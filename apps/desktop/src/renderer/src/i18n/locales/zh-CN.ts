@@ -130,6 +130,8 @@ export const zhCN = {
   "spec.publish": "发布版本",
   "spec.publishNext": "发布版本 {revision}",
   "spec.publishing": "发布中…",
+  "spec.initialChangeSummary": "从 Intero 桌面端发布的首个版本。",
+  "spec.revisionChangeSummary": "从 Intero 桌面端发布的重要修订。",
   "spec.affectedBlocks": "{count} 个受影响区块",
   "spec.publishFailed": "发布失败，本地草稿已保留",
   "spec.published": "版本 {revision} 已发布",

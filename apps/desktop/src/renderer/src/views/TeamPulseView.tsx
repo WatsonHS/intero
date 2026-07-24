@@ -69,7 +69,9 @@ export function TeamPulseView({
         <div className="pulse-summary">
           <div>
             <span className="pulse-summary__number">
-              {pulse.data?.projections.length ?? "—"}
+              {pulse.data?.projections.filter(
+                (item) => item.phase !== "completed" && item.phase !== "paused",
+              ).length ?? "—"}
             </span>
             <span>{t("pulse.activeWorkstreams")}</span>
           </div>

@@ -115,6 +115,7 @@ export async function createSpec(input: {
   markdown: string;
   affectedScopes: string[];
   createdBy: string;
+  changeSummary: string;
 }): Promise<{
   spec: Spec;
   revision: SpecRevision;
@@ -123,7 +124,6 @@ export async function createSpec(input: {
     ...input,
     relatedWorkstreamIds: [],
     status: "in_review",
-    changeSummary: "Published from the Intero desktop Spec editor.",
   });
 }
 
@@ -133,10 +133,10 @@ export async function createSpecRevision(input: {
   markdown: string;
   affectedScopes: string[];
   createdBy: string;
+  changeSummary: string;
 }): Promise<SpecRevision> {
   return postJson(`/v1/specs/${input.specId}/revisions`, {
     ...input,
-    changeSummary: "Material revision published from the Intero desktop.",
   });
 }
 

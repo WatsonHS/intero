@@ -292,7 +292,7 @@ export class InMemoryPlatformStore {
     this.createInboxItem(
       input.createdBy,
       "review_request",
-      `Review requested: ${spec.title}`,
+      spec.title,
       input.changeSummary,
       `spec:${spec.id}:revision:${revision.id}`,
     );

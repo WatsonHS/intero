@@ -139,6 +139,10 @@ export const enUS: Record<TranslationKey, string> = {
   "spec.publish": "Publish revision",
   "spec.publishNext": "Publish revision {revision}",
   "spec.publishing": "Publishing…",
+  "spec.initialChangeSummary":
+    "Initial revision published from Intero Desktop.",
+  "spec.revisionChangeSummary":
+    "Material revision published from Intero Desktop.",
   "spec.affectedBlocks": "{count} affected blocks",
   "spec.publishFailed": "publish failed — local draft kept",
   "spec.published": "revision {revision} published",

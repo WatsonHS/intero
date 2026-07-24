@@ -523,7 +523,7 @@ export class PostgresPlatformStore implements PlatformStore {
         client,
         input.createdBy,
         "review_request",
-        `Review requested: ${spec.title}`,
+        spec.title,
         input.changeSummary,
         `spec:${spec.id}:revision:${revision.id}`,
       );

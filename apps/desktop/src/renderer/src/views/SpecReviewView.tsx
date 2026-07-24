@@ -105,7 +105,6 @@ export function SpecReviewView() {
         setMarkdown(fallbackMarkdown);
       }
       setSaveState("idle");
-      setPublishState("idle");
     } catch {
       setTitle(fallbackTitle);
       setMarkdown(fallbackMarkdown);
@@ -157,6 +156,7 @@ export function SpecReviewView() {
           markdown,
           affectedScopes: currentRevision.affectedScopes,
           createdBy: principal.id,
+          changeSummary: t("spec.revisionChangeSummary"),
         });
         nextSpecId = active.spec.id;
         setPublishedRevision(revision.revision);
@@ -167,6 +167,7 @@ export function SpecReviewView() {
           markdown,
           affectedScopes: [],
           createdBy: principal.id,
+          changeSummary: t("spec.initialChangeSummary"),
         });
         nextSpecId = created.spec.id;
         setPublishedRevision(created.revision.revision);
@@ -258,7 +259,11 @@ export function SpecReviewView() {
             className="spec-selector"
             value={activeId}
             aria-label={t("spec.title")}
-            onChange={(event) => setActiveId(event.target.value)}
+            onChange={(event) => {
+              setActiveId(event.target.value);
+              setPublishState("idle");
+              setPublishedRevision(undefined);
+            }}
           >
             {specs.data?.items.map((item) => (
               <option value={item.spec.id} key={item.spec.id}>

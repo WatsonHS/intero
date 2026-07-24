@@ -430,6 +430,12 @@ describe("Intero API vertical slice", () => {
       },
     });
     const revisionId = created.json().revision.id;
+    expect(await store.listInbox(author)).toEqual([
+      expect.objectContaining({
+        title: "Public Work State API",
+        detail: "Initial review",
+      }),
+    ]);
     for (const [scope, reviewerId] of [
       ["api", uuidv7()],
       ["security", uuidv7()],
