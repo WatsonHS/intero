@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App.js";
 import { I18nProvider } from "./i18n/index.js";
 import "./styles.css";
+import "./claude-design.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {

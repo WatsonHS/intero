@@ -15,7 +15,8 @@
         "packages/representative-core/src/index.ts"
       ],
       "@intero/test-support": ["packages/test-support/src/index.ts"],
-      "@intero/ui": ["packages/ui/src/index.ts"]
+      "@intero/ui": ["packages/ui/src/index.ts"],
+      "@intero/ui/*": ["packages/ui/src/*"]
     }
   },
   "include": [
