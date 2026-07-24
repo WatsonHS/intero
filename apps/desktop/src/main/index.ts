@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   applyManagedInstall,
@@ -31,6 +31,7 @@ type IntegrationAction = "install" | "repair" | "uninstall";
 let integrationMutation = Promise.resolve();
 let trustedRendererId: number | undefined;
 let trustedRendererUrl: string | undefined;
+const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const integrationPreviews = new Map<
   string,
   {
@@ -515,7 +516,7 @@ function createWindow() {
     backgroundColor: "#f2efe8",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.cjs"),
+      preload: join(mainDirectory, "../preload/index.cjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -524,7 +525,7 @@ function createWindow() {
   trustedRendererId = window.webContents.id;
   const rendererUrl = new URL(
     process.env.ELECTRON_RENDERER_URL ??
-      pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+      pathToFileURL(join(mainDirectory, "../renderer/index.html")).href,
   ).href;
   trustedRendererUrl = rendererUrl;
 
