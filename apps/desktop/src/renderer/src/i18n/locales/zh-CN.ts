@@ -211,7 +211,7 @@ export const zhCN = {
     "浏览器预览无法读取本地私有状态，请在 Intero 桌面端查看。",
   "settings.localTransport": "本地套接字 · 受操作系统用户约束",
   "settings.encryptedStorage": "加密存储",
-  "settings.encryptedStorageDetail": "SQLCipher · 密钥保存在系统钥匙串",
+  "settings.encryptedStorageDetail": "SQLCipher · 密钥由本地运行时隔离",
   "settings.language": "界面语言",
   "settings.languageDetail": "语言偏好只保存在这台设备上。",
   "settings.chinese": "简体中文",

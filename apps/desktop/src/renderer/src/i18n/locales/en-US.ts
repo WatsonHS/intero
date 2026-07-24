@@ -228,7 +228,7 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.localTransport": "Local socket · OS user bound",
   "settings.encryptedStorage": "Encrypted storage",
   "settings.encryptedStorageDetail":
-    "SQLCipher · key stored in system keychain",
+    "SQLCipher · key isolated by local runtime",
   "settings.language": "Interface language",
   "settings.languageDetail": "The language preference stays on this device.",
   "settings.chinese": "简体中文",
