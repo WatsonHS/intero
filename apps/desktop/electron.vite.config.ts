@@ -6,7 +6,7 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ["@intero/local-ipc"] })],
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
