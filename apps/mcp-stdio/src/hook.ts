@@ -11,6 +11,7 @@ export async function runHook(
   source: "codex" | "claude-code" | "opencode",
   connectionFile?: string,
 ): Promise<void> {
+  if (!hookShouldCollect()) return;
   try {
     const input = await readHookInput();
     const eventName =
@@ -62,6 +63,12 @@ export async function runHook(
     // Hooks are deliberately fail-open and silent so Agent content and local
     // paths cannot leak through diagnostics.
   }
+}
+
+export function hookShouldCollect(
+  environment: Record<string, string | undefined> = process.env,
+): boolean {
+  return environment.INTERO_INTEGRATION_PROBE !== "1";
 }
 
 export async function isAllowedWorkspace(

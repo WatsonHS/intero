@@ -337,6 +337,7 @@ function agentConfigurationState(
   try {
     const output = execFileSync(executable, argumentsByAdapter[adapter], {
       encoding: "utf8",
+      env: { ...process.env, INTERO_INTEGRATION_PROBE: "1" },
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 3_000,
     });

@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { isAllowedWorkspace, safeSemanticMetadata } from "./hook.js";
+import {
+  hookShouldCollect,
+  isAllowedWorkspace,
+  safeSemanticMetadata,
+} from "./hook.js";
 
 describe("hook privacy boundary", () => {
   it("retains only the lifecycle event class for a session start", () => {
@@ -17,6 +21,11 @@ describe("hook privacy boundary", () => {
       phase: "SessionEnd",
       checkpointKind: "pause",
     });
+  });
+
+  it("ignores Agent sessions created by Intero configuration probes", () => {
+    expect(hookShouldCollect({ INTERO_INTEGRATION_PROBE: "1" })).toBe(false);
+    expect(hookShouldCollect({})).toBe(true);
   });
 
   it("rejects an unregistered cwd before opening daemon transport", async () => {
