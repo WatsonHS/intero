@@ -7,6 +7,7 @@ import {
 } from "@intero/domain";
 import {
   type RepresentativePorts,
+  buildPublicProjection,
   processCanonicalEvent,
 } from "@intero/representative-core";
 
@@ -28,7 +29,10 @@ export class LocalRepresentativeRuntime implements RepresentativePorts {
   }
 
   async handle(event: CanonicalWorkEvent) {
-    if (event.workstreamId && !this.workstreams.has(event.workstreamId)) {
+    const isNew =
+      event.workstreamId !== undefined &&
+      !this.workstreams.has(event.workstreamId);
+    if (event.workstreamId && isNew) {
       await this.saveWorkstream({
         id: event.workstreamId,
         workspaceId: event.workspaceId,
@@ -47,7 +51,15 @@ export class LocalRepresentativeRuntime implements RepresentativePorts {
         version: 0,
       });
     }
-    return processCanonicalEvent(event, this);
+    const result = await processCanonicalEvent(event, this);
+    if (isNew && !result.projection) {
+      const projection = buildPublicProjection(undefined, result.workstream);
+      if (projection) {
+        await this.publishProjection(projection);
+        return { ...result, projection };
+      }
+    }
+    return result;
   }
 
   async loadWorkstream(id: Workstream["id"]): Promise<Workstream> {
@@ -60,12 +72,45 @@ export class LocalRepresentativeRuntime implements RepresentativePorts {
     return this.claims.get(id) ?? [];
   }
 
-  async eventToClaim(
+  async eventToClaims(
     event: CanonicalWorkEvent,
     workstream: Workstream,
-  ): Promise<Claim | undefined> {
+  ): Promise<Claim[]> {
     const kind = event.payload.checkpointKind;
-    if (!kind && event.type !== "ValidationChanged") return undefined;
+    const claims: Claim[] = [];
+    const pauses =
+      kind === "pause" ||
+      event.type === "SessionPaused" ||
+      event.type === "SessionStopped";
+    const resumes =
+      event.type === "SessionStarted" ||
+      (workstream.phase === "paused" && !pauses);
+    if (pauses || resumes) {
+      claims.push(
+        this.claimFor(
+          event,
+          workstream,
+          "paused",
+          pauses ? "true" : "false",
+          "direct_observation",
+        ),
+      );
+    }
+    if (!kind || kind === "pause") {
+      if (event.type === "ValidationChanged") {
+        claims.push(
+          this.claimFor(
+            event,
+            workstream,
+            "validation",
+            event.payload.summary ??
+              event.payload.validationStatus ??
+              event.type,
+          ),
+        );
+      }
+      return claims;
+    }
     const predicate: Claim["predicate"] =
       kind === "intent"
         ? "intent"
@@ -79,38 +124,59 @@ export class LocalRepresentativeRuntime implements RepresentativePorts {
                 ? "scope"
                 : kind === "artifact"
                   ? "artifact"
-                  : kind === "pause"
-                    ? "paused"
-                    : kind === "completion"
-                      ? "completed"
-                      : "validation";
+                  : kind === "completion"
+                    ? "completed"
+                    : "validation";
+    claims.push(
+      this.claimFor(
+        event,
+        workstream,
+        predicate,
+        predicate === "completed"
+          ? "true"
+          : (event.payload.summary ??
+              event.payload.validationStatus ??
+              event.type),
+      ),
+    );
+    return claims;
+  }
+
+  private claimFor(
+    event: CanonicalWorkEvent,
+    workstream: Workstream,
+    predicate: Claim["predicate"],
+    value: string,
+    sourceType: Claim["sourceType"] = event.type === "CheckpointReported"
+      ? "coding_agent_report"
+      : "direct_observation",
+  ): Claim {
     return {
       id: uuidv7() as Claim["id"],
       workstreamId: workstream.id,
       predicate,
-      value:
-        predicate === "paused" || predicate === "completed"
-          ? "true"
-          : (event.payload.summary ??
-            event.payload.validationStatus ??
-            event.type),
-      sourceType:
-        event.type === "CheckpointReported"
-          ? "coding_agent_report"
-          : "direct_observation",
+      value,
+      sourceType,
       sourceRef: `${event.source}:${event.id}`,
       observedAt: event.occurredAt,
-      confidence: event.type === "CheckpointReported" ? 0.74 : 0.92,
+      confidence: sourceType === "coding_agent_report" ? 0.74 : 0.92,
       privacy: event.privacy,
       evidenceRefs: [event.id],
     };
   }
 
   async saveClaim(claim: Claim): Promise<void> {
-    this.claims.set(claim.workstreamId, [
-      ...(this.claims.get(claim.workstreamId) ?? []),
-      claim,
-    ]);
+    const existing = this.claims.get(claim.workstreamId) ?? [];
+    const superseded =
+      claim.predicate === "paused"
+        ? existing.map((candidate) =>
+            candidate.predicate === "paused" &&
+            candidate.withdrawnAt === undefined
+              ? { ...candidate, withdrawnAt: claim.observedAt }
+              : candidate,
+          )
+        : existing;
+    this.claims.set(claim.workstreamId, [...superseded, claim]);
   }
 
   async saveWorkstream(workstream: Workstream): Promise<void> {

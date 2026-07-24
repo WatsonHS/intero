@@ -64,9 +64,38 @@ INTERO_SEED_DEMO=true just up
 ```
 
 For a real acceptance flow, enroll a Workspace through the authenticated local
-`workspace.enroll` RPC and submit `representative.report_checkpoint` through
-the packaged MCP bridge or Coding Agent hook. Unenrolled directories remain
-unobserved.
+`workspace.enroll` RPC, then open **设置 → Coding Agent 集成** to install Codex,
+Claude Code, and OpenCode. The Settings cards write only Intero-owned config
+nodes and can repair or remove them without restoring stale copies of the
+user's global files. Codex deliberately remains in **信任状态未验证** because
+Intero cannot read Codex's private trust state; the user approves Intero hooks
+through Codex's native `/hooks` screen.
+
+The same operation is available from the built bridge:
+
+```bash
+apps/mcp-stdio/dist/index.js integration install --adapter all
+apps/mcp-stdio/dist/index.js integration status --adapter all
+apps/mcp-stdio/dist/index.js integration uninstall --adapter all
+```
+
+Packaged desktop builds include `Contents/Resources/intero-mcp` (or
+`intero-mcp.cmd` on Windows), backed by a self-contained JavaScript bundle and
+the app's Electron runtime. Agent configuration therefore keeps a stable
+launcher path without requiring a separately installed Node.js. Run
+`pnpm --filter @intero/desktop package` to produce an unpacked acceptance
+artifact.
+
+Settings distinguishes text-only configuration, Agent-CLI configuration
+validation, unsupported Agent versions, Codex's pending native hook trust, and
+repair-required journals or locks. If `AGENTS.override.md` shadows the managed
+Codex instructions, the card shows an explicit warning.
+
+A supported Agent session in an enrolled root or linked Git worktree creates a
+private Workstream automatically. The MCP server resolves the current
+Workspace and Workstream internally, so Agent tool calls do not need Intero
+UUIDs. Semantic checkpoints remain explicit Claims; unenrolled directories
+remain unobserved.
 
 Stop the stack without deleting its volumes:
 
@@ -89,7 +118,12 @@ tests.
 ## Privacy defaults
 
 - Only explicitly enrolled Workspace roots may emit work signals.
-- Hook adapters normalize bounded metadata and reject raw session content.
+- Hook adapters subscribe only to content-free session lifecycle events and
+  reject unknown or content-bearing event shapes.
+- Administrator, lifecycle-hook, MCP, and Representative-sidecar IPC clients
+  use separate local capabilities with explicit method allowlists.
+- Managed integration state stores Intero-owned values and hashes only. Existing
+  Agent configs, which may contain credentials, are never copied into Intero.
 - Model egress is disabled by default and deterministic Work State remains
   available without a model or network. The setting is persisted by `interod`
   and applied to the running Local Representative.

@@ -105,6 +105,7 @@ export const PublicWorkProjection = Workstream.pick({
 }).extend({
   changedFields: z.array(
     z.enum([
+      "intent",
       "phase",
       "blockers",
       "dependencies",

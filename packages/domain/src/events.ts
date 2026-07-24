@@ -86,14 +86,21 @@ export type CanonicalWorkEvent = z.infer<typeof CanonicalWorkEvent>;
 
 export const FORBIDDEN_EVENT_FIELDS = new Set([
   "prompt",
-  "assistantResponse",
-  "chainOfThought",
-  "toolInput",
-  "toolOutput",
-  "terminalOutput",
-  "fileContent",
-  "accessToken",
-  "apiKey",
+  "prompttext",
+  "assistantresponse",
+  "chainofthought",
+  "toolinput",
+  "tooloutput",
+  "toolresponse",
+  "terminaloutput",
+  "stdout",
+  "stderr",
+  "filecontent",
+  "accesstoken",
+  "authorization",
+  "apikey",
+  "command",
+  "toolresult",
   "secret",
 ]);
 
@@ -101,11 +108,28 @@ export function containsForbiddenEventField(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(containsForbiddenEventField);
   }
+  if (typeof value === "string") {
+    return containsLikelySecret(value);
+  }
   if (value === null || typeof value !== "object") {
     return false;
   }
   return Object.entries(value).some(
     ([key, nested]) =>
-      FORBIDDEN_EVENT_FIELDS.has(key) || containsForbiddenEventField(nested),
+      FORBIDDEN_EVENT_FIELDS.has(normalizeFieldName(key)) ||
+      containsForbiddenEventField(nested),
   );
+}
+
+function normalizeFieldName(value: string): string {
+  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+}
+
+function containsLikelySecret(value: string): boolean {
+  return [
+    /\bsk-[A-Za-z0-9_-]{16,}\b/,
+    /\bAKIA[A-Z0-9]{16}\b/,
+    /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
+    /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/i,
+  ].some((pattern) => pattern.test(value));
 }

@@ -11,6 +11,7 @@ import { enUS } from "./locales/en-US.js";
 import { zhCN, type TranslationKey } from "./locales/zh-CN.js";
 
 export type Locale = "zh-CN" | "en-US";
+export type { TranslationKey } from "./locales/zh-CN.js";
 
 const STORAGE_KEY = "intero:locale";
 const dictionaries = { "zh-CN": zhCN, "en-US": enUS };

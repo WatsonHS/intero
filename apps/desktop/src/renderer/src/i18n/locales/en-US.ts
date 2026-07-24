@@ -180,6 +180,34 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.active": "active",
   "settings.revoked": "revoked",
   "settings.managedByDaemon": "Managed by interod",
+  "settings.codingAgents": "Coding Agent integrations",
+  "settings.codingAgentsDetail":
+    "Install minimal lifecycle hooks and the same MCP coordination tools for Codex, Claude Code, and OpenCode.",
+  "settings.integrationDisclosure":
+    "Intero observes session lifecycle only. Prompts, responses, complete tool input/output, terminal logs, file contents, and credentials are not collected as work events.",
+  "settings.notDetected": "Local CLI not detected",
+  "settings.integrationState.not_installed": "Not installed",
+  "settings.integrationState.config_written": "Config written",
+  "settings.integrationState.config_valid": "Agent config valid",
+  "settings.integrationState.pending_trust": "Trust required",
+  "settings.integrationState.needs_repair": "Needs repair",
+  "settings.integrationState.unsupported_version": "Unsupported version",
+  "settings.integrationAction.install": "Install",
+  "settings.integrationAction.repair": "Repair",
+  "settings.integrationAction.uninstall": "Uninstall",
+  "settings.integrationWorking": "Working…",
+  "settings.integrationPreview":
+    "Intero will update only the managed configuration entries at these paths. Continue?",
+  "settings.codexTrust":
+    "Codex keeps its native hook trust gate. On first use, open /hooks in Codex and approve the Intero hooks.",
+  "settings.codexOverrideWarning":
+    "AGENTS.override.md currently shadows the managed Intero instructions.",
+  "settings.agentRuntimeUnreachable":
+    "The managed configuration is intact, but the Agent could not reach Intero right now.",
+  "settings.uninstallConfirm":
+    "Uninstall removes only Intero-managed configuration nodes. Continue?",
+  "settings.integrationActionFailed":
+    "The integration action failed. Conflicting user configuration was not overwritten; check the local runtime and configuration state.",
   "settings.modelEgress": "Model egress",
   "settings.modelEgressDetail":
     "Deterministic Work State continues in every mode; policy is stored in encrypted local state.",

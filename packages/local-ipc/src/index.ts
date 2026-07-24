@@ -14,10 +14,14 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
+type ConnectionRole = "administrator" | "hook" | "mcp" | "sidecar";
+
 interface ConnectionDescriptor {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
+  capability?: ConnectionRole;
   socketPath: string;
   authToken: string;
+  workspaceAllowlistPath?: string;
 }
 
 export class SocketDaemonClient implements DaemonClient {
@@ -108,20 +112,37 @@ export class SocketDaemonClient implements DaemonClient {
   }
 }
 
-export async function loadConnectionSettings(): Promise<{
+export async function loadConnectionSettings(options?: {
+  role?: ConnectionRole;
+  descriptorPath?: string;
+}): Promise<{
   socketPath: string;
   authToken: string;
+  workspaceAllowlistPath?: string;
 }> {
+  const role = options?.role ?? "administrator";
   const environmentSocket = process.env.INTERO_SOCKET;
-  const environmentToken = process.env.INTERO_LOCAL_TOKEN;
+  const environmentToken =
+    role === "administrator"
+      ? process.env.INTERO_LOCAL_TOKEN
+      : role === "hook"
+        ? process.env.INTERO_HOOK_TOKEN
+        : role === "mcp"
+          ? process.env.INTERO_MCP_TOKEN
+          : process.env.INTERO_SIDECAR_TOKEN;
   if (environmentSocket && environmentToken) {
     return { socketPath: environmentSocket, authToken: environmentToken };
   }
+  const descriptorName =
+    role === "administrator" ? "connection.json" : `connection-${role}.json`;
   const descriptorPath =
-    process.env.INTERO_CONNECTION_FILE ??
+    options?.descriptorPath ??
+    (role === "administrator"
+      ? process.env.INTERO_CONNECTION_FILE
+      : undefined) ??
     join(
       process.env.INTERO_DATA_DIR ?? join(homedir(), ".intero"),
-      "connection.json",
+      descriptorName,
     );
   let descriptor: ConnectionDescriptor;
   try {
@@ -134,15 +155,22 @@ export async function loadConnectionSettings(): Promise<{
     );
   }
   if (
-    descriptor.schemaVersion !== 1 ||
+    (descriptor.schemaVersion !== 1 && descriptor.schemaVersion !== 2) ||
     typeof descriptor.socketPath !== "string" ||
     typeof descriptor.authToken !== "string" ||
-    descriptor.authToken.length < 20
+    descriptor.authToken.length < 20 ||
+    (descriptor.workspaceAllowlistPath !== undefined &&
+      typeof descriptor.workspaceAllowlistPath !== "string") ||
+    (descriptor.schemaVersion === 1 && role !== "administrator") ||
+    (descriptor.schemaVersion === 2 && descriptor.capability !== role)
   ) {
     throw new Error("Intero connection descriptor is invalid.");
   }
   return {
     socketPath: environmentSocket ?? descriptor.socketPath,
     authToken: environmentToken ?? descriptor.authToken,
+    ...(descriptor.workspaceAllowlistPath
+      ? { workspaceAllowlistPath: descriptor.workspaceAllowlistPath }
+      : {}),
   };
 }

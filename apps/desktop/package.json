@@ -5,14 +5,39 @@
   "type": "module",
   "scripts": {
     "build": "electron-vite build",
+    "package": "pnpm --filter @intero/mcp-stdio build && pnpm build && electron-builder --dir",
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
     "test": "vitest run"
+  },
+  "build": {
+    "appId": "com.intero.desktop",
+    "productName": "Intero",
+    "asar": true,
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../mcp-stdio/dist/index.js",
+        "to": "intero-mcp-runtime/index.js"
+      },
+      {
+        "from": "resources/intero-mcp",
+        "to": "intero-mcp"
+      },
+      {
+        "from": "resources/intero-mcp.cmd",
+        "to": "intero-mcp.cmd"
+      }
+    ]
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.1",
     "@codemirror/view": "^6.43.6",
     "@intero/domain": "workspace:*",
+    "@intero/integrations": "workspace:*",
     "@intero/local-ipc": "workspace:*",
     "@intero/ui": "workspace:*",
     "@phosphor-icons/react": "^2.1.0",

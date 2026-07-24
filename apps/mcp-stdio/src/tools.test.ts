@@ -96,4 +96,57 @@ describe("MCP tool handlers", () => {
       }),
     ).resolves.toEqual({ decisions: [{ title: "Use cursor repair" }] });
   });
+
+  it("binds MCP calls to the current Agent session without public UUID inputs", async () => {
+    class BoundDaemon implements DaemonClient {
+      calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+      async call(
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<unknown> {
+        this.calls.push({ method, params });
+        if (method === "integration.current_context") {
+          return {
+            workspaceId: "019b5ac0-7600-7000-8000-000000000001",
+            workstreamId: "019b5ac0-7600-7000-8000-000000000002",
+            source: "codex",
+            sessionId: "session-1",
+          };
+        }
+        return { accepted: true };
+      }
+    }
+    const daemon = new BoundDaemon();
+    const tools = createToolHandlers(daemon, {
+      source: "codex",
+      cwd: "/workspace",
+      clientSessionId: "mcp-process-1",
+    });
+
+    await tools.reportCheckpoint({
+      kind: "validation",
+      summary: "All integration tests pass.",
+    });
+
+    expect(daemon.calls).toEqual([
+      {
+        method: "integration.current_context",
+        params: {
+          source: "codex",
+          cwd: "/workspace",
+          clientSessionId: "mcp-process-1",
+        },
+      },
+      {
+        method: "representative.report_checkpoint",
+        params: {
+          workspaceId: "019b5ac0-7600-7000-8000-000000000001",
+          workstreamId: "019b5ac0-7600-7000-8000-000000000002",
+          kind: "validation",
+          summary: "All integration tests pass.",
+        },
+      },
+    ]);
+  });
 });

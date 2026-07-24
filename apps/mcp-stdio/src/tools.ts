@@ -6,71 +6,111 @@ const DEFAULT_MAX_BYTES = 64 * 1024;
 const SPEC_REVIEW_MAX_BYTES = 512 * 1024;
 
 export interface ToolHandlers {
+  currentContext(): Promise<unknown>;
   lookupTeamContext(input: {
-    workspaceId: string;
+    workspaceId?: string;
     query: string;
     scope?: string[] | undefined;
   }): Promise<unknown>;
   requestCoordination(input: {
-    workspaceId: string;
-    workstreamId: string;
+    workspaceId?: string;
+    workstreamId?: string;
     reason: string;
     resourceScope: string[];
   }): Promise<unknown>;
   requestSpecReview(input: {
-    workspaceId: string;
-    workstreamId: string;
+    workspaceId?: string;
+    workstreamId?: string;
     title: string;
     markdown: string;
     affectedScopes: string[];
   }): Promise<unknown>;
   lookupDecision(input: {
-    workspaceId: string;
+    workspaceId?: string;
     query: string;
   }): Promise<unknown>;
   checkScope(input: {
-    workspaceId: string;
-    workstreamId: string;
+    workspaceId?: string;
+    workstreamId?: string;
     resourceScope: string[];
   }): Promise<unknown>;
   reportCheckpoint(input: {
-    workspaceId: string;
-    workstreamId: string;
+    workspaceId?: string;
+    workstreamId?: string;
     kind: string;
     summary: string;
     evidenceRefs?: string[] | undefined;
   }): Promise<unknown>;
 }
 
-export function createToolHandlers(daemon: DaemonClient): ToolHandlers {
+export interface McpBinding {
+  source: "codex" | "claude-code" | "opencode";
+  cwd: string;
+  clientSessionId: string;
+}
+
+export function createToolHandlers(
+  daemon: DaemonClient,
+  binding?: McpBinding,
+): ToolHandlers {
+  const context = async () => {
+    if (!binding) return undefined;
+    return (await daemon.call("integration.current_context", {
+      source: binding.source,
+      cwd: binding.cwd,
+      clientSessionId: binding.clientSessionId,
+    })) as {
+      workspaceId: string;
+      workstreamId: string;
+      source: McpBinding["source"];
+      sessionId: string;
+    };
+  };
+  const bound = async (
+    input: Record<string, unknown>,
+    includeWorkstream = true,
+  ) => {
+    const resolved = await context();
+    if (!resolved) return input;
+    return {
+      ...input,
+      workspaceId: resolved.workspaceId,
+      ...(includeWorkstream ? { workstreamId: resolved.workstreamId } : {}),
+    };
+  };
   return {
+    currentContext: async () => {
+      const resolved = await context();
+      if (!resolved) {
+        throw new Error(
+          "This MCP server was not started with an Agent binding.",
+        );
+      }
+      return resolved;
+    },
     lookupTeamContext: (input) =>
-      invokeAndAwait(
-        daemon,
-        "representative.lookup_team_context",
-        bounded(input),
+      bound(bounded(input), false).then((params) =>
+        invokeAndAwait(daemon, "representative.lookup_team_context", params),
       ),
     requestCoordination: (input) =>
-      invokeAndAwait(
-        daemon,
-        "representative.request_coordination",
-        bounded(input),
+      bound(bounded(input)).then((params) =>
+        invokeAndAwait(daemon, "representative.request_coordination", params),
       ),
     requestSpecReview: (input) =>
-      invokeAndAwait(
-        daemon,
-        "representative.request_spec_review",
-        bounded(input, SPEC_REVIEW_MAX_BYTES),
+      bound(bounded(input, SPEC_REVIEW_MAX_BYTES)).then((params) =>
+        invokeAndAwait(daemon, "representative.request_spec_review", params),
       ),
     lookupDecision: (input) =>
-      invokeAndAwait(daemon, "representative.lookup_decision", bounded(input)),
+      bound(bounded(input), false).then((params) =>
+        invokeAndAwait(daemon, "representative.lookup_decision", params),
+      ),
     checkScope: (input) =>
-      invokeAndAwait(daemon, "representative.check_scope", bounded(input)),
+      bound(bounded(input)).then((params) =>
+        invokeAndAwait(daemon, "representative.check_scope", params),
+      ),
     reportCheckpoint: (input) =>
-      invokeAndAwait(
-        daemon,
-        "representative.report_checkpoint",
-        bounded(input),
+      bound(bounded(input)).then((params) =>
+        invokeAndAwait(daemon, "representative.report_checkpoint", params),
       ),
   };
 }
@@ -87,6 +127,9 @@ async function invokeAndAwait(
   while (Date.now() < deadline) {
     const state = await daemon.call("representative.request_result", {
       requestId: accepted.requestId,
+      ...(typeof params.workspaceId === "string"
+        ? { workspaceId: params.workspaceId }
+        : {}),
     });
     if (
       state &&

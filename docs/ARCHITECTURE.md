@@ -162,8 +162,11 @@ Electron, the Local Representative, and the MCP bridge communicate with
 - Windows Named Pipe on Windows.
 
 The protocol is identical across operating systems; only the transport adapter
-differs. Each connection is authenticated with a daemon-managed local token and
-bound to the current OS user.
+differs. Administrator/Desktop, lifecycle-hook ingress, MCP, and Local
+Representative sidecar each receive a separate daemon-managed capability and
+an explicit method allowlist. The descriptors are OS-user-readable local files;
+this separates Intero components and prevents accidental authority reuse, but
+does not claim to sandbox an already-compromised same-UID process.
 
 ### 4.3 Local encrypted storage
 
@@ -210,6 +213,7 @@ All Coding Agent adapters expose the same tools:
 
 ```text
 representative.lookup_team_context
+representative.current_context
 representative.request_coordination
 representative.request_spec_review
 representative.lookup_decision
@@ -220,7 +224,12 @@ representative.report_checkpoint
 `intero mcp-stdio` is a stateless transport bridge, not an Agent. A Coding
 Agent launches it as an ordinary stdio MCP subprocess; the bridge forwards to
 `interod` over the local IPC transport and exits with the Coding Agent
-session.
+session. The process source and working directory bind it to the unique active
+same-source session in the enrolled Workspace. OpenCode may
+resume one unique paused session; concurrent ambiguity fails closed instead of
+selecting by timestamp. If lifecycle delivery was unavailable, one stable
+MCP-process fallback Workstream keeps explicit tools usable. Public MCP tool
+schemas do not expose internal Workspace or Workstream UUIDs.
 
 ### 5.2 Active checkpoint reporting
 
@@ -235,11 +244,11 @@ Agents are instructed to call it only at semantic milestones:
 - work pauses or completes.
 
 The Local Representative stores the report as a `coding_agent_report` Claim and
-reconciles it with hooks, Git, validation, and human corrections.
+reconciles it with lifecycle, Git, validation, and human corrections.
 
 ### 5.3 Adapter-specific observation
 
-Adapters normalize to Canonical Work Events:
+The canonical model supports these Work Events:
 
 ```text
 SessionStarted
@@ -255,19 +264,38 @@ CoordinationRequested
 CheckpointReported
 ```
 
-Default events never contain prompts, assistant responses, chain-of-thought,
-complete tool arguments, complete tool results, terminal output, or file
-contents.
+Automatic Agent adapters intentionally emit only content-free session
+lifecycle events in the MVP. Material intent, validation, blocker, artifact,
+and completion signals come through explicit MCP checkpoints. Prompts,
+assistant responses, chain-of-thought, complete tool arguments/results,
+terminal output, file contents, and credentials are never work events.
 
 Initial adapters:
 
-- Codex: MCP, user-level Intero instructions, and supported lifecycle hooks.
-- Claude Code: MCP, user-level Intero instructions, and supported hooks.
+- Codex: MCP, a managed block in user-level `AGENTS.md`, and `SessionStart` /
+  `SessionEnd` hooks. Codex's native trust approval is not bypassed.
+- Claude Code: MCP, a user-level rule, and `SessionStart` / `SessionEnd` hooks.
 - OpenCode: MCP, a user-level instruction file, and a managed global plugin
-  using session, file, todo, validation, and tool lifecycle hooks.
+  using `session.created`, `session.idle`, and `session.deleted`.
 
-Integration installation must preserve user configuration, update only a
-Intero-managed block or file, and be fully reversible.
+Integration installation preserves user configuration, updates only an
+Intero-managed node, block, or dedicated file, and is reversible. It records
+only the installed value and hashes; it never creates whole-file backups of
+global Agent configs. If a user changes an Intero-owned node, repair/uninstall
+stops with a conflict instead of overwriting that edit.
+
+The installer writes an `installing` journal before mutation, retains both the
+previous and intended managed values during upgrades, and can reclaim a dead
+process lock only after verifying the owning process identity. Legacy manifests
+that did not record an immutable installed executable fail closed and preserve
+the Agent files; an already-journaled legacy cleanup remains resumable. Custom
+`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `OPENCODE_CONFIG_DIR` roots are explicit
+allowed roots and remain subject to symlink-boundary checks.
+
+The desktop package ships a bundled bridge and an executable launcher. It does
+not depend on a system Node.js installation. Renderer requests first trigger a
+native main-process confirmation showing exact target paths; only acceptance
+creates a sender-bound, short-lived, one-use mutation token.
 
 ## 6. Representative runtime
 

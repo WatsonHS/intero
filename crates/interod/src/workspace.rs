@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -35,6 +36,8 @@ pub enum WorkspaceError {
 #[derive(Clone, Default)]
 pub struct WorkspaceRegistry {
     entries: Arc<RwLock<HashMap<Uuid, Workspace>>>,
+    allowlist_path: Arc<RwLock<Option<PathBuf>>>,
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl WorkspaceRegistry {
@@ -47,7 +50,24 @@ impl WorkspaceRegistry {
                     .map(|workspace| (workspace.id, workspace))
                     .collect(),
             )),
+            allowlist_path: Arc::new(RwLock::new(None)),
+            mutation_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub fn with_allowlist_path(self, path: PathBuf) -> Result<Self, WorkspaceError> {
+        {
+            let _mutation = self
+                .mutation_lock
+                .lock()
+                .map_err(|_| WorkspaceError::LockPoisoned)?;
+            *self
+                .allowlist_path
+                .write()
+                .map_err(|_| WorkspaceError::LockPoisoned)? = Some(path);
+            self.write_allowlist()?;
+        }
+        Ok(self)
     }
 
     pub fn enroll(
@@ -55,7 +75,26 @@ impl WorkspaceRegistry {
         root: &Path,
         repository_identity: String,
     ) -> Result<Workspace, WorkspaceError> {
+        let workspace = self.prepare_enrollment(root, repository_identity)?;
+        self.commit_enrollment(&workspace)?;
+        Ok(workspace)
+    }
+
+    pub fn prepare_enrollment(
+        &self,
+        root: &Path,
+        repository_identity: String,
+    ) -> Result<Workspace, WorkspaceError> {
         let canonical_root = fs::canonicalize(root)?;
+        let repository_identity =
+            if let Some((identity, top_level)) = derive_git_repository(&canonical_root)? {
+                if canonical_root != top_level {
+                    return Err(WorkspaceError::OutsideWorkspace);
+                }
+                identity
+            } else {
+                repository_identity
+            };
         let workspace = Workspace {
             id: Uuid::now_v7(),
             root: canonical_root,
@@ -63,20 +102,54 @@ impl WorkspaceRegistry {
             excluded_paths: Vec::new(),
             revoked: false,
         };
+        Ok(workspace)
+    }
+
+    pub fn commit_enrollment(&self, workspace: &Workspace) -> Result<(), WorkspaceError> {
+        let _mutation = self
+            .mutation_lock
+            .lock()
+            .map_err(|_| WorkspaceError::LockPoisoned)?;
         self.entries
             .write()
             .map_err(|_| WorkspaceError::LockPoisoned)?
             .insert(workspace.id, workspace.clone());
-        Ok(workspace)
+        if let Err(reason) = self.write_allowlist() {
+            self.entries
+                .write()
+                .map_err(|_| WorkspaceError::LockPoisoned)?
+                .remove(&workspace.id);
+            let _ = self.write_allowlist();
+            return Err(reason);
+        }
+        Ok(())
+    }
+
+    pub fn remove_enrollment(&self, id: Uuid) -> Result<(), WorkspaceError> {
+        let _mutation = self
+            .mutation_lock
+            .lock()
+            .map_err(|_| WorkspaceError::LockPoisoned)?;
+        self.entries
+            .write()
+            .map_err(|_| WorkspaceError::LockPoisoned)?
+            .remove(&id);
+        self.write_allowlist()
     }
 
     pub fn revoke(&self, id: Uuid) -> Result<(), WorkspaceError> {
+        let _mutation = self
+            .mutation_lock
+            .lock()
+            .map_err(|_| WorkspaceError::LockPoisoned)?;
         let mut entries = self
             .entries
             .write()
             .map_err(|_| WorkspaceError::LockPoisoned)?;
         let workspace = entries.get_mut(&id).ok_or(WorkspaceError::NotEnrolled)?;
         workspace.revoked = true;
+        drop(entries);
+        self.write_allowlist()?;
         Ok(())
     }
 
@@ -116,12 +189,31 @@ impl WorkspaceRegistry {
             .entries
             .read()
             .map_err(|_| WorkspaceError::LockPoisoned)?;
-        entries
+        let direct = entries
             .values()
             .filter(|workspace| !workspace.revoked && canonical.starts_with(&workspace.root))
             .max_by_key(|workspace| workspace.root.components().count())
-            .cloned()
-            .ok_or(WorkspaceError::NotEnrolled)
+            .cloned();
+        if direct.is_some() {
+            return direct.ok_or(WorkspaceError::NotEnrolled);
+        }
+
+        let Some((identity, _)) = derive_git_repository(&canonical)? else {
+            return Err(WorkspaceError::NotEnrolled);
+        };
+        let mut matches = entries
+            .values()
+            .filter(|workspace| {
+                !workspace.revoked
+                    && workspace.repository_identity == identity
+                    && workspace.repository_identity.starts_with("git-common-dir:")
+            })
+            .cloned();
+        let selected_workspace = matches.next().ok_or(WorkspaceError::NotEnrolled)?;
+        if matches.next().is_some() {
+            return Err(WorkspaceError::NotEnrolled);
+        }
+        Ok(selected_workspace)
     }
 
     pub fn authorize_read(&self, id: Uuid, requested: &Path) -> Result<PathBuf, WorkspaceError> {
@@ -151,6 +243,106 @@ impl WorkspaceRegistry {
             return Err(WorkspaceError::SensitivePath);
         }
         Ok(canonical)
+    }
+
+    fn write_allowlist(&self) -> Result<(), WorkspaceError> {
+        let path = self
+            .allowlist_path
+            .read()
+            .map_err(|_| WorkspaceError::LockPoisoned)?
+            .clone();
+        let Some(path) = path else {
+            return Ok(());
+        };
+        let entries = self
+            .entries
+            .read()
+            .map_err(|_| WorkspaceError::LockPoisoned)?;
+        let mut workspaces = entries
+            .values()
+            .filter(|workspace| !workspace.revoked)
+            .map(|workspace| {
+                serde_json::json!({
+                    "root": workspace.root,
+                    "repositoryIdentity": workspace.repository_identity,
+                })
+            })
+            .collect::<Vec<_>>();
+        workspaces.sort_by(|left, right| left["root"].as_str().cmp(&right["root"].as_str()));
+        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "workspaces": workspaces,
+        }))
+        .map_err(std::io::Error::other)?;
+        let temporary = path.with_extension(format!("json.{}.tmp", Uuid::now_v7()));
+        fs::write(&temporary, bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        }
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+}
+
+fn derive_git_repository(path: &Path) -> Result<Option<(String, PathBuf)>, WorkspaceError> {
+    let common_output = git_output(
+        path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let Some(common_output) = common_output else {
+        return Ok(None);
+    };
+    let common = String::from_utf8_lossy(&common_output.stdout);
+    let common = common.trim();
+    if common.is_empty() {
+        return Ok(None);
+    }
+    let canonical_common = fs::canonicalize(common)?;
+
+    let top_level_output = git_output(
+        path,
+        &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+    )?
+    .ok_or(WorkspaceError::NotEnrolled)?;
+    let top_level = String::from_utf8_lossy(&top_level_output.stdout);
+    let canonical_top_level = fs::canonicalize(top_level.trim())?;
+
+    let worktrees_output = git_output(path, &["worktree", "list", "--porcelain"])?
+        .ok_or(WorkspaceError::NotEnrolled)?;
+    let listed = String::from_utf8_lossy(&worktrees_output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|listed| fs::canonicalize(listed).ok())
+        .any(|listed| listed == canonical_top_level);
+    if !listed {
+        return Ok(None);
+    }
+
+    Ok(Some((
+        format!("git-common-dir:{}", canonical_common.to_string_lossy()),
+        canonical_top_level,
+    )))
+}
+
+fn git_output(
+    path: &Path,
+    arguments: &[&str],
+) -> Result<Option<std::process::Output>, WorkspaceError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => Ok(Some(output)),
+        Ok(_) => Ok(None),
+        Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(reason) => Err(WorkspaceError::Resolve(reason)),
     }
 }
 
@@ -187,6 +379,7 @@ fn is_sensitive(root: &Path, candidate: &Path) -> bool {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
 
     use tempfile::tempdir;
 
@@ -224,5 +417,90 @@ mod tests {
             registry.authorize_read(workspace.id, Path::new("escape.rs")),
             Err(WorkspaceError::OutsideWorkspace)
         ));
+    }
+
+    #[test]
+    fn resolves_only_linked_worktrees_by_git_common_directory() {
+        let container = tempdir().expect("container");
+        let repository = container.path().join("repository");
+        let linked = container.path().join("linked");
+        let clone = container.path().join("clone");
+        let forged = container.path().join("forged");
+        fs::create_dir(&repository).expect("repository");
+        run_git(&repository, &["init"]);
+        run_git(
+            &repository,
+            &["config", "user.email", "intero@example.test"],
+        );
+        run_git(&repository, &["config", "user.name", "Intero Test"]);
+        fs::write(repository.join("README.md"), "intero").expect("fixture");
+        run_git(&repository, &["add", "README.md"]);
+        run_git(&repository, &["commit", "-m", "initial"]);
+        run_git(
+            &repository,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().expect("linked path"),
+            ],
+        );
+        let clone_result = Command::new("git")
+            .args([
+                "clone",
+                repository.to_str().expect("repository path"),
+                clone.to_str().expect("clone path"),
+            ])
+            .output()
+            .expect("clone");
+        assert!(clone_result.status.success());
+        fs::create_dir(&forged).expect("forged directory");
+        fs::write(
+            forged.join(".git"),
+            format!("gitdir: {}\n", repository.join(".git").display()),
+        )
+        .expect("forged git pointer");
+
+        let registry = WorkspaceRegistry::default();
+        let workspace = registry
+            .enroll(&repository, "caller-controlled".into())
+            .expect("enrollment");
+        assert!(workspace.repository_identity.starts_with("git-common-dir:"));
+        assert_eq!(
+            registry
+                .resolve_for_path(&linked)
+                .expect("linked worktree")
+                .id,
+            workspace.id
+        );
+        assert!(matches!(
+            registry.resolve_for_path(&clone),
+            Err(WorkspaceError::NotEnrolled)
+        ));
+        assert!(matches!(
+            registry.resolve_for_path(&forged),
+            Err(WorkspaceError::NotEnrolled)
+        ));
+        fs::create_dir(repository.join("nested")).expect("nested directory");
+        assert!(matches!(
+            WorkspaceRegistry::default()
+                .enroll(&repository.join("nested"), "caller-controlled".into()),
+            Err(WorkspaceError::OutsideWorkspace)
+        ));
+    }
+
+    fn run_git(directory: &Path, arguments: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(arguments)
+            .output()
+            .expect("git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            arguments,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

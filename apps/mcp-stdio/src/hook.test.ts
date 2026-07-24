@@ -1,30 +1,45 @@
+import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { safeSemanticMetadata } from "./hook.js";
+import { isAllowedWorkspace, safeSemanticMetadata } from "./hook.js";
 
 describe("hook privacy boundary", () => {
-  it("turns a session start into a generic semantic checkpoint", () => {
+  it("retains only the lifecycle event class for a session start", () => {
     expect(safeSemanticMetadata("SessionStart")).toEqual({
       phase: "SessionStart",
-      checkpointKind: "intent",
-      summary: "Coding Agent session started in an enrolled Workspace.",
     });
   });
 
-  it("classifies tool resources without retaining hook payloads", () => {
-    expect(safeSemanticMetadata("PostToolUse", "WriteFile")).toEqual({
-      phase: "PostToolUse",
-      resourceKind: "file",
+  it("maps lifecycle termination to pause rather than completion", () => {
+    expect(safeSemanticMetadata("SessionEnd")).toEqual({
+      phase: "SessionEnd",
+      checkpointKind: "pause",
     });
   });
 
-  it("records only the outcome class for tool failures", () => {
-    expect(safeSemanticMetadata("PostToolUseFailure", "RunTests")).toEqual({
-      phase: "PostToolUseFailure",
-      checkpointKind: "validation",
-      summary: "A Coding Agent tool reported a failure.",
-      validationStatus: "failed",
-      resourceKind: "artifact",
-    });
+  it("rejects an unregistered cwd before opening daemon transport", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "intero-allowlist-"));
+    const enrolled = join(directory, "enrolled");
+    const unknown = join(directory, "unknown");
+    await mkdir(enrolled);
+    await mkdir(unknown);
+    const allowlist = join(directory, "workspace-allowlist.json");
+    await writeFile(
+      allowlist,
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaces: [
+          {
+            root: await realpath(enrolled),
+            repositoryIdentity: "repo:test",
+          },
+        ],
+      }),
+    );
+
+    await expect(isAllowedWorkspace(enrolled, allowlist)).resolves.toBe(true);
+    await expect(isAllowedWorkspace(unknown, allowlist)).resolves.toBe(false);
   });
 });

@@ -1,9 +1,15 @@
 import { SocketDaemonClient, loadConnectionSettings } from "@intero/local-ipc";
+import { execFile } from "node:child_process";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, relative, sep } from "node:path";
+import { promisify } from "node:util";
 
-const MAX_HOOK_BYTES = 2 * 1024 * 1024;
+const MAX_HOOK_BYTES = 64 * 1024;
+const execFileAsync = promisify(execFile);
 
 export async function runHook(
   source: "codex" | "claude-code" | "opencode",
+  connectionFile?: string,
 ): Promise<void> {
   try {
     const input = await readHookInput();
@@ -14,40 +20,111 @@ export async function runHook(
       stringField(input, "session_id") ??
       stringField(input, "conversation_id") ??
       stringField(input, "transcript_id");
-    if (!eventName || !cwd || !sessionId) return;
+    if (
+      !eventName ||
+      !cwd ||
+      !sessionId ||
+      !isSupportedLifecycleEvent(source, eventName) ||
+      cwd.length > 4_096 ||
+      sessionId.length > 240
+    ) {
+      return;
+    }
+    const eventId =
+      stringField(input, "hook_event_id") ??
+      stringField(input, "event_id") ??
+      stringField(input, "tool_use_id");
 
-    const connection = await loadConnectionSettings();
+    const connection = await loadConnectionSettings({
+      role: "hook",
+      ...(connectionFile ? { descriptorPath: connectionFile } : {}),
+    });
+    if (
+      !connection.workspaceAllowlistPath ||
+      !(await isAllowedWorkspace(cwd, connection.workspaceAllowlistPath))
+    ) {
+      return;
+    }
     const daemon = new SocketDaemonClient(
       connection.socketPath,
       connection.authToken,
     );
-    const context = (await daemon.call("integration.resolve_context", {
+    await daemon.call("integration.ingest_lifecycle", {
       cwd,
       source,
-      sessionId,
-    })) as { workspaceId: string; workstreamId: string };
-    await daemon.call("representative.ingest_adapter_event", {
-      ...context,
-      source,
       sourceEvent: eventName,
+      sessionId,
+      ...(eventId && eventId.length <= 240 ? { eventId } : {}),
       occurredAt: new Date().toISOString(),
-      metadata: safeSemanticMetadata(
-        eventName,
-        stringField(input, "tool_name"),
-      ),
+      metadata: safeSemanticMetadata(eventName),
     });
-  } catch (error) {
-    process.stderr.write(
-      `${JSON.stringify({
-        level: "warn",
-        operation: "integration.hook",
-        source,
-        error: error instanceof Error ? error.message : "hook_failed",
-      })}\n`,
-    );
-  } finally {
-    process.stdout.write("{}\n");
+  } catch {
+    // Hooks are deliberately fail-open and silent so Agent content and local
+    // paths cannot leak through diagnostics.
   }
+}
+
+export async function isAllowedWorkspace(
+  cwd: string,
+  allowlistPath: string,
+): Promise<boolean> {
+  try {
+    const raw = await readFile(allowlistPath, "utf8");
+    if (Buffer.byteLength(raw) > 1024 * 1024) return false;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      (parsed as Record<string, unknown>).schemaVersion !== 1 ||
+      !Array.isArray((parsed as Record<string, unknown>).workspaces)
+    ) {
+      return false;
+    }
+    const canonicalCwd = await realpath(cwd);
+    const entries = (parsed as { workspaces: unknown[] }).workspaces.filter(
+      (value): value is { root: string; repositoryIdentity: string } =>
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        typeof (value as Record<string, unknown>).root === "string" &&
+        typeof (value as Record<string, unknown>).repositoryIdentity ===
+          "string",
+    );
+    if (entries.some((entry) => pathIsInside(canonicalCwd, entry.root))) {
+      return true;
+    }
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "-C",
+        canonicalCwd,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      {
+        timeout: 1_000,
+        maxBuffer: 16 * 1024,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      },
+    );
+    const common = await realpath(stdout.trim());
+    const identity = `git-common-dir:${common}`;
+    return entries.some((entry) => entry.repositoryIdentity === identity);
+  } catch {
+    return false;
+  }
+}
+
+function pathIsInside(candidate: string, root: string): boolean {
+  const fromRoot = relative(root, candidate);
+  return (
+    fromRoot === "" ||
+    (!fromRoot.startsWith(`..${sep}`) &&
+      fromRoot !== ".." &&
+      !isAbsolute(fromRoot))
+  );
 }
 
 async function readHookInput(): Promise<Record<string, unknown>> {
@@ -76,36 +153,27 @@ function stringField(
 
 export function safeSemanticMetadata(
   eventName: string,
-  toolName?: string,
 ): Record<string, string> {
   const metadata: Record<string, string> = {
     phase: eventName.slice(0, 80),
   };
-  if (eventName === "SessionStart" || eventName === "session.created") {
-    metadata.checkpointKind = "intent";
-    metadata.summary = "Coding Agent session started in an enrolled Workspace.";
-  } else if (eventName === "session.idle") {
+  if (
+    eventName === "SessionEnd" ||
+    eventName === "session.idle" ||
+    eventName === "session.deleted"
+  ) {
     metadata.checkpointKind = "pause";
-    metadata.summary = "Coding Agent session is idle.";
-  } else if (eventName === "PostToolUseFailure") {
-    metadata.checkpointKind = "validation";
-    metadata.summary = "A Coding Agent tool reported a failure.";
-    metadata.validationStatus = "failed";
   }
-  if (toolName) metadata.resourceKind = resourceKindForTool(toolName);
   return metadata;
 }
 
-function resourceKindForTool(toolName: string) {
-  const normalized = toolName.toLowerCase();
-  if (
-    normalized.includes("file") ||
-    normalized.includes("write") ||
-    normalized.includes("edit")
-  ) {
-    return "file" as const;
-  }
-  if (normalized.includes("test") || normalized.includes("lint"))
-    return "artifact" as const;
-  return "symbol" as const;
+function isSupportedLifecycleEvent(
+  source: "codex" | "claude-code" | "opencode",
+  eventName: string,
+) {
+  return source === "opencode"
+    ? eventName === "session.created" ||
+        eventName === "session.idle" ||
+        eventName === "session.deleted"
+    : eventName === "SessionStart" || eventName === "SessionEnd";
 }

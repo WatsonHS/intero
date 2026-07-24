@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+resource_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+runtime="$resource_dir/intero-mcp-runtime/index.js"
+export INTERO_MCP_LAUNCHER="$resource_dir/intero-mcp"
+
+if [ -x "$resource_dir/../MacOS/Intero" ]; then
+  electron="$resource_dir/../MacOS/Intero"
+elif [ -x "$resource_dir/../intero" ]; then
+  electron="$resource_dir/../intero"
+elif [ -x "$resource_dir/../../intero" ]; then
+  electron="$resource_dir/../../intero"
+else
+  echo "Intero runtime executable is unavailable." >&2
+  exit 1
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$electron" "$runtime" "$@"

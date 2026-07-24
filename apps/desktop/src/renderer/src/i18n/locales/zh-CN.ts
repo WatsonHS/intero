@@ -167,6 +167,33 @@ export const zhCN = {
   "settings.active": "有效",
   "settings.revoked": "已撤销",
   "settings.managedByDaemon": "由 interod 管理",
+  "settings.codingAgents": "Coding Agent 集成",
+  "settings.codingAgentsDetail":
+    "为 Codex、Claude Code 和 OpenCode 安装最小生命周期 Hook 与同一套 MCP 协作工具。",
+  "settings.integrationDisclosure":
+    "Intero 自动接收的只有会话生命周期。提示词、回复、完整工具输入输出、终端日志、文件内容和凭据不会作为工作事件采集。",
+  "settings.notDetected": "未检测到本机 CLI",
+  "settings.integrationState.not_installed": "未安装",
+  "settings.integrationState.config_written": "配置已写入",
+  "settings.integrationState.config_valid": "Agent 配置有效",
+  "settings.integrationState.pending_trust": "信任状态未验证",
+  "settings.integrationState.needs_repair": "需要修复",
+  "settings.integrationState.unsupported_version": "版本不受支持",
+  "settings.integrationAction.install": "安装",
+  "settings.integrationAction.repair": "修复",
+  "settings.integrationAction.uninstall": "卸载",
+  "settings.integrationWorking": "处理中…",
+  "settings.integrationPreview":
+    "Intero 只会更新以下路径中的托管配置项。是否继续？",
+  "settings.codexTrust":
+    "Codex 会保留原生 Hook 信任门。首次使用请在 Codex 中打开 /hooks 并确认 Intero Hook。",
+  "settings.codexOverrideWarning":
+    "AGENTS.override.md 当前会遮蔽 Intero 的托管指令。",
+  "settings.agentRuntimeUnreachable":
+    "托管配置完整，但 Agent 当前无法连接 Intero 运行时。",
+  "settings.uninstallConfirm": "卸载只会移除 Intero 管理的配置节点。确认继续？",
+  "settings.integrationActionFailed":
+    "集成操作失败；没有覆盖发生冲突的用户配置，请检查本地运行时与配置状态。",
   "settings.modelEgress": "模型数据出口",
   "settings.modelEgressDetail":
     "每种模式都会继续确定性地归约工作状态；策略保存在本地加密存储中。",

@@ -55,6 +55,9 @@ importers:
       "@intero/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@intero/integrations":
+        specifier: workspace:*
+        version: link:../../packages/integrations
       "@intero/local-ipc":
         specifier: workspace:*
         version: link:../../packages/local-ipc
@@ -128,6 +131,9 @@ importers:
       "@intero/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@intero/integrations":
+        specifier: workspace:*
+        version: link:../../packages/integrations
       "@intero/local-ipc":
         specifier: workspace:*
         version: link:../../packages/local-ipc

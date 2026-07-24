@@ -53,6 +53,24 @@ describe("CanonicalWorkEvent", () => {
       }),
     ).toThrow();
   });
+
+  it("normalizes forbidden field aliases and rejects likely credential values", () => {
+    for (const payload of [
+      { prompt_text: "private" },
+      { tool_response: "private" },
+      { terminal_output: "private" },
+      { stdout: "private" },
+      { nested: { authorization: "private" } },
+      { summary: "sk-private-canary-12345678901234567890" },
+    ]) {
+      expect(containsForbiddenEventField(payload)).toBe(true);
+    }
+    expect(
+      containsForbiddenEventField({
+        summary: "Validated the capability matrix.",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("uuidv7", () => {

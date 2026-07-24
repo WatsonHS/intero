@@ -1,6 +1,7 @@
 import type { PublicWorkProjection, Workstream } from "@intero/domain";
 
 const PUBLIC_FIELDS = [
+  "intent",
   "phase",
   "blockers",
   "dependencies",
@@ -24,6 +25,7 @@ export function buildPublicProjection(
 ): PublicWorkProjection | undefined {
   const changedFields: PublicField[] = [];
 
+  if (!previous || previous.title !== next.title) changedFields.push("intent");
   if (!previous || previous.phase !== next.phase) {
     changedFields.push("phase");
     if (next.phase === "paused") changedFields.push("paused");

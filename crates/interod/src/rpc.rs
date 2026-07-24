@@ -13,6 +13,48 @@ use crate::storage::EncryptedStore;
 use crate::workspace::WorkspaceRegistry;
 use crate::workspace_tools;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcRole {
+    Administrator,
+    HookIngress,
+    Mcp,
+    Sidecar,
+}
+
+#[derive(Clone)]
+pub struct RpcTokens {
+    pub administrator: String,
+    pub hook_ingress: String,
+    pub mcp: String,
+    pub sidecar: String,
+}
+
+impl RpcTokens {
+    #[must_use]
+    pub fn administrator_only(token: String) -> Self {
+        Self {
+            administrator: token.clone(),
+            hook_ingress: token.clone(),
+            mcp: token.clone(),
+            sidecar: token,
+        }
+    }
+
+    fn role_for(&self, token: &str) -> Option<RpcRole> {
+        if token == self.administrator {
+            Some(RpcRole::Administrator)
+        } else if token == self.hook_ingress {
+            Some(RpcRole::HookIngress)
+        } else if token == self.mcp {
+            Some(RpcRole::Mcp)
+        } else if token == self.sidecar {
+            Some(RpcRole::Sidecar)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
@@ -39,9 +81,165 @@ pub struct JsonRpcError {
     pub message: String,
 }
 
+fn role_allows(role: RpcRole, method: &str) -> bool {
+    match role {
+        RpcRole::Administrator => true,
+        RpcRole::HookIngress => matches!(method, "system.health" | "integration.ingest_lifecycle"),
+        RpcRole::Mcp => matches!(
+            method,
+            "system.health"
+                | "integration.current_context"
+                | "representative.lookup_team_context"
+                | "representative.request_coordination"
+                | "representative.request_spec_review"
+                | "representative.lookup_decision"
+                | "representative.check_scope"
+                | "representative.report_checkpoint"
+                | "representative.request_result"
+        ),
+        RpcRole::Sidecar => matches!(
+            method,
+            "system.health"
+                | "settings.get"
+                | "state.list_events"
+                | "state.persist_event"
+                | "representative.next_request"
+                | "representative.ack_request"
+                | "representative.complete_request"
+        ),
+    }
+}
+
+fn is_integration_source(source: &str) -> bool {
+    matches!(source, "codex" | "claude-code" | "opencode")
+}
+
+fn valid_adapter_event_request(params: &Value) -> bool {
+    const ALLOWED_FIELDS: &[&str] = &[
+        "workspaceId",
+        "workstreamId",
+        "source",
+        "sourceEvent",
+        "sessionId",
+        "eventId",
+        "occurredAt",
+        "metadata",
+    ];
+    let Some(object) = params.as_object() else {
+        return false;
+    };
+    if object
+        .keys()
+        .any(|key| !ALLOWED_FIELDS.contains(&key.as_str()))
+    {
+        return false;
+    }
+    let source = object.get("source").and_then(Value::as_str);
+    let source_event = object.get("sourceEvent").and_then(Value::as_str);
+    let valid_event = match source {
+        Some("codex" | "claude-code") => {
+            matches!(source_event, Some("SessionStart" | "SessionEnd"))
+        }
+        Some("opencode") => matches!(
+            source_event,
+            Some("session.created" | "session.idle" | "session.deleted")
+        ),
+        _ => false,
+    };
+    if !valid_event
+        || parse_workspace_id(params).is_none()
+        || object
+            .get("workstreamId")
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .is_none()
+        || object
+            .get("occurredAt")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.len() > 40)
+    {
+        return false;
+    }
+    match object.get("metadata") {
+        None => true,
+        Some(Value::Object(metadata)) => {
+            let checkpoint = metadata.get("checkpointKind").and_then(Value::as_str);
+            let expected_checkpoint = match source_event {
+                Some("SessionEnd" | "session.idle" | "session.deleted") => Some("pause"),
+                _ => None,
+            };
+            metadata.len() <= 2
+                && metadata
+                    .keys()
+                    .all(|key| key == "phase" || key == "checkpointKind")
+                && metadata.values().all(|value| {
+                    value
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty() && value.len() <= 80)
+                })
+                && checkpoint == expected_checkpoint
+        }
+        Some(_) => false,
+    }
+}
+
+fn valid_lifecycle_ingress_request(params: &Value) -> bool {
+    const ALLOWED_FIELDS: &[&str] = &[
+        "cwd",
+        "source",
+        "sourceEvent",
+        "sessionId",
+        "eventId",
+        "occurredAt",
+        "metadata",
+    ];
+    let Some(object) = params.as_object() else {
+        return false;
+    };
+    if object
+        .keys()
+        .any(|key| !ALLOWED_FIELDS.contains(&key.as_str()))
+    {
+        return false;
+    }
+    let bounded_string = |field: &str, maximum: usize| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= maximum)
+    };
+    if !bounded_string("cwd", 4_096)
+        || !bounded_string("source", 32)
+        || !bounded_string("sourceEvent", 80)
+        || !bounded_string("sessionId", 240)
+        || !bounded_string("occurredAt", 40)
+        || object
+            .get("eventId")
+            .is_some_and(|_| !bounded_string("eventId", 240))
+    {
+        return false;
+    }
+    let mut internal = object.clone();
+    internal.remove("cwd");
+    internal.insert("workspaceId".into(), Value::String(Uuid::nil().to_string()));
+    internal.insert(
+        "workstreamId".into(),
+        Value::String(Uuid::nil().to_string()),
+    );
+    valid_adapter_event_request(&Value::Object(internal))
+}
+
+fn lifecycle_session_state(source_event: &str) -> &'static str {
+    match source_event {
+        "SessionStart" | "session.created" => "active",
+        "session.idle" => "paused",
+        _ => "ended",
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcService {
-    auth_token: String,
+    auth_tokens: RpcTokens,
     workspaces: WorkspaceRegistry,
     pending_requests: Arc<Mutex<VecDeque<Value>>>,
     durable_store: Option<EncryptedStore>,
@@ -52,7 +250,7 @@ impl RpcService {
     #[must_use]
     pub fn new(auth_token: String, workspaces: WorkspaceRegistry) -> Self {
         Self {
-            auth_token,
+            auth_tokens: RpcTokens::administrator_only(auth_token),
             workspaces,
             pending_requests: Arc::new(Mutex::new(VecDeque::new())),
             durable_store: None,
@@ -66,8 +264,21 @@ impl RpcService {
         workspaces: WorkspaceRegistry,
         durable_store: EncryptedStore,
     ) -> Self {
+        Self::new_durable_with_tokens(
+            RpcTokens::administrator_only(auth_token),
+            workspaces,
+            durable_store,
+        )
+    }
+
+    #[must_use]
+    pub fn new_durable_with_tokens(
+        auth_tokens: RpcTokens,
+        workspaces: WorkspaceRegistry,
+        durable_store: EncryptedStore,
+    ) -> Self {
         Self {
-            auth_token,
+            auth_tokens,
             workspaces,
             pending_requests: Arc::new(Mutex::new(VecDeque::new())),
             durable_store: Some(durable_store),
@@ -77,15 +288,27 @@ impl RpcService {
 
     #[must_use]
     pub fn auth_token(&self) -> &str {
-        &self.auth_token
+        &self.auth_tokens.administrator
+    }
+
+    #[must_use]
+    pub fn auth_tokens(&self) -> &RpcTokens {
+        &self.auth_tokens
     }
 
     pub fn handle(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         if request.jsonrpc != "2.0" {
             return error(request.id, -32600, "Only JSON-RPC 2.0 is supported");
         }
-        if request.auth_token != self.auth_token {
+        let Some(role) = self.auth_tokens.role_for(&request.auth_token) else {
             return error(request.id, -32001, "Local authentication failed");
+        };
+        if !role_allows(role, &request.method) {
+            return error(
+                request.id,
+                -32002,
+                "Local capability does not allow this method",
+            );
         }
         match request.method.as_str() {
             "system.health" => success(
@@ -118,25 +341,36 @@ impl RpcService {
                     .get("repositoryIdentity")
                     .and_then(Value::as_str);
                 match (root, identity) {
-                    (Some(root), Some(identity)) => {
-                        match self
-                            .workspaces
-                            .enroll(&PathBuf::from(root), identity.to_owned())
-                        {
-                            Ok(workspace) => {
-                                if let Some(store) = &self.durable_store
-                                    && let Err(reason) = store.upsert_workspace(&workspace)
-                                {
-                                    return error(request.id, -32050, &reason.to_string());
-                                }
-                                success(
-                                    request.id,
-                                    json!({ "workspaceId": workspace.id, "root": workspace.root }),
-                                )
+                    (Some(root), Some(identity)) => match self
+                        .workspaces
+                        .prepare_enrollment(&PathBuf::from(root), identity.to_owned())
+                    {
+                        Ok(workspace) => {
+                            if let Some(store) = &self.durable_store
+                                && let Err(reason) = store.stage_workspace(&workspace)
+                            {
+                                return error(request.id, -32050, &reason.to_string());
                             }
-                            Err(reason) => error(request.id, -32010, &reason.to_string()),
+                            if let Some(store) = &self.durable_store
+                                && let Err(reason) = store.commit_workspace(workspace.id)
+                            {
+                                let _ = store.delete_workspace(workspace.id);
+                                return error(request.id, -32050, &reason.to_string());
+                            }
+                            if let Err(reason) = self.workspaces.commit_enrollment(&workspace) {
+                                if let Some(store) = &self.durable_store {
+                                    let _ = store.mark_workspace_pending(workspace.id);
+                                    let _ = store.delete_workspace(workspace.id);
+                                }
+                                return error(request.id, -32010, &reason.to_string());
+                            }
+                            success(
+                                request.id,
+                                json!({ "workspaceId": workspace.id, "root": workspace.root }),
+                            )
                         }
-                    }
+                        Err(reason) => error(request.id, -32010, &reason.to_string()),
+                    },
                     _ => error(
                         request.id,
                         -32602,
@@ -187,30 +421,102 @@ impl RpcService {
                     _ => error(request.id, -32602, "workspaceId and query are required"),
                 }
             }
-            "integration.resolve_context" => {
+            "integration.ingest_lifecycle" => {
+                if !valid_lifecycle_ingress_request(&request.params) {
+                    return error(
+                        request.id,
+                        -32602,
+                        "Lifecycle event does not match the closed ingress schema",
+                    );
+                }
+                let (Some(cwd), Some(source), Some(source_event), Some(session_id)) = (
+                    request.params.get("cwd").and_then(Value::as_str),
+                    request.params.get("source").and_then(Value::as_str),
+                    request.params.get("sourceEvent").and_then(Value::as_str),
+                    request.params.get("sessionId").and_then(Value::as_str),
+                ) else {
+                    return error(request.id, -32602, "Lifecycle event fields are required");
+                };
+                let cwd = cwd.to_owned();
+                let source = source.to_owned();
+                let source_event = source_event.to_owned();
+                let session_id = session_id.to_owned();
+                let Some(store) = &self.durable_store else {
+                    return error(request.id, -32050, "Durable state is unavailable");
+                };
+                let workspace = match self.workspaces.resolve_for_path(&PathBuf::from(cwd)) {
+                    Ok(workspace) => workspace,
+                    Err(reason) => return error(request.id, -32012, &reason.to_string()),
+                };
+                let session_key = format!("{source}:{session_id}");
+                let mut params = request.params;
+                let Some(object) = params.as_object_mut() else {
+                    return error(request.id, -32602, "Lifecycle params must be an object");
+                };
+                object.remove("cwd");
+                if contains_forbidden_field(&params) {
+                    return error(
+                        request.id,
+                        -32602,
+                        "Lifecycle event contains a forbidden raw-content field",
+                    );
+                }
+                let request_id = Uuid::now_v7().to_string();
+                let queued_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_millis())
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                match store.ingest_lifecycle_request(
+                    &session_key,
+                    workspace.id,
+                    lifecycle_session_state(&source_event),
+                    &request_id,
+                    params,
+                    queued_at,
+                ) {
+                    Ok((_workstream_id, inserted)) => success(
+                        request.id,
+                        json!({
+                            "accepted": true,
+                            "queued": true,
+                            "duplicate": !inserted,
+                            "requestId": request_id,
+                        }),
+                    ),
+                    Err(reason) => error(request.id, -32050, &reason.to_string()),
+                }
+            }
+            "integration.current_context" => {
                 let cwd = request.params.get("cwd").and_then(Value::as_str);
                 let source = request.params.get("source").and_then(Value::as_str);
-                let session_id = request.params.get("sessionId").and_then(Value::as_str);
-                match (&self.durable_store, cwd, source, session_id) {
-                    (Some(store), Some(cwd), Some(source), Some(session_id))
-                        if !source.is_empty() && !session_id.is_empty() =>
+                let client_session_id = request
+                    .params
+                    .get("clientSessionId")
+                    .and_then(Value::as_str);
+                match (&self.durable_store, cwd, source, client_session_id) {
+                    (Some(store), Some(cwd), Some(source), Some(client_session_id))
+                        if is_integration_source(source)
+                            && !client_session_id.is_empty()
+                            && client_session_id.len() <= 240 =>
                     {
                         match self.workspaces.resolve_for_path(&PathBuf::from(cwd)) {
-                            Ok(workspace) => {
-                                let session_key = format!("{source}:{session_id}");
-                                match store
-                                    .resolve_integration_workstream(&session_key, workspace.id)
-                                {
-                                    Ok(workstream_id) => success(
-                                        request.id,
-                                        json!({
-                                            "workspaceId": workspace.id,
-                                            "workstreamId": workstream_id,
-                                        }),
-                                    ),
-                                    Err(reason) => error(request.id, -32050, &reason.to_string()),
-                                }
-                            }
+                            Ok(workspace) => match store.resolve_mcp_integration_workstream(
+                                source,
+                                client_session_id,
+                                workspace.id,
+                            ) {
+                                Ok((_session_key, workstream_id)) => success(
+                                    request.id,
+                                    json!({
+                                        "workspaceId": workspace.id,
+                                        "workstreamId": workstream_id,
+                                        "source": source,
+                                        "sessionId": client_session_id,
+                                    }),
+                                ),
+                                Err(reason) => error(request.id, -32050, &reason.to_string()),
+                            },
                             Err(reason) => error(request.id, -32012, &reason.to_string()),
                         }
                     }
@@ -218,7 +524,7 @@ impl RpcService {
                     _ => error(
                         request.id,
                         -32602,
-                        "cwd, source, and sessionId are required",
+                        "cwd, a supported source, and clientSessionId are required",
                     ),
                 }
             }
@@ -322,7 +628,21 @@ impl RpcService {
                 let request_id = request.params.get("requestId").and_then(Value::as_str);
                 match (&self.durable_store, request_id) {
                     (Some(store), Some(request_id)) => {
-                        match store.representative_request_result(request_id) {
+                        let workspace_id = if role == RpcRole::Mcp {
+                            let Some(workspace_id) = parse_workspace_id(&request.params) else {
+                                return error(
+                                    request.id,
+                                    -32602,
+                                    "workspaceId is required for MCP result lookup",
+                                );
+                            };
+                            Some(workspace_id)
+                        } else {
+                            None
+                        };
+                        match store
+                            .representative_request_result_for_workspace(request_id, workspace_id)
+                        {
                             Ok(Some(result)) => success(request.id, result),
                             Ok(None) => {
                                 error(request.id, -32013, "Representative request was not found")
@@ -332,6 +652,17 @@ impl RpcService {
                     }
                     (None, _) => error(request.id, -32050, "Durable state is unavailable"),
                     (_, None) => error(request.id, -32602, "requestId is required"),
+                }
+            }
+            "representative.ingest_adapter_event" => {
+                if valid_adapter_event_request(&request.params) {
+                    self.queue_representative_request(request)
+                } else {
+                    error(
+                        request.id,
+                        -32602,
+                        "Adapter event does not match the closed lifecycle schema",
+                    )
                 }
             }
             method if method.starts_with("representative.") => {
@@ -731,23 +1062,46 @@ fn group_id(params: &Value) -> Option<String> {
 fn contains_forbidden_field(value: &Value) -> bool {
     const FORBIDDEN: &[&str] = &[
         "prompt",
-        "assistantResponse",
-        "chainOfThought",
-        "toolInput",
-        "toolOutput",
-        "terminalOutput",
-        "fileContent",
-        "accessToken",
-        "apiKey",
+        "prompttext",
+        "assistantresponse",
+        "chainofthought",
+        "toolinput",
+        "tooloutput",
+        "toolresponse",
+        "terminaloutput",
+        "stdout",
+        "stderr",
+        "filecontent",
+        "accesstoken",
+        "authorization",
+        "apikey",
+        "command",
+        "toolresult",
         "secret",
     ];
     match value {
         Value::Array(values) => values.iter().any(contains_forbidden_field),
         Value::Object(map) => map.iter().any(|(key, value)| {
-            FORBIDDEN.contains(&key.as_str()) || contains_forbidden_field(value)
+            let normalized = key
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            FORBIDDEN.contains(&normalized.as_str()) || contains_forbidden_field(value)
         }),
+        Value::String(value) => looks_like_secret(value),
         _ => false,
     }
+}
+
+fn looks_like_secret(value: &str) -> bool {
+    value.split_whitespace().any(|word| {
+        (word.starts_with("sk-") && word.len() >= 19)
+            || (word.starts_with("AKIA") && word.len() == 20)
+            || (word.starts_with("ghp_") && word.len() >= 24)
+    }) || value
+        .split_once("Bearer ")
+        .is_some_and(|(_, token)| token.trim().len() >= 16)
 }
 
 fn success(id: Value, result: Value) -> JsonRpcResponse {
@@ -777,7 +1131,7 @@ mod tests {
     use tempfile::tempdir;
     use uuid::Uuid;
 
-    use super::{JsonRpcRequest, RpcService, contains_forbidden_field};
+    use super::{JsonRpcRequest, RpcService, RpcTokens, contains_forbidden_field};
     use crate::storage::{CredentialStore, EncryptedStore, StorageError};
     use crate::workspace::WorkspaceRegistry;
 
@@ -787,6 +1141,149 @@ mod tests {
         fn load_or_create_database_key(&self) -> Result<String, StorageError> {
             Ok("dGVzdC1rZXktZm9yLWludGVybw==".into())
         }
+    }
+
+    #[test]
+    fn enforces_local_capability_method_boundaries() {
+        let directory = tempdir().expect("database directory");
+        let store = EncryptedStore::open(&directory.path().join("intero.db"), &TestCredentials)
+            .expect("database");
+        let service = RpcService::new_durable_with_tokens(
+            RpcTokens {
+                administrator: "administrator-token".into(),
+                hook_ingress: "hook-ingress-token".into(),
+                mcp: "mcp-capability-token".into(),
+                sidecar: "sidecar-capability-token".into(),
+            },
+            WorkspaceRegistry::default(),
+            store,
+        );
+
+        for (token, method) in [
+            ("hook-ingress-token", "workspace.list"),
+            ("hook-ingress-token", "settings.get"),
+            ("mcp-capability-token", "workspace.enroll"),
+            ("mcp-capability-token", "state.list_events"),
+            ("sidecar-capability-token", "workspace.list"),
+            ("sidecar-capability-token", "settings.set_model_egress"),
+        ] {
+            let response = service.handle(JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                id: serde_json::json!(1),
+                method: method.into(),
+                params: serde_json::json!({}),
+                auth_token: token.into(),
+            });
+            assert_eq!(
+                response.error.expect("capability should be denied").code,
+                -32002,
+                "{token} unexpectedly called {method}"
+            );
+        }
+
+        let administrator = service.handle(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::json!(2),
+            method: "workspace.list".into(),
+            params: serde_json::json!({}),
+            auth_token: "administrator-token".into(),
+        });
+        assert!(administrator.error.is_none());
+    }
+
+    #[test]
+    fn binds_mcp_to_the_only_active_workspace_session() {
+        let directory = tempdir().expect("database directory");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir(&workspace_root).expect("workspace");
+        let registry = WorkspaceRegistry::default();
+        let workspace = registry
+            .enroll(&workspace_root, "repo:test".into())
+            .expect("enrollment");
+        let store = EncryptedStore::open(&directory.path().join("intero.db"), &TestCredentials)
+            .expect("database");
+        store
+            .upsert_workspace(&workspace)
+            .expect("workspace storage");
+        let workstream_id = store
+            .resolve_integration_workstream("codex:session-1", workspace.id)
+            .expect("integration session");
+        let service = RpcService::new_durable_with_tokens(
+            RpcTokens {
+                administrator: "administrator-token".into(),
+                hook_ingress: "hook-ingress-token".into(),
+                mcp: "mcp-capability-token".into(),
+                sidecar: "sidecar-capability-token".into(),
+            },
+            registry,
+            store,
+        );
+
+        let response = service.handle(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::json!(1),
+            method: "integration.current_context".into(),
+            params: serde_json::json!({
+                "cwd": workspace_root,
+                "source": "codex",
+                "clientSessionId": "mcp-process-1",
+            }),
+            auth_token: "mcp-capability-token".into(),
+        });
+        let expected_workstream_id = workstream_id.to_string();
+        assert_eq!(
+            response
+                .result
+                .expect("context")
+                .get("workstreamId")
+                .and_then(Value::as_str),
+            Some(expected_workstream_id.as_str())
+        );
+    }
+
+    #[test]
+    fn refuses_to_guess_between_concurrent_agent_sessions() {
+        let directory = tempdir().expect("database directory");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir(&workspace_root).expect("workspace");
+        let registry = WorkspaceRegistry::default();
+        let workspace = registry
+            .enroll(&workspace_root, "repo:test".into())
+            .expect("enrollment");
+        let store = EncryptedStore::open(&directory.path().join("intero.db"), &TestCredentials)
+            .expect("database");
+        store
+            .resolve_integration_workstream("codex:session-1", workspace.id)
+            .expect("first session");
+        store
+            .resolve_integration_workstream("codex:session-2", workspace.id)
+            .expect("second session");
+        let service = RpcService::new_durable_with_tokens(
+            RpcTokens {
+                administrator: "administrator-token".into(),
+                hook_ingress: "hook-ingress-token".into(),
+                mcp: "mcp-capability-token".into(),
+                sidecar: "sidecar-capability-token".into(),
+            },
+            registry,
+            store,
+        );
+
+        let response = service.handle(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::json!(1),
+            method: "integration.current_context".into(),
+            params: serde_json::json!({
+                "cwd": workspace_root,
+                "source": "codex",
+                "clientSessionId": "mcp-process-1",
+            }),
+            auth_token: "mcp-capability-token".into(),
+        });
+        assert_eq!(
+            response.error.expect("ambiguous context should fail").code,
+            -32050
+        );
     }
 
     #[test]

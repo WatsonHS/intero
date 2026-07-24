@@ -79,7 +79,9 @@ function resolvedPhase(
   if (collectValues(claims, "blocker", now).length > 0) return "blocked";
   if (selectClaim(claims, "completed", now)?.value === "true")
     return "completed";
-  if (selectClaim(claims, "paused", now)?.value === "true") return "paused";
+  const paused = selectClaim(claims, "paused", now)?.value;
+  if (paused === "true") return "paused";
+  if (paused === "false" && previous === "paused") return "implementing";
   return previous;
 }
 

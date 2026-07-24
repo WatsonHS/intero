@@ -30,7 +30,7 @@ interface QueuedRequest {
 export async function runSidecar(
   runtime: LocalRepresentativeRuntime,
 ): Promise<never> {
-  const connection = await loadConnectionSettings();
+  const connection = await loadConnectionSettings({ role: "sidecar" });
   const daemon = new SocketDaemonClient(
     connection.socketPath,
     connection.authToken,
@@ -195,6 +195,12 @@ function requestToEvent(
       sourceEvent,
       workspaceId: workspaceId as WorkspaceId,
       workstreamId: workstreamId as WorkstreamId,
+      ...(stringParam(request.params, "sessionId")
+        ? { sessionId: stringParam(request.params, "sessionId")! }
+        : {}),
+      ...(stringParam(request.params, "eventId")
+        ? { eventId: stringParam(request.params, "eventId")! }
+        : {}),
       ...(stringParam(request.params, "occurredAt")
         ? { occurredAt: stringParam(request.params, "occurredAt")! }
         : {}),

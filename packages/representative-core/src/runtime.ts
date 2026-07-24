@@ -11,10 +11,10 @@ import { buildPublicProjection } from "./public-projection.js";
 export interface RepresentativePorts {
   loadWorkstream(id: Workstream["id"]): Promise<Workstream>;
   loadClaims(id: Workstream["id"]): Promise<Claim[]>;
-  eventToClaim(
+  eventToClaims(
     event: CanonicalWorkEvent,
     workstream: Workstream,
-  ): Promise<Claim | undefined>;
+  ): Promise<Claim[]>;
   saveClaim(claim: Claim): Promise<void>;
   saveWorkstream(workstream: Workstream): Promise<void>;
   publishProjection(projection: PublicWorkProjection): Promise<void>;
@@ -38,8 +38,8 @@ export async function processCanonicalEvent(
   const current = await ports.loadWorkstream(event.workstreamId);
   if (!firstProcessing) return { workstream: current, duplicate: true };
 
-  const claim = await ports.eventToClaim(event, current);
-  if (claim) await ports.saveClaim(claim);
+  const newClaims = await ports.eventToClaims(event, current);
+  for (const claim of newClaims) await ports.saveClaim(claim);
   const claims = await ports.loadClaims(event.workstreamId);
   const next = resolveWorkstream({ workstream: current, claims });
   await ports.saveWorkstream(next);

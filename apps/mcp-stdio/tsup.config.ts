@@ -4,6 +4,6 @@ export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   clean: true,
-  noExternal: [/^@intero\//],
+  noExternal: [/.*/],
   banner: { js: "#!/usr/bin/env node" },
 });

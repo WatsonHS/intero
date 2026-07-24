@@ -1525,6 +1525,91 @@ input:focus-visible {
   gap: 9px;
 }
 
+.integration-list {
+  align-content: start;
+}
+
+.integration-disclosure {
+  margin: 0 0 3px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+  background: var(--paper-deep);
+  border-left: 2px solid var(--green);
+}
+
+.integration-card {
+  display: grid;
+  grid-template-columns: 38px minmax(140px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 16px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--line);
+}
+
+.integration-card__mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: var(--paper);
+  font-size: 9px;
+  font-weight: 760;
+  background: var(--ink);
+}
+
+.integration-card__identity {
+  display: grid;
+}
+
+.integration-card__identity strong {
+  font-size: 11px;
+}
+
+.integration-card__identity small {
+  max-width: 260px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-state {
+  color: var(--faint);
+  font-size: 8px;
+  font-weight: 690;
+  text-transform: uppercase;
+}
+
+.integration-card > button {
+  min-width: 58px;
+  padding: 7px 10px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  background: transparent;
+  border: 1px solid rgba(200, 90, 66, 0.3);
+  cursor: pointer;
+}
+
+.integration-card > button:disabled {
+  color: var(--faint);
+  border-color: var(--line);
+  cursor: wait;
+}
+
+.integration-card > p {
+  grid-column: 2 / -1;
+  margin: -3px 0 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
 .setting-revoked {
   margin-left: auto;
   color: var(--faint);

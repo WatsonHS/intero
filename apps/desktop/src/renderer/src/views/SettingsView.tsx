@@ -5,11 +5,18 @@ import {
   GlobeHemisphereWestIcon,
   HardDrivesIcon,
   KeyIcon,
+  PlugsConnectedIcon,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getLocalRuntimeStatus, setModelEgress } from "../api.js";
-import { type Locale, useI18n } from "../i18n/index.js";
+import {
+  getCodingAgentIntegrations,
+  getLocalRuntimeStatus,
+  manageCodingAgentIntegration,
+  previewCodingAgentIntegration,
+  setModelEgress,
+} from "../api.js";
+import { type Locale, type TranslationKey, useI18n } from "../i18n/index.js";
 
 export function SettingsView() {
   const { locale, setLocale, t } = useI18n();
@@ -27,6 +34,30 @@ export function SettingsView() {
         (current) =>
           current?.available ? { ...current, modelEgress } : current,
       );
+    },
+  });
+  const integrations = useQuery({
+    queryKey: ["coding-agent-integrations"],
+    queryFn: getCodingAgentIntegrations,
+    refetchInterval: 10_000,
+  });
+  const manageIntegration = useMutation({
+    mutationFn: async (input: {
+      adapter: CodingAgentAdapter;
+      action: CodingAgentIntegrationAction;
+    }) => {
+      const preview = await previewCodingAgentIntegration({
+        ...input,
+        locale,
+      });
+      if (!preview) return undefined;
+      return manageCodingAgentIntegration({
+        adapter: input.adapter,
+        token: preview.token,
+      });
+    },
+    onSuccess: (next) => {
+      if (next) queryClient.setQueryData(["coding-agent-integrations"], next);
     },
   });
   const localState = local.data?.available ? local.data : undefined;
@@ -91,6 +122,48 @@ export function SettingsView() {
               {unavailableReason === "desktop_required"
                 ? t("settings.desktopRequired")
                 : t("settings.daemonUnavailable")}
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section__intro">
+          <PlugsConnectedIcon size={22} />
+          <div>
+            <h2>{t("settings.codingAgents")}</h2>
+            <p>{t("settings.codingAgentsDetail")}</p>
+          </div>
+        </div>
+        <div className="settings-content integration-list">
+          <p className="integration-disclosure">
+            {t("settings.integrationDisclosure")}
+          </p>
+          {integrations.data?.map((integration) => (
+            <IntegrationCard
+              key={integration.adapter}
+              integration={integration}
+              busy={
+                manageIntegration.isPending &&
+                manageIntegration.variables?.adapter === integration.adapter
+              }
+              onAction={(action) => {
+                manageIntegration.mutate({
+                  adapter: integration.adapter,
+                  action,
+                });
+              }}
+            />
+          ))}
+          {integrations.isPending ? (
+            <p className="quiet-copy">{t("general.loading")}</p>
+          ) : null}
+          {!integrations.isPending && integrations.data?.length === 0 ? (
+            <p className="inline-error">{t("settings.desktopRequired")}</p>
+          ) : null}
+          {manageIntegration.isError || integrations.isError ? (
+            <p className="composer-error" role="alert">
+              {t("settings.integrationActionFailed")}
             </p>
           ) : null}
         </div>
@@ -203,6 +276,80 @@ export function SettingsView() {
         ) : null}
       </section>
     </div>
+  );
+}
+
+function IntegrationCard({
+  integration,
+  busy,
+  onAction,
+}: {
+  integration: CodingAgentIntegrationStatus;
+  busy: boolean;
+  onAction: (action: CodingAgentIntegrationAction) => void;
+}) {
+  const { t } = useI18n();
+  const configured = integration.configured;
+  const action: CodingAgentIntegrationAction =
+    integration.state === "needs_repair"
+      ? "repair"
+      : configured
+        ? "uninstall"
+        : "install";
+  const adapterName =
+    integration.adapter === "claude-code"
+      ? "Claude Code"
+      : integration.adapter === "opencode"
+        ? "OpenCode"
+        : "Codex";
+  const stateKey: TranslationKey = `settings.integrationState.${integration.state}`;
+  const actionKey: TranslationKey = `settings.integrationAction.${action}`;
+
+  return (
+    <article className="integration-card">
+      <span className="integration-card__mark">
+        {adapterName.slice(0, 2).toUpperCase()}
+      </span>
+      <span className="integration-card__identity">
+        <strong>{adapterName}</strong>
+        <small>
+          {integration.detected
+            ? integration.version
+            : t("settings.notDetected")}
+        </small>
+      </span>
+      <span
+        className={
+          integration.state === "needs_repair"
+            ? "setting-revoked"
+            : configured
+              ? "setting-ok"
+              : "integration-state"
+        }
+      >
+        {configured ? <CheckIcon size={13} /> : null}
+        {t(stateKey)}
+      </span>
+      <button
+        type="button"
+        disabled={busy || (!integration.supported && action !== "uninstall")}
+        onClick={() => onAction(action)}
+      >
+        {busy ? t("settings.integrationWorking") : t(actionKey)}
+      </button>
+      {integration.state === "pending_trust" ? (
+        <p>{t("settings.codexTrust")}</p>
+      ) : null}
+      {integration.warnings.map((warning) => (
+        <p key={warning}>
+          {warning === "codex_override_shadows_instructions"
+            ? t("settings.codexOverrideWarning")
+            : warning === "agent_runtime_unreachable"
+              ? t("settings.agentRuntimeUnreachable")
+              : warning}
+        </p>
+      ))}
+    </article>
   );
 }
 

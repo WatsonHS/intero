@@ -162,6 +162,38 @@ export async function setModelEgress(
   return window.interoDesktop.setModelEgress(mode);
 }
 
+export async function getCodingAgentIntegrations(): Promise<
+  CodingAgentIntegrationStatus[]
+> {
+  if (typeof window === "undefined" || !window.interoDesktop) return [];
+  return window.interoDesktop.getIntegrationStatus();
+}
+
+export async function previewCodingAgentIntegration(input: {
+  adapter: CodingAgentAdapter;
+  action: CodingAgentIntegrationAction;
+  locale: "zh-CN" | "en-US";
+}): Promise<CodingAgentIntegrationPreview | null> {
+  if (typeof window === "undefined" || !window.interoDesktop) {
+    throw new Error("Integration management requires Intero Desktop.");
+  }
+  return window.interoDesktop.previewIntegration(
+    input.adapter,
+    input.action,
+    input.locale,
+  );
+}
+
+export async function manageCodingAgentIntegration(input: {
+  adapter: CodingAgentAdapter;
+  token: string;
+}): Promise<CodingAgentIntegrationStatus[]> {
+  if (typeof window === "undefined" || !window.interoDesktop) {
+    throw new Error("Integration management requires Intero Desktop.");
+  }
+  return window.interoDesktop.manageIntegration(input.token);
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(
     `${API_URL}${path}`,
