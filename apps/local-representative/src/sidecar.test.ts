@@ -3,7 +3,7 @@ import { uuidv7 } from "@intero/domain";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { LocalRepresentativeRuntime } from "./runtime";
-import { processQueuedRequest } from "./sidecar";
+import { processQueuedRequest, refreshRuntimeSettings } from "./sidecar";
 
 class MemoryDaemon implements DaemonClient {
   readonly events: unknown[] = [];
@@ -15,6 +15,9 @@ class MemoryDaemon implements DaemonClient {
   ): Promise<unknown> {
     if (method === "system.health") {
       return { status: "ok", version: "0.1.0", protocolVersion: 1 };
+    }
+    if (method === "settings.get") {
+      return { modelEgress: "managed_api" };
     }
     if (method === "representative.complete_request") {
       this.completions.push(params.result);
@@ -55,5 +58,14 @@ describe("Local Representative sidecar", () => {
     expect(runtime.projections).toHaveLength(1);
     expect(daemon.completions).toHaveLength(2);
     expect(daemon.completions[1]).toMatchObject({ duplicate: true });
+  });
+
+  it("applies the daemon-owned model policy to the running runtime", async () => {
+    const daemon = new MemoryDaemon();
+    const runtime = new LocalRepresentativeRuntime("disabled");
+
+    await refreshRuntimeSettings(daemon, runtime);
+
+    expect(runtime.modelEgressMode).toBe("managed_api");
   });
 });

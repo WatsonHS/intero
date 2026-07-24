@@ -47,6 +47,17 @@ export async function runSidecar(
   for (;;) {
     if (Date.now() >= nextHeartbeatAt) {
       try {
+        await refreshRuntimeSettings(daemon, runtime);
+      } catch (error) {
+        process.stderr.write(
+          `${JSON.stringify({
+            level: "warn",
+            operation: "representative.settings_refresh",
+            error: error instanceof Error ? error.message : "unknown_error",
+          })}\n`,
+        );
+      }
+      try {
         await reportRuntimeHeartbeat();
         nextHeartbeatAt = Date.now() + 5_000;
       } catch (error) {
@@ -82,6 +93,24 @@ export async function runSidecar(
       await delay(1_000);
     }
   }
+}
+
+export async function refreshRuntimeSettings(
+  daemon: DaemonClient,
+  runtime: LocalRepresentativeRuntime,
+): Promise<void> {
+  const settings = (await daemon.call("settings.get", {})) as {
+    modelEgress?: unknown;
+  };
+  if (
+    settings.modelEgress === "managed_api" ||
+    settings.modelEgress === "user_provided_api" ||
+    settings.modelEgress === "disabled"
+  ) {
+    runtime.setModelEgressMode(settings.modelEgress);
+    return;
+  }
+  throw new Error("interod returned an invalid model egress policy.");
 }
 
 async function reportRuntimeHeartbeat(): Promise<void> {

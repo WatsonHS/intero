@@ -19,9 +19,13 @@ export class LocalRepresentativeRuntime implements RepresentativePorts {
   readonly processed = new Set<string>();
 
   constructor(
-    readonly modelEgressMode: ModelEgressMode,
+    public modelEgressMode: ModelEgressMode,
     readonly principalId = "019b5ac0-7600-7000-8000-000000000002" as Workstream["ownerId"],
   ) {}
+
+  setModelEgressMode(mode: ModelEgressMode): void {
+    this.modelEgressMode = mode;
+  }
 
   async handle(event: CanonicalWorkEvent) {
     if (event.workstreamId && !this.workstreams.has(event.workstreamId)) {

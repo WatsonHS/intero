@@ -3,7 +3,7 @@ import { AttachmentService } from "@intero/attachments";
 import {
   OrganizationId,
   type Claim,
-  type PrincipalId,
+  PrincipalId,
   type ThreadId,
   type ThreadMessage,
   type Workstream,
@@ -17,7 +17,11 @@ import { createInteroAuth, type MagicLinkSender } from "./auth.js";
 import type { PlatformStore } from "./platform-store.js";
 import { PostgresPlatformStore } from "./postgres-store.js";
 import { SpiceDbAuthorization } from "./spicedb-authorization.js";
-import { InMemoryPlatformStore, seedDemoStore } from "./store.js";
+import {
+  demoSeedingEnabled,
+  InMemoryPlatformStore,
+  seedDemoStore,
+} from "./store.js";
 
 class WebhookMagicLinkSender implements MagicLinkSender {
   constructor(private readonly endpoint: string) {}
@@ -42,27 +46,43 @@ class WebhookMagicLinkSender implements MagicLinkSender {
 
 const config = loadRuntimeConfig();
 const databaseUrl = process.env.INTERO_DATABASE_URL;
+const organizationId = OrganizationId.parse(
+  process.env.INTERO_ORGANIZATION_ID ?? "019b5ac0-7600-7000-8000-000000000001",
+);
+const organizationName =
+  process.env.INTERO_ORGANIZATION_NAME ?? "Intero Development";
+const currentPrincipal = {
+  id: PrincipalId.parse(
+    process.env.INTERO_PRINCIPAL_ID ?? "019b5ac0-7600-7000-8000-000000000002",
+  ),
+  displayName: process.env.INTERO_PRINCIPAL_NAME ?? "Intero User",
+  kind: "human" as const,
+};
+const localRepresentativeId = PrincipalId.parse(
+  process.env.INTERO_LOCAL_REPRESENTATIVE_ID ??
+    "019b5ac0-7600-7000-8000-000000000003",
+);
+const representativePrincipal = {
+  id: localRepresentativeId,
+  displayName:
+    process.env.INTERO_LOCAL_REPRESENTATIVE_NAME ?? "Intero Representative",
+  kind: "representative" as const,
+};
 let authDatabase: Pool | undefined;
 let attachments: AttachmentService | undefined;
 let store: PlatformStore;
 if (databaseUrl) {
-  const organizationId = OrganizationId.parse(
-    process.env.INTERO_ORGANIZATION_ID ??
-      "019b5ac0-7600-7000-8000-000000000001",
-  );
   const pool = new Pool({ connectionString: databaseUrl });
   authDatabase = pool;
   const postgresStore = new PostgresPlatformStore(pool, organizationId);
-  await postgresStore.initializeOrganization(
-    process.env.INTERO_ORGANIZATION_NAME ?? "Intero Development",
-  );
+  await postgresStore.initializeOrganization(organizationName);
   if (
-    process.env.INTERO_SEED_DEMO !== "false" &&
+    demoSeedingEnabled(process.env.INTERO_SEED_DEMO) &&
     (await postgresStore.listProjections()).length === 0
   ) {
     await seedPostgresDemo(postgresStore);
   }
-  if (process.env.INTERO_SEED_DEMO !== "false") {
+  if (demoSeedingEnabled(process.env.INTERO_SEED_DEMO)) {
     await ensureDemoThreads(postgresStore);
   }
   store = postgresStore;
@@ -83,7 +103,8 @@ if (databaseUrl) {
   await attachments.ensureBucket();
 } else {
   const memoryStore = new InMemoryPlatformStore();
-  if (process.env.INTERO_SEED_DEMO !== "false") seedDemoStore(memoryStore);
+  if (demoSeedingEnabled(process.env.INTERO_SEED_DEMO))
+    seedDemoStore(memoryStore);
   store = memoryStore;
 }
 const authSecret = process.env.INTERO_AUTH_SECRET;
@@ -121,6 +142,10 @@ const authorization =
     : undefined;
 const app = await buildApp({
   store,
+  organization: { id: organizationId, name: organizationName },
+  currentPrincipal,
+  representativePrincipal,
+  inboxPrincipalIds: [currentPrincipal.id, localRepresentativeId],
   ...(auth ? { auth } : {}),
   ...(authorization ? { authorization } : {}),
   ...(attachments ? { attachments } : {}),

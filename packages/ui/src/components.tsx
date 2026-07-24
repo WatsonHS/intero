@@ -5,8 +5,13 @@ import {
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 
-export function PhaseLabel({ phase }: { phase: string }) {
-  const label = phase.replace("_", " ");
+export function PhaseLabel({
+  phase,
+  label = phase.replace("_", " "),
+}: {
+  phase: string;
+  label?: string;
+}) {
   return (
     <span className={`phase-label phase-label--${phase}`}>
       <span className="phase-label__dot" aria-hidden="true" />
@@ -18,9 +23,11 @@ export function PhaseLabel({ phase }: { phase: string }) {
 export function FreshnessLabel({
   timestamp,
   stale = false,
+  label,
 }: {
   timestamp: string;
   stale?: boolean;
+  label?: string;
 }) {
   const minutes = Math.max(
     0,
@@ -29,16 +36,22 @@ export function FreshnessLabel({
   return (
     <span className={stale ? "freshness freshness--stale" : "freshness"}>
       <ClockCountdownIcon size={14} weight="regular" aria-hidden="true" />
-      {minutes === 0 ? "now" : `${minutes}m ago`}
+      {label ?? (minutes === 0 ? "now" : `${minutes}m ago`)}
     </span>
   );
 }
 
-export function ConfidenceBar({ value }: { value: number }) {
+export function ConfidenceBar({
+  value,
+  label,
+}: {
+  value: number;
+  label?: string;
+}) {
   return (
     <div
       className="confidence"
-      aria-label={`${Math.round(value * 100)} percent confidence`}
+      aria-label={label ?? `${Math.round(value * 100)} percent confidence`}
     >
       <span className="confidence__track">
         <span
@@ -98,9 +111,13 @@ export function EmptyState({
   );
 }
 
-export function LoadingRows() {
+export function LoadingRows({
+  label = "Loading Team Pulse",
+}: {
+  label?: string;
+}) {
   return (
-    <div className="loading-rows" aria-label="Loading Team Pulse">
+    <div className="loading-rows" aria-label={label}>
       {[0, 1, 2].map((row) => (
         <div className="loading-row" key={row}>
           <span />

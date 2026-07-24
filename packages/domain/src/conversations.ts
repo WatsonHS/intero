@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { MessageId, PrincipalId, ThreadId } from "./ids.js";
+import { MessageId, OperationId, PrincipalId, ThreadId } from "./ids.js";
 
 export const ThreadKind = z.enum([
   "human_direct",
@@ -44,6 +44,7 @@ export const ThreadMessage = z
     createdAt: z.iso.datetime(),
     serverReadable: z.boolean(),
     encryptedBody: z.string().max(100_000).optional(),
+    operationId: OperationId.optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;

@@ -56,7 +56,29 @@ export const CreateClaimRequest = Claim;
 export const TeamPulseResponse = z.object({
   generatedAt: z.iso.datetime(),
   projections: z.array(PublicWorkProjection),
+  principals: z.array(
+    z.object({
+      id: z.string().uuid(),
+      displayName: z.string().min(1).max(200),
+      kind: z.enum(["human", "representative", "service"]),
+    }),
+  ),
   staleAfterSeconds: z.number().int().positive(),
+});
+
+export const PrincipalSummary = z.object({
+  id: z.string().uuid(),
+  displayName: z.string().min(1).max(200),
+  kind: z.enum(["human", "representative", "service"]),
+});
+
+export const BootstrapResponse = z.object({
+  organization: z.object({
+    id: z.string().uuid(),
+    name: z.string().min(1).max(200),
+  }),
+  currentPrincipal: PrincipalSummary,
+  representativePrincipal: PrincipalSummary,
 });
 
 export const CoordinateRequest = z.object({ envelope: ActionEnvelope });
@@ -80,6 +102,13 @@ export const AddRepresentativeRequest = z.object({
 export const ThreadResponse = z.object({
   thread: ConversationThread,
   messages: z.array(ThreadMessage),
+  principals: z.array(PrincipalSummary),
+  actions: z.array(
+    z.object({
+      envelope: ActionEnvelope,
+      status: z.literal("resolved"),
+    }),
+  ),
 });
 
 export const CreateSpecRevisionRequest = SpecRevision.omit({
@@ -97,6 +126,15 @@ export const CreateSpecRequest = Spec.omit({
   createdBy: z.string().uuid(),
 });
 export const AddReviewResponseRequest = SpecReviewResponse;
+export const SpecDetailResponse = z.object({
+  spec: Spec,
+  revisions: z.array(SpecRevision),
+  reviews: z.array(SpecReviewResponse),
+  principals: z.array(PrincipalSummary),
+});
+export const SpecListResponse = z.object({
+  items: z.array(SpecDetailResponse),
+});
 export const CreateDecisionRequest = DecisionRecord.omit({
   id: true,
   createdAt: true,

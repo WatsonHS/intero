@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
+  BootstrapResponse,
   CoordinateRequest,
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
@@ -9,13 +10,16 @@ import {
   CreateSpecRequest,
   CreateWorkstreamRequest,
   IngestEventRequest,
+  SpecListResponse,
   TeamPulseResponse,
+  ThreadResponse,
 } from "@intero/api-contracts";
 import openapiTS, { astToString } from "openapi-typescript";
 import { format } from "prettier";
 import { z } from "zod";
 
 const schemas = {
+  BootstrapResponse,
   CoordinateRequest,
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
@@ -23,7 +27,9 @@ const schemas = {
   CreateSpecRequest,
   CreateWorkstreamRequest,
   IngestEventRequest,
+  SpecListResponse,
   TeamPulseResponse,
+  ThreadResponse,
 };
 
 const document = {
@@ -49,6 +55,21 @@ const document = {
           },
         },
         responses: { "202": { description: "Accepted" } },
+      },
+    },
+    "/v1/bootstrap": {
+      get: {
+        operationId: "getBootstrap",
+        responses: {
+          "200": {
+            description: "Current organization and principal",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BootstrapResponse" },
+              },
+            },
+          },
+        },
       },
     },
     "/v1/team-pulse": {
@@ -78,6 +99,45 @@ const document = {
           },
         },
         responses: { "200": { description: "Structured coordination result" } },
+      },
+    },
+    "/v1/threads": {
+      get: {
+        operationId: "listThreads",
+        responses: {
+          "200": {
+            description: "Durable conversation threads",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    items: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/ThreadResponse" },
+                    },
+                  },
+                  required: ["items"],
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/specs": {
+      get: {
+        operationId: "listSpecs",
+        responses: {
+          "200": {
+            description: "Versioned Specs and review state",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/SpecListResponse" },
+              },
+            },
+          },
+        },
       },
     },
   },

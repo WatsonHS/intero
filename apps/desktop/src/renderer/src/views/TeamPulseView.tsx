@@ -10,15 +10,23 @@ import {
   PhaseLabel,
 } from "@intero/ui";
 
-import { getActionInbox, getOfflineStatus, getTeamPulse } from "../api.js";
-
-const DEMO_PRINCIPAL_ID = "019b5ac0-7600-7000-8000-000000000002";
+import {
+  getActionInbox,
+  getOfflineStatus,
+  getTeamPulse,
+  getThreads,
+} from "../api.js";
+import { useI18n } from "../i18n/index.js";
+import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 
 export function TeamPulseView({
   onOpenRepresentative,
+  onOpenAction,
 }: {
   onOpenRepresentative: () => void;
+  onOpenAction: (sourceRef: string) => void;
 }) {
+  const { formatDate, formatRelative, t } = useI18n();
   const pulse = useQuery({
     queryKey: ["team-pulse"],
     queryFn: ({ signal }) => getTeamPulse(signal),
@@ -32,18 +40,29 @@ export function TeamPulseView({
     queryKey: ["offline-status"],
     queryFn: ({ signal }) => getOfflineStatus(signal),
   });
+  const representativeThreads = useQuery({
+    queryKey: ["threads", "representative"],
+    queryFn: ({ signal }) => getThreads("representative", signal),
+  });
+  const principalNames = new Map(
+    pulse.data?.principals.map((principal) => [
+      principal.id,
+      principal.displayName,
+    ]) ?? [],
+  );
+  const latestRepresentativeMessage =
+    representativeThreads.data?.items[0]?.messages
+      .filter((message) => message.serverReadable)
+      .at(-1);
 
   return (
     <div className="pulse-layout">
       <section className="pulse-main">
         <header className="view-header">
           <div>
-            <p className="eyebrow">Friday, 24 July</p>
-            <h1>Team Pulse</h1>
-            <p className="view-header__lede">
-              Current intent, verified movement, and the decisions that need a
-              person.
-            </p>
+            <p className="eyebrow">{formatDate(new Date())}</p>
+            <h1>{t("pulse.title")}</h1>
+            <p className="view-header__lede">{t("pulse.lede")}</p>
           </div>
         </header>
 
@@ -52,7 +71,7 @@ export function TeamPulseView({
             <span className="pulse-summary__number">
               {pulse.data?.projections.length ?? "—"}
             </span>
-            <span>active workstreams</span>
+            <span>{t("pulse.activeWorkstreams")}</span>
           </div>
           <div>
             <span className="pulse-summary__number">
@@ -60,24 +79,34 @@ export function TeamPulseView({
                 (item) => item.phase === "blocked",
               ).length ?? "—"}
             </span>
-            <span>blocked by shared context</span>
+            <span>{t("pulse.blockedWorkstreams")}</span>
           </div>
           <div className="runtime-readout">
             <span
               className={
-                runtime.data?.stale
+                !runtime.data || runtime.data.stale
                   ? "runtime-dot runtime-dot--stale"
                   : "runtime-dot"
               }
             />
             <span>
               <strong>
-                {runtime.data?.fallback === "public"
-                  ? "Public fallback"
-                  : "Local runtime"}
+                {runtime.isPending
+                  ? t("general.loading")
+                  : runtime.data?.fallback === "public"
+                    ? t("pulse.publicFallback")
+                    : runtime.data?.fallback === "local"
+                      ? t("pulse.localRuntime")
+                      : t("general.unavailable")}
               </strong>
               <small>
-                {runtime.data?.disclosure ?? "Checking runtime freshness"}
+                {runtime.isPending
+                  ? t("pulse.checkingFreshness")
+                  : runtime.data?.localRuntime === "online"
+                    ? t("app.localConnected")
+                    : runtime.data?.freshnessAt
+                      ? formatRelative(runtime.data.freshnessAt)
+                      : t("general.none")}
               </small>
             </span>
           </div>
@@ -85,25 +114,25 @@ export function TeamPulseView({
 
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Concurrent work</p>
-            <h2>Where the team is now</h2>
+            <p className="eyebrow">{t("pulse.concurrentWork")}</p>
+            <h2>{t("pulse.whereTeamIs")}</h2>
           </div>
         </div>
 
-        {pulse.isPending ? <LoadingRows /> : null}
+        {pulse.isPending ? <LoadingRows label={t("general.loading")} /> : null}
         {pulse.isError ? (
           <div className="inline-error">
-            <strong>Team Pulse is unavailable.</strong>
+            <strong>{t("pulse.unavailable")}</strong>
             <span>{pulse.error.message}</span>
             <button type="button" onClick={() => void pulse.refetch()}>
-              Try again
+              {t("general.retry")}
             </button>
           </div>
         ) : null}
         {pulse.data?.projections.length === 0 ? (
           <EmptyState
-            title="No public Work State yet"
-            detail="Enroll a Workspace and let a Coding Agent report one semantic checkpoint."
+            title={t("pulse.emptyTitle")}
+            detail={t("pulse.emptyDetail")}
           />
         ) : null}
         <div className="workstream-list">
@@ -115,29 +144,52 @@ export function TeamPulseView({
             >
               <div className="workstream-row__owner">
                 <span className="person-avatar">
-                  {ownerInitials(workstream.ownerId)}
+                  {ownerInitials(
+                    principalNames.get(workstream.ownerId) ??
+                      workstream.ownerId,
+                  )}
                 </span>
                 <span>
-                  <strong>{ownerLabel(workstream.ownerId)}</strong>
-                  <small>Workstream owner</small>
+                  <strong>
+                    {principalNames.get(workstream.ownerId) ??
+                      workstream.ownerId.slice(0, 8)}
+                  </strong>
+                  <small>{t("pulse.owner")}</small>
                 </span>
               </div>
               <div className="workstream-row__body">
                 <div className="workstream-row__title">
-                  <PhaseLabel phase={workstream.phase} />
+                  <PhaseLabel
+                    phase={workstream.phase}
+                    label={t(`phase.${workstream.phase}` as TranslationKey)}
+                  />
                   <h3>{workstream.title}</h3>
                 </div>
                 <p>
                   {workstream.blockers[0] ??
                     workstream.dependencies[0] ??
                     workstream.decisions[0] ??
-                    "No organizational state change since the last checkpoint."}
+                    t("pulse.noMeaningfulChange")}
                 </p>
                 <div className="workstream-row__meta">
-                  <FreshnessLabel timestamp={workstream.freshnessAt} />
-                  <ConfidenceBar value={workstream.confidence} />
+                  <FreshnessLabel
+                    timestamp={workstream.freshnessAt}
+                    stale={
+                      Date.now() - Date.parse(workstream.freshnessAt) >
+                      (pulse.data?.staleAfterSeconds ?? 300) * 1_000
+                    }
+                    label={formatRelative(workstream.freshnessAt)}
+                  />
+                  <ConfidenceBar
+                    value={workstream.confidence}
+                    label={t("confidence.label", {
+                      value: Math.round(workstream.confidence * 100),
+                    })}
+                  />
                   <span>
-                    {workstream.changedFields.length} meaningful changes
+                    {t("pulse.meaningfulChanges", {
+                      count: workstream.changedFields.length,
+                    })}
                   </span>
                 </div>
               </div>
@@ -149,24 +201,32 @@ export function TeamPulseView({
       <aside className="attention-rail">
         <div className="attention-rail__header">
           <div>
-            <p className="eyebrow">Only what needs you</p>
-            <h2>Action Inbox</h2>
+            <p className="eyebrow">{t("pulse.onlyNeedsYou")}</p>
+            <h2>{t("pulse.actionInbox")}</h2>
           </div>
           <span className="count-badge">{inbox.data?.items.length ?? 0}</span>
         </div>
         <div className="attention-list">
+          {inbox.isPending ? <p>{t("general.loading")}</p> : null}
+          {inbox.isError ? (
+            <div className="inline-error">
+              <strong>{t("general.unavailable")}</strong>
+              <button type="button" onClick={() => void inbox.refetch()}>
+                {t("general.retry")}
+              </button>
+            </div>
+          ) : null}
           {inbox.data?.items.map((item) => (
             <AttentionItem
               key={item.id}
-              eyebrow={item.kind.replaceAll("_", " ")}
+              eyebrow={t(`inbox.${item.kind}` as TranslationKey)}
               title={item.title}
               detail={item.detail}
+              onOpen={() => onOpenAction(item.sourceRef)}
             />
           ))}
           {inbox.data?.items.length === 0 ? (
-            <p className="quiet-copy">
-              No decision, review, or scope expansion is waiting.
-            </p>
+            <p className="quiet-copy">{t("pulse.emptyInbox")}</p>
           ) : null}
         </div>
 
@@ -176,17 +236,17 @@ export function TeamPulseView({
               IR
             </span>
             <span>
-              <strong>Your Representative</strong>
-              <small>Local + public identity</small>
+              <strong>{t("pulse.yourRepresentative")}</strong>
+              <small>{t("pulse.oneIdentity")}</small>
             </span>
           </div>
           <p>
-            “One cross-project dependency looks material. I have not made a
-            commitment.”
+            {latestRepresentativeMessage?.body ??
+              t("pulse.noRepresentativeMessage")}
           </p>
           <button type="button" onClick={onOpenRepresentative}>
             <ChatCircleDotsIcon size={17} />
-            Open thread
+            {t("pulse.openThread")}
           </button>
         </div>
       </aside>
@@ -194,14 +254,8 @@ export function TeamPulseView({
   );
 }
 
-function ownerLabel(ownerId: string) {
-  return ownerId === DEMO_PRINCIPAL_ID
-    ? "Huang Sheng"
-    : `Principal ${ownerId.slice(0, 8)}`;
-}
-
-function ownerInitials(ownerId: string) {
-  return ownerId === DEMO_PRINCIPAL_ID
-    ? "HS"
-    : ownerId.slice(0, 2).toUpperCase();
+function ownerInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] ?? ""}${parts.at(-1)![0] ?? ""}`.toUpperCase();
 }

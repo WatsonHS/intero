@@ -1,7 +1,10 @@
 import type {
+  ActionEnvelope,
   ActionInboxItem,
   ActivityEvent,
   DecisionRecord,
+  OperationId,
+  PrincipalId,
   PublicWorkProjection,
 } from "@intero/domain";
 
@@ -29,11 +32,21 @@ export interface PlatformStore {
   createDecision: StoreMethod<"createDecision">;
   cursor: StoreMethod<"cursor">;
   listProjections(): Awaitable<PublicWorkProjection[]>;
-  listInbox(): Awaitable<ActionInboxItem[]>;
+  listInbox(principalId?: PrincipalId): Awaitable<ActionInboxItem[]>;
   listThreads: StoreMethod<"listThreads">;
   getThread: StoreMethod<"getThread">;
   getSpec: StoreMethod<"getSpec">;
+  listSpecs: StoreMethod<"listSpecs">;
+  upsertPrincipal: StoreMethod<"upsertPrincipal">;
+  listPrincipals(ids: PrincipalId[]): Awaitable<PrincipalSummary[]>;
+  listActionEnvelopes(ids: OperationId[]): Awaitable<ActionEnvelope[]>;
   listDecisions(): Awaitable<DecisionRecord[]>;
   latestProjectionFreshness(): Awaitable<string | undefined>;
   listActivity(): Awaitable<ActivityEvent[]>;
+}
+
+export interface PrincipalSummary {
+  id: PrincipalId;
+  displayName: string;
+  kind: "human" | "representative" | "service";
 }

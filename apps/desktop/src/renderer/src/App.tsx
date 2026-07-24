@@ -7,8 +7,12 @@ import {
   SidebarSimpleIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { getBootstrap, getOfflineStatus } from "./api.js";
+import { useI18n } from "./i18n/index.js";
+import type { TranslationKey } from "./i18n/locales/zh-CN.js";
 import { RepresentativeView } from "./views/RepresentativeView.js";
 import { ProjectRoomView } from "./views/ProjectRoomView.js";
 import { SettingsView } from "./views/SettingsView.js";
@@ -20,25 +24,47 @@ type View =
 
 const navigation: Array<{
   id: View;
-  label: string;
+  label: TranslationKey;
   icon: typeof PulseIcon;
 }> = [
-  { id: "pulse", label: "Team Pulse", icon: PulseIcon },
-  { id: "representative", label: "Representative", icon: ChatCircleDotsIcon },
-  { id: "rooms", label: "Project Room", icon: UsersThreeIcon },
-  { id: "coordination", label: "Coordination", icon: GitBranchIcon },
-  { id: "specs", label: "Specs", icon: FileTextIcon },
+  { id: "pulse", label: "app.nav.pulse", icon: PulseIcon },
+  {
+    id: "representative",
+    label: "app.nav.representative",
+    icon: ChatCircleDotsIcon,
+  },
+  { id: "rooms", label: "app.nav.rooms", icon: UsersThreeIcon },
+  { id: "coordination", label: "app.nav.coordination", icon: GitBranchIcon },
+  { id: "specs", label: "app.nav.specs", icon: FileTextIcon },
 ];
 
 export function App() {
+  const { t } = useI18n();
   const [view, setView] = useState<View>("pulse");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const bootstrap = useQuery({
+    queryKey: ["bootstrap"],
+    queryFn: ({ signal }) => getBootstrap(signal),
+  });
+  const runtime = useQuery({
+    queryKey: ["offline-status"],
+    queryFn: ({ signal }) => getOfflineStatus(signal),
+    refetchInterval: 5_000,
+  });
+  const identity = bootstrap.data?.currentPrincipal;
+  const runtimeLabel = runtime.isPending
+    ? t("general.loading")
+    : runtime.data?.localRuntime === "online"
+      ? t("app.localConnected")
+      : runtime.data?.fallback === "public"
+        ? t("app.publicFallback")
+        : t("app.runtimeUnavailable");
 
   return (
     <div
       className={sidebarOpen ? "app-shell" : "app-shell app-shell--collapsed"}
     >
-      <aside className="sidebar" aria-label="Primary navigation">
+      <aside className="sidebar" aria-label={t("app.primaryNavigation")}>
         <div className="sidebar__brand">
           <span className="brand-mark" aria-hidden="true">
             I
@@ -48,7 +74,9 @@ export function App() {
             className="icon-button sidebar__toggle"
             type="button"
             aria-label={
-              sidebarOpen ? "Collapse navigation" : "Expand navigation"
+              sidebarOpen
+                ? t("app.collapseNavigation")
+                : t("app.expandNavigation")
             }
             onClick={() => setSidebarOpen((current) => !current)}
           >
@@ -57,7 +85,7 @@ export function App() {
         </div>
 
         <nav className="sidebar__nav">
-          <p className="nav-label">Workspace</p>
+          <p className="nav-label">{t("app.workspace")}</p>
           {navigation.map((item) => {
             const Icon = item.icon;
             return (
@@ -73,7 +101,7 @@ export function App() {
                   size={19}
                   weight={view === item.id ? "fill" : "regular"}
                 />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
               </button>
             );
           })}
@@ -88,13 +116,15 @@ export function App() {
             onClick={() => setView("settings")}
           >
             <GearSixIcon size={19} weight="regular" />
-            <span>Settings</span>
+            <span>{t("app.nav.settings")}</span>
           </button>
           <div className="identity-chip">
-            <span className="identity-chip__avatar">HS</span>
+            <span className="identity-chip__avatar">
+              {initials(identity?.displayName)}
+            </span>
             <span>
-              <strong>Huang Sheng</strong>
-              <small>Local connected</small>
+              <strong>{identity?.displayName ?? "—"}</strong>
+              <small>{runtimeLabel}</small>
             </span>
           </div>
         </div>
@@ -104,6 +134,9 @@ export function App() {
         {view === "pulse" ? (
           <TeamPulseView
             onOpenRepresentative={() => setView("representative")}
+            onOpenAction={(sourceRef) =>
+              setView(sourceRef.startsWith("spec:") ? "specs" : "coordination")
+            }
           />
         ) : null}
         {view === "representative" ? <RepresentativeView /> : null}
@@ -114,4 +147,11 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function initials(name: string | undefined): string {
+  if (!name) return "—";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0] ?? ""}${parts.at(-1)![0] ?? ""}`.toUpperCase();
 }

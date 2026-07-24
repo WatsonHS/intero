@@ -19,6 +19,7 @@ import type { AttachmentService } from "@intero/attachments";
 import { createLogger, loggerOptions } from "@intero/config";
 import {
   ThreadKind,
+  type OperationId,
   type PrincipalId,
   type SpecId,
   type ThreadId,
@@ -29,6 +30,7 @@ import { z, ZodError, type ZodType } from "zod";
 
 import { type InteroAuth, mountAuth } from "./auth.js";
 import type { PlatformStore } from "./platform-store.js";
+import type { PrincipalSummary } from "./platform-store.js";
 import { FailClosedAuthorization, type AuthorizationPort } from "./ports.js";
 import { InMemoryPlatformStore } from "./store.js";
 
@@ -38,6 +40,10 @@ export interface BuildAppOptions {
   auth?: InteroAuth;
   authorization?: AuthorizationPort;
   attachments?: AttachmentService;
+  organization?: { id: string; name: string };
+  currentPrincipal?: PrincipalSummary;
+  representativePrincipal?: PrincipalSummary;
+  inboxPrincipalIds?: PrincipalId[];
 }
 
 export async function buildApp(
@@ -50,6 +56,26 @@ export async function buildApp(
         : loggerOptions(process.env.INTERO_LOG_LEVEL),
   });
   const store = options.store ?? new InMemoryPlatformStore();
+  const organization = options.organization ?? {
+    id: "019b5ac0-7600-7000-8000-000000000001",
+    name: "Intero Development",
+  };
+  const currentPrincipal = options.currentPrincipal ?? {
+    id: "019b5ac0-7600-7000-8000-000000000002" as PrincipalId,
+    displayName: "Intero User",
+    kind: "human" as const,
+  };
+  const representativePrincipal = options.representativePrincipal ?? {
+    id: "019b5ac0-7600-7000-8000-000000000003" as PrincipalId,
+    displayName: "Intero Representative",
+    kind: "representative" as const,
+  };
+  const inboxPrincipalIds = options.inboxPrincipalIds ?? [
+    currentPrincipal.id,
+    representativePrincipal.id,
+  ];
+  await store.upsertPrincipal(currentPrincipal);
+  await store.upsertPrincipal(representativePrincipal);
   const authorization = options.authorization ?? new FailClosedAuthorization();
   let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
@@ -79,6 +105,12 @@ export async function buildApp(
     status: "ok",
     service: "intero-api",
     version: "0.1.0",
+  }));
+
+  app.get("/v1/bootstrap", async () => ({
+    organization,
+    currentPrincipal,
+    representativePrincipal,
   }));
 
   app.post("/v1/authorization/check", async (request) => {
@@ -169,11 +201,17 @@ export async function buildApp(
     return reply.status(202).send(await store.applyProjection(projection));
   });
 
-  app.get("/v1/team-pulse", async () => ({
-    generatedAt: new Date().toISOString(),
-    projections: await store.listProjections(),
-    staleAfterSeconds: 300,
-  }));
+  app.get("/v1/team-pulse", async () => {
+    const projections = await store.listProjections();
+    return {
+      generatedAt: new Date().toISOString(),
+      projections,
+      principals: await store.listPrincipals(
+        projections.map((projection) => projection.ownerId),
+      ),
+      staleAfterSeconds: 300,
+    };
+  });
 
   app.post("/v1/capability-grants", async (request, reply) => {
     const grant = parse(CreateCapabilityGrantRequest, request.body);
@@ -185,9 +223,18 @@ export async function buildApp(
     return { result: await store.coordinate(envelope) };
   });
 
-  app.get("/v1/action-inbox", async () => ({
-    items: await store.listInbox(),
-  }));
+  app.get("/v1/action-inbox", async () => {
+    const items = (
+      await Promise.all(
+        inboxPrincipalIds.map((principalId) => store.listInbox(principalId)),
+      )
+    )
+      .flat()
+      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return {
+      items: [...new Map(items.map((item) => [item.id, item])).values()],
+    };
+  });
 
   app.post("/v1/threads", async (request, reply) => {
     const input = parse(CreateThreadRequest, request.body);
@@ -203,7 +250,10 @@ export async function buildApp(
       }),
       request.query,
     );
-    return { items: await store.listThreads(query.kind) };
+    const items = await store.listThreads(query.kind);
+    return {
+      items: await Promise.all(items.map((item) => presentThread(store, item))),
+    };
   });
 
   app.get<{ Params: { threadId: string } }>(
@@ -212,7 +262,7 @@ export async function buildApp(
       const threadId = request.params.threadId as ThreadId;
       const result = await store.getThread(threadId);
       if (!result) return notFound(reply, "Thread");
-      return result;
+      return presentThread(store, result);
     },
   );
 
@@ -293,9 +343,15 @@ export async function buildApp(
       const specId = request.params.specId as SpecId;
       const result = await store.getSpec(specId);
       if (!result) return notFound(reply, "Spec");
-      return result;
+      return presentSpec(store, result);
     },
   );
+
+  app.get("/v1/specs", async () => ({
+    items: await Promise.all(
+      (await store.listSpecs()).map((item) => presentSpec(store, item)),
+    ),
+  }));
 
   app.post("/v1/decisions", async (request, reply) => {
     const input = parse(CreateDecisionRequest, request.body);
@@ -335,6 +391,38 @@ export async function buildApp(
   });
 
   return app;
+}
+
+async function presentThread(
+  store: PlatformStore,
+  item: Awaited<ReturnType<PlatformStore["getThread"]>> & {},
+) {
+  const operationIds = item.messages
+    .map((message) => message.operationId)
+    .filter((id): id is OperationId => id !== undefined);
+  return {
+    ...item,
+    principals: await store.listPrincipals(item.thread.participantIds),
+    actions: (await store.listActionEnvelopes(operationIds)).map(
+      (envelope) => ({
+        envelope,
+        status: "resolved" as const,
+      }),
+    ),
+  };
+}
+
+async function presentSpec(
+  store: PlatformStore,
+  item: NonNullable<Awaited<ReturnType<PlatformStore["getSpec"]>>>,
+) {
+  return {
+    ...item,
+    principals: await store.listPrincipals([
+      ...item.revisions.map((revision) => revision.createdBy),
+      ...item.reviews.map((review) => review.reviewerId),
+    ]),
+  };
 }
 
 function parse<T>(schema: ZodType<T>, input: unknown): T {

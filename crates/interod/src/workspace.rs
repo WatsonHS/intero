@@ -100,6 +100,16 @@ impl WorkspaceRegistry {
         Ok(workspace.clone())
     }
 
+    pub fn list(&self) -> Result<Vec<Workspace>, WorkspaceError> {
+        let entries = self
+            .entries
+            .read()
+            .map_err(|_| WorkspaceError::LockPoisoned)?;
+        let mut workspaces = entries.values().cloned().collect::<Vec<_>>();
+        workspaces.sort_by(|left, right| left.root.cmp(&right.root));
+        Ok(workspaces)
+    }
+
     pub fn resolve_for_path(&self, requested: &Path) -> Result<Workspace, WorkspaceError> {
         let canonical = fs::canonicalize(requested)?;
         let entries = self

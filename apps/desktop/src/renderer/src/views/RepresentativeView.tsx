@@ -4,18 +4,26 @@ import {
   CircleNotchIcon,
   GitBranchIcon,
   LockSimpleIcon,
-  PaperclipIcon,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { getThreads, sendThreadMessage } from "../api.js";
+import {
+  createConversationThread,
+  getBootstrap,
+  getOfflineStatus,
+  getThreads,
+  sendThreadMessage,
+} from "../api.js";
+import { useI18n } from "../i18n/index.js";
+import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 
 export function RepresentativeView({
   coordination = false,
 }: {
   coordination?: boolean;
 }) {
+  const { formatRelative, formatTime, t } = useI18n();
   const [draft, setDraft] = useState("");
   const queryClient = useQueryClient();
   const kind = coordination ? "coordination" : "representative";
@@ -24,7 +32,22 @@ export function RepresentativeView({
     queryFn: ({ signal }) => getThreads(kind, signal),
     refetchInterval: 3_000,
   });
+  const runtime = useQuery({
+    queryKey: ["offline-status"],
+    queryFn: ({ signal }) => getOfflineStatus(signal),
+    refetchInterval: 5_000,
+  });
+  const bootstrap = useQuery({
+    queryKey: ["bootstrap"],
+    queryFn: ({ signal }) => getBootstrap(signal),
+  });
   const current = threads.data?.items[0];
+  const principalNames = new Map(
+    current?.principals.map((principal) => [
+      principal.id,
+      principal.displayName,
+    ]) ?? [],
+  );
   const humanId = current?.thread.participantIds.find(
     (participantId) =>
       !current.thread.representativeIds.includes(participantId),
@@ -34,6 +57,26 @@ export function RepresentativeView({
     onSuccess: async () => {
       setDraft("");
       await queryClient.invalidateQueries({ queryKey: ["threads", kind] });
+    },
+  });
+  const createThread = useMutation({
+    mutationFn: async () => {
+      const identity = bootstrap.data;
+      if (!identity) throw new Error("Identity is unavailable.");
+      return createConversationThread({
+        kind: "representative",
+        title: t("thread.yourRepresentative"),
+        participantIds: [
+          identity.currentPrincipal.id,
+          identity.representativePrincipal.id,
+        ],
+        representativeIds: [identity.representativePrincipal.id],
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["threads", "representative"],
+      });
     },
   });
 
@@ -53,58 +96,115 @@ export function RepresentativeView({
           <span className="representative-mark">IR</span>
           <span>
             <p className="eyebrow">
-              {coordination
-                ? "Structured thread"
-                : "One identity, two runtimes"}
+              {coordination ? t("thread.structured") : t("thread.oneIdentity")}
             </p>
             <h1>
               {current?.thread.title ??
-                (coordination ? "Coordination" : "Your Representative")}
+                (coordination
+                  ? t("thread.coordination")
+                  : t("thread.yourRepresentative"))}
             </h1>
           </span>
         </div>
         <div className="runtime-switch">
-          <span className="runtime-switch__active">Local</span>
-          <span>Public</span>
-          <small>{threads.isFetching ? "syncing" : "fresh"}</small>
+          <span
+            className={
+              runtime.data?.fallback === "local" ? "runtime-switch__active" : ""
+            }
+          >
+            {t("thread.local")}
+          </span>
+          <span
+            className={
+              runtime.data?.fallback === "public"
+                ? "runtime-switch__active"
+                : ""
+            }
+          >
+            {t("thread.public")}
+          </span>
+          <small>
+            {runtime.data?.freshnessAt
+              ? formatRelative(runtime.data.freshnessAt)
+              : t("general.unavailable")}
+          </small>
         </div>
       </header>
 
       <div className="thread-body">
         <div className="date-divider">
-          <span>Today</span>
+          <span>{t("general.today")}</span>
         </div>
-        {threads.isLoading ? (
+        {threads.isError ? (
+          <article className="thread-empty">
+            <h2>{t("thread.unavailable")}</h2>
+            <button type="button" onClick={() => void threads.refetch()}>
+              {t("general.retry")}
+            </button>
+          </article>
+        ) : threads.isLoading ? (
           <article className="thread-empty">
             <CircleNotchIcon size={20} className="spin" />
-            <p>Loading the durable thread…</p>
+            <p>{t("thread.loading")}</p>
           </article>
         ) : current ? (
           current.messages.map((message) =>
             message.kind === "coordination_action" ? (
               <article className="coordination-envelope" key={message.id}>
-                <div className="coordination-envelope__header">
-                  <GitBranchIcon size={19} />
-                  <span>
-                    <strong>Coordination request</strong>
-                    <small>Visible, attributable, policy checked</small>
-                  </span>
-                  <span className="status-chip">resolved</span>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Sequence</dt>
-                    <dd>{message.sequence}</dd>
-                  </div>
-                  <div>
-                    <dt>Authority</dt>
-                    <dd>capability grant · checked</dd>
-                  </div>
-                  <div>
-                    <dt>Result</dt>
-                    <dd>{message.body}</dd>
-                  </div>
-                </dl>
+                {(() => {
+                  const action = current.actions.find(
+                    (item) => item.envelope.operationId === message.operationId,
+                  );
+                  return (
+                    <>
+                      <div className="coordination-envelope__header">
+                        <GitBranchIcon size={19} />
+                        <span>
+                          <strong>{t("thread.coordinationAction")}</strong>
+                          <small>{t("thread.attributable")}</small>
+                        </span>
+                        {action ? (
+                          <span className="status-chip">
+                            {t("thread.resolved")}
+                          </span>
+                        ) : null}
+                      </div>
+                      <dl>
+                        <div>
+                          <dt>{t("thread.sequence")}</dt>
+                          <dd>{message.sequence}</dd>
+                        </div>
+                        {action ? (
+                          <>
+                            <div>
+                              <dt>{t("thread.action")}</dt>
+                              <dd>
+                                {t(
+                                  `coordination.${action.envelope.action}` as TranslationKey,
+                                )}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>{t("thread.policy")}</dt>
+                              <dd>{action.envelope.policyVersion}</dd>
+                            </div>
+                            <div>
+                              <dt>{t("thread.scope")}</dt>
+                              <dd>
+                                {action.envelope.resourceScope.join(", ") ||
+                                  t("general.none")}
+                              </dd>
+                            </div>
+                          </>
+                        ) : null}
+                        <div>
+                          <dt>{t("thread.result")}</dt>
+                          <dd>{message.body}</dd>
+                        </div>
+                      </dl>
+                    </>
+                  );
+                })()}
               </article>
             ) : (
               <article
@@ -118,27 +218,39 @@ export function RepresentativeView({
                 <div className="message__meta">
                   <strong>
                     {current.thread.representativeIds.includes(message.senderId)
-                      ? "Intero Representative"
-                      : "You"}
+                      ? (principalNames.get(message.senderId) ??
+                        t("thread.representative"))
+                      : (principalNames.get(message.senderId) ??
+                        t("general.you"))}
                   </strong>
                   {current.thread.representativeIds.includes(
                     message.senderId,
                   ) ? (
-                    <span>Local runtime</span>
+                    <span>
+                      {runtime.data?.fallback === "local"
+                        ? t("thread.localRuntime")
+                        : t("thread.public")}
+                    </span>
                   ) : null}
                   <time>{formatTime(message.createdAt)}</time>
                 </div>
                 <p>
                   {message.serverReadable
                     ? message.body
-                    : "Encrypted human-only message"}
+                    : t("thread.encryptedMessage")}
                 </p>
                 {current.thread.representativeIds.includes(message.senderId) ? (
                   <div className="evidence-strip">
                     <CheckCircleIcon size={17} weight="fill" />
-                    <span>durable sequence {message.sequence}</span>
                     <span>
-                      {message.serverReadable ? "agent-readable" : "encrypted"}
+                      {t("thread.durableSequence", {
+                        sequence: message.sequence,
+                      })}
+                    </span>
+                    <span>
+                      {message.serverReadable
+                        ? t("thread.agentReadable")
+                        : t("thread.encrypted")}
                     </span>
                   </div>
                 ) : null}
@@ -150,19 +262,32 @@ export function RepresentativeView({
             <GitBranchIcon size={22} />
             <h2>
               {coordination
-                ? "No coordination branch yet"
-                : "No Representative Thread yet"}
+                ? t("thread.emptyCoordination")
+                : t("thread.emptyRepresentative")}
             </h2>
             <p>
               {coordination
-                ? "A policy-checked request from an agent will appear here with its authority and result."
-                : "Enroll the local runtime to open a durable Representative Thread."}
+                ? t("thread.emptyCoordinationDetail")
+                : t("thread.emptyRepresentativeDetail")}
             </p>
+            {!coordination ? (
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={!bootstrap.data || createThread.isPending}
+                onClick={() => createThread.mutate()}
+              >
+                {t("thread.startRepresentative")}
+              </button>
+            ) : null}
+            {createThread.isError ? (
+              <p className="composer-error">{t("thread.createFailed")}</p>
+            ) : null}
           </article>
         )}
         {send.isError ? (
           <p className="composer-error" role="alert">
-            Message could not be persisted. Try again.
+            {t("thread.sendFailed")}
           </p>
         ) : null}
       </div>
@@ -171,17 +296,10 @@ export function RepresentativeView({
         <div className="composer__privacy">
           <LockSimpleIcon size={14} />
           {current?.thread.accessMode === "human_only_e2ee"
-            ? "Human-only Thread · end-to-end encrypted"
-            : "Representative Thread · authorized participants only"}
+            ? t("thread.humanOnlyPrivacy")
+            : t("thread.representativePrivacy")}
         </div>
         <div className="composer__row">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Attach file"
-          >
-            <PaperclipIcon size={19} />
-          </button>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -191,14 +309,14 @@ export function RepresentativeView({
                 submit();
               }
             }}
-            placeholder="Ask about private work, team state, or a coordination branch…"
+            placeholder={t("thread.placeholder")}
             rows={1}
             disabled={!current}
           />
           <button
             type="button"
             className="send-button"
-            aria-label="Send message"
+            aria-label={t("thread.send")}
             disabled={!draft.trim() || !current || !humanId || send.isPending}
             onClick={submit}
           >
@@ -212,11 +330,4 @@ export function RepresentativeView({
       </div>
     </div>
   );
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
 }

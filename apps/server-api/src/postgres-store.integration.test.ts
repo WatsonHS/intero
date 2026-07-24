@@ -232,6 +232,19 @@ databaseSuite("PostgreSQL platform store", () => {
     expect(
       (await secondStore.listActivity()).map((event) => event.eventType),
     ).toContain("coordination.action_recorded");
+    expect((await secondStore.getThread(threadId))?.messages[0]).toMatchObject({
+      operationId: envelope.operationId,
+      sequence: 1,
+    });
+    expect(
+      await secondStore.listActionEnvelopes([envelope.operationId]),
+    ).toEqual([expect.objectContaining({ operationId: envelope.operationId })]);
+    expect(await secondStore.listPrincipals([ownerId])).toEqual([
+      expect.objectContaining({
+        id: ownerId,
+        kind: "representative",
+      }),
+    ]);
     await secondStore.close();
   });
 });
