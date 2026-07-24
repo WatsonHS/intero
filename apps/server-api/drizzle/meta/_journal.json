@@ -1,0 +1,76 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1784906828454,
+      "tag": "0000_wet_dreaming_celestial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784906828455,
+      "tag": "0001_tenant_security",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784908737228,
+      "tag": "0002_perfect_warhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784908737229,
+      "tag": "0003_runtime_tenant_security",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784909120137,
+      "tag": "0004_absent_daimon_hellstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784909564263,
+      "tag": "0005_groovy_pestilence",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784909564264,
+      "tag": "0006_public_worker_tenant_security",
+      "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784910740000,
+      "tag": "0007_better_auth",
+      "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784910740001,
+      "tag": "0008_auth_principal_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784911500000,
+      "tag": "0009_attachment_scan_gate",
+      "breakpoints": true
+    }
+  ]
+}

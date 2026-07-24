@@ -1,0 +1,16 @@
+{
+  "name": "@intero/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@intero/domain": "workspace:*",
+    "jsonc-parser": "^3.3.1",
+    "zod": "^4.0.0"
+  }
+}

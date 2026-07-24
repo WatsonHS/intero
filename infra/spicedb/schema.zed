@@ -1,0 +1,41 @@
+definition principal {}
+
+definition organization {
+  relation member: principal
+  relation admin: principal
+  permission view = member + admin
+  permission manage = admin
+}
+
+definition project {
+  relation organization: organization
+  relation member: principal
+  relation manager: principal
+  permission view = member + manager + organization->view
+  permission manage = manager + organization->manage
+}
+
+definition thread {
+  relation project: project
+  relation participant: principal
+  relation representative: principal
+  permission view = participant + representative + project->manage
+  permission post = participant + representative
+  permission manage_access = participant
+}
+
+definition spec {
+  relation project: project
+  relation author: principal
+  relation reviewer: principal
+  permission view = author + reviewer + project->view
+  permission edit = author + project->manage
+  permission review = reviewer + project->manage
+}
+
+definition artifact {
+  relation project: project
+  relation owner: principal
+  relation reader: principal
+  permission view = owner + reader + project->manage
+}

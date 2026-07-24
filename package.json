@@ -1,0 +1,35 @@
+{
+  "name": "intero",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "generate": "turbo run generate",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm test:ts && cargo test --workspace",
+    "test:ts": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm lint && pnpm test && pnpm build",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "drizzle-kit": "^0.31.0",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.6.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

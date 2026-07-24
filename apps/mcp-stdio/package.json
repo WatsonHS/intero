@@ -1,0 +1,21 @@
+{
+  "name": "@intero/mcp-stdio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "intero-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@intero/api-contracts": "workspace:*",
+    "@intero/domain": "workspace:*",
+    "@intero/local-ipc": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "zod": "^4.0.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@intero/server-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "migrate": "tsx src/migrate.ts",
+    "test:database": "vitest run --root ../.. apps/server-worker/src/postgres-repository.integration.test.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@intero/config": "workspace:*",
+    "@intero/domain": "workspace:*",
+    "@intero/representative-core": "workspace:*",
+    "graphile-worker": "^0.17.3",
+    "pg": "^8.22.0"
+  }
+}

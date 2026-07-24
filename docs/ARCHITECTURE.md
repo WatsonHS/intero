@@ -1,6 +1,6 @@
 # Intero Technical Architecture
 
-Status: proposed baseline for MVP planning
+Status: implemented MVP baseline; external pilot validation pending
 
 Date: 2026-07-24
 
@@ -628,14 +628,14 @@ MVP uses the internal Intero Coordination Protocol.
 
 A later A2A 1.0 Gateway maps:
 
-| A2A | Intero |
-|---|---|
-| Agent Card | External Agent registration and capabilities |
-| Message | Conversation message |
-| Task | External coordination task |
-| `contextId` | Coordination Thread |
-| Artifact | Artifact reference |
-| Extension | Intero Action Envelope |
+| A2A         | Intero                                       |
+| ----------- | -------------------------------------------- |
+| Agent Card  | External Agent registration and capabilities |
+| Message     | Conversation message                         |
+| Task        | External coordination task                   |
+| `contextId` | Coordination Thread                          |
+| Artifact    | Artifact reference                           |
+| Extension   | Intero Action Envelope                       |
 
 External Agents can reach only the Public Representative. They map to Intero
 principals and remain subject to Capability Policy, SpiceDB, and privacy

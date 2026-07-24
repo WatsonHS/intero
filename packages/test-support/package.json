@@ -1,0 +1,13 @@
+{
+  "name": "@intero/test-support",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts"
+  },
+  "dependencies": {
+    "@intero/domain": "workspace:*"
+  }
+}

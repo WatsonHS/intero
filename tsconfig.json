@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@intero/api-contracts": ["packages/api-contracts/src/index.ts"],
+      "@intero/config": ["packages/config/src/index.ts"],
+      "@intero/domain": ["packages/domain/src/index.ts"],
+      "@intero/integrations": ["packages/integrations/src/index.ts"],
+      "@intero/project-management": [
+        "packages/project-management/src/index.ts"
+      ],
+      "@intero/representative-core": [
+        "packages/representative-core/src/index.ts"
+      ],
+      "@intero/test-support": ["packages/test-support/src/index.ts"],
+      "@intero/ui": ["packages/ui/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "vitest.config.ts"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "client": {
+    "insecure": true,
+    "allowed_origins": ["http://localhost:5173"]
+  },
+  "admin": {
+    "enabled": true,
+    "insecure": true
+  },
+  "http_api": {
+    "insecure": true
+  },
+  "channel": {
+    "namespaces": [
+      {
+        "name": "intero",
+        "allow_subscribe_for_client": true,
+        "history_size": 1000,
+        "history_ttl": "5m",
+        "force_recovery": true
+      }
+    ]
+  },
+  "health": {
+    "enabled": true
+  },
+  "log": {
+    "level": "info"
+  }
+}

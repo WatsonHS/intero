@@ -1,0 +1,19 @@
+{
+  "name": "@intero/api-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@intero/domain": "workspace:*",
+    "openapi-fetch": "^0.17.0",
+    "zod": "^4.0.0"
+  }
+}

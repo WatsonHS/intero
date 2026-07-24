@@ -1,0 +1,855 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Intero API", "version": "0.1.0" },
+  "servers": [{ "url": "http://localhost:4310" }],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": { "200": { "description": "Healthy" } }
+      }
+    },
+    "/v1/events": {
+      "post": {
+        "operationId": "ingestCanonicalWorkEvent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/IngestEventRequest" }
+            }
+          }
+        },
+        "responses": { "202": { "description": "Accepted" } }
+      }
+    },
+    "/v1/team-pulse": {
+      "get": {
+        "operationId": "getTeamPulse",
+        "responses": {
+          "200": {
+            "description": "Current public Work Projections",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TeamPulseResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/coordination": {
+      "post": {
+        "operationId": "requestCoordination",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CoordinateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Structured coordination result" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CoordinateRequest": {
+        "type": "object",
+        "properties": {
+          "envelope": {
+            "type": "object",
+            "properties": {
+              "schemaVersion": { "type": "number", "enum": [1] },
+              "operationId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "status_query",
+                  "status_response",
+                  "ownership_declaration",
+                  "dependency_request",
+                  "conflict_notice",
+                  "coordination_request",
+                  "correction",
+                  "withdrawal",
+                  "human_escalation"
+                ]
+              },
+              "actorId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "authorityGrantId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "policyVersion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "threadId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "workstreamId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "humanMessage": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "resourceScope": {
+                "maxItems": 50,
+                "type": "array",
+                "items": { "type": "string", "maxLength": 300 }
+              },
+              "relatedClaimIds": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                }
+              },
+              "evidenceRefs": {
+                "maxItems": 100,
+                "type": "array",
+                "items": { "type": "string", "maxLength": 300 }
+              },
+              "requestedActions": {
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "read_public_state",
+                    "answer_status",
+                    "declare_ownership",
+                    "register_blocker",
+                    "register_dependency",
+                    "request_coordination",
+                    "arrange_review",
+                    "publish_state",
+                    "expand_scope",
+                    "promise_deadline",
+                    "approve_architecture",
+                    "irreversible_action"
+                  ]
+                }
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "correctionOf": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "withdrawalOf": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "operationId",
+              "action",
+              "actorId",
+              "authorityGrantId",
+              "policyVersion",
+              "threadId",
+              "humanMessage",
+              "resourceScope",
+              "relatedClaimIds",
+              "evidenceRefs",
+              "requestedActions",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["envelope"],
+        "additionalProperties": false
+      },
+      "CreateCapabilityGrantRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "principalId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "actions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read_public_state",
+                "answer_status",
+                "declare_ownership",
+                "register_blocker",
+                "register_dependency",
+                "request_coordination",
+                "arrange_review",
+                "publish_state",
+                "expand_scope",
+                "promise_deadline",
+                "approve_architecture",
+                "irreversible_action"
+              ]
+            }
+          },
+          "organizationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "projectIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "workstreamIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "resourceScopes": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 300 }
+          },
+          "requiresConfirmation": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read_public_state",
+                "answer_status",
+                "declare_ownership",
+                "register_blocker",
+                "register_dependency",
+                "request_coordination",
+                "arrange_review",
+                "publish_state",
+                "expand_scope",
+                "promise_deadline",
+                "approve_architecture",
+                "irreversible_action"
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "policyVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "principalId",
+          "actions",
+          "organizationId",
+          "projectIds",
+          "workstreamIds",
+          "resourceScopes",
+          "requiresConfirmation",
+          "expiresAt",
+          "policyVersion"
+        ],
+        "additionalProperties": false
+      },
+      "CreateClaimRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "workstreamId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "predicate": {
+            "type": "string",
+            "enum": [
+              "intent",
+              "phase",
+              "scope",
+              "ownership",
+              "blocker",
+              "dependency",
+              "decision",
+              "artifact",
+              "validation",
+              "paused",
+              "completed"
+            ]
+          },
+          "value": { "type": "string", "maxLength": 2000 },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "human_statement",
+              "human_correction",
+              "direct_observation",
+              "coding_agent_report",
+              "project_system",
+              "representative_inference"
+            ]
+          },
+          "sourceRef": { "type": "string", "maxLength": 300 },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "privacy": {
+            "type": "string",
+            "enum": [
+              "P0_LOCAL_ONLY",
+              "P1_REPRESENTATIVE_PRIVATE",
+              "P2_COORDINATION",
+              "P3_PROJECT",
+              "P4_ORGANIZATION"
+            ]
+          },
+          "evidenceRefs": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": { "type": "string", "maxLength": 300 }
+          },
+          "supersedes": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "withdrawnAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "workstreamId",
+          "predicate",
+          "value",
+          "sourceType",
+          "sourceRef",
+          "observedAt",
+          "confidence",
+          "privacy",
+          "evidenceRefs"
+        ],
+        "additionalProperties": false
+      },
+      "CreateDecisionRequest": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "outcome": { "type": "string", "minLength": 1, "maxLength": 16000 },
+          "sourceSpecRevisionId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "sourceThreadId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "affectedScopes": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 300 }
+          },
+          "decidedBy": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "supersedes": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": ["title", "outcome", "affectedScopes", "decidedBy"],
+        "additionalProperties": false
+      },
+      "CreateSpecRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "reviewThreadId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "relatedWorkstreamIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "in_review",
+              "approved",
+              "changes_requested",
+              "superseded"
+            ]
+          },
+          "markdown": { "type": "string", "maxLength": 500000 },
+          "changeSummary": { "type": "string", "maxLength": 2000 },
+          "affectedScopes": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 300 }
+          },
+          "createdBy": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "relatedWorkstreamIds",
+          "status",
+          "markdown",
+          "changeSummary",
+          "affectedScopes",
+          "createdBy"
+        ],
+        "additionalProperties": false
+      },
+      "CreateWorkstreamRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "ownerId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "exploring",
+              "planning",
+              "implementing",
+              "validating",
+              "reviewing",
+              "blocked",
+              "paused",
+              "completed"
+            ]
+          },
+          "scope": {
+            "maxItems": 50,
+            "type": "array",
+            "items": { "type": "string", "maxLength": 300 }
+          },
+          "blockers": {
+            "maxItems": 20,
+            "type": "array",
+            "items": { "type": "string", "maxLength": 600 }
+          },
+          "dependencies": {
+            "maxItems": 20,
+            "type": "array",
+            "items": { "type": "string", "maxLength": 600 }
+          },
+          "decisions": {
+            "maxItems": 50,
+            "type": "array",
+            "items": { "type": "string", "maxLength": 1000 }
+          },
+          "artifactIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "freshnessAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": [
+          "id",
+          "workspaceId",
+          "ownerId",
+          "title",
+          "phase",
+          "scope",
+          "blockers",
+          "dependencies",
+          "decisions",
+          "artifactIds",
+          "freshnessAt",
+          "confidence"
+        ],
+        "additionalProperties": false
+      },
+      "IngestEventRequest": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "operationId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "schemaVersion": { "type": "number", "enum": [1] },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "codex",
+                  "claude-code",
+                  "opencode",
+                  "desktop",
+                  "system"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SessionStarted",
+                  "SessionPaused",
+                  "SessionStopped",
+                  "WorkspaceChanged",
+                  "ResourceTouched",
+                  "GitStateChanged",
+                  "PlanChanged",
+                  "ValidationChanged",
+                  "ArtifactDetected",
+                  "CoordinationRequested",
+                  "CheckpointReported"
+                ]
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "receivedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "workspaceId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "workstreamId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "privacy": {
+                "type": "string",
+                "enum": [
+                  "P0_LOCAL_ONLY",
+                  "P1_REPRESENTATIVE_PRIVATE",
+                  "P2_COORDINATION",
+                  "P3_PROJECT",
+                  "P4_ORGANIZATION"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "phase": { "type": "string", "maxLength": 80 },
+                  "summary": { "type": "string", "maxLength": 600 },
+                  "resourceKind": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "symbol",
+                      "api",
+                      "schema",
+                      "config",
+                      "artifact"
+                    ]
+                  },
+                  "resourceRef": { "type": "string", "maxLength": 300 },
+                  "gitBranch": { "type": "string", "maxLength": 240 },
+                  "gitHead": { "type": "string", "maxLength": 64 },
+                  "validationName": { "type": "string", "maxLength": 160 },
+                  "validationStatus": {
+                    "type": "string",
+                    "enum": ["pending", "passed", "failed", "skipped"]
+                  },
+                  "checkpointKind": {
+                    "type": "string",
+                    "enum": [
+                      "intent",
+                      "decision",
+                      "blocker",
+                      "dependency",
+                      "scope",
+                      "artifact",
+                      "validation",
+                      "pause",
+                      "completion"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "id",
+              "operationId",
+              "schemaVersion",
+              "source",
+              "type",
+              "occurredAt",
+              "receivedAt",
+              "workspaceId",
+              "privacy",
+              "payload",
+              "idempotencyKey"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["event"],
+        "additionalProperties": false
+      },
+      "TeamPulseResponse": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "projections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "projectId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "ownerId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "exploring",
+                    "planning",
+                    "implementing",
+                    "validating",
+                    "reviewing",
+                    "blocked",
+                    "paused",
+                    "completed"
+                  ]
+                },
+                "blockers": {
+                  "maxItems": 20,
+                  "type": "array",
+                  "items": { "type": "string", "maxLength": 600 }
+                },
+                "dependencies": {
+                  "maxItems": 20,
+                  "type": "array",
+                  "items": { "type": "string", "maxLength": 600 }
+                },
+                "decisions": {
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": { "type": "string", "maxLength": 1000 }
+                },
+                "artifactIds": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "freshnessAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                "contradictionClaimIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "changedFields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "phase",
+                      "blockers",
+                      "dependencies",
+                      "ownership",
+                      "decisions",
+                      "artifacts",
+                      "paused",
+                      "completed"
+                    ]
+                  }
+                },
+                "projectedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": [
+                "id",
+                "ownerId",
+                "title",
+                "phase",
+                "blockers",
+                "dependencies",
+                "decisions",
+                "artifactIds",
+                "freshnessAt",
+                "confidence",
+                "contradictionClaimIds",
+                "version",
+                "changedFields",
+                "projectedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "staleAfterSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["generatedAt", "projections", "staleAfterSeconds"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

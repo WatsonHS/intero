@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm generate
+      - run: git diff --exit-code -- packages/api-contracts/generated
+      - run: pnpm lint
+      - run: docker compose up -d --wait
+      - run: DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero pnpm --filter @intero/server-api migrate
+      - run: INTERO_WORKER_DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero pnpm --filter @intero/server-worker migrate
+      - run: INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development pnpm --filter @intero/server-api migrate:spicedb
+      - name: Test TypeScript with real dependencies
+        run: pnpm test:ts
+        env:
+          DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero
+          DATABASE_APP_URL: postgres://intero_app:intero_app@127.0.0.1:5432/intero
+          INTERO_WORKER_DATABASE_URL: postgres://intero_worker:intero_worker@127.0.0.1:5432/intero
+          INTERO_SPICEDB_ENDPOINT: 127.0.0.1:50051
+          INTERO_SPICEDB_TOKEN: intero-development
+          INTERO_CENTRIFUGO_API_URL: http://127.0.0.1:8000
+          INTERO_S3_ENDPOINT: http://127.0.0.1:9000
+      - run: ./scripts/backup-restore-smoke.sh
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: pnpm build
+      - if: always()
+        run: docker compose down

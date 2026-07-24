@@ -1,6 +1,6 @@
 # Intero MVP Implementation Plan
 
-Status: proposed
+Status: implemented locally; external pilot validation pending
 
 Date: 2026-07-24
 
@@ -8,6 +8,23 @@ Inputs:
 
 - `docs/brainstorms/2026-07-24-intero-product-requirements.md`
 - `docs/ARCHITECTURE.md`
+
+## Verification record
+
+As of 2026-07-24, M0 through M4 and the locally automatable M5 hardening are
+implemented. The repository has been verified with:
+
+- the packaged Coding Agent hook and MCP bridge through `interod`, the Local
+  Representative, PostgreSQL, and the desktop UI;
+- real PostgreSQL/RLS, SpiceDB, Centrifugo, MinIO, Better Auth, Graphile Worker,
+  OpenMLS, SQLCipher, cursor-repair, retry, and offline-fallback tests;
+- TypeScript and Rust unit/integration suites, strict Clippy, deterministic
+  OpenAPI generation, production builds, and a PostgreSQL backup/restore smoke
+  test.
+
+M5 still requires evidence outside this repository: signed desktop update
+rollback, passkeys on Windows/macOS/Linux, and a real engineering-team pilot.
+Those results are deliberately not claimed by this implementation record.
 
 ## 1. MVP outcome
 
@@ -291,16 +308,16 @@ flowchart LR
 
 ## 10. Cross-cutting test matrix
 
-| Area | Unit | Integration | End-to-end |
-|---|---|---|---|
-| Claim resolution | reducer fixtures | SQLite/PostgreSQL parity | conflicting completion report |
-| Workspace privacy | path-policy tests | daemon IPC | unregistered directory produces nothing |
-| Agent adapters | event fixtures | managed integration install | checkpoint to Team Pulse |
-| Authorization | policy tests | RLS + SpiceDB | cross-project denial |
-| Coordination | command tests | Worker idempotency | Agent branch to visible result |
-| Conversation | message state | Centrifugo repair | Human-only to Agent-readable boundary |
-| Spec Review | revision matching | storage and review state | material revision reconfirmation |
-| Offline | queue tests | reconnect replay | public freshness fallback |
+| Area              | Unit              | Integration                 | End-to-end                              |
+| ----------------- | ----------------- | --------------------------- | --------------------------------------- |
+| Claim resolution  | reducer fixtures  | SQLite/PostgreSQL parity    | conflicting completion report           |
+| Workspace privacy | path-policy tests | daemon IPC                  | unregistered directory produces nothing |
+| Agent adapters    | event fixtures    | managed integration install | checkpoint to Team Pulse                |
+| Authorization     | policy tests      | RLS + SpiceDB               | cross-project denial                    |
+| Coordination      | command tests     | Worker idempotency          | Agent branch to visible result          |
+| Conversation      | message state     | Centrifugo repair           | Human-only to Agent-readable boundary   |
+| Spec Review       | revision matching | storage and review state    | material revision reconfirmation        |
+| Offline           | queue tests       | reconnect replay            | public freshness fallback               |
 
 ## 11. Migration and replacement boundaries
 

@@ -1,54 +1,79 @@
 # Intero
 
-> The coordination layer for human-agent engineering teams.
+Intero is an AI-native coordination layer for engineering teams. Coding Agents
+report semantic checkpoints to a privacy-preserving local runtime; Intero turns
+those checkpoints into visible Work State, bounded Representative coordination,
+durable project conversations, and versioned Spec Review.
 
-Intero is an AI-native engineering coordination platform. Every team member
-has a continuously available Digital Representative that understands their
-authorized work state, communicates transparently with people and other
-Representatives, and gives Coding Agents organization-aware context at the
-moment they encounter a dependency, blocker, or architectural branch.
+The MVP is implemented as a TypeScript modular monolith plus a Rust privacy
+daemon. Raw prompts, responses, terminal logs, tool payloads, and file contents
+are outside the event contract.
 
-Intero is not a coding agent, an employee-surveillance system, or a complete
-replacement for every project-management tool. Coding agents continue to do the
-implementation work. Intero supplies the missing organization-awareness and
-coordination layer around them.
+## What is in the MVP
 
-## Core loop
+- Electron desktop surfaces for Team Pulse, Representative and Coordination
+  Threads, Project Room, Spec Review, Action Inbox, and privacy settings.
+- `interod`, a Rust daemon with authenticated local IPC, SQLCipher storage,
+  OS-keyring support, Workspace authorization, structured memory, and OpenMLS.
+- A local Representative sidecar with deterministic Work State reduction,
+  projection control, run budgets, durable request results, and offline replay.
+- Managed Codex, Claude Code, and OpenCode adapters plus a stateless MCP bridge.
+- Fastify API and Graphile Worker backed by PostgreSQL/RLS, SpiceDB,
+  Centrifugo, and S3-compatible attachment storage.
+- Better Auth magic links, passkeys, optional GitHub linking, and Electron
+  device authorization.
+- Typed Action Envelopes, capability grants, Spec revisions, audit events,
+  transactional outbox delivery, and cursor gap repair.
 
-```text
-Codex / Claude Code / OpenCode
-        │ Hooks + MCP + semantic checkpoints
-        ▼
-Local Private Plane
-        │ private Work State + policy-controlled projection
-        ▼
-Public Representative
-        │ visible coordination, chat, review, and team state
-        ▼
-Team Pulse / Action Inbox / Coordination / Spec Review
+The detailed contracts and boundaries live in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Delivery status and the external
+pilot boundary are recorded in
+[`docs/plans/2026-07-24-intero-mvp-implementation-plan.md`](docs/plans/2026-07-24-intero-mvp-implementation-plan.md).
+
+## Prerequisites
+
+- Node.js 24 or newer with Corepack
+- pnpm 10
+- Rust stable
+- Docker with Compose
+
+## Start locally
+
+```bash
+corepack pnpm install
+just up
 ```
 
-- A Rust privacy daemon accepts Coding Agent hooks, enforces the Workspace
-  registry, stores private state, and exposes narrow read-only workspace tools.
-- A separate TypeScript Local Representative interprets private signals and can
-  continue operating from existing information while offline.
-- A TypeScript Public Representative remains available through event-driven
-  server jobs and uses only synchronized public state when the local runtime is
-  offline.
-- Built-in chat supports human-to-human, human-to-Representative, and
-  Representative-to-Representative communication with visible attribution and
-  auditable structured actions.
-- Workstreams, Claims, Coordination Threads, Specs, Decisions, Artifacts, Team
-  Pulse, and Action Inbox are first-class product objects.
-- Project management is a module inside Intero, not its foundation.
-  `team-presence` is a product reference only; its raw session collector and
-  frontend are not reused.
+`just up` starts PostgreSQL, SpiceDB, Centrifugo, and MinIO, applies migrations,
+starts `interod`, and launches the application workspaces. Development
+credentials are isolated to `compose.yaml` and `.env.example`; do not reuse them
+outside local development.
 
-## Current status
+Stop the stack without deleting its volumes:
 
-Architecture and MVP definition:
+```bash
+just down
+```
 
-- [Product requirements](docs/brainstorms/2026-07-24-intero-product-requirements.md)
-- [Technical architecture](docs/ARCHITECTURE.md)
-- [MVP implementation plan](docs/plans/2026-07-24-intero-mvp-implementation-plan.md)
-- [Architecture decisions](docs/adr/README.md)
+## Verify
+
+```bash
+just check
+just backup-restore-smoke
+```
+
+`just check` regenerates API clients, type-checks TypeScript, checks Rust
+formatting and Clippy, runs both test suites, and builds all production
+artifacts. CI runs the same code-generation and dependency-backed integration
+tests.
+
+## Privacy defaults
+
+- Only explicitly enrolled Workspace roots may emit work signals.
+- Hook adapters normalize bounded metadata and reject raw session content.
+- Model egress is disabled by default and deterministic Work State remains
+  available without a model or network.
+- Local private state is encrypted with SQLCipher; production uses the OS
+  credential store for its key.
+- Public fallback responses disclose freshness and never silently impersonate
+  the local runtime.

@@ -1,0 +1,14 @@
+node_modules/
+.turbo/
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.local
+*.log
+.DS_Store
+target/
+apps/desktop/out/
+apps/desktop/release/
+generated/tmp/
