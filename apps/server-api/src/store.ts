@@ -31,6 +31,8 @@ import {
   resolveWorkstream,
 } from "@intero/representative-core";
 
+import type { PrincipalSummary } from "./platform-store.js";
+
 const DEMO_ORGANIZATION_ID =
   "019b5ac0-7600-7000-8000-000000000001" as ActivityEvent["organizationId"];
 const SYSTEM_PRINCIPAL_ID =
@@ -55,6 +57,7 @@ export class InMemoryPlatformStore {
   readonly reviews = new Map<SpecId, SpecReviewResponse[]>();
   readonly decisions = new Map<DecisionRecord["id"], DecisionRecord>();
   readonly inbox = new Map<string, ActionInboxItem>();
+  readonly principals = new Map<PrincipalId, PrincipalSummary>();
   readonly activities: ActivityEvent[] = [];
   readonly outbox: OutboxEntry[] = [];
   readonly processedIdempotencyKeys = new Set<string>();
@@ -66,6 +69,7 @@ export class InMemoryPlatformStore {
       "evidenceClaimIds" | "contradictionClaimIds" | "version"
     >,
   ) {
+    this.ensurePrincipal(input.ownerId, "human");
     const workstream: Workstream = {
       ...input,
       evidenceClaimIds: [],
@@ -133,6 +137,7 @@ export class InMemoryPlatformStore {
   }
 
   putGrant(grant: CapabilityGrant): CapabilityGrant {
+    this.ensurePrincipal(grant.principalId, "representative");
     this.grants.set(grant.id, grant);
     return grant;
   }
@@ -189,6 +194,7 @@ export class InMemoryPlatformStore {
           body: envelope.humanMessage,
           createdAt: envelope.createdAt,
           serverReadable: true,
+          operationId: envelope.operationId,
         },
       ]);
     }
@@ -204,6 +210,14 @@ export class InMemoryPlatformStore {
   createThread(thread: ConversationThread): ConversationThread {
     const existing = this.threads.get(thread.id);
     if (existing) return existing;
+    for (const participantId of thread.participantIds) {
+      this.ensurePrincipal(
+        participantId,
+        thread.representativeIds.includes(participantId)
+          ? "representative"
+          : "human",
+      );
+    }
     this.threads.set(thread.id, thread);
     this.messages.set(thread.id, []);
     return thread;
@@ -240,6 +254,8 @@ export class InMemoryPlatformStore {
   ): { thread: ConversationThread; event: ThreadMessage } {
     const current = this.threads.get(threadId);
     if (!current) throw new Error("Thread was not found.");
+    this.ensurePrincipal(representativeId, "representative");
+    this.ensurePrincipal(actorId, "human");
     const transition = addRepresentative(current, representativeId, actorId);
     this.threads.set(threadId, transition.thread);
     this.messages.set(threadId, [
@@ -256,6 +272,7 @@ export class InMemoryPlatformStore {
     affectedScopes: string[];
     createdBy: PrincipalId;
   }): { spec: Spec; revision: SpecRevision } {
+    this.ensurePrincipal(input.createdBy, "human");
     const revision = createSpecRevision({
       specId: input.spec.id,
       revision: 1,
@@ -314,6 +331,12 @@ export class InMemoryPlatformStore {
     if (review.revisionId !== spec.currentRevisionId) {
       throw new Error("Review response must target the current Spec revision.");
     }
+    this.ensurePrincipal(
+      review.reviewerId,
+      review.kind === "representative_impact_analysis"
+        ? "representative"
+        : "human",
+    );
     this.reviews.set(specId, [...(this.reviews.get(specId) ?? []), review]);
     if (review.kind === "human_changes_requested") {
       this.specs.set(specId, { ...spec, status: "changes_requested" });
@@ -351,9 +374,11 @@ export class InMemoryPlatformStore {
     return [...this.projections.values()];
   }
 
-  listInbox(): ActionInboxItem[] {
+  listInbox(principalId?: PrincipalId): ActionInboxItem[] {
     return [...this.inbox.values()].filter(
-      (item) => item.resolvedAt === undefined,
+      (item) =>
+        item.resolvedAt === undefined &&
+        (principalId === undefined || item.principalId === principalId),
     );
   }
 
@@ -385,6 +410,38 @@ export class InMemoryPlatformStore {
       : undefined;
   }
 
+  listSpecs() {
+    return [...this.specs.values()]
+      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((spec) => this.getSpec(spec.id))
+      .filter(
+        (
+          item,
+        ): item is {
+          spec: Spec;
+          revisions: SpecRevision[];
+          reviews: SpecReviewResponse[];
+        } => item !== undefined,
+      );
+  }
+
+  upsertPrincipal(principal: PrincipalSummary): PrincipalSummary {
+    this.principals.set(principal.id, principal);
+    return principal;
+  }
+
+  listPrincipals(ids: PrincipalId[]): PrincipalSummary[] {
+    return [...new Set(ids)]
+      .map((id) => this.principals.get(id))
+      .filter((item): item is PrincipalSummary => item !== undefined);
+  }
+
+  listActionEnvelopes(ids: OperationId[]): ActionEnvelope[] {
+    return [...new Set(ids)]
+      .map((id) => this.envelopes.get(id))
+      .filter((item): item is ActionEnvelope => item !== undefined);
+  }
+
   listDecisions(): DecisionRecord[] {
     return [...this.decisions.values()];
   }
@@ -404,6 +461,27 @@ export class InMemoryPlatformStore {
     const workstream = this.workstreams.get(id);
     if (!workstream) throw new Error("Workstream was not found.");
     return workstream;
+  }
+
+  private ensurePrincipal(
+    id: PrincipalId,
+    kind: PrincipalSummary["kind"],
+  ): void {
+    const existing = this.principals.get(id);
+    if (existing) {
+      if (kind === "representative" && existing.kind !== "representative") {
+        this.principals.set(id, { ...existing, kind });
+      }
+      return;
+    }
+    this.principals.set(id, {
+      id,
+      displayName:
+        kind === "representative"
+          ? "Intero Representative"
+          : `Principal ${id.slice(0, 8)}`,
+      kind,
+    });
   }
 
   private createInboxItem(
@@ -577,6 +655,10 @@ export function claimFromEvent(event: CanonicalWorkEvent): Claim | undefined {
 }
 
 export const systemPrincipalId = SYSTEM_PRINCIPAL_ID;
+
+export function demoSeedingEnabled(value: string | undefined): boolean {
+  return value === "true";
+}
 
 export function seedDemoStore(store: InMemoryPlatformStore): void {
   const workspaceId =

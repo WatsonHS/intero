@@ -31,6 +31,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/bootstrap": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getBootstrap"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/team-pulse": {
     parameters: {
       query?: never;
@@ -63,10 +79,63 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/threads": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listThreads"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/specs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listSpecs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    BootstrapResponse: {
+      organization: {
+        /** Format: uuid */
+        id: string;
+        name: string;
+      };
+      currentPrincipal: {
+        /** Format: uuid */
+        id: string;
+        displayName: string;
+        /** @enum {string} */
+        kind: "human" | "representative" | "service";
+      };
+      representativePrincipal: {
+        /** Format: uuid */
+        id: string;
+        displayName: string;
+        /** @enum {string} */
+        kind: "human" | "representative" | "service";
+      };
+    };
     CoordinateRequest: {
       envelope: {
         /** @enum {number} */
@@ -332,6 +401,76 @@ export interface components {
         idempotencyKey: string;
       };
     };
+    SpecListResponse: {
+      items: {
+        spec: {
+          /** Format: uuid */
+          id: string;
+          title: string;
+          /** Format: uuid */
+          currentRevisionId: string;
+          /** Format: uuid */
+          reviewThreadId?: string;
+          relatedWorkstreamIds: string[];
+          /** @enum {string} */
+          status:
+            | "draft"
+            | "in_review"
+            | "approved"
+            | "changes_requested"
+            | "superseded";
+          /** Format: date-time */
+          createdAt: string;
+        };
+        revisions: {
+          /** Format: uuid */
+          id: string;
+          /** Format: uuid */
+          specId: string;
+          revision: number;
+          markdown: string;
+          blocks: {
+            id: string;
+            /** @enum {string} */
+            kind: "heading" | "paragraph" | "list" | "code" | "quote" | "table";
+            ordinal: number;
+            fingerprint: string;
+          }[];
+          changeSummary: string;
+          affectedScopes: string[];
+          /** Format: uuid */
+          createdBy: string;
+          /** Format: date-time */
+          createdAt: string;
+        }[];
+        reviews: {
+          /** Format: uuid */
+          revisionId: string;
+          /** Format: uuid */
+          reviewerId: string;
+          /** @enum {string} */
+          kind:
+            | "representative_impact_analysis"
+            | "human_acknowledgement"
+            | "human_approval"
+            | "human_conditional_approval"
+            | "human_changes_requested";
+          affectedScopes: string[];
+          body: string;
+          /** Format: date-time */
+          createdAt: string;
+          /** Format: date-time */
+          invalidatedAt?: string;
+        }[];
+        principals: {
+          /** Format: uuid */
+          id: string;
+          displayName: string;
+          /** @enum {string} */
+          kind: "human" | "representative" | "service";
+        }[];
+      }[];
+    };
     TeamPulseResponse: {
       /** Format: date-time */
       generatedAt: string;
@@ -375,7 +514,119 @@ export interface components {
         /** Format: date-time */
         projectedAt: string;
       }[];
+      principals: {
+        /** Format: uuid */
+        id: string;
+        displayName: string;
+        /** @enum {string} */
+        kind: "human" | "representative" | "service";
+      }[];
       staleAfterSeconds: number;
+    };
+    ThreadResponse: {
+      thread: {
+        /** Format: uuid */
+        id: string;
+        /** @enum {string} */
+        kind:
+          | "human_direct"
+          | "human_group"
+          | "representative"
+          | "room"
+          | "coordination"
+          | "spec_review"
+          | "decision"
+          | "task";
+        title: string;
+        participantIds: string[];
+        representativeIds: string[];
+        /** @enum {string} */
+        accessMode: "human_only_e2ee" | "agent_readable";
+        accessChangedAtSequence?: number;
+        priorHistoryGranted: boolean;
+        sequence: number;
+        /** Format: date-time */
+        createdAt: string;
+      };
+      messages: {
+        /** Format: uuid */
+        id: string;
+        /** Format: uuid */
+        threadId: string;
+        /** Format: uuid */
+        senderId: string;
+        sequence: number;
+        /** @enum {string} */
+        kind: "message" | "system_access_change" | "coordination_action";
+        body: string;
+        /** Format: date-time */
+        createdAt: string;
+        serverReadable: boolean;
+        encryptedBody?: string;
+        /** Format: uuid */
+        operationId?: string;
+      }[];
+      principals: {
+        /** Format: uuid */
+        id: string;
+        displayName: string;
+        /** @enum {string} */
+        kind: "human" | "representative" | "service";
+      }[];
+      actions: {
+        envelope: {
+          /** @enum {number} */
+          schemaVersion: 1;
+          /** Format: uuid */
+          operationId: string;
+          /** @enum {string} */
+          action:
+            | "status_query"
+            | "status_response"
+            | "ownership_declaration"
+            | "dependency_request"
+            | "conflict_notice"
+            | "coordination_request"
+            | "correction"
+            | "withdrawal"
+            | "human_escalation";
+          /** Format: uuid */
+          actorId: string;
+          /** Format: uuid */
+          authorityGrantId: string;
+          policyVersion: string;
+          /** Format: uuid */
+          threadId: string;
+          /** Format: uuid */
+          workstreamId?: string;
+          humanMessage: string;
+          resourceScope: string[];
+          relatedClaimIds: string[];
+          evidenceRefs: string[];
+          requestedActions: (
+            | "read_public_state"
+            | "answer_status"
+            | "declare_ownership"
+            | "register_blocker"
+            | "register_dependency"
+            | "request_coordination"
+            | "arrange_review"
+            | "publish_state"
+            | "expand_scope"
+            | "promise_deadline"
+            | "approve_architecture"
+            | "irreversible_action"
+          )[];
+          /** Format: date-time */
+          createdAt: string;
+          /** Format: uuid */
+          correctionOf?: string;
+          /** Format: uuid */
+          withdrawalOf?: string;
+        };
+        /** @enum {string} */
+        status: "resolved";
+      }[];
     };
   };
   responses: never;
@@ -426,6 +677,26 @@ export interface operations {
       };
     };
   };
+  getBootstrap: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current organization and principal */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BootstrapResponse"];
+        };
+      };
+    };
+  };
   getTeamPulse: {
     parameters: {
       query?: never;
@@ -465,6 +736,48 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+    };
+  };
+  listThreads: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Durable conversation threads */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            items: components["schemas"]["ThreadResponse"][];
+          };
+        };
+      };
+    };
+  };
+  listSpecs: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Versioned Specs and review state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SpecListResponse"];
+        };
       };
     };
   };

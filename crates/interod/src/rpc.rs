@@ -94,8 +94,23 @@ impl RpcService {
                     "status": "ok",
                     "version": env!("CARGO_PKG_VERSION"),
                     "protocolVersion": 1,
+                    "encryptedStorage": self.durable_store.is_some(),
                 }),
             ),
+            "workspace.list" => match self.workspaces.list() {
+                Ok(workspaces) => success(
+                    request.id,
+                    json!({
+                        "workspaces": workspaces.into_iter().map(|workspace| json!({
+                            "id": workspace.id,
+                            "root": workspace.root,
+                            "repositoryIdentity": workspace.repository_identity,
+                            "revoked": workspace.revoked,
+                        })).collect::<Vec<_>>()
+                    }),
+                ),
+                Err(reason) => error(request.id, -32050, &reason.to_string()),
+            },
             "workspace.enroll" => {
                 let root = request.params.get("root").and_then(Value::as_str);
                 let identity = request
@@ -223,6 +238,24 @@ impl RpcService {
                         Err(reason) => error(request.id, -32050, &reason.to_string()),
                     },
                     None => error(request.id, -32050, "Durable state is unavailable"),
+                }
+            }
+            "settings.get" => match &self.durable_store {
+                Some(store) => match store.model_egress_mode() {
+                    Ok(mode) => success(request.id, json!({ "modelEgress": mode })),
+                    Err(reason) => error(request.id, -32050, &reason.to_string()),
+                },
+                None => error(request.id, -32050, "Durable state is unavailable"),
+            },
+            "settings.set_model_egress" => {
+                let mode = request.params.get("mode").and_then(Value::as_str);
+                match (&self.durable_store, mode) {
+                    (Some(store), Some(mode)) => match store.set_model_egress_mode(mode) {
+                        Ok(mode) => success(request.id, json!({ "modelEgress": mode })),
+                        Err(reason) => error(request.id, -32602, &reason.to_string()),
+                    },
+                    (None, _) => error(request.id, -32050, "Durable state is unavailable"),
+                    (_, None) => error(request.id, -32602, "mode is required"),
                 }
             }
             "mls.initialize" => self.mls_initialize(request),
@@ -745,7 +778,16 @@ mod tests {
     use uuid::Uuid;
 
     use super::{JsonRpcRequest, RpcService, contains_forbidden_field};
+    use crate::storage::{CredentialStore, EncryptedStore, StorageError};
     use crate::workspace::WorkspaceRegistry;
+
+    struct TestCredentials;
+
+    impl CredentialStore for TestCredentials {
+        fn load_or_create_database_key(&self) -> Result<String, StorageError> {
+            Ok("dGVzdC1rZXktZm9yLWludGVybw==".into())
+        }
+    }
 
     #[test]
     fn rejects_representative_requests_outside_enrolled_workspaces() {
@@ -799,6 +841,35 @@ mod tests {
             next.result.expect("queued request")["method"],
             "representative.report_checkpoint"
         );
+        let workspaces = rpc(&service, "workspace.list", serde_json::json!({}));
+        assert_eq!(workspaces["workspaces"][0]["id"], workspace.id.to_string());
+    }
+
+    #[test]
+    fn persists_model_policy_through_bounded_local_rpc() {
+        let directory = tempdir().expect("runtime fixture");
+        let store = EncryptedStore::open(&directory.path().join("intero.db"), &TestCredentials)
+            .expect("open encrypted store");
+        let service = RpcService::new_durable("token".into(), WorkspaceRegistry::default(), store);
+
+        let updated = rpc(
+            &service,
+            "settings.set_model_egress",
+            serde_json::json!({ "mode": "user_provided_api" }),
+        );
+        assert_eq!(updated["modelEgress"], "user_provided_api");
+        assert_eq!(
+            rpc(&service, "settings.get", serde_json::json!({}))["modelEgress"],
+            "user_provided_api"
+        );
+        let rejected = service.handle(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::json!(2),
+            method: "settings.set_model_egress".into(),
+            params: serde_json::json!({ "mode": "unbounded" }),
+            auth_token: "token".into(),
+        });
+        assert_eq!(rejected.error.expect("invalid mode").code, -32602);
     }
 
     #[test]

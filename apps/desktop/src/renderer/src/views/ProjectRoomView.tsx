@@ -7,9 +7,16 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { getThreads, sendThreadMessage } from "../api.js";
+import {
+  createConversationThread,
+  getBootstrap,
+  getThreads,
+  sendThreadMessage,
+} from "../api.js";
+import { useI18n } from "../i18n/index.js";
 
 export function ProjectRoomView() {
+  const { formatTime, t } = useI18n();
   const [draft, setDraft] = useState("");
   const queryClient = useQueryClient();
   const threads = useQuery({
@@ -17,7 +24,17 @@ export function ProjectRoomView() {
     queryFn: ({ signal }) => getThreads("room", signal),
     refetchInterval: 3_000,
   });
+  const bootstrap = useQuery({
+    queryKey: ["bootstrap"],
+    queryFn: ({ signal }) => getBootstrap(signal),
+  });
   const current = threads.data?.items[0];
+  const principalNames = new Map(
+    current?.principals.map((principal) => [
+      principal.id,
+      principal.displayName,
+    ]) ?? [],
+  );
   const humanId = current?.thread.participantIds.find(
     (participantId) =>
       !current.thread.representativeIds.includes(participantId),
@@ -26,6 +43,24 @@ export function ProjectRoomView() {
     mutationFn: sendThreadMessage,
     onSuccess: async () => {
       setDraft("");
+      await queryClient.invalidateQueries({ queryKey: ["threads", "room"] });
+    },
+  });
+  const createRoom = useMutation({
+    mutationFn: async () => {
+      const identity = bootstrap.data;
+      if (!identity) throw new Error("Identity is unavailable.");
+      return createConversationThread({
+        kind: "room",
+        title: t("room.title"),
+        participantIds: [
+          identity.currentPrincipal.id,
+          identity.representativePrincipal.id,
+        ],
+        representativeIds: [identity.representativePrincipal.id],
+      });
+    },
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["threads", "room"] });
     },
   });
@@ -47,23 +82,34 @@ export function ProjectRoomView() {
             <UsersThreeIcon size={21} />
           </span>
           <span>
-            <p className="eyebrow">Shared project conversation</p>
-            <h1>{current?.thread.title ?? "Project Room"}</h1>
+            <p className="eyebrow">{t("room.sharedConversation")}</p>
+            <h1>{current?.thread.title ?? t("room.title")}</h1>
           </span>
         </div>
         <div className="runtime-switch">
           <span className="runtime-switch__active">
-            {current?.thread.participantIds.length ?? 0} participants
+            {t("general.participants", {
+              count: current?.thread.participantIds.length ?? 0,
+            })}
           </span>
-          <small>{threads.isFetching ? "syncing" : "live"}</small>
+          <small>
+            {threads.isFetching ? t("general.syncing") : t("general.live")}
+          </small>
         </div>
       </header>
 
       <div className="thread-body">
         <div className="date-divider">
-          <span>Today</span>
+          <span>{t("general.today")}</span>
         </div>
-        {current ? (
+        {threads.isError ? (
+          <article className="thread-empty">
+            <h2>{t("room.unavailable")}</h2>
+            <button type="button" onClick={() => void threads.refetch()}>
+              {t("general.retry")}
+            </button>
+          </article>
+        ) : current ? (
           current.messages.map((message) => {
             const representative = current.thread.representativeIds.includes(
               message.senderId,
@@ -79,15 +125,20 @@ export function ProjectRoomView() {
               >
                 <div className="message__meta">
                   <strong>
-                    {representative ? "Intero Representative" : "Huang Sheng"}
+                    {principalNames.get(message.senderId) ??
+                      (representative
+                        ? t("thread.representative")
+                        : message.senderId.slice(0, 8))}
                   </strong>
-                  {representative ? <span>Representative</span> : null}
+                  {representative ? (
+                    <span>{t("room.representativeRole")}</span>
+                  ) : null}
                   <time>{formatTime(message.createdAt)}</time>
                 </div>
                 <p>
                   {message.serverReadable
                     ? message.body
-                    : "Encrypted human-only message"}
+                    : t("thread.encryptedMessage")}
                 </p>
               </article>
             );
@@ -99,15 +150,21 @@ export function ProjectRoomView() {
             ) : (
               <UsersThreeIcon size={23} />
             )}
-            <h2>
-              {threads.isLoading
-                ? "Loading the Project Room…"
-                : "No Project Room yet"}
-            </h2>
-            <p>
-              Project Rooms keep team discussion and visible Representative
-              actions together.
-            </p>
+            <h2>{threads.isLoading ? t("room.loading") : t("room.empty")}</h2>
+            <p>{t("room.emptyDetail")}</p>
+            {!threads.isLoading ? (
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={!bootstrap.data || createRoom.isPending}
+                onClick={() => createRoom.mutate()}
+              >
+                {t("room.create")}
+              </button>
+            ) : null}
+            {createRoom.isError ? (
+              <p className="composer-error">{t("room.createFailed")}</p>
+            ) : null}
           </article>
         )}
       </div>
@@ -115,7 +172,7 @@ export function ProjectRoomView() {
       <div className="composer">
         <div className="composer__privacy">
           <LockSimpleIcon size={14} />
-          Project Room · team-visible and agent-readable
+          {t("room.privacy")}
         </div>
         <div className="composer__row">
           <textarea
@@ -127,14 +184,14 @@ export function ProjectRoomView() {
                 submit();
               }
             }}
-            placeholder="Share a decision, question, or team update…"
+            placeholder={t("room.placeholder")}
             rows={1}
             disabled={!current}
           />
           <button
             type="button"
             className="send-button"
-            aria-label="Send Room message"
+            aria-label={t("room.send")}
             disabled={!draft.trim() || !current || !humanId || send.isPending}
             onClick={submit}
           >
@@ -148,11 +205,4 @@ export function ProjectRoomView() {
       </div>
     </div>
   );
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
 }

@@ -50,6 +50,24 @@ starts `interod`, and launches the application workspaces. Development
 credentials are isolated to `compose.yaml` and `.env.example`; do not reuse them
 outside local development.
 
+The desktop starts in Simplified Chinese. Open **设置 → 界面语言** to switch to
+English; the preference stays on that device. Team Pulse, conversations, Specs,
+identity, Workspace enrollment, runtime health, and model-egress policy are
+loaded from the API or the local privacy daemon. Local absolute Workspace paths
+never enter the public API.
+
+Normal startup does not seed sample Workstreams or Threads. To run an explicit
+visual demo with deterministic fixtures, set:
+
+```bash
+INTERO_SEED_DEMO=true just up
+```
+
+For a real acceptance flow, enroll a Workspace through the authenticated local
+`workspace.enroll` RPC and submit `representative.report_checkpoint` through
+the packaged MCP bridge or Coding Agent hook. Unenrolled directories remain
+unobserved.
+
 Stop the stack without deleting its volumes:
 
 ```bash
@@ -73,7 +91,8 @@ tests.
 - Only explicitly enrolled Workspace roots may emit work signals.
 - Hook adapters normalize bounded metadata and reject raw session content.
 - Model egress is disabled by default and deterministic Work State remains
-  available without a model or network.
+  available without a model or network. The setting is persisted by `interod`
+  and applied to the running Local Representative.
 - Local private state is encrypted with SQLCipher; production uses the OS
   credential store for its key.
 - Public fallback responses disclose freshness and never silently impersonate

@@ -33,7 +33,7 @@ import {
 } from "@intero/representative-core";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
-import type { PlatformStore } from "./platform-store.js";
+import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
 import {
   buildThreadMessage,
   claimFromEvent,
@@ -228,7 +228,7 @@ export class PostgresPlatformStore implements PlatformStore {
 
   async putGrant(grant: CapabilityGrant): Promise<CapabilityGrant> {
     return this.write(async (client) => {
-      await this.ensurePrincipal(client, grant.principalId);
+      await this.ensurePrincipal(client, grant.principalId, "representative");
       await client.query(
         `INSERT INTO capability_grants
           (id, organization_id, principal_id, "grant", policy_version, expires_at, revoked_at)
@@ -361,7 +361,13 @@ export class PostgresPlatformStore implements PlatformStore {
         ...thread.participantIds,
         ...thread.representativeIds,
       ])) {
-        await this.ensurePrincipal(client, principalId);
+        await this.ensurePrincipal(
+          client,
+          principalId,
+          thread.representativeIds.includes(principalId)
+            ? "representative"
+            : "human",
+        );
       }
       await client.query(
         `INSERT INTO threads
@@ -438,7 +444,7 @@ export class PostgresPlatformStore implements PlatformStore {
     return this.write(async (client) => {
       const current = await this.getThreadInTransaction(client, threadId);
       if (!current) throw new Error("Thread was not found.");
-      await this.ensurePrincipal(client, representativeId);
+      await this.ensurePrincipal(client, representativeId, "representative");
       await this.ensurePrincipal(client, actorId);
       const transition = addRepresentative(
         current.thread,
@@ -571,7 +577,13 @@ export class PostgresPlatformStore implements PlatformStore {
           "Review response must target the current Spec revision.",
         );
       }
-      await this.ensurePrincipal(client, review.reviewerId);
+      await this.ensurePrincipal(
+        client,
+        review.reviewerId,
+        review.kind === "representative_impact_analysis"
+          ? "representative"
+          : "human",
+      );
       await client.query(
         `INSERT INTO spec_reviews
           (id, organization_id, spec_id, revision_id, reviewer_id, kind,
@@ -663,10 +675,14 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
-  async listInbox(): Promise<ActionInboxItem[]> {
+  async listInbox(principalId?: PrincipalId): Promise<ActionInboxItem[]> {
     return this.read(async (client) => {
       const result = await client.query(
-        "SELECT * FROM action_inbox WHERE resolved_at IS NULL ORDER BY created_at DESC",
+        `SELECT * FROM action_inbox
+         WHERE resolved_at IS NULL
+           AND ($1::uuid IS NULL OR principal_id = $1)
+         ORDER BY created_at DESC`,
+        [principalId ?? null],
       );
       return result.rows.map(inboxFromRow);
     });
@@ -699,6 +715,79 @@ export class PostgresPlatformStore implements PlatformStore {
 
   async getSpec(specId: SpecId) {
     return this.read((client) => this.getSpecInTransaction(client, specId));
+  }
+
+  async listSpecs() {
+    return this.read(async (client) => {
+      const result = await client.query<{ id: SpecId }>(
+        "SELECT id FROM specs ORDER BY created_at DESC",
+      );
+      const items = await Promise.all(
+        result.rows.map((row) => this.getSpecInTransaction(client, row.id)),
+      );
+      return items.filter(
+        (
+          item,
+        ): item is {
+          spec: Spec;
+          revisions: SpecRevision[];
+          reviews: SpecReviewResponse[];
+        } => item !== undefined,
+      );
+    });
+  }
+
+  async upsertPrincipal(
+    principal: PrincipalSummary,
+  ): Promise<PrincipalSummary> {
+    return this.write(async (client) => {
+      await client.query(
+        `INSERT INTO principals (id, display_name, kind)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET
+           display_name = EXCLUDED.display_name,
+           kind = EXCLUDED.kind,
+           updated_at = now()`,
+        [principal.id, principal.displayName, principal.kind],
+      );
+      return principal;
+    });
+  }
+
+  async listPrincipals(ids: PrincipalId[]): Promise<PrincipalSummary[]> {
+    if (ids.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query<{
+        id: PrincipalId;
+        display_name: string;
+        kind: PrincipalSummary["kind"];
+      }>(
+        `SELECT id, display_name, kind
+         FROM principals
+         WHERE id = ANY($1::uuid[])
+         ORDER BY display_name, id`,
+        [[...new Set(ids)]],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        displayName: row.display_name,
+        kind: row.kind,
+      }));
+    });
+  }
+
+  async listActionEnvelopes(ids: OperationId[]): Promise<ActionEnvelope[]> {
+    if (ids.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query<{ envelope: ActionEnvelope }>(
+        `SELECT envelope
+         FROM action_envelopes
+         WHERE operation_id = ANY($1::uuid[])
+         ORDER BY created_at`,
+        [[...new Set(ids)]],
+      );
+      return result.rows.map((row) => row.envelope);
+    });
   }
 
   async listDecisions(): Promise<DecisionRecord[]> {
@@ -981,12 +1070,24 @@ export class PostgresPlatformStore implements PlatformStore {
   private async ensurePrincipal(
     client: PoolClient,
     id: PrincipalId,
+    kind: PrincipalSummary["kind"] = "human",
   ): Promise<void> {
     await client.query(
       `INSERT INTO principals (id, display_name, kind)
-       VALUES ($1, $2, 'human')
-       ON CONFLICT (id) DO NOTHING`,
-      [id, `Principal ${id.slice(0, 8)}`],
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         kind = CASE
+           WHEN EXCLUDED.kind = 'representative' THEN 'representative'
+           ELSE principals.kind
+         END,
+         updated_at = now()`,
+      [
+        id,
+        kind === "representative"
+          ? "Intero Representative"
+          : `Principal ${id.slice(0, 8)}`,
+        kind,
+      ],
     );
   }
 
@@ -1141,6 +1242,7 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     createdAt: asIso(row.created_at),
     serverReadable: row.server_readable,
     ...(row.encrypted_body ? { encryptedBody: row.encrypted_body } : {}),
+    ...(row.operation_id ? { operationId: row.operation_id } : {}),
   };
 }
 

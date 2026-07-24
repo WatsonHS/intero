@@ -31,9 +31,9 @@ the product requirements.
 
 ## Assumptions
 
-*This plan is part of an already-authorized implementation loop. The items below
+_This plan is part of an already-authorized implementation loop. The items below
 are implementation choices inferred from the user's request and are called out
-so the final review can challenge them.*
+so the final review can challenge them._
 
 - Chinese (`zh-CN`) is the default locale and English (`en-US`) is selectable
   and persisted per desktop profile.
@@ -172,14 +172,14 @@ AE13
 
 ## Key Technical Decisions
 
-| Decision | Rationale |
-| --- | --- |
-| Server bootstrap and list endpoints return public identity and review view models | Prevents UUID-to-name and Spec-state reconstruction in React while keeping public data on the public plane. |
-| Electron exposes a narrow typed local-runtime bridge | Workspace roots and model policy stay on the local private plane and the renderer never receives a generic daemon-call primitive. |
-| Model policy is durable in `interod` and refreshed by the sidecar | A Settings change affects the actual running runtime instead of only changing browser storage. |
-| Localization uses a typed in-repo dictionary and React context | The surface is small, avoids a second state system, supports compile-time key parity, and can later be adapted to a translation service. |
-| Domain content is not translated | Workstream titles, messages, Spec Markdown, and review bodies are user/Agent-authored evidence; only product chrome and enum labels are localized. |
-| Demo data is opt-in | Empty states and real hooks become the default truth, while explicit screenshots/tests can still request deterministic fixtures. |
+| Decision                                                                          | Rationale                                                                                                                                          |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server bootstrap and list endpoints return public identity and review view models | Prevents UUID-to-name and Spec-state reconstruction in React while keeping public data on the public plane.                                        |
+| Electron exposes a narrow typed local-runtime bridge                              | Workspace roots and model policy stay on the local private plane and the renderer never receives a generic daemon-call primitive.                  |
+| Model policy is durable in `interod` and refreshed by the sidecar                 | A Settings change affects the actual running runtime instead of only changing browser storage.                                                     |
+| Localization uses a typed in-repo dictionary and React context                    | The surface is small, avoids a second state system, supports compile-time key parity, and can later be adapted to a translation service.           |
+| Domain content is not translated                                                  | Workstream titles, messages, Spec Markdown, and review bodies are user/Agent-authored evidence; only product chrome and enum labels are localized. |
+| Demo data is opt-in                                                               | Empty states and real hooks become the default truth, while explicit screenshots/tests can still request deterministic fixtures.                   |
 
 ---
 
@@ -211,9 +211,9 @@ AE13
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for
+> _This illustrates the intended approach and is directional guidance for
 > review, not implementation specification. The implementing agent should treat
-> it as context, not code to reproduce.*
+> it as context, not code to reproduce._
 
 ```mermaid
 flowchart TB
@@ -276,6 +276,7 @@ Action-Inbox routing without client-side fixture knowledge.
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `packages/api-contracts/src/index.ts`
 - Modify: `apps/server-api/src/platform-store.ts`
 - Modify: `apps/server-api/src/store.ts`
@@ -288,6 +289,7 @@ Action-Inbox routing without client-side fixture knowledge.
 - Generate: `packages/api-contracts/generated/openapi.ts`
 
 **Approach:**
+
 - Add a bootstrap response for organization and configured current principal,
   plus public principal summaries used to label owners and message senders.
 - Enrich Team Pulse and Thread reads with the public principal summaries needed
@@ -301,11 +303,13 @@ Action-Inbox routing without client-side fixture knowledge.
 contract, then implement both stores.
 
 **Patterns to follow:**
+
 - Typed parsing and endpoint assembly in `apps/server-api/src/app.ts`
 - Store parity in `apps/server-api/src/store.ts` and
   `apps/server-api/src/postgres-store.ts`
 
 **Test scenarios:**
+
 - Happy path: a configured principal, two public Workstreams, and a Thread
   return display names mapped to the correct stable principal IDs.
 - Edge case: an unknown auto-created principal returns its persisted placeholder
@@ -320,6 +324,7 @@ contract, then implement both stores.
   revision IDs stored by the domain.
 
 **Verification:**
+
 - The renderer can label all visible public identities and reconstruct the
   current Spec/review state using API responses only.
 
@@ -333,6 +338,7 @@ locally scoped.
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `crates/interod/src/storage.rs`
 - Modify: `crates/interod/src/workspace.rs`
 - Modify: `crates/interod/src/rpc.rs`
@@ -344,6 +350,7 @@ locally scoped.
 - Test: `apps/local-representative/src/sidecar.test.ts`
 
 **Approach:**
+
 - Add durable, validated model-egress settings to the encrypted local store.
 - Add bounded RPC reads for daemon health, Workspace registry entries, and
   current policy, plus a single validated model-policy write.
@@ -355,11 +362,13 @@ locally scoped.
 the desktop bridge.
 
 **Patterns to follow:**
+
 - Authenticated dispatch in `crates/interod/src/rpc.rs`
 - Additive local schema initialization in `crates/interod/src/storage.rs`
 - Heartbeat loop in `apps/local-representative/src/sidecar.ts`
 
 **Test scenarios:**
+
 - Happy path: setting each supported model mode persists and survives reopening
   the local database.
 - Error path: an unsupported mode is rejected and the prior durable value
@@ -373,6 +382,7 @@ the desktop bridge.
   never a fresh-local label.
 
 **Verification:**
+
 - Daemon RPC is the source of truth for Workspace and model policy and the
   sidecar consumes the same durable policy.
 
@@ -386,6 +396,7 @@ needed by Settings.
 **Dependencies:** U2
 
 **Files:**
+
 - Modify: `apps/desktop/package.json`
 - Modify: `apps/desktop/src/main/index.ts`
 - Modify: `apps/desktop/src/preload/index.ts`
@@ -394,6 +405,7 @@ needed by Settings.
 - Test: `apps/desktop/src/renderer/src/api.test.ts`
 
 **Approach:**
+
 - Register explicit Electron handlers for local status and model-policy change.
 - Use `@intero/local-ipc` in the main process; expose no arbitrary method name or
   raw token/socket access to the renderer.
@@ -401,11 +413,13 @@ needed by Settings.
   preview and daemon outage render truthfully.
 
 **Patterns to follow:**
+
 - Existing context-isolated preload and navigation hardening in
   `apps/desktop/src/main/index.ts`
 - Framed authenticated client in `packages/local-ipc/src/index.ts`
 
 **Test scenarios:**
+
 - Happy path: local bridge returns version, Workspace list, encryption state,
   and model policy.
 - Error path: a missing daemon descriptor becomes an unavailable status without
@@ -416,6 +430,7 @@ needed by Settings.
   state instead of fabricated Workspace data.
 
 **Verification:**
+
 - Renderer code cannot invoke arbitrary daemon methods, and Settings can render
   both connected and unavailable local states.
 
@@ -429,6 +444,7 @@ selection and locale-aware time formatting.
 **Dependencies:** None
 
 **Files:**
+
 - Create: `apps/desktop/src/renderer/src/i18n/index.tsx`
 - Create: `apps/desktop/src/renderer/src/i18n/locales/zh-CN.ts`
 - Create: `apps/desktop/src/renderer/src/i18n/locales/en-US.ts`
@@ -437,6 +453,7 @@ selection and locale-aware time formatting.
 - Test: `apps/desktop/src/renderer/src/i18n/index.test.tsx`
 
 **Approach:**
+
 - Use a typed key set whose English dictionary must match the Chinese source
   dictionary.
 - Persist locale locally and default missing/invalid values to `zh-CN`.
@@ -445,10 +462,12 @@ selection and locale-aware time formatting.
 - Keep persisted domain content verbatim.
 
 **Patterns to follow:**
+
 - Existing React root providers in `apps/desktop/src/renderer/src/main.tsx`
 - Presentational component API in `packages/ui/src/components.tsx`
 
 **Test scenarios:**
+
 - Happy path: no stored preference renders Chinese and formats the current date
   using `zh-CN`.
 - Happy path: switching to English updates visible labels and survives remount.
@@ -457,6 +476,7 @@ selection and locale-aware time formatting.
 - Accessibility: translated aria labels remain non-empty in both locales.
 
 **Verification:**
+
 - No visible product-chrome string in the renderer bypasses the localization
   layer, except the Intero brand and persisted user/Agent content.
 
@@ -472,6 +492,7 @@ AE7, AE9, AE10, AE13
 **Dependencies:** U1, U3, U4
 
 **Files:**
+
 - Modify: `apps/desktop/src/renderer/src/App.tsx`
 - Modify: `apps/desktop/src/renderer/src/api.ts`
 - Modify: `apps/desktop/src/renderer/src/views/TeamPulseView.tsx`
@@ -484,6 +505,7 @@ AE7, AE9, AE10, AE13
 - Test: `apps/desktop/src/renderer/src/views/SettingsView.test.tsx`
 
 **Approach:**
+
 - Load bootstrap once and use stable principal IDs to resolve names and
   initials across navigation, Workstreams, and messages.
 - Replace the fixed date with locale formatting and calculate stale labels from
@@ -502,10 +524,12 @@ AE7, AE9, AE10, AE13
 manual visual QA.
 
 **Patterns to follow:**
+
 - Query keys and mutations in the current desktop views
 - Truthful empty/error components in `@intero/ui`
 
 **Test scenarios:**
+
 - Happy path: live principal names replace UUID fixtures in sidebar,
   Workstreams, and messages.
 - Empty path: zero Workstreams, Threads, Rooms, and inbox items render localized
@@ -524,6 +548,7 @@ manual visual QA.
   both locales.
 
 **Verification:**
+
 - Every visible identity, count, timestamp, runtime fact, Workstream, inbox
   item, and message is traceable to a current API/IPC response or is explicitly
   labeled as an empty/unavailable state.
@@ -538,6 +563,7 @@ durable Spec data and a recoverable local draft.
 **Dependencies:** U1, U4
 
 **Files:**
+
 - Modify: `apps/desktop/src/renderer/src/api.ts`
 - Modify: `apps/desktop/src/renderer/src/views/SpecReviewView.tsx`
 - Modify: `apps/desktop/src/renderer/src/styles.css`
@@ -545,6 +571,7 @@ durable Spec data and a recoverable local draft.
 - Test: `apps/desktop/src/renderer/src/components/SafeMarkdown.test.tsx`
 
 **Approach:**
+
 - Render a localized empty state with an explicit new-draft action when no Spec
   exists.
 - Restore the newest durable Spec and its current revision; allow switching
@@ -560,12 +587,14 @@ durable Spec data and a recoverable local draft.
 tests, then implement UI behavior.
 
 **Patterns to follow:**
+
 - Version and invalidation logic in
   `packages/representative-core/src/spec-review.ts`
 - Safe Markdown boundary in
   `apps/desktop/src/renderer/src/components/SafeMarkdown.tsx`
 
 **Test scenarios:**
+
 - Empty path: no server Specs shows a new-draft action and no fabricated title,
   reviewers, or analysis.
 - Happy path: an existing revision loads its exact title/Markdown and recorded
@@ -583,6 +612,7 @@ tests, then implement UI behavior.
   approval.
 
 **Verification:**
+
 - Reloading the view never returns to sample content and never loses an
   acknowledged local draft; published revisions and review state survive API
   reload.
@@ -597,6 +627,7 @@ Chinese-first instance populated only through real product entry points.
 **Dependencies:** U5, U6
 
 **Files:**
+
 - Modify: `apps/server-api/src/index.ts`
 - Modify: `README.md`
 - Modify: `turbo.json`
@@ -604,6 +635,7 @@ Chinese-first instance populated only through real product entry points.
 - Test: `apps/server-api/src/postgres-store.integration.test.ts`
 
 **Approach:**
+
 - Seed demo Workstreams and Threads only when an explicit environment flag is
   true.
 - Document the difference between empty development, explicit demo, and real
@@ -616,6 +648,7 @@ Chinese-first instance populated only through real product entry points.
   Action Inbox navigation in the running application.
 
 **Test scenarios:**
+
 - Happy path: server startup without the flag creates no sample projection or
   Thread.
 - Explicit demo path: enabling the flag still creates deterministic fixtures
@@ -630,6 +663,7 @@ Chinese-first instance populated only through real product entry points.
   Workspace, model policy, and Spec revision remain visible.
 
 **Verification:**
+
 - The handed-off runtime starts in Chinese, can switch to English, contains no
   default fixtures, and every populated acceptance item is attributable to a
   real API, daemon, or integration event.
@@ -681,15 +715,15 @@ flowchart TB
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-| --- | --- |
-| Local paths accidentally enter public bootstrap responses | Separate contracts and tests; local status is available only through Electron IPC. |
-| The UI claims a policy change before the sidecar uses it | Persist in daemon first, refresh the running sidecar, and render only the confirmed daemon response. |
-| Localized strings drift or English keys go missing | Typed dictionary parity and tests for both locales across major states. |
-| Existing acceptance fixtures mask empty-state failures | Default seeding off, reset the named local data, test empty state before submitting the real checkpoint. |
-| Spec draft overwrites a newer server revision | Key drafts by Spec/revision context, show the durable base revision, and publish using freshly refetched revision state. |
-| Bootstrap identity is mistaken for complete authentication | Keep the configuration mechanism explicit in documentation and do not weaken existing authorization boundaries. |
-| Broad cross-layer changes regress the established vertical slice | Land by dependency unit, run TypeScript/Rust/integration/build gates, then perform two finding-driven review passes. |
+| Risk                                                             | Mitigation                                                                                                               |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Local paths accidentally enter public bootstrap responses        | Separate contracts and tests; local status is available only through Electron IPC.                                       |
+| The UI claims a policy change before the sidecar uses it         | Persist in daemon first, refresh the running sidecar, and render only the confirmed daemon response.                     |
+| Localized strings drift or English keys go missing               | Typed dictionary parity and tests for both locales across major states.                                                  |
+| Existing acceptance fixtures mask empty-state failures           | Default seeding off, reset the named local data, test empty state before submitting the real checkpoint.                 |
+| Spec draft overwrites a newer server revision                    | Key drafts by Spec/revision context, show the durable base revision, and publish using freshly refetched revision state. |
+| Bootstrap identity is mistaken for complete authentication       | Keep the configuration mechanism explicit in documentation and do not weaken existing authorization boundaries.          |
+| Broad cross-layer changes regress the established vertical slice | Land by dependency unit, run TypeScript/Rust/integration/build gates, then perform two finding-driven review passes.     |
 
 ---
 

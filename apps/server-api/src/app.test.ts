@@ -10,7 +10,7 @@ import { uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
-import { InMemoryPlatformStore } from "./store.js";
+import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
 
 describe("Intero API vertical slice", () => {
   let store: InMemoryPlatformStore;
@@ -23,6 +23,12 @@ describe("Intero API vertical slice", () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  it("keeps demo fixtures opt-in", () => {
+    expect(demoSeedingEnabled(undefined)).toBe(false);
+    expect(demoSeedingEnabled("false")).toBe(false);
+    expect(demoSeedingEnabled("true")).toBe(true);
   });
 
   it("reduces a Coding Agent checkpoint into Team Pulse without raw session data", async () => {
@@ -66,6 +72,12 @@ describe("Intero API vertical slice", () => {
       phase: "blocked",
       blockers: ["Waiting for the authorization tuple schema."],
     });
+    expect(pulse.json().principals).toEqual([
+      expect.objectContaining({
+        id: workstream.ownerId,
+        displayName: `Principal ${workstream.ownerId.slice(0, 8)}`,
+      }),
+    ]);
     expect(JSON.stringify(pulse.json())).not.toContain("prompt");
 
     const firstPage = await app.inject({
@@ -115,10 +127,48 @@ describe("Intero API vertical slice", () => {
     });
   });
 
+  it("returns the configured organization and principal bootstrap", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/bootstrap",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      organization: {
+        id: "019b5ac0-7600-7000-8000-000000000001",
+        name: "Intero Development",
+      },
+      currentPrincipal: {
+        id: "019b5ac0-7600-7000-8000-000000000002",
+        displayName: "Intero User",
+        kind: "human",
+      },
+      representativePrincipal: {
+        id: "019b5ac0-7600-7000-8000-000000000003",
+        displayName: "Intero Representative",
+        kind: "representative",
+      },
+    });
+  });
+
   it("enforces Capability Grants and produces one Action Inbox item for expansion", async () => {
-    const actorId = uuidv7() as PrincipalId;
+    const actorId = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
     const workstream = await createWorkstream(app, actorId);
     const threadId = uuidv7() as ActionEnvelope["threadId"];
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      payload: {
+        id: threadId,
+        kind: "coordination",
+        title: "Ownership boundary",
+        participantIds: [actorId],
+        representativeIds: [actorId],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: "2026-07-24T09:59:00.000Z",
+      },
+    });
     const grant: CapabilityGrant = {
       id: uuidv7() as CapabilityGrant["id"],
       principalId: actorId,
@@ -178,6 +228,22 @@ describe("Intero API vertical slice", () => {
     const inbox = await app.inject({ method: "GET", url: "/v1/action-inbox" });
     expect(inbox.json().items).toHaveLength(1);
     expect(inbox.json().items[0].kind).toBe("scope_expansion");
+    const durableThread = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${threadId}`,
+    });
+    expect(durableThread.json()).toMatchObject({
+      messages: [{ operationId: envelope.operationId, sequence: 1 }],
+      actions: [
+        {
+          envelope: {
+            operationId: envelope.operationId,
+            policyVersion: "policy-1",
+          },
+          status: "resolved",
+        },
+      ],
+    });
   });
 
   it("records the Human-only to Agent-readable boundary without exposing history", async () => {
@@ -256,6 +322,15 @@ describe("Intero API vertical slice", () => {
         },
       ],
     });
+    expect(response.json().items[0].principals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: human, kind: "human" }),
+        expect.objectContaining({
+          id: representative,
+          kind: "representative",
+        }),
+      ]),
+    );
   });
 
   it("accepts only ciphertext before the access boundary and plaintext after it", async () => {
@@ -401,6 +476,12 @@ describe("Intero API vertical slice", () => {
       reviews.find((review) => review.affectedScopes[0] === "security")
         ?.invalidatedAt,
     ).toBeUndefined();
+    const list = await app.inject({ method: "GET", url: "/v1/specs" });
+    expect(list.json().items).toHaveLength(1);
+    expect(list.json().items[0]).toMatchObject({
+      spec: { id: specId, status: "in_review" },
+      revisions: [{ revision: 1 }, { revision: 2 }],
+    });
   });
 });
 

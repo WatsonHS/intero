@@ -23,6 +23,8 @@ pub enum StorageError {
     LockPoisoned,
     #[error("stored JSON is invalid: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid runtime setting: {0}")]
+    InvalidSetting(String),
 }
 
 pub trait CredentialStore {
@@ -132,6 +134,11 @@ impl EncryptedStore {
               workspace_id TEXT NOT NULL,
               workstream_id TEXT NOT NULL,
               created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS runtime_settings (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
               object_id UNINDEXED,
@@ -262,6 +269,42 @@ impl EncryptedStore {
             });
         }
         Ok(workspaces)
+    }
+
+    pub fn model_egress_mode(&self) -> Result<String, StorageError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::LockPoisoned)?;
+        let value = connection
+            .query_row(
+                "SELECT value FROM runtime_settings WHERE key = 'model_egress'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value.unwrap_or_else(|| "disabled".to_owned()))
+    }
+
+    pub fn set_model_egress_mode(&self, mode: &str) -> Result<String, StorageError> {
+        if !matches!(mode, "managed_api" | "user_provided_api" | "disabled") {
+            return Err(StorageError::InvalidSetting(
+                "model egress mode is unsupported".to_owned(),
+            ));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::LockPoisoned)?;
+        connection.execute(
+            "INSERT INTO runtime_settings (key, value, updated_at)
+             VALUES ('model_egress', ?1, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+             ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = excluded.updated_at",
+            [mode],
+        )?;
+        Ok(mode.to_owned())
     }
 
     pub fn enqueue_representative_request(&self, request: &Value) -> Result<bool, StorageError> {
@@ -667,6 +710,32 @@ mod tests {
                 .search_memory(other_workspace_id, "missing sequence", 10)
                 .expect("search other workspace")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn persists_only_supported_model_egress_modes() {
+        let directory = tempdir().expect("storage fixture");
+        let path = directory.path().join("intero.db");
+        {
+            let store = EncryptedStore::open(&path, &TestCredentials).expect("open database");
+            assert_eq!(store.model_egress_mode().expect("default mode"), "disabled");
+            assert_eq!(
+                store
+                    .set_model_egress_mode("managed_api")
+                    .expect("persist mode"),
+                "managed_api"
+            );
+            assert!(store.set_model_egress_mode("unbounded").is_err());
+            assert_eq!(
+                store.model_egress_mode().expect("unchanged mode"),
+                "managed_api"
+            );
+        }
+        let reopened = EncryptedStore::open(&path, &TestCredentials).expect("reopen database");
+        assert_eq!(
+            reopened.model_egress_mode().expect("restored mode"),
+            "managed_api"
         );
     }
 }
