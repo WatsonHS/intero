@@ -36,6 +36,7 @@ pilot boundary are recorded in
 - pnpm 10
 - Rust stable
 - Docker with Compose
+- [just](https://github.com/casey/just)
 
 ## Start locally
 

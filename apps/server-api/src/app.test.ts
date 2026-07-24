@@ -88,6 +88,33 @@ describe("Intero API vertical slice", () => {
     ).toBe(true);
   });
 
+  it("reports the Local Representative online only after a fresh heartbeat", async () => {
+    const before = await app.inject({
+      method: "GET",
+      url: "/v1/offline-status",
+    });
+    expect(before.json()).toMatchObject({
+      localRuntime: "offline",
+      fallback: "public",
+    });
+
+    const heartbeat = await app.inject({
+      method: "POST",
+      url: "/v1/runtime/heartbeat",
+    });
+    expect(heartbeat.statusCode).toBe(202);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/v1/offline-status",
+    });
+    expect(after.json()).toMatchObject({
+      localRuntime: "online",
+      fallback: "local",
+      disclosure: "Local Representative is connected.",
+    });
+  });
+
   it("enforces Capability Grants and produces one Action Inbox item for expansion", async () => {
     const actorId = uuidv7() as PrincipalId;
     const workstream = await createWorkstream(app, actorId);

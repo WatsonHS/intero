@@ -43,7 +43,23 @@ export async function runSidecar(
     throw new Error("interod is incompatible with this Local Representative.");
   }
   await replayDurableEvents(daemon, runtime);
+  let nextHeartbeatAt = 0;
   for (;;) {
+    if (Date.now() >= nextHeartbeatAt) {
+      try {
+        await reportRuntimeHeartbeat();
+        nextHeartbeatAt = Date.now() + 5_000;
+      } catch (error) {
+        process.stderr.write(
+          `${JSON.stringify({
+            level: "warn",
+            operation: "representative.heartbeat",
+            error: error instanceof Error ? error.message : "unknown_error",
+          })}\n`,
+        );
+        nextHeartbeatAt = Date.now() + 1_000;
+      }
+    }
     const request = (await daemon.call(
       "representative.next_request",
       {},
@@ -66,6 +82,14 @@ export async function runSidecar(
       await delay(1_000);
     }
   }
+}
+
+async function reportRuntimeHeartbeat(): Promise<void> {
+  if (!process.env.INTERO_API_URL) return;
+  await apiRequest("/v1/runtime/heartbeat", {
+    method: "POST",
+    body: {},
+  });
 }
 
 export async function processQueuedRequest(

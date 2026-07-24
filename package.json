@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev --parallel",
+    "dev": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker --filter=@intero/local-representative",
     "generate": "turbo run generate",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm test:ts && cargo test --workspace",

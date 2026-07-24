@@ -51,6 +51,7 @@ export async function buildApp(
   });
   const store = options.store ?? new InMemoryPlatformStore();
   const authorization = options.authorization ?? new FailClosedAuthorization();
+  let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
   await app.register(cors, {
     origin: [/^http:\/\/localhost:\d+$/],
@@ -310,16 +311,26 @@ export async function buildApp(
     return await store.cursor(query.after, query.limit);
   });
 
+  app.post("/v1/runtime/heartbeat", async (_request, reply) => {
+    localRuntimeHeartbeatAt = Date.now();
+    return reply.status(202).send({ accepted: true });
+  });
+
   app.get("/v1/offline-status", async () => {
     const latest = await store.latestProjectionFreshness();
+    const localRuntimeOnline =
+      localRuntimeHeartbeatAt !== undefined &&
+      Date.now() - localRuntimeHeartbeatAt < 15_000;
     return {
-      localRuntime: "offline",
-      fallback: "public",
+      localRuntime: localRuntimeOnline ? "online" : "offline",
+      fallback: localRuntimeOnline ? "local" : "public",
       freshnessAt: latest ?? null,
       stale: latest ? Date.now() - Date.parse(latest) > 300_000 : true,
-      disclosure: latest
-        ? "Answering from the latest synchronized public Work State."
-        : "No synchronized Work State is available.",
+      disclosure: localRuntimeOnline
+        ? "Local Representative is connected."
+        : latest
+          ? "Answering from the latest synchronized public Work State."
+          : "No synchronized Work State is available.",
     };
   });
 
