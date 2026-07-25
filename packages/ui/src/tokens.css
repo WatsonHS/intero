@@ -1,84 +1,234 @@
+/* ------------------------------------------------------------------------
+   Intero design tokens — ported from "Intero Design Tokens.dc.html".
+
+   One set of token names drives both themes. Neutrals are warm charcoal /
+   warm ivory; there is exactly one accent (user-configurable, darkened 30%
+   in light mode for contrast); green / amber / danger are semantic only —
+   they express Work State status and freshness, never decoration.
+
+   Layers:
+     1. Kit tokens        --intero-*            (dark on :root, light on .theme-light)
+     2. Accent system     --intero-accent-base  → derived accent/soft/sel/glow/on-accent
+     3. shadcn contract   --background … --ring (mapped from the kit)
+     4. Tailwind @theme   colors, fonts, radii, easings, animations
+     5. Compatibility aliases for pre-token views (remove as views migrate)
+   ------------------------------------------------------------------------ */
+
 :root {
   color-scheme: dark;
 
-  /* shadcn semantic color contract */
-  --background: oklch(0.17 0.012 105);
-  --foreground: oklch(0.93 0.014 82);
-  --card: oklch(0.21 0.012 105);
-  --card-foreground: oklch(0.93 0.014 82);
-  --popover: oklch(0.235 0.012 105);
-  --popover-foreground: oklch(0.93 0.014 82);
-  --primary: oklch(0.76 0.13 67);
-  --primary-foreground: oklch(0.19 0.028 62);
-  --secondary: oklch(0.27 0.011 101);
-  --secondary-foreground: oklch(0.89 0.014 82);
-  --muted: oklch(0.24 0.011 101);
-  --muted-foreground: oklch(0.69 0.016 82);
-  --accent: oklch(0.275 0.035 67);
-  --accent-foreground: oklch(0.82 0.11 69);
-  --destructive: oklch(0.69 0.12 37);
-  --destructive-foreground: oklch(0.96 0.012 78);
-  --border: oklch(0.35 0.012 97 / 46%);
-  --input: oklch(0.35 0.012 97 / 62%);
-  --ring: oklch(0.76 0.13 67);
-  --chart-1: oklch(0.76 0.13 67);
-  --chart-2: oklch(0.74 0.09 151);
-  --chart-3: oklch(0.72 0.08 241);
-  --chart-4: oklch(0.75 0.1 311);
-  --chart-5: oklch(0.77 0.1 88);
-  --radius: 0.75rem;
+  /* 1 · Kit — dark */
+  --intero-bg: #14130f; /* window base; the only surface without a border */
+  --intero-panel: #100f0b; /* nav rail, thread list, side rails */
+  --intero-panel2: #1a1813; /* cards, bubbles, raised surfaces */
+  --intero-panel2-glass: color-mix(
+    in srgb,
+    var(--intero-panel2) 85%,
+    transparent
+  ); /* slightly translucent card surface for reveal/acrylic cards */
+  --intero-raise: rgba(255, 247, 232, 0.045); /* inset layer inside a surface */
+  --intero-line: rgba(255, 247, 232, 0.08); /* separators + card borders */
+  --intero-line2: rgba(255, 247, 232, 0.15); /* boundaries that must be seen */
+  --intero-ink: #f0ece3; /* body text and headings */
+  --intero-muted: #a29c90; /* secondary text (≥4.5:1) */
+  --intero-faint: #7c7669; /* labels, timestamps, metadata (≥3.9:1) */
+  --intero-bubble: #221f19; /* human message bubbles */
+  --intero-hover: rgba(255, 247, 232, 0.05); /* row/card hover wash */
+  --intero-on-tint: #1a1710; /* text on person tints */
 
-  /* Intero product tokens */
-  --intero-canvas: #10110e;
-  --intero-sidebar: #0d0e0c;
-  --intero-surface: #171813;
-  --intero-surface-raised: #1d1e19;
-  --intero-surface-strong: #24241e;
-  --intero-success: #79c58e;
-  --intero-success-soft: rgba(121, 197, 142, 0.12);
-  --intero-warning: #d7ad5d;
-  --intero-warning-soft: rgba(215, 173, 93, 0.12);
-  --intero-danger: #e18b6e;
-  --intero-danger-soft: rgba(225, 139, 110, 0.13);
-  --intero-topbar-height: 2.375rem;
-  --intero-nav-rail: 3.875rem;
-  --intero-nav-expanded: 13.25rem;
+  /* Semantic status colors — never decorative */
+  --intero-green: #8ec79a; /* building, validated, approved, durable evidence */
+  --intero-green-soft: rgba(142, 199, 154, 0.14);
+  --intero-amber: #dcb069; /* reviewing, validating, stale, public fallback */
+  --intero-amber-soft: rgba(220, 176, 105, 0.14);
+  --intero-danger: #e08a6e; /* blocked, contradiction, needs a human */
+  --intero-danger-soft: rgba(224, 138, 110, 0.15);
+  --intero-on-danger: #1a1710;
+
+  /* 2 · Accent — the one customizable token; everything else derives */
+  --intero-accent-base: #d98b4a;
+  --intero-accent: var(--intero-accent-base);
+  --intero-accent-soft: color-mix(
+    in srgb,
+    var(--intero-accent) 15%,
+    transparent
+  );
+  --intero-sel: color-mix(in srgb, var(--intero-accent) 12%, transparent);
+  --intero-glow: color-mix(in srgb, var(--intero-accent) 34%, transparent);
+  --intero-on-accent: #1a1710;
+
+  /* Person tints — shared by both themes; avatars and agent-badge corners
+     only, never text or status. Text on a tint always uses on-tint. */
+  --intero-tint-1: #e8a765;
+  --intero-tint-2: #8fb3d9;
+  --intero-tint-3: #b79ad6;
+  --intero-tint-4: #8ec79a;
+  --intero-tint-5: #e0a2a2;
+  --intero-tint-6: #d9c188;
+
+  /* Motion — curves and durations are tokens, not ad-hoc numbers */
+  --intero-ease-decelerate: cubic-bezier(0.2, 0.8, 0.2, 1); /* enter, expand, switch */
+  --intero-ease-standard: cubic-bezier(0.4, 0, 0.2, 1); /* two-way size/position */
+  --intero-ease-exit: cubic-bezier(0.4, 0, 1, 1); /* leaving; accelerate away */
+  --intero-duration-press: 120ms;
+  --intero-duration-hover: 180ms;
+  --intero-duration-view: 240ms;
+  --intero-duration-panel: 280ms;
+  --intero-duration-rail: 300ms;
+  --intero-duration-enter: 420ms;
+
+  /* Layout constants */
+  --intero-topbar-height: 38px;
+  --intero-nav-rail: 62px;
+  --intero-nav-expanded: 212px;
   --intero-content-max: 90rem;
-  --intero-shadow-float: 0 1.375rem 4.375rem rgba(0, 0, 0, 0.35);
-  --intero-shadow-panel: inset 0 1px rgba(255, 255, 255, 0.018);
-  --intero-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --intero-duration-fast: 180ms;
-  --intero-duration-normal: 260ms;
 
-  /* Compatibility aliases while legacy views move onto shadcn primitives. */
-  --ink: var(--foreground);
-  --muted: var(--muted-foreground);
-  --faint: #6f6b62;
-  --paper: var(--background);
-  --paper-deep: var(--muted);
-  --line: var(--border);
-  --line-strong: oklch(0.48 0.014 97 / 50%);
-  --accent-deep: #f0b36f;
-  --accent-soft: color-mix(in oklab, var(--primary) 13%, transparent);
-  --green: var(--intero-success);
-  --green-soft: var(--intero-success-soft);
-  --amber: var(--intero-warning);
-  --amber-soft: var(--intero-warning-soft);
-  --sidebar: var(--intero-sidebar);
-  --sidebar-muted: #7f7b72;
-  --surface: var(--intero-surface);
-  --surface-raised: var(--intero-surface-raised);
-  --surface-strong: var(--intero-surface-strong);
+  /* 3 · shadcn semantic contract, mapped from the kit */
+  --background: var(--intero-bg);
+  --foreground: var(--intero-ink);
+  --card: var(--intero-panel2);
+  --card-foreground: var(--intero-ink);
+  --popover: var(--intero-panel2);
+  --popover-foreground: var(--intero-ink);
+  --primary: var(--intero-accent);
+  --primary-foreground: var(--intero-on-accent);
+  --secondary: var(--intero-raise);
+  --secondary-foreground: var(--intero-ink);
+  --muted: var(--intero-raise);
+  --muted-foreground: var(--intero-muted);
+  --accent: var(--intero-sel);
+  --accent-foreground: var(--intero-ink);
+  --destructive: var(--intero-danger);
+  --destructive-foreground: var(--intero-on-danger);
+  --border: var(--intero-line);
+  --input: var(--intero-line2);
+  --ring: var(--intero-accent);
+  --chart-1: var(--intero-accent);
+  --chart-2: var(--intero-tint-4);
+  --chart-3: var(--intero-tint-2);
+  --chart-4: var(--intero-tint-3);
+  --chart-5: var(--intero-tint-6);
+  --radius: 0.875rem; /* 14px — bubbles and panel cards */
+
+  /* 5 · Compatibility aliases while pre-token views migrate.
+     Note: legacy views use var(--muted) as a text color, so this alias
+     intentionally shadows the shadcn --muted surface value above. */
+  --ink: var(--intero-ink);
+  --muted: var(--intero-muted);
+  --faint: var(--intero-faint);
+  --paper: var(--intero-bg);
+  --paper-deep: var(--intero-panel);
+  --line: var(--intero-line);
+  --line-strong: var(--intero-line2);
+  --accent-deep: color-mix(in srgb, var(--intero-accent) 86%, #ffffff);
+  --accent-soft: var(--intero-accent-soft);
+  --green: var(--intero-green);
+  --green-soft: var(--intero-green-soft);
+  --amber: var(--intero-amber);
+  --amber-soft: var(--intero-amber-soft);
   --danger: var(--intero-danger);
   --danger-soft: var(--intero-danger-soft);
+  --sidebar: var(--intero-panel);
+  --sidebar-muted: var(--intero-faint);
+  --surface: var(--intero-panel2);
+  --surface-raised: var(--intero-raise);
+  --surface-strong: var(--intero-bubble);
   --topbar-height: var(--intero-topbar-height);
+  --intero-canvas: var(--intero-bg);
+  --intero-sidebar: var(--intero-panel);
+  --intero-surface: var(--intero-panel2);
+  --intero-surface-raised: var(--intero-raise);
+  --intero-surface-strong: var(--intero-bubble);
+  --intero-success: var(--intero-green);
+  --intero-success-soft: var(--intero-green-soft);
+  --intero-warning: var(--intero-amber);
+  --intero-warning-soft: var(--intero-amber-soft);
+  --intero-danger-legacy: var(--intero-danger);
+  /* No shadows: depth comes from surface lightness + 1px borders only.
+     The desktop window's own drop shadow is the single exception. */
+  --intero-shadow-float: none;
+  --intero-shadow-panel: none;
+  --intero-ease: var(--intero-ease-decelerate);
+  --intero-duration-fast: var(--intero-duration-hover);
+  --intero-duration-normal: var(--intero-duration-view);
 }
 
+.theme-light {
+  color-scheme: light;
+
+  --intero-bg: #f4efe5;
+  --intero-panel: #eee8dc;
+  --intero-panel2: #fffdf9;
+  --intero-raise: rgba(40, 34, 24, 0.04);
+  --intero-line: rgba(40, 34, 24, 0.1);
+  --intero-line2: rgba(40, 34, 24, 0.18);
+  --intero-ink: #241f17;
+  --intero-muted: #6e685b;
+  --intero-faint: #7d7565;
+  --intero-bubble: #e7dfd1;
+  --intero-hover: rgba(40, 34, 24, 0.05);
+  --intero-on-tint: #2b2419;
+
+  --intero-green: #4f7d5c;
+  --intero-green-soft: rgba(79, 125, 92, 0.13);
+  --intero-amber: #8a6117;
+  --intero-amber-soft: rgba(138, 97, 23, 0.13);
+  --intero-danger: #b5563a;
+  --intero-danger-soft: rgba(181, 86, 58, 0.12);
+  --intero-on-danger: #fffaf2;
+
+  /* Light mode darkens the accent 30% to pass contrast */
+  --intero-accent: color-mix(in srgb, var(--intero-accent-base) 70%, #000000);
+  --intero-accent-soft: color-mix(
+    in srgb,
+    var(--intero-accent) 13%,
+    transparent
+  );
+  --intero-sel: color-mix(in srgb, var(--intero-accent) 13%, transparent);
+  /* Glow is decoration, not text: use the raw accent hue so it reads as a
+     warm halo on light surfaces instead of a near-invisible dark smudge. */
+  --intero-glow: color-mix(in srgb, var(--intero-accent-base) 45%, transparent);
+  --intero-on-accent: #fffaf2;
+}
+
+/* 4 · Tailwind theme — utilities read straight from the kit */
 @theme inline {
-  --font-sans:
-    "Geist", "SF Pro Text", "Avenir Next", "Segoe UI Variable", sans-serif;
+  --font-sans: "Geist", "Helvetica Neue", "SF Pro Text", sans-serif;
   --font-mono: "Geist Mono", "SFMono-Regular", "Roboto Mono", monospace;
 
+  /* Kit colors → bg-panel2, text-ink, border-line, text-faint, … */
+  --color-bg: var(--intero-bg);
+  --color-panel: var(--intero-panel);
+  --color-panel2: var(--intero-panel2);
+  --color-panel2-glass: var(--intero-panel2-glass);
+  --color-raise: var(--intero-raise);
+  --color-line: var(--intero-line);
+  --color-line2: var(--intero-line2);
+  --color-ink: var(--intero-ink);
+  --color-ink-muted: var(--intero-muted);
+  --color-faint: var(--intero-faint);
+  --color-bubble: var(--intero-bubble);
+  --color-hover-wash: var(--intero-hover);
+  --color-on-tint: var(--intero-on-tint);
+  --color-green: var(--intero-green);
+  --color-green-soft: var(--intero-green-soft);
+  --color-amber: var(--intero-amber);
+  --color-amber-soft: var(--intero-amber-soft);
+  --color-danger: var(--intero-danger);
+  --color-danger-soft: var(--intero-danger-soft);
+  --color-accent-strong: var(--intero-accent);
+  --color-accent-soft: var(--intero-accent-soft);
+  --color-sel: var(--intero-sel);
+  --color-on-accent: var(--intero-on-accent);
+  --color-glow: var(--intero-glow);
+  --color-tint-1: var(--intero-tint-1);
+  --color-tint-2: var(--intero-tint-2);
+  --color-tint-3: var(--intero-tint-3);
+  --color-tint-4: var(--intero-tint-4);
+  --color-tint-5: var(--intero-tint-5);
+  --color-tint-6: var(--intero-tint-6);
+
+  /* shadcn semantic colors */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -104,8 +254,269 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  --radius-sm: calc(var(--radius) - 0.25rem);
-  --radius-md: calc(var(--radius) - 0.125rem);
+  /* Radii — 999 pills · 8 quiet buttons/tags · 9 buttons/row hover ·
+     12 inset surfaces · 14 bubbles/cards · 16 person cards/containers */
+  --radius-pill: 999px;
+  --radius-quiet: 8px;
+  --radius-btn: 9px;
+  --radius-inset: 12px;
+  --radius-card: 14px;
+  --radius-container: 16px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 0.25rem);
+  --radius-xl: 16px;
+
+  /* Easings → ease-decelerate, ease-standard, ease-exit */
+  --ease-decelerate: var(--intero-ease-decelerate);
+  --ease-standard: var(--intero-ease-standard);
+  --ease-exit: var(--intero-ease-exit);
+
+  /* Motion tokens → animate-view-enter, animate-card-enter, … */
+  --animate-view-enter: intero-view-in var(--intero-duration-view)
+    var(--intero-ease-decelerate) both;
+  --animate-card-enter: intero-card-in var(--intero-duration-enter)
+    var(--intero-ease-decelerate) both;
+  --animate-message-enter: intero-msg-in 380ms var(--intero-ease-decelerate)
+    both;
+  --animate-panel-slide: intero-panel-in var(--intero-duration-panel)
+    var(--intero-ease-decelerate) both;
+  --animate-bar-grow: intero-bar-grow 720ms var(--intero-ease-decelerate) both;
+  --animate-avatar-pop: intero-avatar-pop 480ms var(--intero-ease-decelerate)
+    both;
+  --animate-count-up: intero-count-up var(--intero-duration-panel)
+    var(--intero-ease-decelerate) both;
+  --animate-badge-bounce: intero-badge-bounce 420ms
+    var(--intero-ease-decelerate) both;
+  --animate-pill-pulse: intero-pill-pulse 260ms ease-in-out 1;
+  --animate-drift: intero-drift 8s ease-in-out infinite;
+  --animate-drift-y: intero-drift-y 5.2s ease-in-out infinite;
+  --animate-drift-fade: intero-drift-fade 6.6s ease-in-out infinite;
+  --animate-dot-pulse: intero-dot-pulse 2.2s ease-in-out infinite;
+  --animate-breathe: intero-breathe 2.8s ease-in-out infinite;
+  --animate-shimmer: intero-shimmer 1.7s ease-in-out infinite;
+  --animate-think: intero-think 1.4s ease-in-out infinite;
+  --animate-dash-flow: intero-dash-flow 6s linear infinite;
+  --animate-sweep: intero-sweep 1600ms ease-in-out 1;
+  --animate-spin: intero-spin 900ms linear infinite;
+
+  @keyframes intero-view-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-card-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-msg-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.99);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-panel-in {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-bar-grow {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: none;
+    }
+  }
+  @keyframes intero-avatar-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.86);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-count-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes intero-badge-bounce {
+    0% {
+      transform: scale(0);
+    }
+    55% {
+      transform: scale(1.18);
+    }
+    72% {
+      transform: scale(0.96);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes intero-pill-pulse {
+    0%,
+    100% {
+      transform: none;
+    }
+    50% {
+      transform: scale(1.07);
+    }
+  }
+  @keyframes intero-drift {
+    0%,
+    100% {
+      transform: translateX(-6%) scale(1);
+    }
+    50% {
+      transform: translateX(6%) scale(1.2);
+    }
+  }
+  @keyframes intero-drift-y {
+    0%,
+    100% {
+      transform: translateY(-2.5%);
+    }
+    50% {
+      transform: translateY(2.5%);
+    }
+  }
+  @keyframes intero-drift-fade {
+    0%,
+    100% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  @keyframes intero-dot-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 currentColor;
+      opacity: 0.85;
+    }
+    50% {
+      box-shadow: 0 0 0 4px transparent;
+      opacity: 1;
+    }
+  }
+  @keyframes intero-breathe {
+    0%,
+    100% {
+      transform: scale(0.9);
+      opacity: 0.7;
+    }
+    50% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  @keyframes intero-shimmer {
+    0%,
+    100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 0.75;
+    }
+  }
+  @keyframes intero-think {
+    0%,
+    100% {
+      opacity: 0.25;
+      transform: translateY(0);
+    }
+    50% {
+      opacity: 1;
+      transform: translateY(-2px);
+    }
+  }
+  @keyframes intero-dash-flow {
+    to {
+      background-position:
+        14px 0,
+        -14px 100%,
+        0 -14px,
+        100% 14px;
+    }
+  }
+  @keyframes intero-sweep {
+    0% {
+      transform: translateX(-120%);
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(220%);
+      opacity: 1;
+    }
+  }
+  @keyframes intero-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}
+
+/* Reduce-motion: the in-app toggle (.motion-reduced on <html>) removes
+   entrance + decorative animation but keeps state signals (breathe,
+   shimmer, dot-pulse, think, spin). */
+.motion-reduced
+  :is(
+    .animate-view-enter,
+    .animate-card-enter,
+    .animate-message-enter,
+    .animate-panel-slide,
+    .animate-bar-grow,
+    .animate-avatar-pop,
+    .animate-count-up,
+    .animate-badge-bounce,
+    .animate-pill-pulse,
+    .animate-drift,
+    .animate-drift-y,
+    .animate-drift-fade,
+    .animate-dash-flow,
+    .animate-sweep,
+    .group-hover\:animate-sweep
+  ) {
+  animation: none;
+}
+
+/* System preference squashes everything and parks loops on a stable frame. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,12 +1,15 @@
 import type {
   ActionEnvelope,
   ActionInboxItem,
+  ActivityEvent,
   ConversationThread,
+  DecisionRecord,
   KanbanCard,
   KanbanCardId,
   KanbanColumn,
   Project,
   PublicWorkProjection,
+  ReviewResponseKind,
   Spec,
   SpecRevision,
   SpecReviewResponse,
@@ -202,6 +205,47 @@ export async function getSpecs(
   signal?: AbortSignal,
 ): Promise<{ items: SpecPayload[] }> {
   return getJson<{ items: SpecPayload[] }>("/v1/specs", signal);
+}
+
+export async function addSpecReview(input: {
+  specId: string;
+  review: {
+    revisionId: string;
+    reviewerId: string;
+    kind: ReviewResponseKind;
+    affectedScopes: string[];
+    body: string;
+  };
+}): Promise<SpecReviewResponse> {
+  return postJson(`/v1/specs/${input.specId}/reviews`, {
+    ...input.review,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function createDecision(input: {
+  title: string;
+  outcome: string;
+  sourceSpecRevisionId?: string;
+  sourceThreadId?: string;
+  affectedScopes: string[];
+  decidedBy: string[];
+}): Promise<DecisionRecord> {
+  return postJson("/v1/decisions", input);
+}
+
+export async function getDecisions(
+  signal?: AbortSignal,
+): Promise<{ items: DecisionRecord[] }> {
+  return getJson<{ items: DecisionRecord[] }>("/v1/decisions", signal);
+}
+
+export async function getActivity(
+  after = 0,
+  limit = 200,
+  signal?: AbortSignal,
+): Promise<{ items: ActivityEvent[]; nextCursor: number; hasMore: boolean }> {
+  return getJson(`/v1/activity?after=${after}&limit=${limit}`, signal);
 }
 
 export async function getLocalRuntimeStatus(): Promise<LocalRuntimeStatus> {

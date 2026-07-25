@@ -61,11 +61,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       setLocale,
       t,
       formatDate(input) {
-        return new Intl.DateTimeFormat(locale, {
-          weekday: "long",
+        const date = new Date(input);
+        const day = new Intl.DateTimeFormat(locale, {
+          year: "numeric",
           month: "long",
           day: "numeric",
-        }).format(new Date(input));
+        }).format(date);
+        const weekday = new Intl.DateTimeFormat(locale, {
+          weekday: "short",
+        }).format(date);
+        return `${day} · ${weekday}`;
       },
       formatTime(input) {
         return new Intl.DateTimeFormat(locale, {
@@ -78,9 +83,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
           0,
           Math.round((Date.now() - new Date(input).getTime()) / 60_000),
         );
-        return minutes === 0
-          ? t("freshness.now")
-          : t("freshness.minutesAgo", { count: minutes });
+        if (minutes === 0) return t("freshness.now");
+        if (minutes < 60) return t("freshness.minutesAgo", { count: minutes });
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return t("freshness.hoursAgo", { count: hours });
+        const days = Math.floor(hours / 24);
+        if (days === 1) return t("freshness.yesterday");
+        return t("freshness.daysAgo", { count: days });
       },
     }),
     [locale, setLocale, t],
