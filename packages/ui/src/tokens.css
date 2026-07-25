@@ -55,6 +55,24 @@
   );
   --intero-sel: color-mix(in srgb, var(--intero-accent) 12%, transparent);
   --intero-glow: color-mix(in srgb, var(--intero-accent) 34%, transparent);
+  /* Reveal-highlight light color: warm-white-lifted accent. Dark surfaces
+     need far less lift than light ones to read as the same light. */
+  --intero-reveal-light: hsl(
+    from color-mix(in srgb, #fff2df 28%, var(--intero-accent-base)) h s
+      calc(l + 3)
+  );
+  /* Reveal transparency per theme: wash = the big soft pool under the
+     cursor, ring = the lit border segment. */
+  --intero-reveal-wash: color-mix(
+    in srgb,
+    var(--intero-reveal-light) 2%,
+    transparent
+  );
+  --intero-reveal-ring: color-mix(
+    in srgb,
+    var(--intero-reveal-light) 38%,
+    transparent
+  );
   --intero-on-accent: #1a1710;
 
   /* Person tints — shared by both themes; avatars and agent-badge corners
@@ -188,6 +206,20 @@
   /* Glow is decoration, not text: use the raw accent hue so it reads as a
      warm halo on light surfaces instead of a near-invisible dark smudge. */
   --intero-glow: color-mix(in srgb, var(--intero-accent-base) 45%, transparent);
+  --intero-reveal-light: hsl(
+    from color-mix(in srgb, #fff2df 45%, var(--intero-accent-base)) h s
+      calc(l + 12)
+  );
+  --intero-reveal-wash: color-mix(
+    in srgb,
+    var(--intero-reveal-light) 30%,
+    transparent
+  );
+  --intero-reveal-ring: color-mix(
+    in srgb,
+    var(--intero-reveal-light) 75%,
+    transparent
+  );
   --intero-on-accent: #fffaf2;
 }
 

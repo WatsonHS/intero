@@ -61,16 +61,15 @@ export function revealMove(event: {
   target.style.setProperty("--ry", `${event.clientY - rect.top}px`);
 }
 
-// The reveal is light, not tint: lift the accent toward warm white, then
-// raise its HSL lightness so the halo reads luminous instead of hazy.
-const REVEAL_LIGHT =
-  "hsl(from color-mix(in srgb, #fff2df 45%, var(--intero-accent-base)) h s calc(l + 12))";
-
-// Background wash: large, soft, with a long falloff — felt more than seen.
-export const REVEAL_GRADIENT = `radial-gradient(560px circle at var(--rx, 50%) var(--ry, 50%), color-mix(in srgb, ${REVEAL_LIGHT} 30%, transparent), transparent 85%)`;
+// The reveal is light, not tint. Color AND transparency are theme-aware
+// tokens (see --intero-reveal-light / -wash / -ring in tokens.css); only
+// the geometry lives here.
+export const REVEAL_GRADIENT =
+  "radial-gradient(560px circle at var(--rx, 50%) var(--ry, 50%), var(--intero-reveal-wash), transparent 85%)";
 
 // Border light: tighter and brighter, clipped to the card's 1px edge ring.
-export const REVEAL_RING_GRADIENT = `radial-gradient(280px circle at var(--rx, 50%) var(--ry, 50%), color-mix(in srgb, ${REVEAL_LIGHT} 75%, transparent), transparent 78%)`;
+export const REVEAL_RING_GRADIENT =
+  "radial-gradient(280px circle at var(--rx, 50%) var(--ry, 50%), var(--intero-reveal-ring), transparent 78%)";
 
 export function confidencePercent(confidence: number): number {
   return Math.round(confidence * 100);
