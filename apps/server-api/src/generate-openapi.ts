@@ -7,12 +7,16 @@ import {
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
   CreateDecisionRequest,
+  CreateKanbanCardRequest,
   CreateSpecRequest,
   CreateWorkstreamRequest,
   IngestEventRequest,
+  KanbanBoardResponse,
+  KanbanCardResponse,
   SpecListResponse,
   TeamPulseResponse,
   ThreadResponse,
+  UpdateKanbanCardRequest,
 } from "@intero/api-contracts";
 import openapiTS, { astToString } from "openapi-typescript";
 import { format } from "prettier";
@@ -24,12 +28,16 @@ const schemas = {
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
   CreateDecisionRequest,
+  CreateKanbanCardRequest,
   CreateSpecRequest,
   CreateWorkstreamRequest,
   IngestEventRequest,
+  KanbanBoardResponse,
+  KanbanCardResponse,
   SpecListResponse,
   TeamPulseResponse,
   ThreadResponse,
+  UpdateKanbanCardRequest,
 };
 
 const document = {
@@ -81,6 +89,75 @@ const document = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/TeamPulseResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/kanban": {
+      get: {
+        operationId: "getKanbanBoard",
+        responses: {
+          "200": {
+            description: "Project Kanban cards with optional Workstream links",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/KanbanBoardResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/kanban/cards": {
+      post: {
+        operationId: "createKanbanCard",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/CreateKanbanCardRequest" },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Created Kanban card",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/KanbanCardResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/kanban/cards/{cardId}": {
+      patch: {
+        operationId: "updateKanbanCard",
+        parameters: [
+          {
+            in: "path",
+            name: "cardId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/UpdateKanbanCardRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Updated Kanban card",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/KanbanCardResponse" },
               },
             },
           },

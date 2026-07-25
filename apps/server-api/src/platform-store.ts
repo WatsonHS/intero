@@ -3,12 +3,16 @@ import type {
   ActionInboxItem,
   ActivityEvent,
   DecisionRecord,
+  KanbanCard,
+  KanbanCardId,
   OperationId,
   PrincipalId,
+  Project,
+  ProjectId,
   PublicWorkProjection,
 } from "@intero/domain";
 
-import type { InMemoryPlatformStore } from "./store.js";
+import type { InMemoryPlatformStore, KanbanCardUpdate } from "./store.js";
 
 type Awaitable<T> = T | Promise<T>;
 type StoreMethod<Name extends keyof InMemoryPlatformStore> =
@@ -17,6 +21,14 @@ type StoreMethod<Name extends keyof InMemoryPlatformStore> =
     : never;
 
 export interface PlatformStore {
+  ensureProject(project: Project): Awaitable<Project>;
+  listProjects(): Awaitable<Project[]>;
+  listKanbanCards(projectId?: ProjectId): Awaitable<KanbanCard[]>;
+  createKanbanCard: StoreMethod<"createKanbanCard">;
+  updateKanbanCard(
+    cardId: KanbanCardId,
+    update: KanbanCardUpdate,
+  ): Awaitable<KanbanCard>;
   createWorkstream: StoreMethod<"createWorkstream">;
   addClaim: StoreMethod<"addClaim">;
   ingestEvent: StoreMethod<"ingestEvent">;

@@ -19,7 +19,8 @@ describe("desktop application shell", () => {
     );
 
     expect(output).toContain("团队脉搏");
-    expect(output).toContain("数字代表");
+    expect(output).toContain("通讯");
+    expect(output).toContain("看板");
     expect(output).toContain("方案评审");
     expect(output).not.toContain("Huang Sheng");
     expect(output).not.toContain("Friday, 24 July");

@@ -63,6 +63,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/kanban": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getKanbanBoard"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/kanban/cards": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["createKanbanCard"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/kanban/cards/{cardId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch: operations["updateKanbanCard"];
+    trace?: never;
+  };
   "/v1/coordination": {
     parameters: {
       query?: never;
@@ -291,6 +339,21 @@ export interface components {
       /** Format: uuid */
       supersedes?: string;
     };
+    CreateKanbanCardRequest: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      projectId: string;
+      title: string;
+      description: string;
+      /** @enum {string} */
+      column: "backlog" | "planned" | "in_progress" | "review" | "done";
+      position: number;
+      /** Format: uuid */
+      ownerId?: string;
+      estimatePoints?: number;
+      relatedWorkstreamIds: string[];
+    };
     CreateSpecRequest: {
       /** Format: uuid */
       id: string;
@@ -401,6 +464,102 @@ export interface components {
         idempotencyKey: string;
       };
     };
+    KanbanBoardResponse: {
+      projects: {
+        /** Format: uuid */
+        id: string;
+        name: string;
+        projectManagementEnabled: boolean;
+      }[];
+      /** Format: uuid */
+      selectedProjectId?: string;
+      cards: {
+        /** Format: uuid */
+        id: string;
+        /** Format: uuid */
+        projectId: string;
+        title: string;
+        description: string;
+        /** @enum {string} */
+        column: "backlog" | "planned" | "in_progress" | "review" | "done";
+        position: number;
+        /** Format: uuid */
+        ownerId?: string;
+        estimatePoints?: number;
+        relatedWorkstreamIds: string[];
+        /** Format: date-time */
+        createdAt: string;
+        /** Format: date-time */
+        updatedAt: string;
+      }[];
+      workstreams: {
+        /** Format: uuid */
+        id: string;
+        /** Format: uuid */
+        projectId?: string;
+        /** Format: uuid */
+        ownerId: string;
+        title: string;
+        /** @enum {string} */
+        phase:
+          | "exploring"
+          | "planning"
+          | "implementing"
+          | "validating"
+          | "reviewing"
+          | "blocked"
+          | "paused"
+          | "completed";
+        blockers: string[];
+        dependencies: string[];
+        decisions: string[];
+        artifactIds: string[];
+        /** Format: date-time */
+        freshnessAt: string;
+        confidence: number;
+        contradictionClaimIds: string[];
+        version: number;
+        changedFields: (
+          | "intent"
+          | "phase"
+          | "blockers"
+          | "dependencies"
+          | "ownership"
+          | "decisions"
+          | "artifacts"
+          | "paused"
+          | "completed"
+        )[];
+        /** Format: date-time */
+        projectedAt: string;
+      }[];
+      principals: {
+        /** Format: uuid */
+        id: string;
+        displayName: string;
+        /** @enum {string} */
+        kind: "human" | "representative" | "service";
+      }[];
+    };
+    KanbanCardResponse: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      projectId: string;
+      title: string;
+      description: string;
+      /** @enum {string} */
+      column: "backlog" | "planned" | "in_progress" | "review" | "done";
+      position: number;
+      /** Format: uuid */
+      ownerId?: string;
+      estimatePoints?: number;
+      relatedWorkstreamIds: string[];
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
     SpecListResponse: {
       items: {
         spec: {
@@ -502,6 +661,7 @@ export interface components {
         contradictionClaimIds: string[];
         version: number;
         changedFields: (
+          | "intent"
           | "phase"
           | "blockers"
           | "dependencies"
@@ -628,6 +788,17 @@ export interface components {
         status: "resolved";
       }[];
     };
+    UpdateKanbanCardRequest: {
+      title?: string;
+      description?: string;
+      /** @enum {string} */
+      column?: "backlog" | "planned" | "in_progress" | "review" | "done";
+      position?: number;
+      /** Format: uuid */
+      ownerId?: string;
+      estimatePoints?: number;
+      relatedWorkstreamIds?: string[];
+    };
   };
   responses: never;
   parameters: never;
@@ -713,6 +884,76 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["TeamPulseResponse"];
+        };
+      };
+    };
+  };
+  getKanbanBoard: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Project Kanban cards with optional Workstream links */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["KanbanBoardResponse"];
+        };
+      };
+    };
+  };
+  createKanbanCard: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateKanbanCardRequest"];
+      };
+    };
+    responses: {
+      /** @description Created Kanban card */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["KanbanCardResponse"];
+        };
+      };
+    };
+  };
+  updateKanbanCard: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        cardId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateKanbanCardRequest"];
+      };
+    };
+    responses: {
+      /** @description Updated Kanban card */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["KanbanCardResponse"];
         };
       };
     };

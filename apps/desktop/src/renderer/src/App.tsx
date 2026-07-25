@@ -3,9 +3,9 @@ import {
   FileTextIcon,
   GearSixIcon,
   GitBranchIcon,
+  KanbanIcon,
   PulseIcon,
   SidebarSimpleIcon,
-  UsersThreeIcon,
 } from "@phosphor-icons/react";
 import {
   Button,
@@ -20,14 +20,14 @@ import { useState } from "react";
 import { getBootstrap, getOfflineStatus } from "./api.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
+import { CommunicationsView } from "./views/CommunicationsView.js";
+import { KanbanView } from "./views/KanbanView.js";
 import { RepresentativeView } from "./views/RepresentativeView.js";
-import { ProjectRoomView } from "./views/ProjectRoomView.js";
 import { SettingsView } from "./views/SettingsView.js";
 import { SpecReviewView } from "./views/SpecReviewView.js";
 import { TeamPulseView } from "./views/TeamPulseView.js";
 
-type View =
-  "pulse" | "representative" | "rooms" | "coordination" | "specs" | "settings";
+type View = "pulse" | "chat" | "kanban" | "coordination" | "specs" | "settings";
 
 const navigation: Array<{
   id: View;
@@ -36,11 +36,11 @@ const navigation: Array<{
 }> = [
   { id: "pulse", label: "app.nav.pulse", icon: PulseIcon },
   {
-    id: "representative",
-    label: "app.nav.representative",
+    id: "chat",
+    label: "app.nav.chat",
     icon: ChatCircleDotsIcon,
   },
-  { id: "rooms", label: "app.nav.rooms", icon: UsersThreeIcon },
+  { id: "kanban", label: "app.nav.kanban", icon: KanbanIcon },
   { id: "coordination", label: "app.nav.coordination", icon: GitBranchIcon },
   { id: "specs", label: "app.nav.specs", icon: FileTextIcon },
 ];
@@ -194,7 +194,7 @@ export function App() {
           <main className="workspace">
             {view === "pulse" ? (
               <TeamPulseView
-                onOpenRepresentative={() => setView("representative")}
+                onOpenRepresentative={() => setView("chat")}
                 onOpenAction={(sourceRef) =>
                   setView(
                     sourceRef.startsWith("spec:") ? "specs" : "coordination",
@@ -202,8 +202,8 @@ export function App() {
                 }
               />
             ) : null}
-            {view === "representative" ? <RepresentativeView /> : null}
-            {view === "rooms" ? <ProjectRoomView /> : null}
+            {view === "chat" ? <CommunicationsView /> : null}
+            {view === "kanban" ? <KanbanView /> : null}
             {view === "coordination" ? (
               <RepresentativeView coordination />
             ) : null}

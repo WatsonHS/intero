@@ -8,10 +8,14 @@ import {
   type ConversationThread,
   type CoordinationResult,
   type DecisionRecord,
+  type KanbanCard,
+  type KanbanCardId,
   type OperationId,
   type OrganizationId,
   type OutboxEntry,
   type PrincipalId,
+  type Project,
+  type ProjectId,
   type PublicWorkProjection,
   type Spec,
   type SpecId,
@@ -37,6 +41,7 @@ import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
 import {
   buildThreadMessage,
   claimFromEvent,
+  type KanbanCardUpdate,
   type MutationResult,
 } from "./store.js";
 
@@ -54,6 +59,139 @@ export class PostgresPlatformStore implements PlatformStore {
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()`,
         [this.organizationId, name],
       );
+    });
+  }
+
+  async ensureProject(project: Project): Promise<Project> {
+    return this.write(async (client) => {
+      await client.query(
+        `INSERT INTO projects
+          (id, organization_id, name, project_management_enabled)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           project_management_enabled = EXCLUDED.project_management_enabled,
+           updated_at = now()`,
+        [
+          project.id,
+          this.organizationId,
+          project.name,
+          project.projectManagementEnabled,
+        ],
+      );
+      return project;
+    });
+  }
+
+  async listProjects(): Promise<Project[]> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT id, name, project_management_enabled
+         FROM projects
+         ORDER BY name`,
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        projectManagementEnabled: row.project_management_enabled,
+      }));
+    });
+  }
+
+  async listKanbanCards(projectId?: ProjectId): Promise<KanbanCard[]> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT c.*,
+           COALESCE(
+             jsonb_agg(cw.workstream_id)
+               FILTER (WHERE cw.workstream_id IS NOT NULL),
+             '[]'::jsonb
+           ) AS related_workstream_ids
+         FROM kanban_cards c
+         LEFT JOIN kanban_card_workstreams cw ON cw.card_id = c.id
+         WHERE ($1::uuid IS NULL OR c.project_id = $1)
+         GROUP BY c.id
+         ORDER BY c.position, c.created_at`,
+        [projectId ?? null],
+      );
+      return result.rows.map(kanbanCardFromRow);
+    });
+  }
+
+  async createKanbanCard(card: KanbanCard): Promise<KanbanCard> {
+    return this.write(async (client) => {
+      const project = await client.query(
+        "SELECT id FROM projects WHERE id = $1",
+        [card.projectId],
+      );
+      if (!project.rows[0]) throw new Error("Project was not found.");
+      if (card.ownerId) await this.ensurePrincipal(client, card.ownerId);
+      await client.query(
+        `INSERT INTO kanban_cards
+          (id, organization_id, project_id, title, description, "column",
+           position, owner_id, estimate_points, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          card.id,
+          this.organizationId,
+          card.projectId,
+          card.title,
+          card.description,
+          card.column,
+          card.position,
+          card.ownerId ?? null,
+          card.estimatePoints ?? null,
+          card.createdAt,
+          card.updatedAt,
+        ],
+      );
+      await this.replaceKanbanWorkstreamLinks(
+        client,
+        card.id,
+        card.relatedWorkstreamIds,
+      );
+      return card;
+    });
+  }
+
+  async updateKanbanCard(
+    cardId: KanbanCardId,
+    update: KanbanCardUpdate,
+  ): Promise<KanbanCard> {
+    return this.write(async (client) => {
+      if (update.ownerId) await this.ensurePrincipal(client, update.ownerId);
+      const result = await client.query(
+        `UPDATE kanban_cards SET
+           title = COALESCE($2, title),
+           description = COALESCE($3, description),
+           "column" = COALESCE($4, "column"),
+           position = COALESCE($5, position),
+           owner_id = COALESCE($6, owner_id),
+           estimate_points = COALESCE($7, estimate_points),
+           updated_at = now()
+         WHERE id = $1
+         RETURNING id`,
+        [
+          cardId,
+          update.title ?? null,
+          update.description ?? null,
+          update.column ?? null,
+          update.position ?? null,
+          update.ownerId ?? null,
+          update.estimatePoints ?? null,
+        ],
+      );
+      if (!result.rows[0]) throw new Error("Kanban card was not found.");
+      if (update.relatedWorkstreamIds) {
+        await this.replaceKanbanWorkstreamLinks(
+          client,
+          cardId,
+          update.relatedWorkstreamIds,
+        );
+      }
+      const card = await this.getKanbanCardInTransaction(client, cardId);
+      if (!card) throw new Error("Kanban card was not found.");
+      return card;
     });
   }
 
@@ -821,6 +959,50 @@ export class PostgresPlatformStore implements PlatformStore {
     await this.pool.end();
   }
 
+  private async getKanbanCardInTransaction(
+    client: PoolClient,
+    cardId: KanbanCardId,
+  ): Promise<KanbanCard | undefined> {
+    const result = await client.query(
+      `SELECT c.*,
+         COALESCE(
+           jsonb_agg(cw.workstream_id)
+             FILTER (WHERE cw.workstream_id IS NOT NULL),
+           '[]'::jsonb
+         ) AS related_workstream_ids
+       FROM kanban_cards c
+       LEFT JOIN kanban_card_workstreams cw ON cw.card_id = c.id
+       WHERE c.id = $1
+       GROUP BY c.id`,
+      [cardId],
+    );
+    return result.rows[0] ? kanbanCardFromRow(result.rows[0]) : undefined;
+  }
+
+  private async replaceKanbanWorkstreamLinks(
+    client: PoolClient,
+    cardId: KanbanCardId,
+    workstreamIds: WorkstreamId[],
+  ): Promise<void> {
+    await client.query(
+      "DELETE FROM kanban_card_workstreams WHERE card_id = $1",
+      [cardId],
+    );
+    if (workstreamIds.length === 0) return;
+    const inserted = await client.query(
+      `INSERT INTO kanban_card_workstreams
+        (organization_id, card_id, workstream_id)
+       SELECT $1, $2, w.id
+       FROM workstreams w
+       WHERE w.organization_id = $1
+         AND w.id = ANY($3::uuid[])`,
+      [this.organizationId, cardId, workstreamIds],
+    );
+    if (inserted.rowCount !== workstreamIds.length) {
+      throw new Error("Workstream was not found.");
+    }
+  }
+
   private async addClaimInTransaction(
     client: PoolClient,
     claim: Claim,
@@ -1211,6 +1393,24 @@ function asIso(value: Date | string): string {
   return value instanceof Date
     ? value.toISOString()
     : new Date(value).toISOString();
+}
+
+function kanbanCardFromRow(row: QueryResultRow): KanbanCard {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    description: row.description,
+    column: row.column,
+    position: row.position,
+    ...(row.owner_id ? { ownerId: row.owner_id } : {}),
+    ...(row.estimate_points !== null
+      ? { estimatePoints: row.estimate_points }
+      : {}),
+    relatedWorkstreamIds: row.related_workstream_ids,
+    createdAt: asIso(row.created_at),
+    updatedAt: asIso(row.updated_at),
+  };
 }
 
 function claimFromRow(row: QueryResultRow): Claim {

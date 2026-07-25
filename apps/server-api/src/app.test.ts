@@ -127,6 +127,97 @@ describe("Intero API vertical slice", () => {
     });
   });
 
+  it("keeps Kanban cards independent while allowing optional Workstream links", async () => {
+    const workstream = await createWorkstream(app);
+    const projectId = "019b5ac0-7600-7000-8000-000000000011";
+    const independentCardId = uuidv7();
+    const linkedCardId = uuidv7();
+
+    const independent = await app.inject({
+      method: "POST",
+      url: "/v1/kanban/cards",
+      payload: {
+        id: independentCardId,
+        projectId,
+        title: "Build the communications directory",
+        description: "A project card without a Workstream dependency.",
+        column: "planned",
+        position: 0,
+        relatedWorkstreamIds: [],
+      },
+    });
+    expect(independent.statusCode).toBe(201);
+    expect(independent.json()).toMatchObject({
+      id: independentCardId,
+      relatedWorkstreamIds: [],
+    });
+
+    const linked = await app.inject({
+      method: "POST",
+      url: "/v1/kanban/cards",
+      payload: {
+        id: linkedCardId,
+        projectId,
+        title: "Expose Work State in the board",
+        description: "",
+        column: "in_progress",
+        position: 0,
+        ownerId: workstream.ownerId,
+        relatedWorkstreamIds: [workstream.id],
+      },
+    });
+    expect(linked.statusCode).toBe(201);
+
+    const associated = await app.inject({
+      method: "PATCH",
+      url: `/v1/kanban/cards/${independentCardId}`,
+      payload: { relatedWorkstreamIds: [workstream.id], column: "review" },
+    });
+    expect(associated.json()).toMatchObject({
+      column: "review",
+      relatedWorkstreamIds: [workstream.id],
+    });
+
+    const board = await app.inject({ method: "GET", url: "/v1/kanban" });
+    expect(board.statusCode).toBe(200);
+    expect(board.json()).toMatchObject({
+      selectedProjectId: projectId,
+      cards: expect.arrayContaining([
+        expect.objectContaining({
+          id: independentCardId,
+          relatedWorkstreamIds: [workstream.id],
+        }),
+        expect.objectContaining({
+          id: linkedCardId,
+          relatedWorkstreamIds: [workstream.id],
+        }),
+      ]),
+      workstreams: [],
+    });
+
+    const duplicateLink = await app.inject({
+      method: "PATCH",
+      url: `/v1/kanban/cards/${independentCardId}`,
+      payload: {
+        relatedWorkstreamIds: [workstream.id, workstream.id],
+      },
+    });
+    expect(duplicateLink.statusCode).toBe(400);
+
+    const missingWorkstream = await app.inject({
+      method: "PATCH",
+      url: `/v1/kanban/cards/${independentCardId}`,
+      payload: { relatedWorkstreamIds: [uuidv7()] },
+    });
+    expect(missingWorkstream.statusCode).toBe(404);
+
+    const missingProject = await app.inject({
+      method: "GET",
+      url: `/v1/kanban?projectId=${uuidv7()}`,
+    });
+    expect(missingProject.statusCode).toBe(404);
+  });
+
   it("returns the configured organization and principal bootstrap", async () => {
     const response = await app.inject({
       method: "GET",

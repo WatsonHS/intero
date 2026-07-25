@@ -71,6 +71,13 @@
       "when": 1784911500000,
       "tag": "0009_attachment_scan_gate",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784955380546,
+      "tag": "0010_unknown_vance_astro",
+      "breakpoints": true
     }
   ]
 }

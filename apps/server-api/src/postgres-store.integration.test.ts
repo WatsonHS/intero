@@ -20,6 +20,7 @@ const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 databaseSuite("PostgreSQL platform store", () => {
   const organizationId = uuidv7() as OrganizationId;
   const ownerId = uuidv7() as PrincipalId;
+  const projectId = uuidv7() as Workstream["projectId"];
   const workstreamId = uuidv7() as Workstream["id"];
   const workspaceId = uuidv7() as Workstream["workspaceId"];
   const admin = new Client({ connectionString: databaseUrl });
@@ -41,7 +42,15 @@ databaseSuite("PostgreSQL platform store", () => {
       organizationId,
     );
     await store.initializeOrganization("Postgres store fixture");
-    app = await buildApp({ store, logger: false });
+    app = await buildApp({
+      store,
+      logger: false,
+      project: {
+        id: projectId!,
+        name: "Intero integration fixture",
+        projectManagementEnabled: true,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -62,7 +71,10 @@ databaseSuite("PostgreSQL platform store", () => {
       "capability_grants",
       "public_work_projections",
       "claims",
+      "kanban_card_workstreams",
+      "kanban_cards",
       "workstreams",
+      "projects",
     ]) {
       await admin.query(`DELETE FROM ${table} WHERE organization_id = $1`, [
         organizationId,
@@ -243,6 +255,49 @@ databaseSuite("PostgreSQL platform store", () => {
       expect.objectContaining({
         id: ownerId,
         kind: "representative",
+      }),
+    ]);
+    await secondStore.close();
+  });
+
+  it("persists optional Kanban-to-Workstream associations", async () => {
+    const cardId = uuidv7();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/kanban/cards",
+      payload: {
+        id: cardId,
+        projectId,
+        title: "Verify the durable board",
+        description: "The card can exist before a Workstream is attached.",
+        column: "planned",
+        position: 0,
+        relatedWorkstreamIds: [],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const linked = await app.inject({
+      method: "PATCH",
+      url: `/v1/kanban/cards/${cardId}`,
+      payload: {
+        column: "in_progress",
+        relatedWorkstreamIds: [workstreamId],
+      },
+    });
+    expect(linked.json()).toMatchObject({
+      column: "in_progress",
+      relatedWorkstreamIds: [workstreamId],
+    });
+
+    const secondStore = new PostgresPlatformStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    expect(await secondStore.listKanbanCards(projectId)).toEqual([
+      expect.objectContaining({
+        id: cardId,
+        relatedWorkstreamIds: [workstreamId],
       }),
     ]);
     await secondStore.close();

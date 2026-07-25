@@ -8,6 +8,10 @@ import {
   ConversationThread,
   CoordinationResult,
   DecisionRecord,
+  KanbanCard,
+  KanbanColumn,
+  KanbanWorkstreamLinks,
+  Project,
   PublicWorkProjection,
   Spec,
   SpecRevision,
@@ -80,6 +84,30 @@ export const BootstrapResponse = z.object({
   currentPrincipal: PrincipalSummary,
   representativePrincipal: PrincipalSummary,
 });
+
+export const CreateKanbanCardRequest = KanbanCard.omit({
+  createdAt: true,
+  updatedAt: true,
+});
+export const UpdateKanbanCardRequest = z
+  .object({
+    title: z.string().min(1).max(240).optional(),
+    description: z.string().max(4_000).optional(),
+    column: KanbanColumn.optional(),
+    position: z.number().int().nonnegative().optional(),
+    ownerId: z.string().uuid().optional(),
+    estimatePoints: z.number().int().min(0).max(100).optional(),
+    relatedWorkstreamIds: KanbanWorkstreamLinks.optional(),
+  })
+  .strict();
+export const KanbanBoardResponse = z.object({
+  projects: z.array(Project),
+  selectedProjectId: z.string().uuid().optional(),
+  cards: z.array(KanbanCard),
+  workstreams: z.array(PublicWorkProjection),
+  principals: z.array(PrincipalSummary),
+});
+export const KanbanCardResponse = KanbanCard;
 
 export const CoordinateRequest = z.object({ envelope: ActionEnvelope });
 export const CoordinateResponse = z.object({ result: CoordinationResult });
