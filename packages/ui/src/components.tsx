@@ -3,7 +3,11 @@ import {
   ClockCountdownIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
+
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Card } from "./components/ui/card.js";
 
 export function PhaseLabel({
   phase,
@@ -12,11 +16,19 @@ export function PhaseLabel({
   phase: string;
   label?: string;
 }) {
+  const variant: ComponentProps<typeof Badge>["variant"] =
+    phase === "blocked"
+      ? "destructive"
+      : phase === "reviewing" || phase === "validating"
+        ? "warning"
+        : phase === "completed" || phase === "paused"
+          ? "secondary"
+          : "success";
   return (
-    <span className={`phase-label phase-label--${phase}`}>
+    <Badge variant={variant} className={`phase-label phase-label--${phase}`}>
       <span className="phase-label__dot" aria-hidden="true" />
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -76,7 +88,12 @@ export function AttentionItem({
   onOpen?: () => void;
 }) {
   return (
-    <button type="button" className="attention-item" onClick={onOpen}>
+    <Button
+      type="button"
+      variant="ghost"
+      className="attention-item"
+      onClick={onOpen}
+    >
       <span className="attention-item__icon">
         <WarningCircleIcon size={18} weight="regular" aria-hidden="true" />
       </span>
@@ -86,7 +103,7 @@ export function AttentionItem({
         <span>{detail}</span>
       </span>
       <ArrowRightIcon size={16} weight="regular" aria-hidden="true" />
-    </button>
+    </Button>
   );
 }
 
@@ -100,14 +117,14 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="empty-state">
+    <Card className="empty-state">
       <span className="empty-state__mark" aria-hidden="true">
         I
       </span>
       <strong>{title}</strong>
       <p>{detail}</p>
       {action}
-    </div>
+    </Card>
   );
 }
 

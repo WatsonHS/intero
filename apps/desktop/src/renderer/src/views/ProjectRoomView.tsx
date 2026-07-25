@@ -4,6 +4,7 @@ import {
   LockSimpleIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react";
+import { Button, Card } from "@intero/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -103,23 +104,28 @@ export function ProjectRoomView() {
           <span>{t("general.today")}</span>
         </div>
         {threads.isError ? (
-          <article className="thread-empty">
+          <Card className="thread-empty gap-0">
             <h2>{t("room.unavailable")}</h2>
-            <button type="button" onClick={() => void threads.refetch()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void threads.refetch()}
+            >
               {t("general.retry")}
-            </button>
-          </article>
+            </Button>
+          </Card>
         ) : current ? (
           current.messages.map((message) => {
             const representative = current.thread.representativeIds.includes(
               message.senderId,
             );
             return (
-              <article
+              <Card
                 className={
                   representative
-                    ? "message message--representative"
-                    : "message message--human"
+                    ? "message message--representative gap-0"
+                    : "message message--human gap-0"
                 }
                 key={message.id}
               >
@@ -140,11 +146,11 @@ export function ProjectRoomView() {
                     ? message.body
                     : t("thread.encryptedMessage")}
                 </p>
-              </article>
+              </Card>
             );
           })
         ) : (
-          <article className="thread-empty">
+          <Card className="thread-empty gap-0">
             {threads.isLoading ? (
               <CircleNotchIcon size={21} className="spin" />
             ) : (
@@ -153,19 +159,19 @@ export function ProjectRoomView() {
             <h2>{threads.isLoading ? t("room.loading") : t("room.empty")}</h2>
             <p>{t("room.emptyDetail")}</p>
             {!threads.isLoading ? (
-              <button
+              <Button
                 className="button button--primary"
                 type="button"
                 disabled={!bootstrap.data || createRoom.isPending}
                 onClick={() => createRoom.mutate()}
               >
                 {t("room.create")}
-              </button>
+              </Button>
             ) : null}
             {createRoom.isError ? (
               <p className="composer-error">{t("room.createFailed")}</p>
             ) : null}
-          </article>
+          </Card>
         )}
       </div>
 
@@ -188,8 +194,9 @@ export function ProjectRoomView() {
             rows={1}
             disabled={!current}
           />
-          <button
+          <Button
             type="button"
+            size="icon"
             className="send-button"
             aria-label={t("room.send")}
             disabled={!draft.trim() || !current || !humanId || send.isPending}
@@ -200,7 +207,7 @@ export function ProjectRoomView() {
             ) : (
               <ArrowUpIcon size={18} weight="bold" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@ import {
   ApplyPublicProjectionRequest,
   CreateAttachmentUploadRequest,
   CoordinateRequest,
+  CreateKanbanCardRequest,
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
   CreateDecisionRequest,
@@ -14,13 +15,18 @@ import {
   CursorQuery,
   IngestEventRequest,
   SendThreadMessageRequest,
+  UpdateKanbanCardRequest,
 } from "@intero/api-contracts";
 import type { AttachmentService } from "@intero/attachments";
 import { createLogger, loggerOptions } from "@intero/config";
 import {
   ThreadKind,
+  type KanbanCard,
+  type KanbanCardId,
   type OperationId,
   type PrincipalId,
+  type Project,
+  type ProjectId,
   type SpecId,
   type ThreadId,
 } from "@intero/domain";
@@ -33,6 +39,7 @@ import type { PlatformStore } from "./platform-store.js";
 import type { PrincipalSummary } from "./platform-store.js";
 import { FailClosedAuthorization, type AuthorizationPort } from "./ports.js";
 import { InMemoryPlatformStore } from "./store.js";
+import type { KanbanCardUpdate } from "./store.js";
 
 export interface BuildAppOptions {
   store?: PlatformStore;
@@ -43,6 +50,7 @@ export interface BuildAppOptions {
   organization?: { id: string; name: string };
   currentPrincipal?: PrincipalSummary;
   representativePrincipal?: PrincipalSummary;
+  project?: Project;
   inboxPrincipalIds?: PrincipalId[];
 }
 
@@ -70,12 +78,18 @@ export async function buildApp(
     displayName: "Intero Representative",
     kind: "representative" as const,
   };
+  const project = options.project ?? {
+    id: "019b5ac0-7600-7000-8000-000000000011" as ProjectId,
+    name: "Intero",
+    projectManagementEnabled: true,
+  };
   const inboxPrincipalIds = options.inboxPrincipalIds ?? [
     currentPrincipal.id,
     representativePrincipal.id,
   ];
   await store.upsertPrincipal(currentPrincipal);
   await store.upsertPrincipal(representativePrincipal);
+  await store.ensureProject(project);
   const authorization = options.authorization ?? new FailClosedAuthorization();
   let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
@@ -212,6 +226,63 @@ export async function buildApp(
       staleAfterSeconds: 300,
     };
   });
+
+  app.get("/v1/kanban", async (request) => {
+    const query = parse(
+      z.object({
+        projectId: z.string().uuid().optional(),
+      }),
+      request.query,
+    );
+    const projects = await store.listProjects();
+    const selectedProject = query.projectId
+      ? projects.find((item) => item.id === query.projectId)
+      : projects.find((item) => item.projectManagementEnabled);
+    if (query.projectId && !selectedProject) {
+      throw new Error("Project was not found.");
+    }
+    const selectedProjectId = selectedProject?.id as ProjectId | undefined;
+    const [cards, workstreams] = await Promise.all([
+      store.listKanbanCards(selectedProjectId),
+      store.listProjections(),
+    ]);
+    const principalIds = [
+      ...cards.flatMap((card) => (card.ownerId ? [card.ownerId] : [])),
+      ...workstreams.map((workstream) => workstream.ownerId),
+    ];
+    return {
+      projects,
+      ...(selectedProjectId ? { selectedProjectId } : {}),
+      cards,
+      workstreams,
+      principals: await store.listPrincipals([...new Set(principalIds)]),
+    };
+  });
+
+  app.post("/v1/kanban/cards", async (request, reply) => {
+    const input = parse(CreateKanbanCardRequest, request.body);
+    const now = new Date().toISOString();
+    return reply.status(201).send(
+      await store.createKanbanCard({
+        ...input,
+        createdAt: now,
+        updatedAt: now,
+      } as KanbanCard),
+    );
+  });
+
+  app.patch<{ Params: { cardId: string } }>(
+    "/v1/kanban/cards/:cardId",
+    async (request, reply) => {
+      const input = parse(UpdateKanbanCardRequest, request.body);
+      return reply.send(
+        await store.updateKanbanCard(
+          request.params.cardId as KanbanCardId,
+          input as KanbanCardUpdate,
+        ),
+      );
+    },
+  );
 
   app.post("/v1/capability-grants", async (request, reply) => {
     const grant = parse(CreateCapabilityGrantRequest, request.body);

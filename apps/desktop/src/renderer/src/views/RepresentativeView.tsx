@@ -5,6 +5,7 @@ import {
   GitBranchIcon,
   LockSimpleIcon,
 } from "@phosphor-icons/react";
+import { Button, Card } from "@intero/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -136,21 +137,26 @@ export function RepresentativeView({
           <span>{t("general.today")}</span>
         </div>
         {threads.isError ? (
-          <article className="thread-empty">
+          <Card className="thread-empty gap-0">
             <h2>{t("thread.unavailable")}</h2>
-            <button type="button" onClick={() => void threads.refetch()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void threads.refetch()}
+            >
               {t("general.retry")}
-            </button>
-          </article>
+            </Button>
+          </Card>
         ) : threads.isLoading ? (
-          <article className="thread-empty">
+          <Card className="thread-empty gap-0">
             <CircleNotchIcon size={20} className="spin" />
             <p>{t("thread.loading")}</p>
-          </article>
+          </Card>
         ) : current ? (
           current.messages.map((message) =>
             message.kind === "coordination_action" ? (
-              <article className="coordination-envelope" key={message.id}>
+              <Card className="coordination-envelope gap-0" key={message.id}>
                 {(() => {
                   const action = current.actions.find(
                     (item) => item.envelope.operationId === message.operationId,
@@ -205,13 +211,13 @@ export function RepresentativeView({
                     </>
                   );
                 })()}
-              </article>
+              </Card>
             ) : (
-              <article
+              <Card
                 className={
                   current.thread.representativeIds.includes(message.senderId)
-                    ? "message message--representative"
-                    : "message message--human"
+                    ? "message message--representative gap-0"
+                    : "message message--human gap-0"
                 }
                 key={message.id}
               >
@@ -254,11 +260,11 @@ export function RepresentativeView({
                     </span>
                   </div>
                 ) : null}
-              </article>
+              </Card>
             ),
           )
         ) : (
-          <article className="thread-empty">
+          <Card className="thread-empty gap-0">
             <GitBranchIcon size={22} />
             <h2>
               {coordination
@@ -271,19 +277,19 @@ export function RepresentativeView({
                 : t("thread.emptyRepresentativeDetail")}
             </p>
             {!coordination ? (
-              <button
+              <Button
                 className="button button--primary"
                 type="button"
                 disabled={!bootstrap.data || createThread.isPending}
                 onClick={() => createThread.mutate()}
               >
                 {t("thread.startRepresentative")}
-              </button>
+              </Button>
             ) : null}
             {createThread.isError ? (
               <p className="composer-error">{t("thread.createFailed")}</p>
             ) : null}
-          </article>
+          </Card>
         )}
         {send.isError ? (
           <p className="composer-error" role="alert">
@@ -313,8 +319,9 @@ export function RepresentativeView({
             rows={1}
             disabled={!current}
           />
-          <button
+          <Button
             type="button"
+            size="icon"
             className="send-button"
             aria-label={t("thread.send")}
             disabled={!draft.trim() || !current || !humanId || send.isPending}
@@ -325,7 +332,7 @@ export function RepresentativeView({
             ) : (
               <ArrowUpIcon size={18} weight="bold" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

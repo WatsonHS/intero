@@ -107,6 +107,54 @@ export const workstreams = pgTable(
   ],
 );
 
+export const kanbanCards = pgTable(
+  "kanban_cards",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    column: text("column").notNull(),
+    position: integer("position").notNull().default(0),
+    ownerId: uuid("owner_id").references(() => principals.id),
+    estimatePoints: integer("estimate_points"),
+    ...timestamps,
+  },
+  (table) => [
+    index("kanban_cards_project_column_idx").on(
+      table.projectId,
+      table.column,
+      table.position,
+    ),
+    index("kanban_cards_owner_idx").on(table.ownerId),
+  ],
+);
+
+export const kanbanCardWorkstreams = pgTable(
+  "kanban_card_workstreams",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    cardId: uuid("card_id")
+      .notNull()
+      .references(() => kanbanCards.id),
+    workstreamId: uuid("workstream_id")
+      .notNull()
+      .references(() => workstreams.id),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.cardId, table.workstreamId] }),
+    index("kanban_card_workstreams_workstream_idx").on(table.workstreamId),
+  ],
+);
+
 export const claims = pgTable(
   "claims",
   {

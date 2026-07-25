@@ -27,7 +27,7 @@ describe("desktop localization", () => {
     );
 
     expect(output).toContain('data-locale="zh-CN"');
-    expect(output).toContain("团队脉搏");
+    expect(output).toContain("大家正在干什么");
     expect(output).toContain("界面语言");
   });
 });

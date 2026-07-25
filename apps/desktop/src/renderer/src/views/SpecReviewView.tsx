@@ -4,6 +4,7 @@ import {
   GitDiffIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
+import { Button } from "@intero/ui";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,19 +25,21 @@ const EDITOR_THEME = EditorView.theme({
   "&": {
     minHeight: "610px",
     background: "transparent",
-    color: "#33362f",
+    color: "var(--foreground)",
   },
   ".cm-content": {
     padding: "48px clamp(32px, 7vw, 86px)",
-    caretColor: "#a64b39",
+    caretColor: "var(--primary)",
     fontFamily: '"Geist Mono", "SFMono-Regular", monospace',
     fontSize: "12px",
     lineHeight: "1.75",
   },
   ".cm-gutters": { display: "none" },
-  ".cm-activeLine": { backgroundColor: "rgba(166, 75, 57, 0.035)" },
+  ".cm-activeLine": {
+    backgroundColor: "color-mix(in oklab, var(--primary) 4%, transparent)",
+  },
   "&.cm-focused": {
-    outline: "2px solid rgba(166, 75, 57, 0.16)",
+    outline: "2px solid color-mix(in oklab, var(--primary) 16%, transparent)",
     outlineOffset: "-2px",
   },
 });
@@ -201,9 +204,14 @@ export function SpecReviewView() {
       <div className="spec-view spec-view--empty">
         <section className="thread-empty">
           <strong>{t("spec.unavailable")}</strong>
-          <button type="button" onClick={() => void specs.refetch()}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void specs.refetch()}
+          >
             {t("general.retry")}
-          </button>
+          </Button>
         </section>
       </div>
     );
@@ -222,7 +230,7 @@ export function SpecReviewView() {
         <section className="empty-state">
           <strong>{t("spec.emptyTitle")}</strong>
           <p>{t("spec.emptyDetail")}</p>
-          <button
+          <Button
             className="button button--primary"
             type="button"
             onClick={() => {
@@ -232,7 +240,7 @@ export function SpecReviewView() {
           >
             <PlusIcon size={16} />
             {t("spec.newDraft")}
-          </button>
+          </Button>
         </section>
       </div>
     );
@@ -273,24 +281,28 @@ export function SpecReviewView() {
             <option value={NEW_SPEC}>{t("spec.newDraft")}</option>
           </select>
           <div className="segmented-control">
-            <button
+            <Button
               className={mode === "edit" ? "active" : ""}
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => setMode("edit")}
             >
               <CodeIcon size={15} />
               {t("spec.edit")}
-            </button>
-            <button
+            </Button>
+            <Button
               className={mode === "preview" ? "active" : ""}
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => setMode("preview")}
             >
               <EyeIcon size={15} />
               {t("spec.preview")}
-            </button>
+            </Button>
           </div>
-          <button
+          <Button
             className="button button--primary"
             type="button"
             disabled={
@@ -306,7 +318,7 @@ export function SpecReviewView() {
               : currentRevision
                 ? t("spec.publishNext", { revision: nextRevision })
                 : t("spec.publish")}
-          </button>
+          </Button>
         </div>
       </header>
 

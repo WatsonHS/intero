@@ -1,0 +1,111 @@
+:root {
+  color-scheme: dark;
+
+  /* shadcn semantic color contract */
+  --background: oklch(0.17 0.012 105);
+  --foreground: oklch(0.93 0.014 82);
+  --card: oklch(0.21 0.012 105);
+  --card-foreground: oklch(0.93 0.014 82);
+  --popover: oklch(0.235 0.012 105);
+  --popover-foreground: oklch(0.93 0.014 82);
+  --primary: oklch(0.76 0.13 67);
+  --primary-foreground: oklch(0.19 0.028 62);
+  --secondary: oklch(0.27 0.011 101);
+  --secondary-foreground: oklch(0.89 0.014 82);
+  --muted: oklch(0.24 0.011 101);
+  --muted-foreground: oklch(0.69 0.016 82);
+  --accent: oklch(0.275 0.035 67);
+  --accent-foreground: oklch(0.82 0.11 69);
+  --destructive: oklch(0.69 0.12 37);
+  --destructive-foreground: oklch(0.96 0.012 78);
+  --border: oklch(0.35 0.012 97 / 46%);
+  --input: oklch(0.35 0.012 97 / 62%);
+  --ring: oklch(0.76 0.13 67);
+  --chart-1: oklch(0.76 0.13 67);
+  --chart-2: oklch(0.74 0.09 151);
+  --chart-3: oklch(0.72 0.08 241);
+  --chart-4: oklch(0.75 0.1 311);
+  --chart-5: oklch(0.77 0.1 88);
+  --radius: 0.75rem;
+
+  /* Intero product tokens */
+  --intero-canvas: #10110e;
+  --intero-sidebar: #0d0e0c;
+  --intero-surface: #171813;
+  --intero-surface-raised: #1d1e19;
+  --intero-surface-strong: #24241e;
+  --intero-success: #79c58e;
+  --intero-success-soft: rgba(121, 197, 142, 0.12);
+  --intero-warning: #d7ad5d;
+  --intero-warning-soft: rgba(215, 173, 93, 0.12);
+  --intero-danger: #e18b6e;
+  --intero-danger-soft: rgba(225, 139, 110, 0.13);
+  --intero-topbar-height: 2.375rem;
+  --intero-nav-rail: 3.875rem;
+  --intero-nav-expanded: 13.25rem;
+  --intero-content-max: 90rem;
+  --intero-shadow-float: 0 1.375rem 4.375rem rgba(0, 0, 0, 0.35);
+  --intero-shadow-panel: inset 0 1px rgba(255, 255, 255, 0.018);
+  --intero-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --intero-duration-fast: 180ms;
+  --intero-duration-normal: 260ms;
+
+  /* Compatibility aliases while legacy views move onto shadcn primitives. */
+  --ink: var(--foreground);
+  --muted: var(--muted-foreground);
+  --faint: #6f6b62;
+  --paper: var(--background);
+  --paper-deep: var(--muted);
+  --line: var(--border);
+  --line-strong: oklch(0.48 0.014 97 / 50%);
+  --accent-deep: #f0b36f;
+  --accent-soft: color-mix(in oklab, var(--primary) 13%, transparent);
+  --green: var(--intero-success);
+  --green-soft: var(--intero-success-soft);
+  --amber: var(--intero-warning);
+  --amber-soft: var(--intero-warning-soft);
+  --sidebar: var(--intero-sidebar);
+  --sidebar-muted: #7f7b72;
+  --surface: var(--intero-surface);
+  --surface-raised: var(--intero-surface-raised);
+  --surface-strong: var(--intero-surface-strong);
+  --danger: var(--intero-danger);
+  --danger-soft: var(--intero-danger-soft);
+  --topbar-height: var(--intero-topbar-height);
+}
+
+@theme inline {
+  --font-sans:
+    "Geist", "SF Pro Text", "Avenir Next", "Segoe UI Variable", sans-serif;
+  --font-mono: "Geist Mono", "SFMono-Regular", "Roboto Mono", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 0.25rem);
+  --radius-md: calc(var(--radius) - 0.125rem);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 0.25rem);
+}

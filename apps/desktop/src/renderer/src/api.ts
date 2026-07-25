@@ -2,6 +2,10 @@ import type {
   ActionEnvelope,
   ActionInboxItem,
   ConversationThread,
+  KanbanCard,
+  KanbanCardId,
+  KanbanColumn,
+  Project,
   PublicWorkProjection,
   Spec,
   SpecRevision,
@@ -44,6 +48,14 @@ export interface SpecPayload {
   principals: PrincipalSummary[];
 }
 
+export interface KanbanPayload {
+  projects: Project[];
+  selectedProjectId?: string;
+  cards: KanbanCard[];
+  workstreams: PublicWorkProjection[];
+  principals: PrincipalSummary[];
+}
+
 export async function getBootstrap(
   signal?: AbortSignal,
 ): Promise<BootstrapPayload> {
@@ -73,12 +85,58 @@ export async function getOfflineStatus(signal?: AbortSignal): Promise<{
 }
 
 export async function getThreads(
-  kind: ConversationThread["kind"],
+  kind?: ConversationThread["kind"],
   signal?: AbortSignal,
 ): Promise<{
   items: ThreadPayload[];
 }> {
-  return getJson(`/v1/threads?kind=${encodeURIComponent(kind)}`, signal);
+  return getJson(
+    kind ? `/v1/threads?kind=${encodeURIComponent(kind)}` : "/v1/threads",
+    signal,
+  );
+}
+
+export async function getKanban(
+  projectId?: string,
+  signal?: AbortSignal,
+): Promise<KanbanPayload> {
+  return getJson(
+    projectId
+      ? `/v1/kanban?projectId=${encodeURIComponent(projectId)}`
+      : "/v1/kanban",
+    signal,
+  );
+}
+
+export async function createKanbanCard(input: {
+  projectId: string;
+  title: string;
+  description: string;
+  column: KanbanColumn;
+  position: number;
+  ownerId?: string;
+  estimatePoints?: number;
+  relatedWorkstreamIds: string[];
+}): Promise<KanbanCard> {
+  return postJson("/v1/kanban/cards", {
+    id: crypto.randomUUID(),
+    ...input,
+  });
+}
+
+export async function updateKanbanCard(
+  cardId: KanbanCardId,
+  input: Partial<{
+    title: string;
+    description: string;
+    column: KanbanColumn;
+    position: number;
+    ownerId: string;
+    estimatePoints: number;
+    relatedWorkstreamIds: string[];
+  }>,
+): Promise<KanbanCard> {
+  return patchJson(`/v1/kanban/cards/${cardId}`, input);
 }
 
 export async function sendThreadMessage(input: {
@@ -208,6 +266,18 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Intero API returned ${response.status}.`);
+  }
+  return (await response.json()) as T;
+}
+
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });

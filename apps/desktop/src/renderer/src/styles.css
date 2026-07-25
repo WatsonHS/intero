@@ -1,28 +1,13 @@
 @import "tailwindcss";
+@import "@intero/ui/tokens.css";
+@source "../../../../../packages/ui/src";
 
 :root {
-  color-scheme: light;
-  font-family: "Geist", "Avenir Next", "Segoe UI Variable", sans-serif;
-  color: #242722;
-  background: #f2efe8;
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  background: var(--background);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --ink: #242722;
-  --muted: #77776f;
-  --faint: #a7a59b;
-  --paper: #f7f4ee;
-  --paper-deep: #eeebe3;
-  --line: rgba(48, 51, 45, 0.13);
-  --line-strong: rgba(48, 51, 45, 0.23);
-  --accent: #c85a42;
-  --accent-deep: #a94632;
-  --accent-soft: #f3ded7;
-  --green: #496d5b;
-  --green-soft: #dfe9e2;
-  --amber: #9a6a2b;
-  --amber-soft: #efe4d1;
-  --sidebar: #292c27;
-  --sidebar-muted: #a7aaa0;
 }
 
 * {
@@ -56,7 +41,7 @@ button {
 button:focus-visible,
 textarea:focus-visible,
 input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--primary);
   outline-offset: 3px;
 }
 
@@ -119,7 +104,7 @@ input:focus-visible {
   font-size: 14px;
   font-weight: 760;
   letter-spacing: -0.04em;
-  background: var(--accent);
+  background: var(--primary);
 }
 
 .brand-mark {
@@ -191,7 +176,7 @@ input:focus-visible {
 .nav-item--active {
   color: #fff8f2;
   background: rgba(200, 90, 66, 0.2);
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .sidebar__footer {
@@ -299,7 +284,7 @@ input:focus-visible {
 
 .eyebrow {
   margin: 0 0 8px;
-  color: var(--accent);
+  color: var(--primary);
   font-size: 10px;
   font-weight: 760;
   letter-spacing: 0.14em;
@@ -356,8 +341,8 @@ input:focus-visible {
 
 .button--primary {
   color: #fff9f4;
-  background: var(--accent);
-  border: 1px solid var(--accent);
+  background: var(--primary);
+  border: 1px solid var(--primary);
   box-shadow: 0 8px 20px rgba(120, 54, 40, 0.15);
 }
 
@@ -613,7 +598,7 @@ input:focus-visible {
 }
 
 .phase-label--blocked {
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .phase-label--reviewing,
@@ -674,8 +659,8 @@ input:focus-visible {
 }
 
 .row-open:hover {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--primary);
+  border-color: var(--primary);
 }
 
 .attention-rail {
@@ -706,7 +691,7 @@ input:focus-visible {
   color: #fff9f4;
   font-family: "Geist Mono", monospace;
   font-size: 10px;
-  background: var(--accent);
+  background: var(--primary);
   border-radius: 50%;
 }
 
@@ -733,7 +718,7 @@ input:focus-visible {
 }
 
 .attention-item:hover {
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .attention-item__icon {
@@ -741,7 +726,7 @@ input:focus-visible {
   width: 26px;
   height: 26px;
   place-items: center;
-  color: var(--accent);
+  color: var(--primary);
   background: var(--accent-soft);
   border-radius: 50%;
 }
@@ -752,7 +737,7 @@ input:focus-visible {
 }
 
 .attention-item__eyebrow {
-  color: var(--accent);
+  color: var(--primary);
   font-size: 8px;
   font-weight: 760;
   letter-spacing: 0.11em;
@@ -887,7 +872,7 @@ input:focus-visible {
 
 .inline-error button {
   padding: 0;
-  color: var(--accent);
+  color: var(--primary);
   font-weight: 650;
   background: none;
   border: 0;
@@ -901,7 +886,7 @@ input:focus-visible {
   place-items: center;
   color: #fff;
   font-weight: 700;
-  background: var(--accent);
+  background: var(--primary);
   clip-path: polygon(0 0, 100% 0, 100% 70%, 70% 100%, 0 100%);
 }
 
@@ -1007,7 +992,7 @@ input:focus-visible {
 
 .message--representative {
   background: rgba(255, 255, 255, 0.44);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .message--human {
@@ -1029,7 +1014,7 @@ input:focus-visible {
 }
 
 .message__meta span {
-  color: var(--accent);
+  color: var(--primary);
 }
 
 .message__meta time {
@@ -1234,7 +1219,7 @@ input:focus-visible {
   height: 35px;
   place-items: center;
   color: #fff;
-  background: var(--accent);
+  background: var(--primary);
   border: 0;
   border-radius: 7px;
   cursor: pointer;
@@ -1364,7 +1349,7 @@ input:focus-visible {
 }
 
 .spec-title-field input:focus {
-  border-color: var(--accent);
+  border-color: var(--primary);
 }
 
 .markdown-preview {
@@ -1471,7 +1456,7 @@ input:focus-visible {
 
 .representative-analysis {
   background: #e8e5dd;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--primary);
 }
 
 .representative-analysis small {
@@ -1645,7 +1630,7 @@ input:focus-visible {
 
 .workspace-setting > button {
   padding: 0;
-  color: var(--accent);
+  color: var(--primary);
   font-size: 9px;
   font-weight: 680;
   background: none;
@@ -1681,7 +1666,7 @@ input:focus-visible {
 .choice-grid input {
   width: 14px;
   height: 14px;
-  accent-color: var(--accent);
+  accent-color: var(--primary);
 }
 
 .choice-grid span {

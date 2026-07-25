@@ -8,9 +8,13 @@ import {
   type ConversationThread,
   type CoordinationResult,
   type DecisionRecord,
+  type KanbanCard,
+  type KanbanCardId,
   type OperationId,
   type OutboxEntry,
   type PrincipalId,
+  type Project,
+  type ProjectId,
   type PublicWorkProjection,
   type Spec,
   type SpecId,
@@ -44,7 +48,22 @@ export type MutationResult<T> = {
   outbox: OutboxEntry;
 };
 
+export type KanbanCardUpdate = Partial<
+  Pick<
+    KanbanCard,
+    | "title"
+    | "description"
+    | "column"
+    | "position"
+    | "ownerId"
+    | "estimatePoints"
+    | "relatedWorkstreamIds"
+  >
+>;
+
 export class InMemoryPlatformStore {
+  readonly projects = new Map<ProjectId, Project>();
+  readonly kanbanCards = new Map<KanbanCardId, KanbanCard>();
   readonly workstreams = new Map<WorkstreamId, Workstream>();
   readonly claims = new Map<WorkstreamId, Claim[]>();
   readonly projections = new Map<WorkstreamId, PublicWorkProjection>();
@@ -62,6 +81,56 @@ export class InMemoryPlatformStore {
   readonly outbox: OutboxEntry[] = [];
   readonly processedIdempotencyKeys = new Set<string>();
   #sequence = 0;
+
+  ensureProject(project: Project): Project {
+    this.projects.set(project.id, project);
+    return project;
+  }
+
+  listProjects(): Project[] {
+    return [...this.projects.values()].toSorted((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+  }
+
+  listKanbanCards(projectId?: ProjectId): KanbanCard[] {
+    return [...this.kanbanCards.values()]
+      .filter((card) => projectId === undefined || card.projectId === projectId)
+      .toSorted(
+        (left, right) =>
+          left.position - right.position ||
+          left.createdAt.localeCompare(right.createdAt),
+      );
+  }
+
+  createKanbanCard(card: KanbanCard): KanbanCard {
+    if (!this.projects.has(card.projectId)) {
+      throw new Error("Project was not found.");
+    }
+    if (this.kanbanCards.has(card.id)) {
+      throw new Error("Kanban card already exists.");
+    }
+    this.ensureKanbanWorkstreams(card.relatedWorkstreamIds);
+    if (card.ownerId) this.ensurePrincipal(card.ownerId, "human");
+    this.kanbanCards.set(card.id, card);
+    return card;
+  }
+
+  updateKanbanCard(cardId: KanbanCardId, update: KanbanCardUpdate): KanbanCard {
+    const current = this.kanbanCards.get(cardId);
+    if (!current) throw new Error("Kanban card was not found.");
+    if (update.relatedWorkstreamIds) {
+      this.ensureKanbanWorkstreams(update.relatedWorkstreamIds);
+    }
+    if (update.ownerId) this.ensurePrincipal(update.ownerId, "human");
+    const next = {
+      ...current,
+      ...update,
+      updatedAt: new Date().toISOString(),
+    };
+    this.kanbanCards.set(cardId, next);
+    return next;
+  }
 
   createWorkstream(
     input: Omit<
@@ -372,6 +441,17 @@ export class InMemoryPlatformStore {
 
   listProjections(): PublicWorkProjection[] {
     return [...this.projections.values()];
+  }
+
+  private ensureKanbanWorkstreams(workstreamIds: WorkstreamId[]): void {
+    for (const workstreamId of workstreamIds) {
+      if (
+        !this.workstreams.has(workstreamId) &&
+        !this.projections.has(workstreamId)
+      ) {
+        throw new Error("Related Workstream was not found.");
+      }
+    }
   }
 
   listInbox(principalId?: PrincipalId): ActionInboxItem[] {
