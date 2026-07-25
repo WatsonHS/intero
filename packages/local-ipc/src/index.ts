@@ -14,6 +14,16 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
+export class DaemonRpcError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DaemonRpcError";
+  }
+}
+
 type ConnectionRole = "administrator" | "hook" | "mcp" | "sidecar";
 
 interface ConnectionDescriptor {
@@ -92,7 +102,14 @@ export class SocketDaemonClient implements DaemonClient {
                 ),
               );
             } else if (response.error) {
-              settle(() => reject(new Error(response.error!.message)));
+              settle(() =>
+                reject(
+                  new DaemonRpcError(
+                    response.error!.code,
+                    response.error!.message,
+                  ),
+                ),
+              );
             } else {
               settle(() => resolve(response.result));
             }

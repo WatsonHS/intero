@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
-import { SocketDaemonClient } from "./daemon-client.js";
+import { ReloadingDaemonClient, SocketDaemonClient } from "./daemon-client.js";
 import { loadConnectionSettings } from "./connection.js";
 import { runHook } from "./hook.js";
 import { createToolHandlers } from "./tools.js";
@@ -46,12 +46,14 @@ async function runMcpServer() {
   ) {
     throw new Error("A supported --mcp-source is required.");
   }
-  const { socketPath, authToken } = await loadConnectionSettings({
-    role: "mcp",
-    ...(connectionFile ? { descriptorPath: connectionFile } : {}),
-  });
   const tools = createToolHandlers(
-    new SocketDaemonClient(socketPath, authToken),
+    new ReloadingDaemonClient(async () => {
+      const { socketPath, authToken } = await loadConnectionSettings({
+        role: "mcp",
+        ...(connectionFile ? { descriptorPath: connectionFile } : {}),
+      });
+      return new SocketDaemonClient(socketPath, authToken);
+    }),
     {
       source: mcpSource,
       cwd: process.cwd(),
