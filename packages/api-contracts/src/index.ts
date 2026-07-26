@@ -113,7 +113,26 @@ export const CoordinateRequest = z.object({ envelope: ActionEnvelope });
 export const CoordinateResponse = z.object({ result: CoordinationResult });
 export const CreateCapabilityGrantRequest = CapabilityGrant;
 
-export const CreateThreadRequest = ConversationThread.omit({ sequence: true });
+// Conclusion state is set by concluding, never by the creator.
+export const CreateThreadRequest = ConversationThread.omit({
+  sequence: true,
+  concludedAt: true,
+  concludedBy: true,
+});
+export const ConcludeThreadRequest = z
+  .object({
+    messageId: z.string().uuid(),
+    actorId: z.string().uuid(),
+    conclusion: z.string().min(1).max(16_000),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+export const MarkThreadReadRequest = z
+  .object({
+    principalId: z.string().uuid(),
+    sequence: z.number().int().nonnegative(),
+  })
+  .strict();
 export const SendThreadMessageRequest = z
   .object({
     id: z.string().uuid(),

@@ -70,11 +70,8 @@ export interface ApiServiceConfig {
   auth?: {
     publicUrl: string;
     secret: string;
-    magicLinkWebhook?: string;
-    developmentMagicLinks: boolean;
     passkeyRpId: string;
     trustedOrigins: string[];
-    github?: { clientId: string; clientSecret: string };
   };
 }
 
@@ -140,21 +137,6 @@ export function loadApiServiceConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ApiServiceConfig {
   const authSecret = environment.INTERO_AUTH_SECRET;
-  const magicLinkWebhook = environment.INTERO_MAGIC_LINK_WEBHOOK;
-  const developmentMagicLinks =
-    environment.INTERO_AUTH_DEVELOPMENT_LINKS === "true";
-  if (Boolean(authSecret) !== Boolean(magicLinkWebhook || developmentMagicLinks)) {
-    throw new Error(
-      "INTERO_AUTH_SECRET requires INTERO_MAGIC_LINK_WEBHOOK or explicit INTERO_AUTH_DEVELOPMENT_LINKS=true.",
-    );
-  }
-  const githubClientId = environment.INTERO_GITHUB_CLIENT_ID;
-  const githubClientSecret = environment.INTERO_GITHUB_CLIENT_SECRET;
-  if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {
-    throw new Error(
-      "INTERO_GITHUB_CLIENT_ID and INTERO_GITHUB_CLIENT_SECRET must be configured together.",
-    );
-  }
   const runtime = loadRuntimeConfig(environment);
   return {
     runtime,
@@ -168,7 +150,7 @@ export function loadApiServiceConfig(
     spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
     allowDevelopmentIdentity:
       environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true",
-    ...(authSecret && (magicLinkWebhook || developmentMagicLinks)
+    ...(authSecret
       ? {
           auth: {
             publicUrl: z
@@ -178,10 +160,6 @@ export function loadApiServiceConfig(
                   `http://${runtime.host}:${runtime.port}`,
               ),
             secret: z.string().min(32).parse(authSecret),
-            ...(magicLinkWebhook
-              ? { magicLinkWebhook: z.url().parse(magicLinkWebhook) }
-              : {}),
-            developmentMagicLinks,
             trustedOrigins: (
               environment.INTERO_AUTH_TRUSTED_ORIGINS ??
               environment.INTERO_PUBLIC_URL ??
@@ -193,14 +171,6 @@ export function loadApiServiceConfig(
               .string()
               .min(1)
               .parse(environment.INTERO_PASSKEY_RP_ID ?? "localhost"),
-            ...(githubClientId && githubClientSecret
-              ? {
-                  github: {
-                    clientId: githubClientId,
-                    clientSecret: ServerSecret.parse(githubClientSecret),
-                  },
-                }
-              : {}),
           },
         }
       : {}),

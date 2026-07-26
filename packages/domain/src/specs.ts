@@ -100,6 +100,10 @@ export const SpecCommentThread = z
     revisionId: SpecRevisionId,
     lineStart: z.number().int().positive(),
     lineEnd: z.number().int().positive(),
+    /** Offsets into the anchored block's rendered text. Present when the
+        reader selected a run of characters rather than the whole block. */
+    charStart: z.number().int().nonnegative().optional(),
+    charEnd: z.number().int().nonnegative().optional(),
     selection: z.string().max(2_000).optional(),
     status: z.enum(["open", "resolved"]),
     createdAt: z.iso.datetime(),

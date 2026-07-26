@@ -28,10 +28,31 @@ export const ConversationThread = z
     accessChangedAtSequence: z.number().int().positive().optional(),
     priorHistoryGranted: z.boolean(),
     sequence: z.number().int().nonnegative(),
+    /** Owning team. Optional on purpose: a thread may span teams or none. */
+    teamId: z.uuid().optional(),
+    /** The conversation this one was branched out of, if any. */
+    parentThreadId: ThreadId.optional(),
+    /** Set once the branch has been concluded back into its parent. */
+    concludedAt: z.iso.datetime().optional(),
+    concludedBy: PrincipalId.optional(),
     createdAt: z.iso.datetime(),
   })
   .strict();
 export type ConversationThread = z.infer<typeof ConversationThread>;
+
+/**
+ * How much of a thread a person has seen. Unread is derived from this and the
+ * message sequence rather than stored, so it cannot drift.
+ */
+export const ThreadReadState = z
+  .object({
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    lastReadSequence: z.number().int().nonnegative(),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export type ThreadReadState = z.infer<typeof ThreadReadState>;
 
 export const ThreadMessage = z
   .object({

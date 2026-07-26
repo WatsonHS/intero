@@ -58,6 +58,25 @@ describe("service environment schemas", () => {
     });
   });
 
+  it("configures invite-only credentials without a delivery provider", () => {
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "http://127.0.0.1:4310",
+        INTERO_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1:5183",
+        INTERO_PASSKEY_RP_ID: "127.0.0.1",
+      }),
+    ).toMatchObject({
+      auth: {
+        publicUrl: "http://127.0.0.1:4310",
+        passkeyRpId: "127.0.0.1",
+        trustedOrigins: ["http://127.0.0.1:5183"],
+      },
+    });
+  });
+
   it("validates ordered migrator dependencies", () => {
     expect(
       loadMigratorServiceConfig({

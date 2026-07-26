@@ -172,14 +172,24 @@ export const PilotCoordinationThread = z
   .object({
     id: z.uuid(),
     projectId: ProjectId,
-    workStateId: z.uuid(),
+    workStateId: z.uuid().optional(),
     trigger: z.enum([
       "dependency_declared",
       "blocker_raised",
       "review_requested",
       "coordination_requested",
     ]),
-    sourceBindingId: z.uuid(),
+    sourceBindingId: z.uuid().optional(),
+    automationSignalId: z.uuid().optional(),
+    automationKind: z
+      .enum([
+        "blocker",
+        "dependency_change",
+        "spec_review_stale",
+        "coordination_unresolved",
+        "project_work_risk",
+      ])
+      .optional(),
     participantIds: z.array(PrincipalId).min(1).max(20),
     safeContext: z.string().min(1).max(600),
     candidateNextSteps: z.array(z.string().min(1).max(300)).max(5),
@@ -293,9 +303,7 @@ export const PilotStandInJobStatus = z.enum([
   "private",
   "failed",
 ]);
-export type PilotStandInJobStatus = z.infer<
-  typeof PilotStandInJobStatus
->;
+export type PilotStandInJobStatus = z.infer<typeof PilotStandInJobStatus>;
 
 export const PilotStandInProcessingState = z
   .object({
@@ -385,9 +393,7 @@ export const PilotStandInOutput = z
       .strict(),
   })
   .strict();
-export type PilotStandInOutput = z.infer<
-  typeof PilotStandInOutput
->;
+export type PilotStandInOutput = z.infer<typeof PilotStandInOutput>;
 
 export const PilotStandInAnswer = z
   .object({
@@ -400,16 +406,12 @@ export const PilotStandInAnswer = z
     sourceWorkStateIds: z.array(z.uuid()).min(1).max(10),
   })
   .strict();
-export type PilotStandInAnswer = z.infer<
-  typeof PilotStandInAnswer
->;
+export type PilotStandInAnswer = z.infer<typeof PilotStandInAnswer>;
 
 export const PilotStandInAnswerDetail = PilotStandInAnswer.omit({
   sourceWorkStateIds: true,
 });
-export type PilotStandInAnswerDetail = z.infer<
-  typeof PilotStandInAnswerDetail
->;
+export type PilotStandInAnswerDetail = z.infer<typeof PilotStandInAnswerDetail>;
 
 export const PilotStandInSource = z
   .object({
@@ -429,9 +431,7 @@ export const PilotStandInSource = z
       .strict(),
   })
   .strict();
-export type PilotStandInSource = z.infer<
-  typeof PilotStandInSource
->;
+export type PilotStandInSource = z.infer<typeof PilotStandInSource>;
 
 export const PilotStandInExchange = z
   .object({
@@ -447,9 +447,7 @@ export const PilotStandInExchange = z
     createdAt: z.iso.datetime(),
   })
   .strict();
-export type PilotStandInExchange = z.infer<
-  typeof PilotStandInExchange
->;
+export type PilotStandInExchange = z.infer<typeof PilotStandInExchange>;
 
 export const PILOT_DATA_POLICY = {
   structuredPrivateRetentionDays: 180,
