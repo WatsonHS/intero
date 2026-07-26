@@ -103,22 +103,35 @@ Migrations `0012_normalized_pilot_state.sql` and
 configured with `INTERO_PILOT_PERSISTENCE=postgres`; `0013` adds durable
 Stand-in jobs and worker heartbeats.
 
-Previous validation-stage Pilot data is intentionally not migrated. To discard
-normalized Pilot data for exactly one known development Organization, use the
-guarded reset command. It requires both the target Organization UUID and an
-exact confirmation containing that UUID:
+Previous validation-stage Pilot data is intentionally not migrated. Validation
+resets must use a newly created, disposable loopback database whose name starts
+with `intero_validation_` or contains an explicit `_test_` segment. Never use
+the currently running product/Demo database. To discard normalized Pilot data
+for exactly one known Organization in that disposable database, use the
+guarded reset command. It requires the disposable target, the target
+Organization UUID, and exact confirmations for both:
 
 ```bash
-export DATABASE_URL='postgresql://migration-user:...@host/intero'
+export DATABASE_URL='postgresql://migration-user:...@127.0.0.1/intero_validation_019f9f'
+export INTERO_RESET_DISPOSABLE_CONFIRM='INTERO_VALIDATION_DISPOSABLE:127.0.0.1:5432/intero_validation_019f9f'
 export INTERO_RESET_ORGANIZATION_ID='019b5ac0-7600-7000-8000-000000000001'
 export INTERO_RESET_CONFIRM="DELETE_NORMALIZED_PILOT_DATA:${INTERO_RESET_ORGANIZATION_ID}"
 pnpm --filter @intero/server-api reset:pilot
 ```
 
 The command prints the selected database host/name and Organization before
-deleting. Never run it against a shared or unknown target. It removes only
-normalized Pilot rows plus their Pilot Activity Events/outbox entries; it does
-not drop schema or automatically delete the Organization.
+deleting. If that Organization has any configured Provider, it refuses before
+deleting any rows. Destroying that configuration additionally requires
+`INTERO_RESET_DESTROY_PROVIDER_CONFIG` to equal the database-and-Organization
+specific phrase printed by the refusal. That override is for disposable
+validation databases only. The guard checks only whether a Provider row exists;
+it never reads or prints the encrypted credential.
+
+The reset removes only normalized Pilot rows plus their Pilot Activity
+Events/outbox entries; it does not drop schema or automatically delete the
+Organization. Create the disposable database for one validation run, run
+migrations and tests there, then drop the whole database. Do not reuse
+`reset:pilot` as cleanup for the user-facing product/Demo environment.
 
 Rollback is code/config rollback, not a destructive down migration. The
 additive normalized tables remain in place. An older snapshot-based build

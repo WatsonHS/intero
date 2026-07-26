@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   DEMO_IDS,
   expectedDemoConfirmation,
+  expectedProviderDestructionConfirmation,
   requireDemoTarget,
   resetDemoData,
   seedDemoData,
@@ -25,15 +26,22 @@ integration("persisted Demo workspace", () => {
       })
     : undefined;
   let pool: Pool;
+  const providerDestructionConfirmation = target
+    ? expectedProviderDestructionConfirmation(target)
+    : "";
 
   beforeAll(async () => {
-    await resetDemoData(target!);
+    await resetDemoData(target!, {
+      providerDestructionConfirmation,
+    });
     pool = new Pool({ connectionString: databaseUrl });
   });
 
   afterAll(async () => {
     await pool?.end();
-    await resetDemoData(target!);
+    await resetDemoData(target!, {
+      providerDestructionConfirmation,
+    });
   });
 
   it("seeds once and preserves the same persisted workspace on rerun", async () => {
@@ -238,5 +246,47 @@ integration("persisted Demo workspace", () => {
         .flatMap((spec) => spec.commentThreads)
         .some((thread) => thread.status === "open"),
     ).toBe(true);
+  });
+
+  it("preserves an admin Provider on seed and requires explicit destruction on reset", async () => {
+    const pilot = new NormalizedPostgresPilotStore(pool, DEMO_IDS.organization);
+    await pilot.configureProvider({
+      administratorId: DEMO_IDS.principals.alex,
+      endpoint: "https://provider.integration.invalid/v1",
+      defaultModel: "integration-admin-model",
+      encryptedApiKey: "integration-test-ciphertext",
+    });
+
+    const reseed = await seedDemoData({
+      target: target!,
+      providerEncryptionKey: "demo-integration-encryption-key",
+      now: new Date("2026-07-26T10:00:00.000Z"),
+    });
+    expect(reseed.status).toBe("already_seeded");
+    await expect(pilot.getProviderConfiguration()).resolves.toMatchObject({
+      endpoint: "https://provider.integration.invalid/v1",
+      defaultModel: "integration-admin-model",
+    });
+
+    await expect(resetDemoData(target!)).rejects.toThrow(
+      "existing configured Provider",
+    );
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM pilot_provider_configs",
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+    expect(
+      (await pool.query("SELECT count(*)::int AS count FROM projects")).rows[0]
+        ?.count,
+    ).toBeGreaterThan(0);
+
+    await expect(
+      resetDemoData(target!, {
+        providerDestructionConfirmation,
+      }),
+    ).resolves.toMatchObject({ status: "reset" });
   });
 });

@@ -17,9 +17,21 @@ The commands refuse to run unless all of these conditions are true:
   and Demo identities (plus the canonical renderer's fixed local bootstrap
   principals, which the running API may recreate).
 
-Do not point these commands at a shared database. The reset command truncates
-all application tables in the confirmed disposable database while preserving
-the applied migration ledger.
+Do not point these commands at a shared or user-facing product/Demo database.
+The reset command truncates all application tables in the confirmed disposable
+database while preserving the applied migration ledger.
+
+`demo:seed` is non-destructive on an already seeded database: it returns
+`already_seeded` before writing Provider configuration, so an administrator's
+configured Provider remains unchanged.
+
+`demo:reset` and `demo:reset-and-seed` check only whether
+`pilot_provider_configs` contains a row; they do not read or print its encrypted
+credential. When a configured Provider exists, both commands refuse before
+truncating any table. The only override is the database-specific destructive
+phrase from the refusal, supplied as
+`INTERO_DEMO_DESTROY_PROVIDER_CONFIG=DESTROY_INTERO_CONFIGURED_PROVIDER:<host>:<port>/<database>`.
+Never set this override for the running user-facing environment.
 
 ## Create the workspace
 
@@ -59,11 +71,25 @@ To intentionally restore the baseline:
 pnpm demo:reset-and-seed
 ```
 
+If the disposable database contains a configured Provider, the command above
+will refuse. Only after confirming that the database was created solely for
+this validation run may you use the exact destructive phrase:
+
+```sh
+export INTERO_DEMO_DESTROY_PROVIDER_CONFIG='DESTROY_INTERO_CONFIGURED_PROVIDER:127.0.0.1:5432/intero_demo'
+pnpm demo:reset-and-seed
+unset INTERO_DEMO_DESTROY_PROVIDER_CONFIG
+```
+
 To leave the confirmed database empty:
 
 ```sh
 pnpm demo:reset
 ```
+
+Automated validation must create a uniquely named disposable database, migrate
+and seed it, run the checks, and drop that database afterward. It must not reset
+the currently running product/Demo database.
 
 ## Start and sign in
 

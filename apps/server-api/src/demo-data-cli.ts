@@ -30,7 +30,18 @@ process.stdout.write(
 );
 
 if (command === "reset" || command === "reset-and-seed") {
-  process.stdout.write(`${JSON.stringify(await resetDemoData(target))}\n`);
+  process.stdout.write(
+    `${JSON.stringify(
+      await resetDemoData(target, {
+        ...(process.env.INTERO_DEMO_DESTROY_PROVIDER_CONFIG
+          ? {
+              providerDestructionConfirmation:
+                process.env.INTERO_DEMO_DESTROY_PROVIDER_CONFIG,
+            }
+          : {}),
+      }),
+    )}\n`,
+  );
 }
 if (command === "seed" || command === "reset-and-seed") {
   const providerEncryptionKey = process.env.INTERO_PROVIDER_ENCRYPTION_KEY;

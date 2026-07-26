@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { expectedDemoConfirmation, requireDemoTarget } from "./demo-data.js";
+import {
+  expectedDemoConfirmation,
+  expectedProviderDestructionConfirmation,
+  requireDemoTarget,
+  requireProviderDestructionConfirmation,
+} from "./demo-data.js";
 
 const databaseUrl = "postgres://intero:intero@127.0.0.1:5432/intero_demo";
 const confirmation = "INTERO_DEMO_DISPOSABLE:127.0.0.1:5432/intero_demo";
@@ -35,6 +40,47 @@ describe("Demo data safety boundary", () => {
         demoEnabled: "true",
       }),
     ).toMatchObject({ host: "[::1]", confirmation: ipv6Confirmation });
+  });
+
+  it("requires a database-specific destructive override for an existing Provider", () => {
+    const target = requireDemoTarget({
+      databaseUrl,
+      confirmation,
+      nodeEnv: "test",
+      demoEnabled: "true",
+    });
+    const destructiveConfirmation =
+      "DESTROY_INTERO_CONFIGURED_PROVIDER:127.0.0.1:5432/intero_demo";
+    expect(expectedProviderDestructionConfirmation(target)).toBe(
+      destructiveConfirmation,
+    );
+    expect(() =>
+      requireProviderDestructionConfirmation({
+        target,
+        hasConfiguredProvider: true,
+      }),
+    ).toThrow("existing configured Provider");
+    expect(() =>
+      requireProviderDestructionConfirmation({
+        target,
+        hasConfiguredProvider: true,
+        confirmation:
+          "DESTROY_INTERO_CONFIGURED_PROVIDER:127.0.0.1:5432/other_demo",
+      }),
+    ).toThrow("INTERO_DEMO_DESTROY_PROVIDER_CONFIG");
+    expect(() =>
+      requireProviderDestructionConfirmation({
+        target,
+        hasConfiguredProvider: true,
+        confirmation: destructiveConfirmation,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      requireProviderDestructionConfirmation({
+        target,
+        hasConfiguredProvider: false,
+      }),
+    ).not.toThrow();
   });
 
   it.each([

@@ -34,6 +34,8 @@ const DEMO_DATABASE_PATTERN = /(demo|test|validation)/i;
 const DEMO_EMAIL_SUFFIX = "@demo.intero.test";
 const DEMO_ORGANIZATION_NAME = "Intero Demo Product Studio";
 const DEMO_SEED_VERSION = 8;
+const DESTROY_PROVIDER_CONFIRMATION_PREFIX =
+  "DESTROY_INTERO_CONFIGURED_PROVIDER";
 export const DEMO_PASSWORD = "Intero-demo-2026!";
 const CANONICAL_RUNTIME_PRINCIPAL_IDS = [
   "019b5ac0-7600-7000-8000-000000000002",
@@ -170,6 +172,26 @@ export interface DemoSeedResult {
 export function expectedDemoConfirmation(databaseUrl: string): string {
   const target = parsePostgresUrl(databaseUrl);
   return `INTERO_DEMO_DISPOSABLE:${target.hostname}:${target.port || "5432"}/${target.pathname.slice(1)}`;
+}
+
+export function expectedProviderDestructionConfirmation(
+  target: Pick<DemoTarget, "host" | "port" | "databaseName">,
+): string {
+  return `${DESTROY_PROVIDER_CONFIRMATION_PREFIX}:${target.host}:${target.port}/${target.databaseName}`;
+}
+
+export function requireProviderDestructionConfirmation(input: {
+  target: Pick<DemoTarget, "host" | "port" | "databaseName">;
+  hasConfiguredProvider: boolean;
+  confirmation?: string;
+}): void {
+  if (!input.hasConfiguredProvider) return;
+  const expected = expectedProviderDestructionConfirmation(input.target);
+  if (input.confirmation !== expected) {
+    throw new Error(
+      `Refusing to reset a database with an existing configured Provider. This would permanently delete its encrypted credential and replace the configuration on a later Demo seed. If this is truly a disposable database, set INTERO_DEMO_DESTROY_PROVIDER_CONFIG exactly to ${expected}.`,
+    );
+  }
 }
 
 export function requireDemoTarget(input: {
@@ -358,7 +380,10 @@ async function seedBoundedAutomation(
   }
 }
 
-export async function resetDemoData(target: DemoTarget): Promise<{
+export async function resetDemoData(
+  target: DemoTarget,
+  options: { providerDestructionConfirmation?: string } = {},
+): Promise<{
   status: "reset" | "already_empty";
   tableCount: number;
 }> {
@@ -367,6 +392,20 @@ export async function resetDemoData(target: DemoTarget): Promise<{
   try {
     const state = await inspectDemoOwnership(pool);
     if (state === "empty") return { status: "already_empty", tableCount: 0 };
+    const configuredProvider = await pool.query<{ configured: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM pilot_provider_configs
+       ) AS configured`,
+    );
+    requireProviderDestructionConfirmation({
+      target,
+      hasConfiguredProvider: configuredProvider.rows[0]?.configured === true,
+      ...(options.providerDestructionConfirmation
+        ? {
+            confirmation: options.providerDestructionConfirmation,
+          }
+        : {}),
+    });
     const tables = await pool.query<{ tablename: string }>(
       `SELECT tablename
        FROM pg_tables
