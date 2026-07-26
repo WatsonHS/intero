@@ -1,11 +1,11 @@
 import {
   ArrowUpRightIcon,
+  CaretDownIcon,
+  CaretUpIcon,
   CloudArrowDownIcon,
-  CloudCheckIcon,
   PlantIcon,
   ShieldCheckIcon,
   TimerIcon,
-  UserCircleMinusIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type {
@@ -31,15 +31,16 @@ import {
   getThreads,
   type ProjectWorkPayload,
 } from "../api.js";
+import { Avatar, Meta, TONE_CLASSES, cn } from "../design/primitives.js";
 import { Reveal } from "../design/reveal.js";
 import {
   PHASE_META,
-  confidencePercent,
-  initials,
+  freshest,
   isStale,
+  loadSummary,
+  orderByAttention,
   revealMove,
   staleAfterMinutes,
-  tintFor,
   type Tone,
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
@@ -51,23 +52,12 @@ import {
   withdrawPilotPulse,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
-
-const TONE_CLASSES: Record<Tone, { text: string; bg: string; dot: string }> = {
-  green: { text: "text-green", bg: "bg-green-soft", dot: "bg-green" },
-  amber: { text: "text-amber", bg: "bg-amber-soft", dot: "bg-amber" },
-  danger: { text: "text-danger", bg: "bg-danger-soft", dot: "bg-danger" },
-  faint: { text: "text-faint", bg: "bg-raise", dot: "bg-faint" },
-  accent: {
-    text: "text-accent-strong",
-    bg: "bg-accent-soft",
-    dot: "bg-accent-strong",
-  },
-  cool: { text: "text-ink-muted", bg: "bg-raise", dot: "bg-faint" },
-};
-
-function cn(...classes: Array<string | false | undefined>): string {
-  return classes.filter(Boolean).join(" ");
-}
+import {
+  mergeWorkLines,
+  workLineFromNarrative,
+  workLineFromProjection,
+  type WorkLine,
+} from "./work-lines.js";
 
 export function TeamPulseView({
   onOpenPerson,
@@ -134,7 +124,7 @@ function CanonicalTeamPulseView({
     queryFn: ({ signal }) => getProjectWork(pilotProject!.id, signal),
     enabled: Boolean(
       pilotProject &&
-        pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
     ),
     refetchInterval: 4_000,
   });
@@ -143,7 +133,7 @@ function CanonicalTeamPulseView({
     queryFn: ({ signal }) => getProjectSpecs(pilotProject!.id, signal),
     enabled: Boolean(
       pilotProject &&
-        pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
     ),
     refetchInterval: 4_000,
   });
@@ -487,7 +477,7 @@ function CanonicalTeamPulseView({
         {showCards ? (
           <div className="mt-[22px] grid grid-cols-[repeat(auto-fill,minmax(310px,1fr))] items-start gap-3">
             {people.map(({ ownerId, workstreams }, index) => (
-              <PeerPersonCard
+              <PersonCard
                 key={ownerId}
                 ownerId={ownerId}
                 name={principalNames.get(ownerId) ?? ownerId.slice(0, 8)}
@@ -622,237 +612,13 @@ function CanonicalTeamPulseView({
   );
 }
 
+/**
+ * One person, one card. The card is a list of everything they have in flight
+ * at once — ordered by how much attention each workstream needs, not by
+ * priority. Every line is a projection published by that person's
+ * Representative; nothing here is entered by hand.
+ */
 function PersonCard({
-  ownerId,
-  name,
-  workstreams,
-  index,
-  staleAfterSeconds,
-  offline,
-  offlineSyncTime,
-  open,
-  onToggle,
-  onOpen,
-  pilotEntryByProjectionId,
-  pilotIdentityId,
-  withdrawingWorkStateId,
-  onWithdraw,
-}: {
-  ownerId: string;
-  name: string;
-  workstreams: PublicWorkProjection[];
-  index: number;
-  staleAfterSeconds: number | undefined;
-  offline: boolean;
-  offlineSyncTime: string;
-  open: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-  pilotEntryByProjectionId: Map<string, PilotPulseEntry>;
-  pilotIdentityId: string | undefined;
-  withdrawingWorkStateId: string | undefined;
-  onWithdraw: (workStateId: string) => void;
-}) {
-  const { t, formatRelative } = useI18n();
-  const main = chooseMainWorkstream(workstreams);
-  const subs = workstreams.filter((item) => item.id !== main.id);
-  const activeSubs = subs.filter(
-    (item) => item.phase !== "completed" && item.phase !== "paused",
-  ).length;
-  const mainTone = TONE_CLASSES[PHASE_META[main.phase].tone];
-  const mainStale = isStale(main.freshnessAt, staleAfterSeconds);
-  const freshColorClass = offline || mainStale ? "text-amber" : "text-faint";
-  const freshText = offline
-    ? t("pulse.card.syncedAt", { time: offlineSyncTime })
-    : formatRelative(main.freshnessAt);
-  const delay = Math.min(index * 45, 320);
-  const pilotEntry = pilotEntryByProjectionId.get(main.id);
-  const pilotNarrative = pilotEntry?.narrative;
-  const [detailsOpen, setDetailsOpen] = useState(false);
-
-  return (
-    <div
-      className="group relative flex flex-col overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
-      style={{ animationDelay: `${delay}ms` }}
-      onMouseEnter={revealMove}
-      onMouseMove={revealMove}
-    >
-      <Reveal />
-      <button
-        type="button"
-        onClick={onOpen}
-        className="grid w-full grid-cols-[34px_minmax(0,1fr)_22px] items-center gap-[11px] border-0 bg-transparent p-0 text-left text-ink hover:text-accent-strong"
-      >
-        <span
-          className="grid h-[34px] w-[34px] animate-avatar-pop place-items-center rounded-full text-[10.5px] font-bold text-on-tint transition-transform duration-[240ms] ease-decelerate hover:scale-[1.06]"
-          style={{ background: tintFor(ownerId), animationDelay: `${delay}ms` }}
-        >
-          {initials(name)}
-        </span>
-        <span className="grid min-w-0">
-          <span className="flex items-center gap-2">
-            <strong className="text-[13.5px] font-[620] tracking-[-0.01em]">
-              {name}
-            </strong>
-            <span className={cn("font-mono text-[9.5px]", freshColorClass)}>
-              {freshText}
-            </span>
-          </span>
-          <small className="mt-[3px] truncate text-[10.5px] text-faint">
-            {t("pulse.card.role")}
-          </small>
-        </span>
-        <ArrowUpRightIcon size={13} className="text-faint" />
-      </button>
-
-      {pilotEntry && pilotNarrative ? (
-        <div
-          className="mt-[13px] grid gap-3 rounded-inset border border-transparent bg-raise p-3.5 text-left text-ink"
-          data-testid={`pilot-pulse-entry-${pilotEntry.workStateId}`}
-        >
-          <div className="flex items-center gap-2">
-            <PhaseChip phase={main.phase} size="sm" />
-            <h3 className="text-[14px] font-[570] leading-[1.4] tracking-[-0.015em] [text-wrap:pretty]">
-              {main.title}
-            </h3>
-          </div>
-          <PilotWorkNarrativeContent narrative={pilotNarrative} />
-          <button
-            type="button"
-            aria-expanded={detailsOpen}
-            onClick={() => setDetailsOpen((current) => !current)}
-            className="mt-0.5 flex items-center gap-1.5 border-0 border-t border-line bg-transparent pt-2.5 text-left font-mono text-[9.5px] text-faint hover:text-ink-muted"
-          >
-            <CloudCheckIcon size={12} className="text-green" />
-            来源与新鲜度 · {formatRelative(pilotEntry.freshnessAt)}
-            <span className="ml-auto">{detailsOpen ? "收起" : "查看"}</span>
-          </button>
-          {detailsOpen ? (
-            <div
-              data-testid={`pilot-pulse-provenance-${pilotEntry.workStateId}`}
-              className="grid gap-2 rounded-[9px] border border-line bg-panel px-2.5 py-2 font-mono text-[9.5px] text-faint"
-            >
-              <span>
-                {pilotEntry.provenance.client} ·{" "}
-                {pilotEntry.provenance.connectionName} · {pilotEntry.eventType}
-              </span>
-              <span>
-                发生于 {formatRelative(pilotEntry.provenance.occurredAt)} ·
-                接收于 {formatRelative(pilotEntry.provenance.receivedAt)}
-              </span>
-              {pilotEntry.ownerId === pilotIdentityId ? (
-                <button
-                  type="button"
-                  data-testid={`pilot-withdraw-${pilotEntry.workStateId}`}
-                  disabled={withdrawingWorkStateId === pilotEntry.workStateId}
-                  onClick={() => onWithdraw(pilotEntry.workStateId)}
-                  className="inline-flex w-fit items-center gap-1 border-0 bg-transparent p-0 text-[9.5px] text-ink-muted hover:text-danger"
-                >
-                  <UserCircleMinusIcon size={12} />
-                  {withdrawingWorkStateId === pilotEntry.workStateId
-                    ? "撤回中…"
-                    : "撤回团队摘要"}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <p className="mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-            {meaningfulDetail(main, t("pulse.card.noChange"))}
-          </p>
-          <button
-            type="button"
-            onClick={onOpen}
-            className="mt-3.5 block w-full rounded-inset border border-transparent bg-raise p-3.5 text-left text-ink hover:border-line2"
-          >
-            <PhaseChip phase={main.phase} size="sm" />
-            <h3 className="mt-2.5 text-[14px] font-[570] leading-[1.4] tracking-[-0.015em] [text-wrap:pretty]">
-              {main.title}
-            </h3>
-            <div className="mt-3 flex items-center gap-3.5">
-              <span className="inline-flex items-center gap-[7px]">
-                <span className="relative h-1 w-[44px] overflow-hidden rounded-[2px] bg-line2">
-                  <span
-                    className={cn(
-                      "absolute inset-y-0 left-0 origin-left animate-bar-grow transition-[width] duration-[620ms] ease-decelerate",
-                      mainTone.dot,
-                    )}
-                    style={{ width: `${confidencePercent(main.confidence)}%` }}
-                  />
-                </span>
-                <span className="font-mono text-[10px] text-ink-muted">
-                  {confidencePercent(main.confidence)}
-                </span>
-              </span>
-              <span className="text-[10.5px] text-faint">
-                {t("pulse.card.changes", {
-                  count: main.changedFields.length,
-                })}
-              </span>
-              {offline ? (
-                <span className="ml-auto font-mono text-[9px] text-faint">
-                  {t("pulse.card.source")}
-                </span>
-              ) : null}
-            </div>
-          </button>
-        </>
-      )}
-
-      {subs.length > 0 ? (
-        <button
-          type="button"
-          onClick={onToggle}
-          className="mt-3 flex w-full items-center gap-[9px] border-0 bg-transparent p-0 text-left text-[11px] text-ink-muted hover:text-accent-strong"
-        >
-          <span>
-            {open
-              ? t("pulse.card.subsOpen")
-              : t("pulse.card.subsClosed", {
-                  active: activeSubs,
-                  total: subs.length,
-                })}
-          </span>
-          <span className="h-px flex-1 bg-line" />
-          <span>
-            {open ? t("pulse.card.collapse") : t("pulse.card.expand")}
-          </span>
-        </button>
-      ) : null}
-      {open ? (
-        <div className="mt-2.5 flex flex-col gap-0.5">
-          {subs.map((sub) => {
-            const tone = TONE_CLASSES[PHASE_META[sub.phase].tone];
-            const dim = sub.phase === "completed" || sub.phase === "paused";
-            return (
-              <div
-                key={sub.id}
-                className="grid grid-cols-[7px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[9px] p-[8px_9px] hover:bg-hover-wash"
-              >
-                <span className={cn("h-1.5 w-1.5 rounded-full", tone.dot)} />
-                <span
-                  className={cn(
-                    "truncate text-[11.5px]",
-                    dim ? "text-faint" : "text-ink",
-                  )}
-                >
-                  {sub.title}
-                </span>
-                <span className="font-mono text-[9.5px] text-faint">
-                  {formatRelative(sub.freshnessAt)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PeerPersonCard({
   ownerId,
   name,
   workstreams,
@@ -886,119 +652,292 @@ function PeerPersonCard({
   projectContextByProjectionId: Map<string, ProjectPulseContext>;
 }) {
   const { t, formatRelative } = useI18n();
-  const active = workstreams.filter(
-    (item) => item.phase !== "completed" && item.phase !== "paused",
-  );
-  const blocked = workstreams.filter((item) => item.phase === "blocked");
-  const freshest = workstreams.reduce((latest, item) =>
-    Date.parse(item.freshnessAt) > Date.parse(latest.freshnessAt)
-      ? item
-      : latest,
-  );
-  const stale = isStale(freshest.freshnessAt, staleAfterSeconds);
-  const visible = open ? workstreams : workstreams.slice(0, 3);
-  const summary =
-    blocked.length > 0
-      ? `正在推进 ${active.map((item) => item.title).slice(0, 2).join("、")}；其中 ${blocked.length} 项受阻。`
-      : active.length > 0
-        ? `正在推进 ${active.map((item) => item.title).slice(0, 2).join("、")}。`
-        : `最近完成或暂停了 ${workstreams.map((item) => item.title).slice(0, 2).join("、")}。`;
+  const ordered = orderByAttention(workstreams);
+  const load = loadSummary(workstreams);
+  const lead = freshest(workstreams) ?? ordered[0]!;
+  const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
+  const visible = open ? ordered : ordered.slice(0, VISIBLE_TASKS);
+  const hidden = ordered.length - visible.length;
+
+  const loadLabel =
+    load.blocked > 0
+      ? t("pulse.load.blocked", { total: load.total, blocked: load.blocked })
+      : load.live < load.total
+        ? t("pulse.load.partial", { total: load.total, live: load.live })
+        : t("pulse.load.all", { total: load.total });
+
   return (
     <section
       className="relative overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
       style={{ animationDelay: `${Math.min(index * 45, 320)}ms` }}
+      onMouseEnter={revealMove}
+      onMouseMove={revealMove}
     >
       <Reveal />
       <button
         type="button"
         onClick={onOpen}
-        className="relative grid w-full grid-cols-[34px_minmax(0,1fr)_22px] items-center gap-[11px] border-0 bg-transparent p-0 text-left"
+        className="relative grid w-full cursor-pointer grid-cols-[34px_minmax(0,1fr)_22px] items-center gap-[11px] border-0 bg-transparent p-0 text-left text-ink hover:text-accent-strong"
       >
-        <span
-          className="grid h-[34px] w-[34px] place-items-center rounded-full text-[10.5px] font-bold text-on-tint"
-          style={{ background: tintFor(ownerId) }}
-        >
-          {initials(name)}
-        </span>
+        <Avatar
+          id={ownerId}
+          name={name}
+          size="lg"
+          className="animate-avatar-pop transition-transform duration-[240ms] ease-decelerate hover:scale-[1.06]"
+        />
         <span className="grid min-w-0">
           <span className="flex items-center gap-2">
-            <strong className="text-[13.5px] font-[620]">{name}</strong>
-            <span className="font-mono text-[9.5px] text-faint">
+            <strong className="text-[13.5px] font-[620] tracking-[-0.01em]">
+              {name}
+            </strong>
+            <Meta tone={offline || leadStale ? "amber" : "faint"}>
               {offline
                 ? t("pulse.card.syncedAt", { time: offlineSyncTime })
-                : formatRelative(freshest.freshnessAt)}
-            </span>
+                : formatRelative(lead.freshnessAt)}
+            </Meta>
           </span>
-          <small className="mt-1 text-[10px] text-faint">
-            {active.length} active · {blocked.length} blocked
-            {stale ? " · stale" : ""}
+          <small className="mt-[3px] truncate text-[10.5px] text-faint">
+            {t("pulse.card.role")}
           </small>
         </span>
         <ArrowUpRightIcon size={13} className="text-faint" />
       </button>
+
       <p
-        className="relative mt-3 text-[11.5px] leading-[1.65] text-ink-muted"
+        className="relative mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]"
         data-testid={`stand-in-person-summary-${ownerId}`}
       >
-        {summary}
+        {personSummary(ordered, load, t)}
       </p>
-      <div className="relative mt-3 grid gap-2.5">
-        {visible.map((workstream) => {
-          const pilotEntry = pilotEntryByProjectionId.get(workstream.id);
-          const projectContext = projectContextByProjectionId.get(
-            workstream.id,
-          );
-          return (
-            <article
-              key={workstream.id}
-              className="rounded-inset border border-line bg-raise p-3.5"
-              data-testid={`peer-work-card-${workstream.id}`}
-            >
-              <div className="flex items-start gap-2">
-                <PhaseChip phase={workstream.phase} size="sm" />
-                <h3 className="text-[13px] font-[570] leading-[1.45]">
-                  {workstream.title}
-                </h3>
-              </div>
-              {projectContext ? (
-                <ProjectWorkPulseContent
-                  context={projectContext}
-                  formatRelative={formatRelative}
-                />
-              ) : pilotEntry?.narrative ? (
-                <div className="mt-3">
-                  <PilotWorkNarrativeContent narrative={pilotEntry.narrative} />
-                </div>
-              ) : (
-                <p className="mt-2 text-[11px] leading-[1.6] text-ink-muted">
-                  {meaningfulDetail(workstream, t("pulse.card.noChange"))}
-                </p>
-              )}
-              {pilotEntry && pilotEntry.ownerId === pilotIdentityId ? (
-                <button
-                  type="button"
-                  disabled={withdrawingWorkStateId === pilotEntry.workStateId}
-                  onClick={() => onWithdraw(pilotEntry.workStateId)}
-                  className="mt-2 border-0 bg-transparent p-0 font-mono text-[9px] text-faint hover:text-danger"
-                >
-                  撤回团队摘要
-                </button>
-              ) : null}
-            </article>
-          );
-        })}
+
+      <div className="relative mt-4 flex items-center gap-2">
+        <span className="text-[10px] font-[650] tracking-[0.08em] text-faint">
+          {t("pulse.parallel")}
+        </span>
+        <span className="h-px flex-1 bg-line" />
+        <Meta tone={load.blocked > 0 ? "danger" : "faint"}>{loadLabel}</Meta>
       </div>
-      {workstreams.length > 3 ? (
+
+      <div className="relative mt-2 flex flex-col gap-0.5">
+        {visible.map((workstream) => (
+          <ParallelTaskRow
+            key={workstream.id}
+            workstream={workstream}
+            line={lineFor(
+              workstream,
+              pilotEntryByProjectionId,
+              projectContextByProjectionId,
+            )}
+            stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
+            offline={offline}
+            offlineSyncTime={offlineSyncTime}
+            onOpen={onOpen}
+          />
+        ))}
+      </div>
+
+      {ordered.length > VISIBLE_TASKS ? (
         <button
           type="button"
           onClick={onToggle}
-          className="relative mt-3 w-full border-0 border-t border-line bg-transparent pt-3 text-left text-[10.5px] text-faint"
+          aria-expanded={open}
+          className="relative mt-[9px] flex cursor-pointer items-center gap-1.5 self-start border-0 bg-transparent p-0 text-[11px] text-ink-muted hover:text-accent-strong"
         >
-          {open ? "收起" : `${workstreams.length - 3} more`}
+          {open ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
+          {open
+            ? t("pulse.card.collapse")
+            : t("pulse.card.more", { count: hidden })}
         </button>
       ) : null}
+
+      {ownWithdrawableEntry(
+        visible,
+        pilotEntryByProjectionId,
+        pilotIdentityId,
+      ).map((entry) => (
+        <button
+          key={entry.workStateId}
+          type="button"
+          data-testid={`pilot-withdraw-${entry.workStateId}`}
+          disabled={withdrawingWorkStateId === entry.workStateId}
+          onClick={() => onWithdraw(entry.workStateId)}
+          className="relative mt-2 cursor-pointer self-start border-0 bg-transparent p-0 font-mono text-[9px] text-faint hover:text-danger"
+        >
+          {withdrawingWorkStateId === entry.workStateId
+            ? t("pulse.card.withdrawing")
+            : t("pulse.card.withdraw", { title: entry.title })}
+        </button>
+      ))}
     </section>
   );
+}
+
+/**
+ * A single in-flight workstream, compressed to one row: what phase it is in,
+ * what evidence backs that, when it was last observed, and the two lines that
+ * actually tell a reader whether to step in — what just landed and what is next.
+ */
+function ParallelTaskRow({
+  workstream,
+  line,
+  stale,
+  offline,
+  offlineSyncTime,
+  onOpen,
+}: {
+  workstream: PublicWorkProjection;
+  line: WorkLine;
+  stale: boolean;
+  offline: boolean;
+  offlineSyncTime: string;
+  onOpen: () => void;
+}) {
+  const { t, formatRelative } = useI18n();
+  const meta = PHASE_META[workstream.phase];
+  const tone = TONE_CLASSES[meta.tone];
+  const blocked = meta.tone === "danger";
+  const next = line.next ?? line.collaboration;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-testid={`peer-work-card-${workstream.id}`}
+      className={cn(
+        "grid w-full cursor-pointer grid-cols-[7px_minmax(0,1fr)] items-start gap-2.5 rounded-[11px] border px-[11px] py-2.5 text-left text-ink",
+        blocked
+          ? "border-danger-soft bg-danger-soft"
+          : "border-line bg-raise hover:border-line2",
+      )}
+    >
+      <span
+        className={cn(
+          "mt-[5px] h-[7px] w-[7px] rounded-full",
+          tone.dot,
+          blocked ? "animate-dot-pulse" : undefined,
+        )}
+      />
+      <span className="grid min-w-0 gap-[7px]">
+        <span
+          className={cn(
+            "text-[12.5px] font-[540] leading-[1.45] tracking-[-0.008em] [text-wrap:pretty]",
+            meta.tone === "faint" ? "text-faint" : "text-ink",
+          )}
+        >
+          {workstream.title}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className={cn("text-[9.5px] font-[650]", tone.text)}>
+            {t(`phase.${workstream.phase}` as TranslationKey)}
+          </span>
+          {line.evidence ? (
+            <span className="truncate font-mono text-[9px] text-faint">
+              {line.evidence}
+            </span>
+          ) : null}
+          <Meta
+            tone={offline || stale ? "amber" : "faint"}
+            className="ml-auto shrink-0 text-[9.5px]"
+          >
+            {offline
+              ? t("pulse.card.syncedAt", { time: offlineSyncTime })
+              : formatRelative(workstream.freshnessAt)}
+          </Meta>
+        </span>
+        <span className="mt-px grid grid-cols-[34px_minmax(0,1fr)] gap-x-[9px] gap-y-2">
+          <span className="pt-px text-[9px] font-[650] tracking-[0.04em] text-faint">
+            {t("work.done")}
+          </span>
+          <span className="text-[11px] leading-[1.5] text-ink-muted [text-wrap:pretty]">
+            {line.done ?? line.focus ?? t("work.noneReported")}
+          </span>
+          <span
+            className={cn(
+              "pt-px text-[9px] font-[650] tracking-[0.04em]",
+              blocked ? "text-danger" : "text-faint",
+            )}
+          >
+            {t("work.next")}
+          </span>
+          <span
+            className={cn(
+              "text-[11px] leading-[1.5] [text-wrap:pretty]",
+              blocked ? "text-danger" : "text-ink-muted",
+            )}
+          >
+            {next ?? t("work.noneReported")}
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+const VISIBLE_TASKS = 3;
+
+/** Narrative for a workstream, whichever source published it. */
+function lineFor(
+  workstream: PublicWorkProjection,
+  pilotEntries: Map<string, PilotPulseEntry>,
+  projectContexts: Map<string, ProjectPulseContext>,
+): WorkLine {
+  const context = projectContexts.get(workstream.id);
+  const narrative = pilotEntries.get(workstream.id)?.narrative;
+  return mergeWorkLines(
+    workLineFromProjection(workstream),
+    narrative ? workLineFromNarrative(narrative) : undefined,
+    context ? workLineFromProjectContext(context) : undefined,
+  );
+}
+
+function workLineFromProjectContext(context: ProjectPulseContext): WorkLine {
+  return {
+    focus: context.description || context.statusLabel,
+    ...(context.completedOutcome ? { done: context.completedOutcome } : {}),
+    ...(context.evidence ? { evidence: context.evidence } : {}),
+    next: context.nextStep,
+    ...(context.blockers.length > 0
+      ? { collaboration: context.blockers.join("；") }
+      : {}),
+  };
+}
+
+/** Pulse entries this person published themselves, so they can retract them. */
+function ownWithdrawableEntry(
+  workstreams: PublicWorkProjection[],
+  pilotEntries: Map<string, PilotPulseEntry>,
+  identityId: string | undefined,
+): PilotPulseEntry[] {
+  if (!identityId) return [];
+  return workstreams.flatMap((workstream) => {
+    const entry = pilotEntries.get(workstream.id);
+    return entry && entry.ownerId === identityId ? [entry] : [];
+  });
+}
+
+function personSummary(
+  ordered: PublicWorkProjection[],
+  load: { total: number; live: number; blocked: number },
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+): string {
+  const titles = ordered
+    .filter((item) => item.phase !== "completed" && item.phase !== "paused")
+    .slice(0, 2)
+    .map((item) => item.title);
+  if (titles.length === 0) {
+    return t("pulse.summary.quiet", {
+      titles: ordered
+        .slice(0, 2)
+        .map((item) => item.title)
+        .join("、"),
+    });
+  }
+  return load.blocked > 0
+    ? t("pulse.summary.blocked", {
+        titles: titles.join("、"),
+        blocked: load.blocked,
+      })
+    : t("pulse.summary.active", { titles: titles.join("、") });
 }
 
 function NarrativeLine({
@@ -1067,42 +1006,6 @@ type ProjectPulseContext = {
   updatedAt: string;
 };
 
-function ProjectWorkPulseContent({
-  context,
-  formatRelative,
-}: {
-  context: ProjectPulseContext;
-  formatRelative: (value: string) => string;
-}) {
-  return (
-    <div className="mt-3">
-      <NarrativeLine label="正在做">
-        {context.description || context.statusLabel}
-      </NarrativeLine>
-      <NarrativeLine label="刚完成">
-        {context.completedOutcome ?? "尚未完成"}
-      </NarrativeLine>
-      <NarrativeLine label="结果依据">
-        {context.evidence ?? "尚未附加完成依据"}
-      </NarrativeLine>
-      <NarrativeLine label="下一步">{context.nextStep}</NarrativeLine>
-      <NarrativeLine label="需要协作">
-        {context.blockers.length > 0
-          ? context.blockers.join("；")
-          : "暂不需要他人协助"}
-      </NarrativeLine>
-      <details className="mt-2">
-        <summary className="cursor-pointer font-mono text-[9px] text-faint">
-          来源与新鲜度
-        </summary>
-        <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-faint">
-          {context.source} · {formatRelative(context.updatedAt)}
-        </p>
-      </details>
-    </div>
-  );
-}
-
 function projectWorkToPulse(data: ProjectWorkPayload): {
   projections: PublicWorkProjection[];
   contexts: Map<string, ProjectPulseContext>;
@@ -1123,8 +1026,7 @@ function projectWorkToPulse(data: ProjectWorkPayload): {
       projectId: item.projectId,
       ownerId: item.ownerId,
       title: item.title,
-      phase:
-        blockers.length > 0 ? "blocked" : phaseForWorkItem(item.status),
+      phase: blockers.length > 0 ? "blocked" : phaseForWorkItem(item.status),
       blockers,
       dependencies: [],
       decisions: [],
@@ -1141,12 +1043,8 @@ function projectWorkToPulse(data: ProjectWorkPayload): {
       kind: "work_item",
       description: item.description,
       statusLabel: workItemStatusLabel(item.status),
-      ...(item.status === "done"
-        ? { completedOutcome: item.title }
-        : {}),
-      ...(item.completionEvidence
-        ? { evidence: item.completionEvidence }
-        : {}),
+      ...(item.status === "done" ? { completedOutcome: item.title } : {}),
+      ...(item.completionEvidence ? { evidence: item.completionEvidence } : {}),
       blockers,
       nextStep: workItemNextStep(item.status),
       source: historySource(latestHistory),
@@ -1154,9 +1052,7 @@ function projectWorkToPulse(data: ProjectWorkPayload): {
     });
   }
   const parentFeatureIds = new Set(
-    data.workItems.flatMap((item) =>
-      item.featureId ? [item.featureId] : [],
-    ),
+    data.workItems.flatMap((item) => (item.featureId ? [item.featureId] : [])),
   );
   for (const feature of data.features) {
     if (!feature.ownerId || parentFeatureIds.has(feature.id)) continue;
@@ -1318,47 +1214,9 @@ function mergeProjections(
 ): PublicWorkProjection[] {
   return [
     ...new Map(
-      sources
-        .flat()
-        .map((projection) => [projection.id, projection]),
+      sources.flat().map((projection) => [projection.id, projection]),
     ).values(),
   ];
-}
-
-function PhaseChip({
-  phase,
-  size,
-}: {
-  phase: WorkstreamPhase;
-  size: "sm" | "md";
-}) {
-  const { t } = useI18n();
-  const meta = PHASE_META[phase];
-  const tone = TONE_CLASSES[meta.tone];
-  const sizeClasses =
-    size === "sm"
-      ? "px-[9px] py-[3px] text-[9.5px]"
-      : "px-[10px] py-1 text-[10px]";
-  return (
-    <span
-      key={phase}
-      className={cn(
-        "inline-flex animate-pill-pulse items-center gap-1.5 rounded-pill font-[620]",
-        sizeClasses,
-        tone.text,
-        tone.bg,
-      )}
-    >
-      <span
-        className={cn(
-          "h-[5px] w-[5px] rounded-full",
-          tone.dot,
-          meta.tone === "danger" ? "animate-dot-pulse" : undefined,
-        )}
-      />
-      {t(`phase.${phase}` as TranslationKey)}
-    </span>
-  );
 }
 
 function groupByOwner(
@@ -1374,39 +1232,4 @@ function groupByOwner(
     ownerId,
     workstreams: ownerWorkstreams,
   }));
-}
-
-function chooseMainWorkstream(
-  workstreams: PublicWorkProjection[],
-): PublicWorkProjection {
-  const rank: Record<string, number> = {
-    blocked: 0,
-    reviewing: 1,
-    implementing: 2,
-    planning: 3,
-    paused: 4,
-    completed: 5,
-  };
-  return workstreams.reduce((current, candidate) => {
-    const currentRank = rank[current.phase] ?? 10;
-    const candidateRank = rank[candidate.phase] ?? 10;
-    if (candidateRank !== currentRank) {
-      return candidateRank < currentRank ? candidate : current;
-    }
-    return Date.parse(candidate.freshnessAt) > Date.parse(current.freshnessAt)
-      ? candidate
-      : current;
-  });
-}
-
-function meaningfulDetail(
-  workstream: PublicWorkProjection,
-  fallback: string,
-): string {
-  return (
-    workstream.blockers[0] ??
-    workstream.dependencies[0] ??
-    workstream.decisions[0] ??
-    fallback
-  );
 }

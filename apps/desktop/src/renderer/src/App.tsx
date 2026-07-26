@@ -20,10 +20,7 @@ import { initials } from "./design/utils.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
 import { usePilotOptional } from "./pilot/context.js";
-import {
-  AcceptInvitationView,
-  SignInView,
-} from "./views/AccessView.js";
+import { AcceptInvitationView, SignInView } from "./views/AccessView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
 import { CoordinationView } from "./views/CoordinationView.js";
 import { PersonView } from "./views/PersonView.js";
@@ -342,7 +339,9 @@ export function App() {
           />
         ) : null}
         {view === "chat" ? <CommunicationsView /> : null}
-        {view === "coord" ? <CoordinationView /> : null}
+        {view === "coord" ? (
+          <CoordinationView onOpenThread={() => setView("chat")} />
+        ) : null}
         {view === "spec" ? <SpecReviewView /> : null}
         {view === "project" ? (
           <ProjectView

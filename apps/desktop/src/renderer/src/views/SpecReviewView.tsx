@@ -21,7 +21,19 @@ import {
   getSpecs,
 } from "../api.js";
 import { SafeMarkdown } from "../components/SafeMarkdown.js";
-import { initials, tintFor } from "../design/utils.js";
+import {
+  Avatar,
+  EmptySlot,
+  FilterChip,
+  ListPane,
+  ListRow,
+  Meta,
+  SectionLabel,
+  SegmentedControl,
+  StatusPill,
+  cn,
+} from "../design/primitives.js";
+import type { Tone } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { usePilotOptional } from "../pilot/context.js";
@@ -52,17 +64,25 @@ const EDITOR_THEME = EditorView.theme({
 
 const NEW_SPEC = "new";
 
-function statusToneClass(status: Spec["status"]): string {
-  if (status === "in_review") return "bg-amber-soft text-amber";
-  if (status === "approved") return "bg-green-soft text-green";
-  if (status === "changes_requested") return "bg-danger-soft text-danger";
-  return "bg-raise text-faint";
-}
+const STATUS_TONE: Record<Spec["status"], Tone> = {
+  draft: "faint",
+  in_review: "amber",
+  approved: "green",
+  changes_requested: "danger",
+  superseded: "faint",
+};
 
-function reviewToneClass(kind: string): string {
-  if (kind.includes("approval")) return "bg-green-soft text-green";
-  if (kind === "human_changes_requested") return "bg-danger-soft text-danger";
-  return "bg-raise text-faint";
+const FILTERS: Array<{ id: Spec["status"] | "all"; label: TranslationKey }> = [
+  { id: "all", label: "general.all" },
+  { id: "in_review", label: "spec.status.in_review" },
+  { id: "draft", label: "spec.status.draft" },
+  { id: "approved", label: "spec.status.approved" },
+];
+
+function reviewTone(kind: string): Tone {
+  if (kind.includes("approval")) return "green";
+  if (kind === "human_changes_requested") return "danger";
+  return "faint";
 }
 
 function truncate(text: string, max: number): string {
@@ -89,7 +109,7 @@ export function SpecReviewView() {
 }
 
 function LegacySpecReviewView() {
-  const { formatTime, t } = useI18n();
+  const { formatRelative, formatTime, t } = useI18n();
   const queryClient = useQueryClient();
   const specs = useQuery({
     queryKey: ["specs"],
@@ -100,6 +120,7 @@ function LegacySpecReviewView() {
     queryFn: ({ signal }) => getBootstrap(signal),
   });
   const [activeId, setActiveId] = useState<string>();
+  const [filter, setFilter] = useState<Spec["status"] | "all">("all");
   const [mode, setMode] = useState<"edit" | "preview">("preview");
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
@@ -118,7 +139,8 @@ function LegacySpecReviewView() {
     }
   }, [activeId, specs.data?.items]);
 
-  const active = specs.data?.items.find((item) => item.spec.id === activeId);
+  const items = specs.data?.items ?? [];
+  const active = items.find((item) => item.spec.id === activeId);
   const currentRevision = active?.revisions.find(
     (revision) => revision.id === active.spec.currentRevisionId,
   );
@@ -204,8 +226,8 @@ function LegacySpecReviewView() {
     (review) => review.kind === "stand_in_impact_analysis",
   );
 
-  // Preview always targets the clicked revision pill; editing always
-  // targets the live local draft, which is bound to currentRevision.
+  // Preview always targets the clicked revision pill; editing always targets
+  // the live local draft, which is bound to currentRevision.
   const isViewingDraft =
     !previewRevisionId || previewRevisionId === currentRevision?.id;
   const selectedRevision = active?.revisions.find(
@@ -219,8 +241,10 @@ function LegacySpecReviewView() {
     (revision) => revision.revision === (revisionForLegend?.revision ?? -1) - 1,
   );
   const previousFingerprintsByOrdinal = new Map(
-    previousRevision?.blocks.map((block) => [block.ordinal, block.fingerprint]) ??
-      [],
+    previousRevision?.blocks.map((block) => [
+      block.ordinal,
+      block.fingerprint,
+    ]) ?? [],
   );
   const changedCount =
     previousRevision && revisionForLegend
@@ -368,7 +392,7 @@ function LegacySpecReviewView() {
   if (!activeId) {
     return (
       <div className="animate-view-enter grid h-full place-items-center p-[34px]">
-        <div className="grid max-w-[420px] justify-items-center gap-2.5 rounded-container border border-dashed border-line2 p-[54px_44px] text-center">
+        <div className="grid max-w-[420px] justify-items-center gap-2.5 rounded-container border border-dashed border-line2 px-[44px] py-[54px] text-center">
           <strong className="text-[19px] font-[600] text-ink">
             {t("spec.emptyTitle")}
           </strong>
@@ -402,21 +426,120 @@ function LegacySpecReviewView() {
           : saveState === "saved"
             ? t("spec.savedLocally")
             : t("spec.savingLocally");
+  const filtered = items.filter(
+    (item) => filter === "all" || item.spec.status === filter,
+  );
+  const inReviewCount = items.filter(
+    (item) => item.spec.status === "in_review",
+  ).length;
 
   return (
-    <div className="animate-view-enter grid h-full grid-cols-[minmax(0,1fr)_348px] grid-rows-[minmax(0,1fr)]">
-      <div className="h-full overflow-auto p-[34px_34px_70px]">
-        <div className="flex items-center gap-3">
+    <div className="animate-view-enter grid h-full grid-cols-[312px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
+      <ListPane
+        title={t("nav.spec")}
+        count={`${filtered.length} / ${items.length}`}
+        lede={
+          <strong className="font-[620] text-amber">
+            {t("spec.inReviewCount", { count: inReviewCount })}
+          </strong>
+        }
+        action={
+          <button
+            type="button"
+            aria-label={t("spec.newDraft")}
+            title={t("spec.newDraft")}
+            onClick={() => {
+              setActiveId(NEW_SPEC);
+              setMode("edit");
+            }}
+            className="grid h-6 w-6 cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted hover:text-accent-strong"
+          >
+            <PlusIcon size={13} />
+          </button>
+        }
+        filters={FILTERS.map((option) => (
+          <FilterChip
+            key={option.id}
+            active={filter === option.id}
+            onClick={() => setFilter(option.id)}
+          >
+            {t(option.label)}
+          </FilterChip>
+        ))}
+        footer={
+          <span className="ml-auto font-mono text-[10px] text-faint">
+            {t("general.showingOf", {
+              shown: filtered.length,
+              total: items.length,
+            })}
+          </span>
+        }
+      >
+        {filtered.map((item) => {
+          const head = item.revisions.find(
+            (revision) => revision.id === item.spec.currentRevisionId,
+          );
+          return (
+            <ListRow
+              key={item.spec.id}
+              selected={item.spec.id === activeId}
+              onClick={() => {
+                setActiveId(item.spec.id);
+                setPublishState("idle");
+                setPublishedRevision(undefined);
+              }}
+            >
+              <span className="flex items-center gap-2">
+                <Meta>
+                  {item.spec.id.slice(0, 8)} ·{" "}
+                  {t("spec.rev", { n: head?.revision ?? 1 })}
+                </Meta>
+                <StatusPill tone={STATUS_TONE[item.spec.status]} size="sm">
+                  {t(`spec.status.${item.spec.status}` as TranslationKey)}
+                </StatusPill>
+                <Meta className="ml-auto text-[9px]">
+                  {formatRelative(head?.createdAt ?? item.spec.createdAt)}
+                </Meta>
+              </span>
+              <span className="text-[12.5px] font-[560] leading-[1.4] [text-wrap:pretty]">
+                {item.spec.title}
+              </span>
+              <span className="flex items-center gap-2">
+                {head ? (
+                  <Avatar
+                    id={head.createdBy}
+                    name={nameOf(head.createdBy)}
+                    size="xs"
+                  />
+                ) : null}
+                <span className="truncate text-[10px] text-faint">
+                  {head ? nameOf(head.createdBy) : "—"} ·{" "}
+                  {t("spec.scopeCount", {
+                    count: head?.affectedScopes.length ?? 0,
+                  })}
+                </span>
+              </span>
+            </ListRow>
+          );
+        })}
+        {filtered.length === 0 ? (
+          <div className="mx-0.5 my-2.5">
+            <EmptySlot>{t("spec.noneInFilter")}</EmptySlot>
+          </div>
+        ) : null}
+      </ListPane>
+
+      <div className="h-full overflow-auto px-[34px] pb-[70px] pt-[30px]">
+        <div className="flex items-center gap-2.5">
           {currentRevision && active ? (
             <>
-              <span className="text-[11px] font-[650] tracking-[0.1em] text-accent-strong">
-                {t("spec.eyebrow", { revision: currentRevision.revision })}
-              </span>
-              <span
-                className={`rounded-pill px-2.5 py-1 text-[10.5px] font-[620] ${statusToneClass(active.spec.status)}`}
-              >
+              <Meta className="text-[10.5px]">
+                {active.spec.id.slice(0, 8)} ·{" "}
+                {t("spec.rev", { n: currentRevision.revision })}
+              </Meta>
+              <StatusPill tone={STATUS_TONE[active.spec.status]}>
                 {t(`spec.status.${active.spec.status}` as TranslationKey)}
-              </span>
+              </StatusPill>
               <span className="text-[11px] text-faint">
                 {t("spec.initiated", {
                   name: nameOf(currentRevision.createdBy),
@@ -429,60 +552,34 @@ function LegacySpecReviewView() {
               {t("spec.localDraft")}
             </span>
           )}
-        </div>
-        <h1 className="mt-3 text-[28px] font-[540] tracking-[-0.035em] text-ink">
-          {active ? active.spec.title : title || t("spec.untitled")}
-        </h1>
-
-        <div className="mt-5 flex items-center gap-2.5">
-          <select
-            className="h-8 rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] text-ink"
-            value={activeId}
-            aria-label={t("nav.spec")}
-            onChange={(event) => {
-              setActiveId(event.target.value);
-              setPublishState("idle");
-              setPublishedRevision(undefined);
-            }}
-          >
-            {specs.data?.items.map((item) => (
-              <option value={item.spec.id} key={item.spec.id}>
-                {item.spec.title}
-              </option>
-            ))}
-            <option value={NEW_SPEC}>{t("spec.newDraft")}</option>
-          </select>
-
-          <div className="flex items-center gap-1 rounded-[10px] bg-raise p-[3px]">
-            <button
-              type="button"
-              className={`inline-flex h-[26px] cursor-pointer items-center gap-1.5 rounded-[8px] border-0 px-2.5 text-[11.5px] ${
-                mode === "edit"
-                  ? "bg-panel2 text-ink"
-                  : "bg-transparent text-ink-muted hover:text-ink"
-              }`}
-              onClick={() => setMode("edit")}
-            >
-              <CodeIcon size={15} />
-              {t("spec.edit")}
-            </button>
-            <button
-              type="button"
-              className={`inline-flex h-[26px] cursor-pointer items-center gap-1.5 rounded-[8px] border-0 px-2.5 text-[11.5px] ${
-                mode === "preview"
-                  ? "bg-panel2 text-ink"
-                  : "bg-transparent text-ink-muted hover:text-ink"
-              }`}
-              onClick={() => setMode("preview")}
-            >
-              <EyeIcon size={15} />
-              {t("spec.preview")}
-            </button>
-          </div>
-
+          <SegmentedControl
+            className="ml-auto"
+            value={mode}
+            onChange={setMode}
+            items={[
+              {
+                id: "edit" as const,
+                label: (
+                  <>
+                    <CodeIcon size={13} />
+                    {t("spec.edit")}
+                  </>
+                ),
+              },
+              {
+                id: "preview" as const,
+                label: (
+                  <>
+                    <EyeIcon size={13} />
+                    {t("spec.preview")}
+                  </>
+                ),
+              },
+            ]}
+          />
           <button
             type="button"
-            className="ml-auto h-[34px] cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
+            className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[11.5px] font-[620] text-on-accent disabled:opacity-55"
             disabled={
               publishState === "publishing" ||
               !title.trim() ||
@@ -498,220 +595,229 @@ function LegacySpecReviewView() {
                 : t("spec.publish")}
           </button>
         </div>
-        <p className="mt-2 font-mono text-[10.5px] text-faint">{toolbarText}</p>
 
-        {active && active.revisions.length > 0 ? (
-          <div className="mt-5 flex gap-1.5">
-            {[...active.revisions]
-              .sort((left, right) => left.revision - right.revision)
-              .map((revision) => {
-                const isCurrent = revision.id === currentRevision?.id;
-                return (
+        <h1 className="mt-4 text-[26px] font-[540] tracking-[-0.035em] text-ink">
+          {active ? active.spec.title : title || t("spec.untitled")}
+        </h1>
+        <Meta className="mt-2 block text-[10.5px]">{toolbarText}</Meta>
+
+        <div className="mt-5 grid grid-cols-[minmax(0,1fr)_300px] items-start gap-5">
+          <div className="min-w-0">
+            {active && active.revisions.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {[...active.revisions]
+                  .sort((left, right) => left.revision - right.revision)
+                  .map((revision) => (
+                    <button
+                      type="button"
+                      key={revision.id}
+                      onClick={() => setPreviewRevisionId(revision.id)}
+                      className={cn(
+                        "grid cursor-pointer gap-1 rounded-[11px] border px-3.5 py-2.5 text-left",
+                        revision.id === previewRevisionId
+                          ? "border-accent-strong bg-accent-soft"
+                          : "border-line bg-panel2 hover:border-accent-strong",
+                      )}
+                    >
+                      <span className="font-mono text-[11px] text-ink">
+                        {t("spec.rev", { n: revision.revision })}
+                      </span>
+                      <span className="text-[10.5px] text-faint">
+                        {truncate(revision.changeSummary, 28)}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            ) : null}
+
+            {mode === "preview" && changedCount > 0 ? (
+              <div className="mt-3 font-mono text-[11px] text-green">
+                + {changedCount} · {t("spec.changedBlock")}
+              </div>
+            ) : null}
+
+            <div className="mt-[22px] rounded-container border border-line bg-panel2 px-[38px] py-[34px]">
+              {mode === "preview" ? (
+                <SafeMarkdown markdown={previewMarkdown} />
+              ) : (
+                <>
+                  <label className="grid gap-1.5">
+                    <span className="text-[11px] font-[620] text-ink-muted">
+                      {t("spec.titleLabel")}
+                    </span>
+                    <input
+                      className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[13px] text-ink disabled:opacity-60"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                      placeholder={t("spec.titlePlaceholder")}
+                      disabled={active !== undefined}
+                    />
+                  </label>
+                  <CodeMirror
+                    className="mt-4"
+                    value={markdown}
+                    extensions={[markdownLanguage(), EDITOR_THEME]}
+                    basicSetup={{
+                      lineNumbers: false,
+                      foldGutter: false,
+                      highlightActiveLineGutter: false,
+                    }}
+                    onChange={setMarkdown}
+                    aria-label={t("spec.markdownEditor")}
+                  />
+                </>
+              )}
+            </div>
+
+            <div className="mt-[26px]">
+              <SectionLabel>{t("spec.reviewers")}</SectionLabel>
+              {reviewerReviews.length === 0 ? (
+                <p className="mt-3 text-[11.5px] text-faint">
+                  {t("spec.noReviews")}
+                </p>
+              ) : (
+                <div className="mt-3 grid gap-2">
+                  {reviewerReviews.map((review) => (
+                    <div
+                      className="rounded-[13px] border border-line bg-panel2 px-[15px] py-3.5"
+                      key={`${review.revisionId}:${review.reviewerId}:${review.createdAt}`}
+                    >
+                      <div className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-2.5">
+                        <Avatar
+                          id={review.reviewerId}
+                          name={nameOf(review.reviewerId)}
+                          size="md"
+                        />
+                        <span className="grid min-w-0">
+                          <strong className="text-[12px] font-[620] text-ink">
+                            {nameOf(review.reviewerId)}
+                          </strong>
+                          <small className="mt-[3px] text-[10px] text-faint">
+                            {t("spec.rev", {
+                              n: revisionNumbers.get(review.revisionId) ?? "—",
+                            })}
+                          </small>
+                        </span>
+                        <StatusPill tone={reviewTone(review.kind)} size="sm">
+                          {t(`review.${review.kind}` as TranslationKey)}
+                          {review.invalidatedAt
+                            ? ` · ${t("spec.invalidated")}`
+                            : ""}
+                        </StatusPill>
+                      </div>
+                      {review.body ? (
+                        <p className="mt-[11px] rounded-btn bg-raise px-3 py-[11px] text-[11.5px] leading-[1.65] text-ink-muted">
+                          {review.body}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="sticky top-0 grid gap-3">
+            {impactReview ? (
+              <div className="rounded-[13px] border border-accent-soft bg-accent-soft p-4">
+                <div className="flex items-center gap-[9px]">
+                  <span className="grid h-[22px] w-[22px] place-items-center rounded-[6px_10px_6px_6px] bg-accent-strong text-[8px] font-bold text-on-accent">
+                    IR
+                  </span>
+                  <strong className="text-[11.5px] font-[620] text-ink">
+                    {t("spec.impact")}
+                  </strong>
+                </div>
+                <p className="mt-2.5 text-[12px] leading-[1.7] text-ink [text-wrap:pretty]">
+                  {impactReview.body}
+                </p>
+                <small className="mt-[11px] block text-[10px] text-ink-muted">
+                  {t("spec.notApproval")}
+                </small>
+              </div>
+            ) : null}
+
+            <div className="rounded-[13px] border border-line bg-panel2 p-4">
+              <div className="flex items-center gap-2.5">
+                <SealCheckIcon size={16} className="text-ink-muted" />
+                <strong className="text-[11.5px] font-[620] text-ink">
+                  {t("spec.decisionRecord")}
+                </strong>
+              </div>
+              <p className="mt-2.5 text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
+                {t("spec.decisionPending")}
+              </p>
+
+              {bootstrap.data && currentRevision && !existingDecisionReview ? (
+                <div className="mt-3.5 grid gap-2">
                   <button
                     type="button"
-                    key={revision.id}
-                    onClick={() => setPreviewRevisionId(revision.id)}
-                    className={`grid cursor-pointer gap-1 rounded-[11px] border p-[10px_14px] text-left ${
-                      isCurrent
-                        ? "border-accent-strong bg-accent-soft"
-                        : "border-line bg-panel2 hover:border-accent-strong"
-                    }`}
+                    className="h-[34px] w-full cursor-pointer rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent disabled:opacity-55"
+                    disabled={approve.isPending}
+                    onClick={() => approve.mutate()}
                   >
-                    <span className="font-mono text-[11px] text-ink">
-                      {t("spec.rev", { n: revision.revision })}
-                    </span>
-                    <span className="text-[10.5px] text-faint">
-                      {truncate(revision.changeSummary, 30)}
-                    </span>
+                    {t("spec.approve", { revision: currentRevision.revision })}
                   </button>
-                );
-              })}
-          </div>
-        ) : null}
+                  <button
+                    type="button"
+                    className="h-[34px] cursor-pointer rounded-btn border border-line2 bg-transparent text-[12px] text-ink hover:border-accent-strong disabled:opacity-55"
+                    disabled={requestChanges.isPending}
+                    onClick={() => requestChanges.mutate()}
+                  >
+                    {t("spec.requestChanges")}
+                  </button>
+                </div>
+              ) : null}
 
-        {mode === "preview" && changedCount > 0 ? (
-          <div className="mt-3 font-mono text-[11px] text-green">
-            + {changedCount} · {t("spec.changedBlock")}
-          </div>
-        ) : null}
+              {existingDecisionReview &&
+              currentRevision &&
+              existingDecisionReview.kind === "human_approval" ? (
+                <div className="mt-[13px] rounded-btn bg-green-soft px-[13px] py-3">
+                  <div className="flex items-center gap-2 text-[11.5px] text-green">
+                    <CheckCircleIcon size={14} weight="fill" />
+                    {t("spec.decisionDone")}
+                  </div>
+                  <p className="mt-2 font-mono text-[10.5px] leading-[1.6] text-ink-muted">
+                    {t("spec.decisionDoneMeta", {
+                      revision:
+                        revisionNumbers.get(
+                          existingDecisionReview.revisionId,
+                        ) ?? currentRevision.revision,
+                      name: nameOf(existingDecisionReview.reviewerId),
+                    })}
+                  </p>
+                </div>
+              ) : null}
 
-        <div className="mt-[22px] rounded-container border border-line bg-panel2 p-[34px_38px]">
-          {mode === "preview" ? (
-            <SafeMarkdown markdown={previewMarkdown} />
-          ) : (
-            <>
-              <label className="grid gap-1.5">
-                <span className="text-[11px] font-[620] text-ink-muted">
-                  {t("spec.titleLabel")}
-                </span>
-                <input
-                  className="h-9 rounded-[9px] border border-line2 bg-transparent px-3 text-[13px] text-ink disabled:opacity-60"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  placeholder={t("spec.titlePlaceholder")}
-                  disabled={active !== undefined}
-                />
-              </label>
-              <CodeMirror
-                className="mt-4"
-                value={markdown}
-                extensions={[markdownLanguage(), EDITOR_THEME]}
-                basicSetup={{
-                  lineNumbers: false,
-                  foldGutter: false,
-                  highlightActiveLineGutter: false,
-                }}
-                onChange={setMarkdown}
-                aria-label={t("spec.markdownEditor")}
-              />
-            </>
-          )}
+              {existingDecisionReview &&
+              currentRevision &&
+              existingDecisionReview.kind === "human_changes_requested" ? (
+                <div className="mt-[13px] rounded-btn bg-amber-soft px-[13px] py-3">
+                  <div className="text-[11.5px] text-amber">
+                    {t("review.human_changes_requested")}
+                  </div>
+                  <p className="mt-2 font-mono text-[10.5px] leading-[1.6] text-ink-muted">
+                    {t("spec.rev", {
+                      n:
+                        revisionNumbers.get(
+                          existingDecisionReview.revisionId,
+                        ) ?? currentRevision.revision,
+                    })}
+                    {" · "}
+                    {nameOf(existingDecisionReview.reviewerId)}
+                  </p>
+                </div>
+              ) : null}
+
+              {approve.isError || requestChanges.isError ? (
+                <p className="mt-2 text-[11px] text-danger">
+                  {t("spec.decisionFailed")}
+                </p>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
-
-      <aside className="h-full overflow-auto border-l border-line bg-panel p-[34px_26px_50px]">
-        <div className="text-[10.5px] font-[650] tracking-[0.08em] text-faint">
-          {t("spec.reviewers")}
-        </div>
-        {reviewerReviews.length === 0 ? (
-          <p className="mt-3 text-[11.5px] text-faint">{t("spec.noReviews")}</p>
-        ) : (
-          <div className="mt-3 grid gap-2">
-            {reviewerReviews.map((review) => (
-              <div
-                className="rounded-[13px] border border-line bg-panel2 p-[14px_15px]"
-                key={`${review.revisionId}:${review.reviewerId}:${review.createdAt}`}
-              >
-                <div className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-2.5">
-                  <span
-                    className="grid h-[26px] w-[26px] place-items-center rounded-full text-[9px] font-[650] text-on-tint"
-                    style={{ background: tintFor(review.reviewerId) }}
-                  >
-                    {initials(nameOf(review.reviewerId))}
-                  </span>
-                  <span className="grid min-w-0">
-                    <strong className="text-[12px] font-[620] text-ink">
-                      {nameOf(review.reviewerId)}
-                    </strong>
-                    <small className="mt-[3px] text-[10px] text-faint">
-                      {t("spec.rev", {
-                        n: revisionNumbers.get(review.revisionId) ?? "—",
-                      })}
-                    </small>
-                  </span>
-                  <span
-                    className={`rounded-pill px-2.5 py-1 text-[9.5px] font-[620] ${reviewToneClass(review.kind)}`}
-                  >
-                    {t(`review.${review.kind}` as TranslationKey)}
-                    {review.invalidatedAt ? ` · ${t("spec.invalidated")}` : ""}
-                  </span>
-                </div>
-                {review.body ? (
-                  <p className="mt-[11px] rounded-[9px] bg-raise p-[11px_12px] text-[11.5px] leading-[1.65] text-ink-muted">
-                    {review.body}
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {impactReview ? (
-          <div className="mt-[22px] rounded-[13px] border border-accent-soft bg-accent-soft p-4">
-            <div className="flex items-center gap-[9px]">
-              <span className="grid h-[22px] w-[22px] place-items-center rounded-[6px_10px_6px_6px] bg-accent-strong text-[8px] font-bold text-on-accent">
-                IR
-              </span>
-              <strong className="text-[11.5px] font-[620] text-ink">
-                {t("spec.impact")}
-              </strong>
-            </div>
-            <p className="mt-2.5 text-[12px] leading-[1.7] text-ink [text-wrap:pretty]">
-              {impactReview.body}
-            </p>
-            <small className="mt-[11px] block text-[10px] text-ink-muted">
-              {t("spec.notApproval")}
-            </small>
-          </div>
-        ) : null}
-
-        <div className="mt-[22px] rounded-[13px] border border-line bg-panel2 p-4">
-          <div className="flex items-center gap-2.5">
-            <SealCheckIcon size={16} className="text-ink-muted" />
-            <strong className="text-[11.5px] font-[620] text-ink">
-              {t("spec.decisionRecord")}
-            </strong>
-          </div>
-          <p className="mt-2.5 text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
-            {t("spec.decisionPending")}
-          </p>
-
-          {bootstrap.data && currentRevision && !existingDecisionReview ? (
-            <div className="mt-3.5 grid gap-2">
-              <button
-                type="button"
-                className="h-[34px] w-full cursor-pointer rounded-btn border-0 bg-accent-strong text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
-                disabled={approve.isPending}
-                onClick={() => approve.mutate()}
-              >
-                {t("spec.approve", { revision: currentRevision.revision })}
-              </button>
-              <button
-                type="button"
-                className="h-[34px] cursor-pointer rounded-btn border border-line2 bg-transparent text-[12.5px] text-ink hover:border-accent-strong disabled:opacity-55"
-                disabled={requestChanges.isPending}
-                onClick={() => requestChanges.mutate()}
-              >
-                {t("spec.requestChanges")}
-              </button>
-            </div>
-          ) : null}
-
-          {existingDecisionReview &&
-          currentRevision &&
-          existingDecisionReview.kind === "human_approval" ? (
-            <div className="mt-[13px] rounded-[9px] bg-green-soft p-[12px_13px]">
-              <div className="flex items-center gap-2 text-[11.5px] text-green">
-                <CheckCircleIcon size={14} weight="fill" />
-                {t("spec.decisionDone")}
-              </div>
-              <p className="mt-2 font-mono text-[10.5px] leading-[1.6] text-ink-muted">
-                {t("spec.decisionDoneMeta", {
-                  revision:
-                    revisionNumbers.get(existingDecisionReview.revisionId) ??
-                    currentRevision.revision,
-                  name: nameOf(existingDecisionReview.reviewerId),
-                })}
-              </p>
-            </div>
-          ) : null}
-
-          {existingDecisionReview &&
-          currentRevision &&
-          existingDecisionReview.kind === "human_changes_requested" ? (
-            <div className="mt-[13px] rounded-[9px] bg-amber-soft p-[12px_13px]">
-              <div className="text-[11.5px] text-amber">
-                {t("review.human_changes_requested")}
-              </div>
-              <p className="mt-2 font-mono text-[10.5px] leading-[1.6] text-ink-muted">
-                {t("spec.rev", {
-                  n:
-                    revisionNumbers.get(existingDecisionReview.revisionId) ??
-                    currentRevision.revision,
-                })}
-                {" · "}
-                {nameOf(existingDecisionReview.reviewerId)}
-              </p>
-            </div>
-          ) : null}
-
-          {approve.isError || requestChanges.isError ? (
-            <p className="mt-2 text-[11px] text-danger">
-              {t("spec.decisionFailed")}
-            </p>
-          ) : null}
-        </div>
-      </aside>
     </div>
   );
 }

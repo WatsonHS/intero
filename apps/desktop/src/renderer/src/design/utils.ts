@@ -47,6 +47,54 @@ export function toneClass(tone: Tone): string {
   return `tone-${tone}`;
 }
 
+// How much attention a phase deserves. Parallel work is ordered by this, not
+// by priority: what is stuck comes first, what is finished sinks. Ties break
+// on freshness so the most recently observed workstream leads.
+const ATTENTION_RANK: Record<WorkstreamPhase, number> = {
+  blocked: 0,
+  reviewing: 1,
+  validating: 2,
+  implementing: 3,
+  planning: 4,
+  exploring: 5,
+  paused: 6,
+  completed: 7,
+};
+
+export function orderByAttention<
+  T extends { phase: WorkstreamPhase; freshnessAt: string },
+>(workstreams: readonly T[]): T[] {
+  return workstreams.toSorted(
+    (left, right) =>
+      ATTENTION_RANK[left.phase] - ATTENTION_RANK[right.phase] ||
+      Date.parse(right.freshnessAt) - Date.parse(left.freshnessAt),
+  );
+}
+
+export function isLivePhase(phase: WorkstreamPhase): boolean {
+  return phase !== "completed" && phase !== "paused";
+}
+
+/** Counts behind the "N 条并行 · M 条卡住" load label. */
+export function loadSummary<T extends { phase: WorkstreamPhase }>(
+  workstreams: readonly T[],
+): { total: number; live: number; blocked: number } {
+  return {
+    total: workstreams.length,
+    live: workstreams.filter((item) => isLivePhase(item.phase)).length,
+    blocked: workstreams.filter((item) => item.phase === "blocked").length,
+  };
+}
+
+export function freshest<T extends { freshnessAt: string }>(
+  workstreams: readonly T[],
+): T | undefined {
+  return workstreams.toSorted(
+    (left, right) =>
+      Date.parse(right.freshnessAt) - Date.parse(left.freshnessAt),
+  )[0];
+}
+
 // Fluent-style reveal: the hover halo follows the pointer. The handler only
 // writes CSS variables on the hovered card; the overlay's radial gradient
 // reads them, and group-hover controls its opacity — no React state involved.
@@ -75,7 +123,9 @@ export function confidencePercent(confidence: number): number {
   return Math.round(confidence * 100);
 }
 
-export function staleAfterMinutes(staleAfterSeconds: number | undefined): number {
+export function staleAfterMinutes(
+  staleAfterSeconds: number | undefined,
+): number {
   return Math.round((staleAfterSeconds ?? 1_800) / 60);
 }
 

@@ -1,5 +1,5 @@
-import { ArrowLeftIcon } from "@phosphor-icons/react";
-import type { PublicWorkProjection, WorkstreamPhase } from "@intero/domain";
+import { ArrowLeftIcon, GitPullRequestIcon } from "@phosphor-icons/react";
+import type { PilotPulseEntry, PublicWorkProjection } from "@intero/domain";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -9,36 +9,39 @@ import {
   getThreads,
 } from "../api.js";
 import {
+  Avatar,
+  Meta,
+  NarrativeGrid,
+  PhaseChip,
+  SectionLabel,
+  Timeline,
+  TimelineEntry,
+  cn,
+} from "../design/primitives.js";
+import {
   PHASE_META,
   confidencePercent,
-  initials,
+  freshest,
   isStale,
-  tintFor,
-  type Tone,
+  loadSummary,
+  orderByAttention,
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
-import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { pilotPulseEntryToProjection } from "../pilot/adapters.js";
 import { getPilotOverview } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import {
+  mergeWorkLines,
+  workLineFromNarrative,
+  workLineFromProjection,
+  type WorkLine,
+} from "./work-lines.js";
 
-const TONE_CLASSES: Record<Tone, { text: string; bg: string; dot: string }> = {
-  green: { text: "text-green", bg: "bg-green-soft", dot: "bg-green" },
-  amber: { text: "text-amber", bg: "bg-amber-soft", dot: "bg-amber" },
-  danger: { text: "text-danger", bg: "bg-danger-soft", dot: "bg-danger" },
-  faint: { text: "text-faint", bg: "bg-raise", dot: "bg-faint" },
-  accent: {
-    text: "text-accent-strong",
-    bg: "bg-accent-soft",
-    dot: "bg-accent-strong",
-  },
-  cool: { text: "text-ink-muted", bg: "bg-raise", dot: "bg-faint" },
-};
-
-function cn(...classes: Array<string | false | undefined>): string {
-  return classes.filter(Boolean).join(" ");
-}
-
+/**
+ * One person's detail page. It is the expanded form of their Team Pulse card:
+ * the same parallel workstreams, ordered the same way, with the full narrative
+ * each Representative published instead of the two-line summary.
+ */
 export function PersonView({
   ownerId,
   onBack,
@@ -80,9 +83,10 @@ export function PersonView({
     refetchInterval: 1_500,
   });
 
+  const pilotEntries = pilotOverview.data?.pulse ?? [];
   const projections = [
     ...(pulse.data?.projections ?? []),
-    ...(pilotOverview.data?.pulse ?? []).map(pilotPulseEntryToProjection),
+    ...pilotEntries.map(pilotPulseEntryToProjection),
   ];
   const workstreams = [
     ...new Map(
@@ -91,11 +95,12 @@ export function PersonView({
         .map((item) => [item.id, item]),
     ).values(),
   ];
-  const pilotPrincipal = pilotOverview.data?.principals.find(
-    (principal) => principal.id === ownerId,
+  const entryByProjectionId = new Map<string, PilotPulseEntry>(
+    pilotEntries.map((entry) => [entry.workStateId, entry]),
   );
   const principalName =
-    pilotPrincipal?.displayName ??
+    pilotOverview.data?.principals.find((principal) => principal.id === ownerId)
+      ?.displayName ??
     pulse.data?.principals.find((principal) => principal.id === ownerId)
       ?.displayName ??
     ownerId.slice(0, 8);
@@ -109,7 +114,7 @@ export function PersonView({
   if (!pulseReady || workstreams.length === 0) {
     return (
       <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
-        <div className="grid h-full place-items-center overflow-auto pt-[26px] px-[32px] pb-[60px]">
+        <div className="grid h-full place-items-center overflow-auto px-[32px] pb-[60px] pt-[26px]">
           <div className="grid justify-items-center gap-3 text-center">
             <p className="text-[13px] text-ink-muted">
               {pulsePending ? t("general.loading") : t("person.notFound")}
@@ -117,30 +122,31 @@ export function PersonView({
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex items-center gap-[7px] border-0 bg-transparent p-0 text-[11.5px] text-ink-muted hover:text-accent-strong"
+              className="inline-flex cursor-pointer items-center gap-[7px] border-0 bg-transparent p-0 text-[11.5px] text-ink-muted hover:text-accent-strong"
             >
               <ArrowLeftIcon size={13} />
               {t("person.back")}
             </button>
           </div>
         </div>
-        <aside className="h-full overflow-auto border-l border-line bg-panel pt-[26px] px-[24px] pb-[50px]" />
+        <aside className="h-full overflow-auto border-l border-line bg-panel px-[24px] pb-[50px] pt-[26px]" />
       </div>
     );
   }
 
-  const main = chooseMainWorkstream(workstreams);
-  const subs = workstreams.filter((item) => item.id !== main.id);
-  const mainTone = TONE_CLASSES[PHASE_META[main.phase].tone];
-  const mainStale = isStale(main.freshnessAt, pulse.data?.staleAfterSeconds);
-  const standInDotClass = offline || mainStale ? "bg-amber" : "bg-green";
-  const standInText = offline
-    ? t("person.standInPublic", { time: offlineSyncTime })
-    : t("person.standInLocal", { time: formatRelative(main.freshnessAt) });
+  const staleAfterSeconds = pulse.data?.staleAfterSeconds;
+  const ordered = orderByAttention(workstreams);
+  const load = loadSummary(workstreams);
+  const lead = freshest(workstreams) ?? ordered[0]!;
+  const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
+  const loadLabel =
+    load.blocked > 0
+      ? t("pulse.load.blocked", { total: load.total, blocked: load.blocked })
+      : load.live < load.total
+        ? t("pulse.load.partial", { total: load.total, live: load.live })
+        : t("pulse.load.all", { total: load.total });
   const summaryText =
-    main.blockers[0] ?? main.dependencies[0] ?? main.decisions[0];
-  const noteText = main.decisions[0] ?? main.blockers[0];
-  const freshColorClass = mainStale ? "text-amber" : "text-faint";
+    lead.decisions[0] ?? lead.blockers[0] ?? lead.dependencies[0];
 
   const workstreamIds = new Set<string>(workstreams.map((item) => item.id));
   const checkpoints = (activity.data?.items ?? [])
@@ -151,15 +157,20 @@ export function PersonView({
     .slice(-6)
     .reverse();
 
+  // A dependency is something this person is waiting on; a blocker is what is
+  // holding a workstream still. Both are bounded strings from the public
+  // contract — nothing here is inferred.
   const dependencies = workstreams.flatMap((workstream) =>
     workstream.dependencies.map((text) => ({
       workstreamId: workstream.id,
+      title: workstream.title,
       text,
     })),
   );
   const blockers = workstreams.flatMap((workstream) =>
     workstream.blockers.map((text) => ({
       workstreamId: workstream.id,
+      title: workstream.title,
       text,
     })),
   );
@@ -171,23 +182,18 @@ export function PersonView({
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
-      <div className="h-full overflow-auto pt-[26px] px-[32px] pb-[60px]">
+      <div className="h-full overflow-auto px-[32px] pb-[60px] pt-[26px]">
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-[7px] border-0 bg-transparent p-0 text-[11.5px] text-ink-muted hover:text-accent-strong"
+          className="inline-flex cursor-pointer items-center gap-[7px] border-0 bg-transparent p-0 text-[11.5px] text-ink-muted hover:text-accent-strong"
         >
           <ArrowLeftIcon size={13} />
           {t("person.back")}
         </button>
 
         <div className="mt-5 grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-4">
-          <span
-            className="grid h-[52px] w-[52px] place-items-center rounded-full text-[15px] font-bold text-on-tint"
-            style={{ background: tintFor(ownerId) }}
-          >
-            {initials(principalName)}
-          </span>
+          <Avatar id={ownerId} name={principalName} size="xl" />
           <span className="grid min-w-0">
             <h1 className="m-0 text-[26px] font-[560] tracking-[-0.035em]">
               {principalName}
@@ -197,8 +203,17 @@ export function PersonView({
                 {t("pulse.card.role")}
               </span>
               <span className="inline-flex items-center gap-1.5 text-[11.5px] text-ink-muted">
-                <span className={cn("h-1.5 w-1.5 rounded-full", standInDotClass)} />
-                {standInText}
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    offline || leadStale ? "bg-amber" : "bg-green",
+                  )}
+                />
+                {offline
+                  ? t("person.standInPublic", { time: offlineSyncTime })
+                  : t("person.standInLocal", {
+                      time: formatRelative(lead.freshnessAt),
+                    })}
               </span>
             </span>
           </span>
@@ -221,82 +236,39 @@ export function PersonView({
         </div>
 
         {summaryText ? (
-          <p className="mt-[22px] max-w-[660px] rounded-[13px] border border-accent-soft bg-accent-soft py-[16px] px-[18px] text-[13px] leading-[1.75] text-ink [text-wrap:pretty]">
+          <p className="mt-[22px] max-w-[660px] rounded-[13px] border border-accent-soft bg-accent-soft px-[18px] py-[16px] text-[13px] leading-[1.75] text-ink [text-wrap:pretty]">
             <strong className="font-[650]">{t("person.says")}</strong>{" "}
             {summaryText}
           </p>
         ) : null}
 
         <div className="mt-[30px] flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">{t("person.main")}</strong>
-          <span className="font-mono text-[10.5px] text-faint">
-            {main.id.slice(0, 8)}
-          </span>
+          <strong className="text-[14px] font-[620]">
+            {t("person.parallel")}
+          </strong>
+          <Meta tone={load.blocked > 0 ? "danger" : "faint"}>{loadLabel}</Meta>
         </div>
-        <div className="mt-3 rounded-card border border-line bg-panel2 py-[18px] px-[20px]">
-          <PhaseChip phase={main.phase} size="md" />
-          <h2 className="mt-3 text-[18px] font-[570] leading-[1.35] tracking-[-0.02em] [text-wrap:pretty]">
-            {main.title}
-          </h2>
-          {noteText ? (
-            <p className="mt-3 max-w-[620px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
-              {noteText}
-            </p>
-          ) : null}
-          <div className="mt-4 flex items-center gap-5 border-t border-line pt-3.5">
-            <span className="inline-flex items-center gap-2">
-              <span className="relative h-1 w-[52px] overflow-hidden rounded-[2px] bg-line2">
-                <span
-                  className={cn("absolute inset-y-0 left-0", mainTone.dot)}
-                  style={{ width: `${confidencePercent(main.confidence)}%` }}
-                />
-              </span>
-              <span className="font-mono text-[10.5px] text-ink-muted">
-                {t("person.confidence", {
-                  value: confidencePercent(main.confidence),
-                })}
-              </span>
-            </span>
-            <span className="text-[11.5px] text-faint">
-              {t("person.changes", { count: main.changedFields.length })}
-            </span>
-            <span
-              className={cn("ml-auto font-mono text-[10.5px]", freshColorClass)}
-            >
-              {formatRelative(main.freshnessAt)}
-            </span>
-          </div>
-        </div>
-
-        <div className="mt-[30px] flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">{t("person.subs")}</strong>
-          <span className="font-mono text-[10.5px] text-faint">
-            {subs.length}
-          </span>
-        </div>
-        <div className="mt-3 flex flex-col gap-2">
-          {subs.map((sub) => {
-            const dim = sub.phase === "completed" || sub.phase === "paused";
-            return (
-              <div
-                key={sub.id}
-                className="grid grid-cols-[minmax(0,1fr)_90px_84px] items-center gap-3.5 rounded-inset border border-line bg-panel2 py-[13px] px-[16px]"
-              >
-                <span
-                  className={cn(
-                    "truncate text-[12.5px]",
-                    dim ? "text-faint" : "text-ink",
-                  )}
-                >
-                  {sub.title}
-                </span>
-                <PhaseChip phase={sub.phase} size="sm" />
-                <span className="text-right font-mono text-[10px] text-faint">
-                  {formatRelative(sub.freshnessAt)}
-                </span>
-              </div>
-            );
-          })}
+        <p className="mt-[9px] max-w-[620px] text-[11.5px] leading-[1.65] text-faint [text-wrap:pretty]">
+          {t("person.parallelLede")}
+        </p>
+        <div className="mt-3.5 flex flex-col gap-2.5">
+          {ordered.map((workstream) => (
+            <WorkstreamCard
+              key={workstream.id}
+              workstream={workstream}
+              line={mergeWorkLines(
+                workLineFromProjection(workstream),
+                entryByProjectionId.get(workstream.id)?.narrative
+                  ? workLineFromNarrative(
+                      entryByProjectionId.get(workstream.id)!.narrative,
+                    )
+                  : undefined,
+              )}
+              stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
+              offline={offline}
+              offlineSyncTime={offlineSyncTime}
+            />
+          ))}
         </div>
 
         <div className="mt-[30px]">
@@ -311,14 +283,12 @@ export function PersonView({
               {t("person.checkpointsEmpty")}
             </p>
           ) : (
-            <div className="relative mt-4 pl-6">
-              <span className="absolute top-2 bottom-3 left-[5px] w-px bg-line2" />
+            <Timeline className="mt-4">
               {checkpoints.map((event) => (
-                <div
+                <TimelineEntry
                   key={`${event.sequence}-${event.aggregateId}`}
-                  className="relative pb-5"
+                  tone="accent"
                 >
-                  <span className="absolute -left-6 top-[5px] h-[11px] w-[11px] rounded-full border-2 border-accent-strong bg-bg" />
                   <div className="flex items-center gap-2.5">
                     <span className="text-[11px] font-[650] text-accent-strong">
                       {event.eventType}
@@ -330,105 +300,55 @@ export function PersonView({
                   <p className="mt-2 max-w-[600px] text-[12.5px] leading-[1.7] text-ink [text-wrap:pretty]">
                     {event.aggregateType} · {event.eventType}
                   </p>
-                  <div className="mt-1.5 font-mono text-[9.5px] text-faint">
+                  <Meta className="mt-1.5 block text-[9.5px]">
                     seq {event.sequence}
-                  </div>
-                </div>
+                  </Meta>
+                </TimelineEntry>
               ))}
-            </div>
+            </Timeline>
           )}
         </div>
       </div>
 
-      <aside className="h-full overflow-auto border-l border-line bg-panel pt-[26px] px-[24px] pb-[50px]">
-        <div className="rounded-inset bg-raise py-[15px] px-[16px]">
-          <div className="text-[10.5px] font-[650] tracking-[0.08em] text-faint">
-            {t("person.confHow")}
-          </div>
+      <aside className="h-full overflow-auto border-l border-line bg-panel px-[24px] pb-[50px] pt-[26px]">
+        <div className="rounded-inset bg-raise px-[16px] py-[15px]">
+          <SectionLabel>{t("person.confHow")}</SectionLabel>
           <p className="mt-2.5 text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
             {t("person.confNote", {
-              value: confidencePercent(main.confidence),
+              value: confidencePercent(lead.confidence),
             })}
           </p>
-          {main.contradictionClaimIds.length > 0 ? (
+          {lead.contradictionClaimIds.length > 0 ? (
             <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
               {t("person.confContradictions", {
-                count: main.contradictionClaimIds.length,
+                count: lead.contradictionClaimIds.length,
               })}
             </p>
           ) : null}
         </div>
 
-        {dependencies.length > 0 ? (
-          <div className="mt-[22px]">
-            <div className="text-[10.5px] font-[650] tracking-[0.08em] text-faint">
-              {t("person.waitingOn")}
-            </div>
-            <div className="mt-[11px] flex flex-col gap-2">
-              {dependencies.map((dependency, index) => (
-                <div
-                  key={`${dependency.workstreamId}-${index}`}
-                  className="rounded-[11px] border border-danger-soft bg-danger-soft py-3 px-[13px]"
-                >
-                  <span className="font-mono text-[10.5px] text-danger">
-                    {dependency.workstreamId.slice(0, 8)}
-                  </span>
-                  <p className="mt-1.5 text-[12px] leading-[1.55] text-ink [text-wrap:pretty]">
-                    {dependency.text}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {blockers.length > 0 ? (
-          <div className="mt-[22px]">
-            <div className="text-[10.5px] font-[650] tracking-[0.08em] text-faint">
-              {t("person.blockers")}
-            </div>
-            <div className="mt-[11px] flex flex-col gap-2">
-              {blockers.map((blocker, index) => (
-                <div
-                  key={`${blocker.workstreamId}-${index}`}
-                  className="rounded-[11px] border border-line bg-panel2 py-3 px-[13px]"
-                >
-                  <span className="font-mono text-[10.5px] text-faint">
-                    {blocker.workstreamId.slice(0, 8)}
-                  </span>
-                  <p className="mt-1.5 text-[12px] leading-[1.55] text-ink [text-wrap:pretty]">
-                    {blocker.text}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <RelationList
+          label={t("person.waitingOn")}
+          tone="danger"
+          items={dependencies}
+        />
+        <RelationList
+          label={t("person.blockers")}
+          tone="neutral"
+          items={blockers}
+        />
 
         {groups.length > 0 ? (
           <div className="mt-[22px]">
-            <div className="text-[10.5px] font-[650] tracking-[0.08em] text-faint">
-              {t("person.groups")}
-            </div>
+            <SectionLabel>{t("person.groups")}</SectionLabel>
             <div className="mt-[11px] flex flex-col gap-2">
               {groups.map((item) => (
                 <button
                   key={item.thread.id}
                   type="button"
                   onClick={onOpenChat}
-                  className="group relative grid w-full gap-1.5 overflow-hidden rounded-[11px] border border-transparent bg-transparent py-3 px-[13px] text-left text-ink hover:border-accent-strong"
+                  className="grid w-full cursor-pointer gap-1.5 rounded-[11px] border border-dashed border-line2 bg-transparent px-[13px] py-3 text-left text-ink hover:border-accent-strong"
                 >
-                  <span
-                    className="pointer-events-none absolute inset-0 animate-dash-flow rounded-[11px] group-hover:opacity-0"
-                    style={{
-                      backgroundImage:
-                        "linear-gradient(90deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(90deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(180deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(180deg, var(--intero-line2) 0 7px, transparent 7px 14px)",
-                      backgroundSize: "14px 1px, 14px 1px, 1px 14px, 1px 14px",
-                      backgroundPosition: "0 0, 0 100%, 0 0, 100% 0",
-                      backgroundRepeat:
-                        "repeat-x, repeat-x, repeat-y, repeat-y",
-                    }}
-                  />
                   <span className="text-[12px] font-[600]">
                     {item.thread.title}
                   </span>
@@ -443,7 +363,7 @@ export function PersonView({
           </div>
         ) : null}
 
-        <p className="mt-6 rounded-[11px] bg-raise py-[14px] px-[15px] text-[11px] leading-[1.7] text-faint [text-wrap:pretty]">
+        <p className="mt-6 rounded-[11px] bg-raise px-[15px] py-[14px] text-[11px] leading-[1.7] text-faint [text-wrap:pretty]">
           {t("person.footer")}
         </p>
       </aside>
@@ -451,60 +371,126 @@ export function PersonView({
   );
 }
 
-function PhaseChip({
-  phase,
-  size,
+/**
+ * One in-flight workstream at full detail: the phase it is in, what backs that
+ * claim, and the narrative rows. Blocked work carries the danger surface so it
+ * is legible before the text is read.
+ */
+function WorkstreamCard({
+  workstream,
+  line,
+  stale,
+  offline,
+  offlineSyncTime,
 }: {
-  phase: WorkstreamPhase;
-  size: "sm" | "md";
+  workstream: PublicWorkProjection;
+  line: WorkLine;
+  stale: boolean;
+  offline: boolean;
+  offlineSyncTime: string;
 }) {
-  const { t } = useI18n();
-  const meta = PHASE_META[phase];
-  const tone = TONE_CLASSES[meta.tone];
-  const sizeClasses =
-    size === "sm"
-      ? "px-[9px] py-[3px] text-[9.5px]"
-      : "px-[10px] py-1 text-[10px]";
+  const { t, formatRelative } = useI18n();
+  const blocked = PHASE_META[workstream.phase].tone === "danger";
+  const rows: Array<{
+    label: string;
+    value: string;
+    tone?: "default" | "danger";
+    mono?: boolean;
+  }> = [{ label: t("work.done"), value: line.done ?? t("work.noneReported") }];
+  if (line.evidence) {
+    rows.push({
+      label: t("work.evidence"),
+      value: line.evidence,
+      mono: true,
+    });
+  }
+  rows.push({
+    label: t("work.next"),
+    value: line.next ?? t("work.noneReported"),
+    ...(blocked ? { tone: "danger" as const } : {}),
+  });
+  if (line.collaboration) {
+    rows.push({ label: t("work.collaboration"), value: line.collaboration });
+  }
+
   return (
-    <span
+    <article
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-pill font-[620]",
-        sizeClasses,
-        tone.text,
-        tone.bg,
+        "rounded-card border px-[19px] py-[17px]",
+        blocked ? "border-danger-soft bg-danger-soft" : "border-line bg-panel2",
       )}
+      data-testid={`person-work-card-${workstream.id}`}
     >
-      <span
-        className={cn(
-          "h-[5px] w-[5px] rounded-full",
-          tone.dot,
-          meta.tone === "danger" ? "animate-dot-pulse" : undefined,
-        )}
+      <div className="flex items-center gap-2.5">
+        <PhaseChip phase={workstream.phase} size="sm" />
+        <Meta>{workstream.id.slice(0, 8)}</Meta>
+        {workstream.artifactIds.length > 0 ? (
+          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-faint">
+            <GitPullRequestIcon size={12} />
+            {workstream.artifactIds.length}
+          </span>
+        ) : null}
+        <Meta tone={offline || stale ? "amber" : "faint"} className="ml-auto">
+          {offline
+            ? t("pulse.card.syncedAt", { time: offlineSyncTime })
+            : formatRelative(workstream.freshnessAt)}
+        </Meta>
+      </div>
+      <h2 className="mt-3 text-[16px] font-[570] leading-[1.4] tracking-[-0.02em] [text-wrap:pretty]">
+        {workstream.title}
+      </h2>
+      {line.focus ? (
+        <p className="mt-2.5 max-w-[620px] text-[12.5px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
+          {line.focus}
+        </p>
+      ) : null}
+      <NarrativeGrid
+        rows={rows}
+        labelWidth={54}
+        className="mt-3.5 border-t border-line pt-3.5"
       />
-      {t(`phase.${phase}` as TranslationKey)}
-    </span>
+    </article>
   );
 }
 
-function chooseMainWorkstream(
-  workstreams: PublicWorkProjection[],
-): PublicWorkProjection {
-  const rank: Record<string, number> = {
-    blocked: 0,
-    reviewing: 1,
-    implementing: 2,
-    planning: 3,
-    paused: 4,
-    completed: 5,
-  };
-  return workstreams.reduce((current, candidate) => {
-    const currentRank = rank[current.phase] ?? 10;
-    const candidateRank = rank[candidate.phase] ?? 10;
-    if (candidateRank !== currentRank) {
-      return candidateRank < currentRank ? candidate : current;
-    }
-    return Date.parse(candidate.freshnessAt) > Date.parse(current.freshnessAt)
-      ? candidate
-      : current;
-  });
+function RelationList({
+  label,
+  tone,
+  items,
+}: {
+  label: string;
+  tone: "danger" | "neutral";
+  items: Array<{ workstreamId: string; title: string; text: string }>;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-[22px]">
+      <SectionLabel>{label}</SectionLabel>
+      <div className="mt-[11px] flex flex-col gap-2">
+        {items.map((item, index) => (
+          <div
+            key={`${item.workstreamId}-${index}`}
+            className={cn(
+              "rounded-[11px] border px-[13px] py-3",
+              tone === "danger"
+                ? "border-danger-soft bg-danger-soft"
+                : "border-line bg-panel2",
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <Meta tone={tone === "danger" ? "danger" : "faint"}>
+                {item.workstreamId.slice(0, 8)}
+              </Meta>
+              <span className="truncate text-[11px] text-ink-muted">
+                {item.title}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[12px] leading-[1.55] text-ink [text-wrap:pretty]">
+              {item.text}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
