@@ -416,9 +416,14 @@ export class PostgresPlatformStore implements PlatformStore {
             reason: "Capability Grant was not found.",
           };
       if (!decision.allowed) {
+        const attentionPrincipalId = await this.attentionPrincipalId(
+          client,
+          envelope.threadId,
+          envelope.actorId,
+        );
         await this.createInboxItem(
           client,
-          envelope.actorId,
+          attentionPrincipalId,
           "scope_expansion",
           "Stand-in action needs authorization",
           decision.reason,
@@ -427,9 +432,14 @@ export class PostgresPlatformStore implements PlatformStore {
         return coordinationResult(envelope, "rejected", decision.reason);
       }
       if (decision.requiresConfirmation) {
+        const attentionPrincipalId = await this.attentionPrincipalId(
+          client,
+          envelope.threadId,
+          envelope.actorId,
+        );
         await this.createInboxItem(
           client,
-          envelope.actorId,
+          attentionPrincipalId,
           "consequential_commitment",
           "Stand-in action needs confirmation",
           envelope.humanMessage,
@@ -502,16 +512,14 @@ export class PostgresPlatformStore implements PlatformStore {
         await this.ensurePrincipal(
           client,
           principalId,
-          thread.standInIds.includes(principalId)
-            ? "stand_in"
-            : "human",
+          thread.standInIds.includes(principalId) ? "stand_in" : "human",
         );
       }
       await client.query(
         `INSERT INTO threads
           (id, organization_id, kind, title, access_mode, access_changed_at_sequence,
-           prior_history_granted, sequence, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           prior_history_granted, sequence, team_id, parent_thread_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (id) DO NOTHING`,
         [
           thread.id,
@@ -522,6 +530,8 @@ export class PostgresPlatformStore implements PlatformStore {
           thread.accessChangedAtSequence ?? null,
           thread.priorHistoryGranted,
           thread.sequence,
+          thread.teamId ?? null,
+          thread.parentThreadId ?? null,
           thread.createdAt,
         ],
       );
@@ -574,6 +584,99 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  /** Move a person's read marker forward. Never backwards — re-reading an old
+   *  message must not resurrect unread counts for everything after it. */
+  async markThreadRead(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    sequence: number,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      await client.query(
+        `INSERT INTO thread_reads
+          (organization_id, thread_id, principal_id, last_read_sequence)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (thread_id, principal_id) DO UPDATE SET
+           last_read_sequence = GREATEST(
+             thread_reads.last_read_sequence, EXCLUDED.last_read_sequence),
+           updated_at = now()`,
+        [this.organizationId, threadId, principalId, sequence],
+      );
+    });
+  }
+
+  async listThreadReads(
+    principalId: PrincipalId,
+  ): Promise<Array<{ threadId: ThreadId; lastReadSequence: number }>> {
+    return this.read(async (client) => {
+      const result = await client.query<{
+        thread_id: ThreadId;
+        last_read_sequence: number;
+      }>(
+        "SELECT thread_id, last_read_sequence FROM thread_reads WHERE principal_id = $1",
+        [principalId],
+      );
+      return result.rows.map((row) => ({
+        threadId: row.thread_id,
+        lastReadSequence: row.last_read_sequence,
+      }));
+    });
+  }
+
+  /**
+   * Conclude a branched thread: the conclusion is posted into the parent
+   * conversation, so the decision lands where the discussion started, and the
+   * branch is marked concluded rather than deleted.
+   */
+  async concludeThreadIntoParent(input: {
+    threadId: ThreadId;
+    actorId: PrincipalId;
+    conclusion: string;
+    messageId: ThreadMessage["id"];
+    at: string;
+  }): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
+    return this.write(async (client) => {
+      const current = await this.getThreadInTransaction(client, input.threadId);
+      if (!current) throw new Error("Thread was not found.");
+      if (!current.thread.parentThreadId) {
+        throw new Error("Thread did not branch from another conversation.");
+      }
+      if (current.thread.concludedAt) {
+        throw new Error("Thread was already concluded.");
+      }
+      if (!current.thread.participantIds.includes(input.actorId)) {
+        throw new Error("Only a participant can conclude the Thread.");
+      }
+      const parent = await this.getThreadInTransaction(
+        client,
+        current.thread.parentThreadId,
+      );
+      if (!parent) throw new Error("Parent Thread was not found.");
+      if (!parent.thread.participantIds.includes(input.actorId)) {
+        throw new Error("Only a participant of the parent can conclude.");
+      }
+
+      const parentMessage = buildThreadMessage(parent.thread, {
+        id: input.messageId,
+        senderId: input.actorId,
+        body: input.conclusion,
+        createdAt: input.at,
+      });
+      await client.query(
+        "UPDATE threads SET sequence = $2, updated_at = now() WHERE id = $1",
+        [parent.thread.id, parentMessage.sequence],
+      );
+      await this.insertMessage(client, parentMessage);
+      await client.query(
+        `UPDATE threads SET concluded_at = $2, concluded_by = $3, updated_at = now()
+         WHERE id = $1`,
+        [input.threadId, input.at, input.actorId],
+      );
+      const updated = await this.getThreadInTransaction(client, input.threadId);
+      return { thread: updated!.thread, parentMessage };
+    });
+  }
+
   async addStandInToThread(
     threadId: ThreadId,
     standInId: PrincipalId,
@@ -584,11 +687,7 @@ export class PostgresPlatformStore implements PlatformStore {
       if (!current) throw new Error("Thread was not found.");
       await this.ensurePrincipal(client, standInId, "stand_in");
       await this.ensurePrincipal(client, actorId);
-      const transition = addStandIn(
-        current.thread,
-        standInId,
-        actorId,
-      );
+      const transition = addStandIn(current.thread, standInId, actorId);
       await client.query(
         `UPDATE threads SET
            access_mode = $2,
@@ -718,9 +817,7 @@ export class PostgresPlatformStore implements PlatformStore {
       await this.ensurePrincipal(
         client,
         review.reviewerId,
-        review.kind === "stand_in_impact_analysis"
-          ? "stand_in"
-          : "human",
+        review.kind === "stand_in_impact_analysis" ? "stand_in" : "human",
       );
       await client.query(
         `INSERT INTO spec_reviews
@@ -1130,6 +1227,12 @@ export class PostgresPlatformStore implements PlatformStore {
           : {}),
         priorHistoryGranted: row.prior_history_granted,
         sequence: row.sequence,
+        ...(row.team_id ? { teamId: row.team_id } : {}),
+        ...(row.parent_thread_id
+          ? { parentThreadId: row.parent_thread_id }
+          : {}),
+        ...(row.concluded_at ? { concludedAt: asIso(row.concluded_at) } : {}),
+        ...(row.concluded_by ? { concludedBy: row.concluded_by } : {}),
         createdAt: asIso(row.created_at),
       },
       messages: messages.rows.map(messageFromRow),
@@ -1249,6 +1352,25 @@ export class PostgresPlatformStore implements PlatformStore {
     );
   }
 
+  private async attentionPrincipalId(
+    client: PoolClient,
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): Promise<PrincipalId> {
+    const result = await client.query<{ principal_id: PrincipalId }>(
+      `SELECT tp.principal_id
+       FROM thread_participants tp
+       JOIN principals p ON p.id = tp.principal_id
+       WHERE tp.thread_id = $1
+         AND tp.principal_id <> $2
+         AND p.kind = 'human'
+       ORDER BY tp.principal_id
+       LIMIT 1`,
+      [threadId, actorId],
+    );
+    return result.rows[0]?.principal_id ?? actorId;
+  }
+
   private async ensurePrincipal(
     client: PoolClient,
     id: PrincipalId,
@@ -1265,9 +1387,7 @@ export class PostgresPlatformStore implements PlatformStore {
          updated_at = now()`,
       [
         id,
-        kind === "stand_in"
-          ? "Intero Stand-in"
-          : `Principal ${id.slice(0, 8)}`,
+        kind === "stand_in" ? "Intero Stand-in" : `Principal ${id.slice(0, 8)}`,
         kind,
       ],
     );

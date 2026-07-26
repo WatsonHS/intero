@@ -24,10 +24,14 @@ import { z } from "zod";
 
 import type {
   AuthenticatedPrincipal,
+  InteroAuth,
   PrincipalDirectory,
   RequestAuth,
 } from "./auth.js";
+import type { PostgresAutomationStore } from "./automation-store.js";
+import { ACTIVATION_BOOTSTRAP_HEADER } from "./auth.js";
 import type { CoordinationTransport, ModelGateway } from "./pilot-ports.js";
+import type { PostgresInformationStore } from "./information-store.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
@@ -38,6 +42,12 @@ export interface PilotRoutesOptions {
   organizationId: PilotOrganization["id"];
   requestAuth: RequestAuth;
   principalDirectory: PrincipalDirectory;
+  auth?: InteroAuth;
+  authDatabase?: import("pg").Pool;
+  authActivationSecret?: string;
+  authPublicUrl?: string;
+  informationStore?: PostgresInformationStore;
+  automationStore?: PostgresAutomationStore;
   standIn: AuthenticatedPrincipal | Omit<AuthenticatedPrincipal, "email">;
   deploymentProbe?: (baseUrl: string) => Promise<boolean>;
   providerSecretCipher: ProviderSecretCipher;
@@ -57,6 +67,12 @@ export async function registerPilotRoutes(
   app: FastifyInstance,
   options: PilotRoutesOptions,
 ): Promise<void> {
+  const activationLimiter = options.authDatabase
+    ? new PostgresActivationRateLimiter(
+        options.authDatabase,
+        options.organizationId,
+      )
+    : new InMemoryActivationRateLimiter();
   app.get("/v1/pilot/bootstrap", async (request) => {
     const currentPrincipal = await options.requestAuth.resolve(request, false);
     return {
@@ -211,6 +227,7 @@ export async function registerPilotRoutes(
         id: principal.id,
         displayName: principal.displayName,
         email: principal.email,
+        avatarTone: principal.avatarTone,
         organizationRole: await options.store.getOrganizationRole(principal.id),
       },
     };
@@ -219,14 +236,26 @@ export async function registerPilotRoutes(
   app.patch("/v1/pilot/profile", async (request) => {
     const principal = await requireIdentity(request, options.requestAuth);
     const input = z
-      .object({ displayName: z.string().trim().min(1).max(160) })
+      .object({
+        displayName: z.string().trim().min(1).max(160).optional(),
+        avatarTone: z.enum(["accent", "green", "amber", "cool"]).optional(),
+      })
       .strict()
+      .refine(
+        (value) =>
+          value.displayName !== undefined || value.avatarTone !== undefined,
+        "At least one profile field must be provided.",
+      )
       .parse(request.body);
     return {
-      profile: await options.principalDirectory.updateDisplayName(
-        principal.id,
-        input.displayName,
-      ),
+      profile: await options.principalDirectory.updateProfile(principal.id, {
+        ...(input.displayName !== undefined
+          ? { displayName: input.displayName }
+          : {}),
+        ...(input.avatarTone !== undefined
+          ? { avatarTone: input.avatarTone }
+          : {}),
+      }),
     };
   });
 
@@ -278,7 +307,7 @@ export async function registerPilotRoutes(
       return reply.status(201).send({
         invitation: presentInvitation(invitation, now.toISOString()),
         token,
-        acceptPath: `/accept-invitation?token=${encodeURIComponent(token)}`,
+        activationPath: `/accept-invitation?token=${encodeURIComponent(token)}`,
       });
     },
   );
@@ -305,7 +334,7 @@ export async function registerPilotRoutes(
       return {
         invitation: presentInvitation(invitation, now.toISOString()),
         token,
-        acceptPath: `/accept-invitation?token=${encodeURIComponent(token)}`,
+        activationPath: `/accept-invitation?token=${encodeURIComponent(token)}`,
       };
     },
   );
@@ -352,11 +381,128 @@ export async function registerPilotRoutes(
           "This invitation is invalid.",
         );
       }
+      const activationAccount = options.authDatabase
+        ? await options.authDatabase.query(
+            `SELECT 1 FROM "user" WHERE lower(email) = $1 LIMIT 1`,
+            [invitation.email],
+          )
+        : undefined;
       return {
         invitation: presentInvitation(invitation, new Date().toISOString()),
         organization: { id: organization.id, name: organization.name },
         team: { id: team.id, name: team.name },
+        activationRequired: !activationAccount?.rowCount,
       };
+    },
+  );
+
+  app.post<{ Params: { token: string } }>(
+    "/v1/pilot/invitations/:token/activate",
+    async (request, reply) => {
+      if (
+        !options.auth ||
+        !options.authDatabase ||
+        !options.authActivationSecret ||
+        !options.authPublicUrl
+      ) {
+        throw new PilotStoreError(
+          "AUTHENTICATION_UNAVAILABLE",
+          503,
+          "Account activation is not configured for this deployment.",
+        );
+      }
+      const input = z
+        .object({
+          credential: z.enum(["password", "passkey", "both"]),
+          password: z.string().min(12).max(128).optional(),
+        })
+        .strict()
+        .superRefine((value, context) => {
+          if (value.credential !== "passkey" && value.password === undefined) {
+            context.addIssue({
+              code: "custom",
+              path: ["password"],
+              message: "A password is required for this credential choice.",
+            });
+          }
+        })
+        .parse(request.body);
+      const tokenHash = sha256(request.params.token);
+      const rateLimitKey = `${request.ip}:${tokenHash}`;
+      const retryAfter = await activationLimiter.consume(rateLimitKey);
+      if (retryAfter !== undefined) {
+        return reply
+          .header("retry-after", String(retryAfter))
+          .status(429)
+          .send({
+            code: "ACTIVATION_RATE_LIMITED",
+            message: "Too many activation attempts. Try again later.",
+          });
+      }
+      const invitation =
+        await options.store.findInvitationByTokenHash(tokenHash);
+      const now = new Date().toISOString();
+      if (
+        !invitation ||
+        invitation.acceptedAt ||
+        invitation.revokedAt ||
+        invitation.expiresAt <= now
+      ) {
+        throw new PilotStoreError(
+          "INVITATION_INVALID",
+          404,
+          "This activation link is invalid, expired, revoked, or already used.",
+        );
+      }
+      const existing = await options.authDatabase.query(
+        `SELECT 1 FROM "user" WHERE lower(email) = $1 LIMIT 1`,
+        [invitation.email],
+      );
+      if (existing.rowCount) {
+        throw new PilotStoreError(
+          "ACCOUNT_ALREADY_ACTIVATED",
+          409,
+          "This account is already activated. Sign in with a Passkey or password.",
+        );
+      }
+      const password = input.password ?? randomBytes(32).toString("base64url");
+      const authResponse = await options.auth.handler(
+        new Request(
+          new URL("/api/auth/sign-up/email", options.authPublicUrl).toString(),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              origin: options.authPublicUrl,
+              [ACTIVATION_BOOTSTRAP_HEADER]: options.authActivationSecret,
+            },
+            body: JSON.stringify({
+              name: invitation.displayName,
+              email: invitation.email,
+              password,
+            }),
+          },
+        ),
+      );
+      if (!authResponse.ok) {
+        const body = await authResponse
+          .json()
+          .catch(() => ({ message: "Credential activation failed." }));
+        return reply.status(authResponse.status).send(body);
+      }
+      await options.authDatabase.query(
+        `UPDATE "user" SET "emailVerified" = true, "updatedAt" = now()
+         WHERE lower(email) = $1`,
+        [invitation.email],
+      );
+      const cookies = authResponse.headers.getSetCookie();
+      if (cookies.length > 0) reply.header("set-cookie", cookies);
+      return reply.status(201).send({
+        activated: true,
+        credential: input.credential,
+        passkeyEnrollmentRequired:
+          input.credential === "passkey" || input.credential === "both",
+      });
     },
   );
 
@@ -370,9 +516,9 @@ export async function registerPilotRoutes(
         principalId: principal.id,
         now: new Date().toISOString(),
       });
-      const profile = await options.principalDirectory.updateDisplayName(
+      const profile = await options.principalDirectory.updateProfile(
         principal.id,
-        accepted.invitation.displayName,
+        { displayName: accepted.invitation.displayName },
       );
       return {
         invitation: presentInvitation(
@@ -388,60 +534,53 @@ export async function registerPilotRoutes(
 
   app.patch<{
     Params: { teamId: string; memberId: string };
-  }>(
-    "/v1/pilot/teams/:teamId/members/:memberId",
-    async (request) => {
-      const principal = await requireIdentity(request, options.requestAuth);
-      const input = z
-        .object({
-          teamRole: PilotTeamRole.optional(),
-          organizationRole: PilotOrganizationRole.optional(),
+  }>("/v1/pilot/teams/:teamId/members/:memberId", async (request) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    const input = z
+      .object({
+        teamRole: PilotTeamRole.optional(),
+        organizationRole: PilotOrganizationRole.optional(),
+      })
+      .strict()
+      .refine(
+        (value) =>
+          value.teamRole !== undefined || value.organizationRole !== undefined,
+        "At least one role must be provided.",
+      )
+      .parse(request.body);
+    const now = new Date().toISOString();
+    const memberId = request.params.memberId as PrincipalId;
+    const teamMembership = input.teamRole
+      ? await options.store.updateTeamMemberRole({
+          teamId: request.params.teamId,
+          memberId,
+          role: input.teamRole,
+          principalId: principal.id,
+          now,
         })
-        .strict()
-        .refine(
-          (value) =>
-            value.teamRole !== undefined ||
-            value.organizationRole !== undefined,
-          "At least one role must be provided.",
-        )
-        .parse(request.body);
-      const now = new Date().toISOString();
-      const memberId = request.params.memberId as PrincipalId;
-      const teamMembership = input.teamRole
-        ? await options.store.updateTeamMemberRole({
-            teamId: request.params.teamId,
-            memberId,
-            role: input.teamRole,
-            principalId: principal.id,
-            now,
-          })
-        : undefined;
-      const organizationMembership = input.organizationRole
-        ? await options.store.updateOrganizationRole({
-            memberId,
-            role: input.organizationRole,
-            principalId: principal.id,
-            now,
-          })
-        : undefined;
-      return { teamMembership, organizationMembership };
-    },
-  );
+      : undefined;
+    const organizationMembership = input.organizationRole
+      ? await options.store.updateOrganizationRole({
+          memberId,
+          role: input.organizationRole,
+          principalId: principal.id,
+          now,
+        })
+      : undefined;
+    return { teamMembership, organizationMembership };
+  });
 
   app.delete<{
     Params: { teamId: string; memberId: string };
-  }>(
-    "/v1/pilot/teams/:teamId/members/:memberId",
-    async (request, reply) => {
-      const principal = await requireIdentity(request, options.requestAuth);
-      await options.store.removeTeamMember({
-        teamId: request.params.teamId,
-        memberId: request.params.memberId as PrincipalId,
-        principalId: principal.id,
-      });
-      return reply.status(204).send();
-    },
-  );
+  }>("/v1/pilot/teams/:teamId/members/:memberId", async (request, reply) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    await options.store.removeTeamMember({
+      teamId: request.params.teamId,
+      memberId: request.params.memberId as PrincipalId,
+      principalId: principal.id,
+    });
+    return reply.status(204).send();
+  });
 
   app.post<{ Params: { teamId: string } }>(
     "/v1/pilot/teams/:teamId/join-links",
@@ -589,7 +728,7 @@ export async function registerPilotRoutes(
   app.post<{ Params: { threadId: string } }>(
     "/v1/pilot/dms/:threadId/messages",
     async (request, reply) => {
-    const principal = await requireIdentity(request, options.requestAuth);
+      const principal = await requireIdentity(request, options.requestAuth);
       const input = z
         .object({ body: z.string().min(1).max(4_000) })
         .strict()
@@ -902,16 +1041,23 @@ export async function registerPilotRoutes(
         })
         .strict()
         .parse(request.body);
-      return {
-        thread: await options.coordination.proposeConclusion({
-          threadId: request.params.threadId,
-          principalId: principal.id,
-          conclusion: input.conclusion,
-          responsibleParticipantId:
-            input.responsibleParticipantId as PrincipalId,
-          now: new Date().toISOString(),
-        }),
-      };
+      const thread = await options.coordination.proposeConclusion({
+        threadId: request.params.threadId,
+        principalId: principal.id,
+        conclusion: input.conclusion,
+        responsibleParticipantId: input.responsibleParticipantId as PrincipalId,
+        now: new Date().toISOString(),
+      });
+      await options.informationStore?.createAttention({
+        principalId: input.responsibleParticipantId as PrincipalId,
+        projectId: thread.projectId,
+        kind: "human_decision",
+        title: `Coordination confirmation · ${thread.trigger}`,
+        detail: input.conclusion,
+        sourceRef: `coordination:${thread.id}`,
+        dedupeKey: `coordination-confirm:${thread.id}`,
+      });
+      return { thread };
     },
   );
 
@@ -919,13 +1065,28 @@ export async function registerPilotRoutes(
     "/v1/pilot/coordination/:threadId/confirm",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
-      return {
-        thread: await options.coordination.confirm(
-          request.params.threadId,
-          principal.id,
-          new Date().toISOString(),
-        ),
-      };
+      const now = new Date().toISOString();
+      const thread = await options.coordination.confirm(
+        request.params.threadId,
+        principal.id,
+        now,
+      );
+      const automationSignal =
+        await options.automationStore?.findSignalByCoordinationThread(
+          thread.id,
+        );
+      if (automationSignal) {
+        await options.automationStore!.markConfirmed({
+          signalId: automationSignal.id,
+          actorId: principal.id,
+          now,
+        });
+      }
+      await options.informationStore?.resolveAttention(
+        principal.id,
+        `coordination-confirm:${thread.id}`,
+      );
+      return { thread };
     },
   );
 }
@@ -972,7 +1133,9 @@ async function requireIdentity(
 async function visiblePrincipals(
   options: PilotRoutesOptions,
   principalId: PrincipalId,
-): Promise<Array<AuthenticatedPrincipal | Omit<AuthenticatedPrincipal, "email">>> {
+): Promise<
+  Array<AuthenticatedPrincipal | Omit<AuthenticatedPrincipal, "email">>
+> {
   const teams = await options.store.listTeams(principalId);
   const memberships = (
     await Promise.all(
@@ -1030,15 +1193,97 @@ function createInvitationToken(): string {
   return `invite_${randomBytes(24).toString("base64url")}`;
 }
 
+interface ActivationRateLimiter {
+  consume(key: string, now?: number): Promise<number | undefined>;
+}
+
+class InMemoryActivationRateLimiter implements ActivationRateLimiter {
+  private readonly attempts = new Map<
+    string,
+    { count: number; resetAt: number }
+  >();
+
+  async consume(key: string, now = Date.now()): Promise<number | undefined> {
+    const current = this.attempts.get(key);
+    if (!current || current.resetAt <= now) {
+      this.attempts.set(key, { count: 1, resetAt: now + 15 * 60_000 });
+      return undefined;
+    }
+    if (current.count >= 5) {
+      return Math.max(1, Math.ceil((current.resetAt - now) / 1_000));
+    }
+    current.count += 1;
+    return undefined;
+  }
+}
+
+class PostgresActivationRateLimiter implements ActivationRateLimiter {
+  constructor(
+    private readonly database: import("pg").Pool,
+    private readonly organizationId: PilotOrganization["id"],
+  ) {}
+
+  async consume(key: string, now = Date.now()): Promise<number | undefined> {
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT set_config('intero.organization_id',$1,true)",
+        [this.organizationId],
+      );
+      const keyHash = sha256(key);
+      const result = await client.query<{
+        attempts: number;
+        window_started_at: Date;
+      }>(
+        `INSERT INTO auth_activation_attempts
+          (organization_id,key_hash,window_started_at,attempts)
+         VALUES ($1,$2,to_timestamp($3 / 1000.0),1)
+         ON CONFLICT (organization_id,key_hash) DO UPDATE SET
+           attempts = CASE
+             WHEN auth_activation_attempts.window_started_at
+                    <= to_timestamp($3 / 1000.0) - interval '15 minutes'
+               THEN 1
+             ELSE auth_activation_attempts.attempts + 1
+           END,
+           window_started_at = CASE
+             WHEN auth_activation_attempts.window_started_at
+                    <= to_timestamp($3 / 1000.0) - interval '15 minutes'
+               THEN to_timestamp($3 / 1000.0)
+             ELSE auth_activation_attempts.window_started_at
+           END,
+           updated_at = now()
+         RETURNING attempts,window_started_at`,
+        [this.organizationId, keyHash, now],
+      );
+      await client.query(
+        `DELETE FROM auth_activation_attempts
+         WHERE updated_at < now() - interval '7 days'`,
+      );
+      await client.query("COMMIT");
+      const row = result.rows[0]!;
+      if (row.attempts <= 5) return undefined;
+      return Math.max(
+        1,
+        Math.ceil(
+          (row.window_started_at.getTime() + 15 * 60_000 - now) / 1_000,
+        ),
+      );
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
 function presentInvitation(invitation: PilotTeamInvitation, now: string) {
-  const {
-    tokenHash: _tokenHash,
-    ...safe
-  } = invitation;
+  const { tokenHash: _tokenHash, ...safe } = invitation;
   return {
     ...safe,
     status: invitation.acceptedAt

@@ -1,6 +1,6 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
-import { deviceAuthorization, magicLink } from "better-auth/plugins";
+import { deviceAuthorization } from "better-auth/plugins";
 import { Pool } from "pg";
 
 /**
@@ -15,11 +15,12 @@ export const auth = betterAuth({
       process.env.DATABASE_URL ??
       "postgresql://intero:intero@localhost:5432/intero",
   }),
+  emailAndPassword: {
+    enabled: true,
+    minPasswordLength: 12,
+    maxPasswordLength: 128,
+  },
   plugins: [
-    magicLink({
-      storeToken: "hashed",
-      sendMagicLink: async () => undefined,
-    }),
     passkey({
       rpID: "localhost",
       rpName: "Intero",

@@ -10,10 +10,12 @@ import {
   CreateDecisionRequest,
   CreateSpecRequest,
   CreateSpecRevisionRequest,
+  ConcludeThreadRequest,
   CreateThreadRequest,
   CreateWorkstreamRequest,
   CursorQuery,
   IngestEventRequest,
+  MarkThreadReadRequest,
   SendThreadMessageRequest,
   UpdateKanbanCardRequest,
 } from "@intero/api-contracts";
@@ -48,6 +50,9 @@ import {
   type PrincipalDirectory,
   type RequestAuth,
 } from "./auth.js";
+import { registerAutomationRoutes } from "./automation-routes.js";
+import { PostgresAutomationStore } from "./automation-store.js";
+import { PostgresInformationStore } from "./information-store.js";
 import {
   InMemoryPilotStore,
   type PilotStore,
@@ -87,12 +92,25 @@ import { InMemoryPlatformStore } from "./store.js";
 import type { KanbanCardUpdate } from "./store.js";
 import { VercelAiModelGateway } from "./vercel-model-gateway.js";
 
+/** Membership and invitation changes — the events the audit log renders. */
+const GOVERNANCE_EVENT_TYPES = new Set([
+  "pilot.team_member.role_changed",
+  "pilot.team_member.removed",
+  "pilot.organization_member.role_changed",
+  "pilot.team_invitation.created",
+  "pilot.team_invitation.revoked",
+]);
+
 export interface BuildAppOptions {
   store?: PlatformStore;
   logger?: boolean;
   auth?: InteroAuth;
   authCorsOrigins?: string[];
   authDatabase?: Pool;
+  authActivationSecret?: string;
+  authPublicUrl?: string;
+  informationStore?: PostgresInformationStore;
+  automationStore?: PostgresAutomationStore;
   allowDevelopmentIdentity?: boolean;
   principalDirectory?: PrincipalDirectory;
   requestAuth?: RequestAuth;
@@ -102,7 +120,6 @@ export interface BuildAppOptions {
   currentPrincipal?: PrincipalSummary;
   standInPrincipal?: PrincipalSummary;
   project?: Project;
-  inboxPrincipalIds?: PrincipalId[];
   pilotStore?: PilotStore;
   projectWorkStore?: PostgresProjectWorkStore;
   pilotIdentities?: PrincipalSummary[];
@@ -170,15 +187,31 @@ export async function buildApp(
       developmentIdentities: pilotIdentities,
       directory: principalDirectory,
     });
+  const informationStore =
+    options.informationStore ??
+    (options.authDatabase
+      ? new PostgresInformationStore(
+          options.authDatabase,
+          organization.id as ConstructorParameters<
+            typeof PostgresInformationStore
+          >[1],
+        )
+      : undefined);
+  const automationStore =
+    options.automationStore ??
+    (options.authDatabase
+      ? new PostgresAutomationStore(
+          options.authDatabase,
+          organization.id as ConstructorParameters<
+            typeof PostgresAutomationStore
+          >[1],
+        )
+      : undefined);
   const project = options.project ?? {
     id: "019b5ac0-7600-7000-8000-000000000011" as ProjectId,
     name: "Intero",
     projectManagementEnabled: true,
   };
-  const inboxPrincipalIds = options.inboxPrincipalIds ?? [
-    currentPrincipal.id,
-    standInPrincipal.id,
-  ];
   await store.upsertPrincipal(currentPrincipal);
   await store.upsertPrincipal(standInPrincipal);
   for (const identity of pilotIdentities) {
@@ -228,7 +261,10 @@ export async function buildApp(
   let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
   await app.register(cors, {
-    origin: [/^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/],
+    origin: [
+      ...(options.authCorsOrigins ?? []),
+      /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/,
+    ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
@@ -312,6 +348,14 @@ export async function buildApp(
     >[1]["organizationId"],
     requestAuth,
     principalDirectory,
+    ...(options.auth ? { auth: options.auth } : {}),
+    ...(options.authDatabase ? { authDatabase: options.authDatabase } : {}),
+    ...(options.authActivationSecret
+      ? { authActivationSecret: options.authActivationSecret }
+      : {}),
+    ...(options.authPublicUrl ? { authPublicUrl: options.authPublicUrl } : {}),
+    ...(informationStore ? { informationStore } : {}),
+    ...(automationStore ? { automationStore } : {}),
     standIn: standInPrincipal,
     providerSecretCipher,
     checkpointService: pilotCheckpointService,
@@ -340,6 +384,13 @@ export async function buildApp(
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {
       store: options.projectWorkStore,
+      pilotStore,
+      requestAuth,
+    });
+  }
+  if (automationStore) {
+    await registerAutomationRoutes(app, {
+      store: automationStore,
       pilotStore,
       requestAuth,
     });
@@ -512,16 +563,149 @@ export async function buildApp(
     return { result: await store.coordinate(envelope) };
   });
 
-  app.get("/v1/action-inbox", async () => {
-    const items = (
-      await Promise.all(
-        inboxPrincipalIds.map((principalId) => store.listInbox(principalId)),
-      )
-    )
-      .flat()
-      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+  app.get("/v1/action-inbox", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    const includeDismissed =
+      (request.query as { includeDismissed?: string }).includeDismissed ===
+      "true";
+    const items = informationStore
+      ? await informationStore.listAttention(principal!.id, includeDismissed)
+      : await store.listInbox(principal!.id);
+    const preferences = informationStore
+      ? await informationStore.getPreferences(principal!.id)
+      : {
+          principalId: principal!.id,
+          mutedKinds: [],
+          updatedAt: new Date(0).toISOString(),
+        };
+    const muteActive =
+      preferences.muteUntil && preferences.muteUntil > new Date().toISOString();
+    const unreadCount = items.filter(
+      (item) =>
+        !item.readAt &&
+        !item.dismissedAt &&
+        !muteActive &&
+        !preferences.mutedKinds.includes(item.kind),
+    ).length;
+    const automationSummary = automationStore
+      ? await automationStore.summarizeForPrincipal(principal!.id)
+      : [];
+    return { items, preferences, unreadCount, automationSummary };
+  });
+
+  app.patch<{ Params: { itemId: string } }>(
+    "/v1/action-inbox/:itemId",
+    async (request) => {
+      if (!informationStore)
+        throw new PilotStoreError(
+          "ATTENTION_STORE_UNAVAILABLE",
+          503,
+          "Action Inbox persistence is unavailable.",
+        );
+      const principal = await requestAuth.resolve(request);
+      const input = parse(
+        z
+          .object({
+            action: z.enum(["read", "unread", "dismiss", "restore", "resolve"]),
+          })
+          .strict(),
+        request.body,
+      );
+      return {
+        item: await informationStore.updateAttention(
+          principal!.id,
+          request.params.itemId,
+          input.action,
+        ),
+      };
+    },
+  );
+
+  app.get("/v1/notification-preferences", async (request) => {
+    if (!informationStore)
+      throw new PilotStoreError(
+        "ATTENTION_STORE_UNAVAILABLE",
+        503,
+        "Notification preferences are unavailable.",
+      );
+    const principal = await requestAuth.resolve(request);
     return {
-      items: [...new Map(items.map((item) => [item.id, item])).values()],
+      preferences: await informationStore.getPreferences(principal!.id),
+    };
+  });
+
+  app.put("/v1/notification-preferences", async (request) => {
+    if (!informationStore)
+      throw new PilotStoreError(
+        "ATTENTION_STORE_UNAVAILABLE",
+        503,
+        "Notification preferences are unavailable.",
+      );
+    const principal = await requestAuth.resolve(request);
+    const input = parse(
+      z
+        .object({
+          mutedKinds: z.array(
+            z.enum([
+              "human_decision",
+              "scope_expansion",
+              "consequential_commitment",
+              "high_impact_contradiction",
+              "review_request",
+              "imminent_blocker",
+            ]),
+          ),
+          muteUntil: z.iso.datetime().optional(),
+        })
+        .strict(),
+      request.body,
+    );
+    return {
+      preferences: await informationStore.setPreferences(principal!.id, {
+        mutedKinds: input.mutedKinds,
+        ...(input.muteUntil ? { muteUntil: input.muteUntil } : {}),
+      }),
+    };
+  });
+
+  app.get("/v1/search", async (request) => {
+    if (!informationStore)
+      throw new PilotStoreError(
+        "SEARCH_UNAVAILABLE",
+        503,
+        "Authorized search requires PostgreSQL persistence.",
+      );
+    const principal = await requestAuth.resolve(request);
+    const input = parse(
+      z.object({
+        q: z.string().trim().min(2).max(200),
+        projectId: z.string().uuid().optional(),
+        types: z.string().max(300).optional(),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+      }),
+      request.query,
+    );
+    const allowedTypes = [
+      "work_item",
+      "spec",
+      "spec_version",
+      "comment",
+      "code_reference",
+      "coordination",
+      "stand_in_activity",
+    ] as const;
+    const requestedTypes = input.types
+      ?.split(",")
+      .filter((type): type is (typeof allowedTypes)[number] =>
+        allowedTypes.includes(type as (typeof allowedTypes)[number]),
+      );
+    return {
+      items: await informationStore.search(principal!.id, {
+        query: input.q,
+        ...(input.projectId ? { projectId: input.projectId as ProjectId } : {}),
+        ...(requestedTypes?.length ? { types: requestedTypes } : {}),
+        limit: input.limit,
+      }),
     };
   });
 
@@ -540,10 +724,65 @@ export async function buildApp(
       request.query,
     );
     const items = await store.listThreads(query.kind);
+    const viewer = await requestAuth.resolve(request, false);
+    const reads = viewer
+      ? new Map(
+          (await store.listThreadReads(viewer.id)).map((entry) => [
+            entry.threadId as string,
+            entry.lastReadSequence,
+          ]),
+        )
+      : undefined;
     return {
-      items: await Promise.all(items.map((item) => presentThread(store, item))),
+      items: await Promise.all(
+        items.map((item) =>
+          presentThread(store, item, reads, viewer?.id as PrincipalId),
+        ),
+      ),
     };
   });
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/read",
+    async (request, reply) => {
+      const input = parse(MarkThreadReadRequest, request.body);
+      await store.markThreadRead(
+        request.params.threadId as ThreadId,
+        input.principalId as PrincipalId,
+        input.sequence,
+      );
+      return reply.status(204).send();
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/conclusion",
+    async (request, reply) => {
+      const input = parse(ConcludeThreadRequest, request.body);
+      try {
+        const result = await store.concludeThreadIntoParent({
+          threadId: request.params.threadId as ThreadId,
+          actorId: input.actorId as PrincipalId,
+          conclusion: input.conclusion,
+          messageId: input.messageId as Parameters<
+            PlatformStore["appendMessage"]
+          >[1]["id"],
+          at: input.createdAt,
+        });
+        return reply.status(201).send(result);
+      } catch (error) {
+        return reply.status(409).send({
+          error: {
+            code: "thread_not_concludable",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The Thread could not be concluded.",
+          },
+        });
+      }
+    },
+  );
 
   app.get<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId",
@@ -656,6 +895,52 @@ export async function buildApp(
     return await store.cursor(query.after, query.limit);
   });
 
+  /**
+   * Governance audit: who changed whose role, and who invited or removed whom.
+   *
+   * These are read off the same activity events the mutations already emit, so
+   * there is no second trail to keep in sync. Only membership and invitation
+   * events are exposed — never checkpoints, prompts or file contents.
+   */
+  app.get("/v1/governance-audit", async () => {
+    const events = await store.listActivity();
+    const entries = events
+      .filter((event) => GOVERNANCE_EVENT_TYPES.has(event.eventType))
+      .slice(0, 100)
+      .map((event) => {
+        const detail = Object.fromEntries(
+          Object.entries(event.metadata)
+            .filter(
+              ([key]) => key.startsWith("audit.") && key !== "audit.subjectId",
+            )
+            .map(([key, value]) => [key.slice("audit.".length), value]),
+        );
+        const subjectId = event.metadata["audit.subjectId"];
+        return {
+          id: event.operationId,
+          eventType: event.eventType,
+          actorId: event.actorId,
+          ...(typeof subjectId === "string" ? { subjectId } : {}),
+          aggregateId: event.aggregateId,
+          detail,
+          occurredAt: event.occurredAt,
+        };
+      });
+    const principalIds = [
+      ...new Set(
+        entries.flatMap((entry) =>
+          [entry.actorId, entry.subjectId].filter(
+            (id): id is string => id !== undefined,
+          ),
+        ),
+      ),
+    ];
+    return {
+      entries,
+      principals: await store.listPrincipals(principalIds as PrincipalId[]),
+    };
+  });
+
   app.post("/v1/runtime/heartbeat", async (_request, reply) => {
     localRuntimeHeartbeatAt = Date.now();
     return reply.status(202).send({ accepted: true });
@@ -685,12 +970,24 @@ export async function buildApp(
 async function presentThread(
   store: PlatformStore,
   item: Awaited<ReturnType<PlatformStore["getThread"]>> & {},
+  reads?: Map<string, number>,
+  viewerId?: PrincipalId,
 ) {
   const operationIds = item.messages
     .map((message) => message.operationId)
     .filter((id): id is OperationId => id !== undefined);
+  // Unread is what arrived after your marker that you did not send yourself.
+  const lastRead = reads?.get(item.thread.id) ?? 0;
+  const unreadCount = viewerId
+    ? item.messages.filter(
+        (message) =>
+          message.sequence > lastRead && message.senderId !== viewerId,
+      ).length
+    : 0;
   return {
     ...item,
+    unreadCount,
+    lastReadSequence: lastRead,
     principals: await store.listPrincipals(item.thread.participantIds),
     actions: (await store.listActionEnvelopes(operationIds)).map(
       (envelope) => ({

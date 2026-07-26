@@ -1,95 +1,78 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { deviceAuthorization, magicLink } from "better-auth/plugins";
+import { deviceAuthorization } from "better-auth/plugins";
 import type { PrincipalId } from "@intero/domain";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
 
 import type { PrincipalSummary } from "./platform-store.js";
 import { PilotStoreError } from "./pilot-store.js";
 
 const DEVELOPMENT_IDENTITY_HEADER = "x-intero-dev-principal-id";
-
-export interface MagicLinkSender {
-  send(input: {
-    email: string;
-    url: string;
-    expiresInSeconds: number;
-  }): Promise<void>;
-}
+export const ACTIVATION_BOOTSTRAP_HEADER =
+  "x-intero-activation-bootstrap-secret";
 
 export interface AuthConfig {
   publicUrl: string;
   secret: string;
   rpId: string;
   database?: Pool;
-  githubClientId?: string;
-  githubClientSecret?: string;
   trustedOrigins?: string[];
-  authorizeMagicLink?: (input: {
-    email: string;
-    invitationToken?: string;
-  }) => Promise<boolean>;
 }
 
-export function createInteroAuth(config: AuthConfig, sender: MagicLinkSender) {
-  const github =
-    config.githubClientId && config.githubClientSecret
-      ? {
-          github: {
-            clientId: config.githubClientId,
-            clientSecret: config.githubClientSecret,
-          },
-        }
-      : undefined;
-
+export function createInteroAuth(config: AuthConfig) {
   return betterAuth({
     baseURL: config.publicUrl,
     trustedOrigins: config.trustedOrigins ?? [config.publicUrl],
     secret: config.secret,
     ...(config.database ? { database: config.database } : {}),
-    ...(github ? { socialProviders: github } : {}),
-    ...(config.authorizeMagicLink
-      ? {
-          hooks: {
-            before: createAuthMiddleware(async (context) => {
-              if (context.path !== "/sign-in/magic-link") return;
-              const body = context.body as {
-                email?: unknown;
-                metadata?: { invitationToken?: unknown };
-              };
-              if (
-                typeof body.email !== "string" ||
-                !(await config.authorizeMagicLink!({
-                  email: normalizeEmail(body.email),
-                  ...(typeof body.metadata?.invitationToken === "string"
-                    ? { invitationToken: body.metadata.invitationToken }
-                    : {}),
-                }))
-              ) {
-                throw new APIError("FORBIDDEN", {
-                  message:
-                    "This email does not have an accepted membership or a matching invitation.",
-                });
-              }
-            }),
-          },
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 12,
+      maxPasswordLength: 128,
+      autoSignIn: true,
+    },
+    rateLimit: {
+      enabled: true,
+      window: 60,
+      max: 20,
+      customRules: {
+        "/sign-in/email": { window: 60, max: 5 },
+        "/passkey/generate-authenticate-options": { window: 60, max: 10 },
+      },
+    },
+    hooks: {
+      before: createAuthMiddleware(async (context) => {
+        if (
+          context.path === "/sign-up/email" &&
+          !safeSecretEquals(
+            context.headers?.get(ACTIVATION_BOOTSTRAP_HEADER),
+            config.secret,
+          )
+        ) {
+          throw new APIError("FORBIDDEN", {
+            message:
+              "Accounts can only be activated from a valid team invitation.",
+          });
         }
-      : {}),
-    plugins: [
-      magicLink({
-        expiresIn: 600,
-        storeToken: "hashed",
-        rateLimit: { window: 60, max: 5 },
-        sendMagicLink: async ({ email, url }) => {
-          await sender.send({ email, url, expiresInSeconds: 600 });
-        },
+        if (
+          context.path.includes("forget-password") ||
+          context.path.includes("reset-password")
+        ) {
+          throw new APIError("NOT_FOUND", {
+            message:
+              "Self-service password recovery is not available. Contact an organization administrator.",
+          });
+        }
       }),
+    },
+    plugins: [
       passkey({
         rpID: config.rpId,
         rpName: "Intero",
-        origin: config.publicUrl,
+        origin: config.trustedOrigins ?? [config.publicUrl],
       }),
       deviceAuthorization({
         verificationUri: `${config.publicUrl}/device`,
@@ -99,19 +82,36 @@ export function createInteroAuth(config: AuthConfig, sender: MagicLinkSender) {
   });
 }
 
+function safeSecretEquals(
+  candidate: string | null | undefined,
+  expected: string,
+) {
+  if (!candidate) return false;
+  const candidateBuffer = Buffer.from(candidate);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    candidateBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(candidateBuffer, expectedBuffer)
+  );
+}
+
 export type InteroAuth = ReturnType<typeof createInteroAuth>;
 
 export interface AuthenticatedPrincipal extends PrincipalSummary {
   email: string;
   authUserId?: string;
+  avatarTone?: "accent" | "green" | "amber" | "cool";
 }
 
 export interface PrincipalDirectory {
   get(principalId: PrincipalId): Promise<AuthenticatedPrincipal | undefined>;
   list(principalIds: PrincipalId[]): Promise<AuthenticatedPrincipal[]>;
-  updateDisplayName(
+  updateProfile(
     principalId: PrincipalId,
-    displayName: string,
+    input: {
+      displayName?: string;
+      avatarTone?: AuthenticatedPrincipal["avatarTone"];
+    },
   ): Promise<AuthenticatedPrincipal>;
 }
 
@@ -130,10 +130,11 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
       id: PrincipalId;
       display_name: string;
       kind: PrincipalSummary["kind"];
+      avatar_tone: "accent" | "green" | "amber" | "cool";
       email: string | null;
       auth_user_id: string | null;
     }>(
-      `SELECT p.id, p.display_name, p.kind, u.email,
+      `SELECT p.id, p.display_name, p.kind, p.avatar_tone, u.email,
               ap.auth_user_id
        FROM principals p
        LEFT JOIN auth_principals ap ON ap.principal_id = p.id
@@ -146,21 +147,27 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
       id: row.id,
       displayName: row.display_name,
       kind: row.kind,
+      avatarTone: row.avatar_tone,
       email: row.email ?? "",
       ...(row.auth_user_id ? { authUserId: row.auth_user_id } : {}),
     }));
   }
 
-  async updateDisplayName(
+  async updateProfile(
     principalId: PrincipalId,
-    displayName: string,
+    input: {
+      displayName?: string;
+      avatarTone?: AuthenticatedPrincipal["avatarTone"];
+    },
   ): Promise<AuthenticatedPrincipal> {
-    const normalized = displayName.trim();
+    const normalized = input.displayName?.trim();
     await this.database.query(
       `UPDATE principals
-       SET display_name = $2, updated_at = now()
+       SET display_name = COALESCE($2, display_name),
+           avatar_tone = COALESCE($3, avatar_tone),
+           updated_at = now()
        WHERE id = $1`,
-      [principalId, normalized],
+      [principalId, normalized, input.avatarTone],
     );
     const principal = await this.get(principalId);
     if (!principal) {
@@ -181,6 +188,7 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
     for (const identity of identities) {
       this.principals.set(identity.id, {
         ...identity,
+        avatarTone: "accent",
         email: `${identity.displayName
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, ".")
@@ -203,9 +211,12 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
     });
   }
 
-  async updateDisplayName(
+  async updateProfile(
     principalId: PrincipalId,
-    displayName: string,
+    input: {
+      displayName?: string;
+      avatarTone?: AuthenticatedPrincipal["avatarTone"];
+    },
   ): Promise<AuthenticatedPrincipal> {
     const principal = this.principals.get(principalId);
     if (!principal) {
@@ -215,7 +226,11 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
         "The signed-in Intero profile was not found.",
       );
     }
-    const updated = { ...principal, displayName: displayName.trim() };
+    const updated = {
+      ...principal,
+      ...(input.displayName ? { displayName: input.displayName.trim() } : {}),
+      ...(input.avatarTone ? { avatarTone: input.avatarTone } : {}),
+    };
     this.principals.set(principalId, updated);
     return structuredClone(updated);
   }

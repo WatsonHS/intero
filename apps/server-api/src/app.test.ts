@@ -25,6 +25,143 @@ describe("Intero API vertical slice", () => {
     await app.close();
   });
 
+  it("branches a Thread, concludes it back into its parent, and refuses twice", async () => {
+    const alex = "019f9a00-0000-7000-8000-000000000101" as PrincipalId;
+    const priya = "019f9a00-0000-7000-8000-000000000102" as PrincipalId;
+    const teamId = uuidv7();
+    const createThread = (body: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: "/v1/threads", payload: body });
+
+    const parentId = uuidv7();
+    const parent = await createThread({
+      id: parentId,
+      kind: "room",
+      title: "#intero-core",
+      participantIds: [alex, priya],
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      teamId,
+      createdAt: new Date().toISOString(),
+    });
+    expect(parent.statusCode).toBe(201);
+    // The owning team is optional but must survive the round trip when set.
+    expect(parent.json<ConversationThread>().teamId).toBe(teamId);
+
+    const branchId = uuidv7();
+    const branch = await createThread({
+      id: branchId,
+      kind: "human_group",
+      title: "confidence ownership",
+      participantIds: [alex, priya],
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      parentThreadId: parentId,
+      createdAt: new Date().toISOString(),
+    });
+    expect(branch.json<ConversationThread>().parentThreadId).toBe(parentId);
+
+    const concluded = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${branchId}/conclusion`,
+      payload: {
+        messageId: uuidv7(),
+        actorId: alex,
+        conclusion: "Settled: optional in revision 3.",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    expect(concluded.statusCode).toBe(201);
+    const result = concluded.json<{
+      thread: ConversationThread;
+      parentMessage: { body: string; threadId: string };
+    }>();
+    expect(result.thread.concludedAt).toBeDefined();
+    expect(result.thread.concludedBy).toBe(alex);
+    // The conclusion lands in the parent, which is the whole point.
+    expect(result.parentMessage.threadId).toBe(parentId);
+    expect(result.parentMessage.body).toContain("optional in revision 3");
+
+    const again = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${branchId}/conclusion`,
+      payload: {
+        messageId: uuidv7(),
+        actorId: alex,
+        conclusion: "Settled again.",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it("counts unread as other people's messages past your read marker", async () => {
+    // Unread is per viewer, so both people must be resolvable identities —
+    // an unauthenticated caller has no read marker and sees zero.
+    const alex = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
+    const priya = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      payload: {
+        id: threadId,
+        kind: "room",
+        title: "#unread",
+        participantIds: [alex, priya],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    for (const senderId of [priya, priya, alex]) {
+      await app.inject({
+        method: "POST",
+        url: `/v1/threads/${threadId}/messages`,
+        payload: {
+          id: uuidv7(),
+          senderId,
+          body: "hello",
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    const unreadFor = async (viewer: PrincipalId) => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/threads",
+        headers: { "x-intero-dev-principal-id": viewer },
+      });
+      return response
+        .json<{
+          items: Array<{ thread: { id: string }; unreadCount: number }>;
+        }>()
+        .items.find((item) => item.thread.id === threadId)?.unreadCount;
+    };
+
+    // Your own messages are never unread to you.
+    expect(await unreadFor(alex)).toBe(2);
+    expect(await unreadFor(priya)).toBe(1);
+
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/read`,
+      payload: { principalId: alex, sequence: 3 },
+    });
+    expect(await unreadFor(alex)).toBe(0);
+
+    // Re-reading an older message must not resurrect the ones after it.
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/read`,
+      payload: { principalId: alex, sequence: 1 },
+    });
+    expect(await unreadFor(alex)).toBe(0);
+  });
+
   it("keeps demo fixtures opt-in", () => {
     expect(demoSeedingEnabled(undefined)).toBe(false);
     expect(demoSeedingEnabled("false")).toBe(false);
@@ -370,7 +507,11 @@ describe("Intero API vertical slice", () => {
       status: "rejected",
       suggestedAgentAction: "narrow",
     });
-    const inbox = await app.inject({ method: "GET", url: "/v1/action-inbox" });
+    const inbox = await app.inject({
+      method: "GET",
+      url: "/v1/action-inbox",
+      headers: { "x-intero-dev-principal-id": actorId },
+    });
     expect(inbox.json().items).toHaveLength(1);
     expect(inbox.json().items[0].kind).toBe("scope_expansion");
     const durableThread = await app.inject({

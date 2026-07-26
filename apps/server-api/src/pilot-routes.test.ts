@@ -87,6 +87,39 @@ describe("pilot cloud-first vertical slice", () => {
     await app.close();
   });
 
+  it("persists account display name and avatar tone through the profile boundary", async () => {
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { displayName: "Alex Lin", avatarTone: "green" },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().profile).toMatchObject({
+      displayName: "Alex Lin",
+      avatarTone: "green",
+    });
+
+    const fetched = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().profile).toMatchObject({
+      displayName: "Alex Lin",
+      avatarTone: "green",
+    });
+
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { avatarTone: "rainbow" },
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it("requires a selected identity and keeps provider credentials server-only", async () => {
     const unauthorized = await app.inject({
       method: "POST",

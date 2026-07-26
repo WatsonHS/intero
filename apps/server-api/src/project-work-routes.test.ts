@@ -1,24 +1,13 @@
-import {
-  PrincipalId,
-  ProjectId,
-  type WorkActor,
-  uuidv7,
-} from "@intero/domain";
+import { PrincipalId, ProjectId, type WorkActor, uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
 import type { PilotStore } from "./pilot-store.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 
-const principalId = PrincipalId.parse(
-  "019b5ac0-7600-7000-8000-0000000000a1",
-);
-const projectId = ProjectId.parse(
-  "019b5ac0-7600-7000-8000-000000000011",
-);
-const otherProjectId = ProjectId.parse(
-  "019b5ac0-7600-7000-8000-000000000012",
-);
+const principalId = PrincipalId.parse("019b5ac0-7600-7000-8000-0000000000a1");
+const projectId = ProjectId.parse("019b5ac0-7600-7000-8000-000000000011");
+const otherProjectId = ProjectId.parse("019b5ac0-7600-7000-8000-000000000012");
 const teamId = "019b5ac0-7600-7000-8000-000000000021";
 
 describe("Phase 5 Project Work routes", () => {
@@ -95,8 +84,7 @@ describe("Phase 5 Project Work routes", () => {
     app = await buildApp({
       logger: false,
       metrics: false,
-      projectWorkStore:
-        projectStore as unknown as PostgresProjectWorkStore,
+      projectWorkStore: projectStore as unknown as PostgresProjectWorkStore,
       pilotStore: pilotStore as unknown as PilotStore,
       requestAuth: {
         mode: "session",
@@ -151,7 +139,6 @@ describe("Phase 5 Project Work routes", () => {
       payload: {
         title: "Verify signed refund export",
         status: "todo",
-        priority: "P1",
       },
     });
 
@@ -163,6 +150,39 @@ describe("Phase 5 Project Work routes", () => {
     });
     expect(createdIdempotencyKey).toBe("phase5-route-idempotency");
     expect(response.body).not.toContain("one-time-bound-agent-credential");
+  });
+
+  it("keeps Agent automation inside human ownership and priority boundaries", async () => {
+    signedIn = false;
+    for (const payload of [
+      {
+        title: "Agent must not assign a person",
+        ownerId: principalId,
+      },
+      {
+        title: "Agent must not reprioritize work",
+        priority: "P0",
+      },
+      {
+        title: "Agent must not create a completed result",
+        status: "done",
+      },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/project-work/${projectId}/items`,
+        headers: {
+          authorization: "Bearer one-time-bound-agent-credential",
+          "idempotency-key": `phase7-boundary-${payload.title}`,
+        },
+        payload,
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({
+        code: "AUTOMATION_AUTHORITY_DENIED",
+      });
+    }
+    expect(projectStore.createWorkItem).not.toHaveBeenCalled();
   });
 
   it("keeps PI/Sprint governance limited to an admin or Team Leader", async () => {

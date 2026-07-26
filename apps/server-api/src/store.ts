@@ -71,6 +71,11 @@ export class InMemoryPlatformStore {
   readonly envelopes = new Map<OperationId, ActionEnvelope>();
   readonly threads = new Map<ThreadId, ConversationThread>();
   readonly messages = new Map<ThreadId, ThreadMessage[]>();
+  /** Keyed `${threadId}:${principalId}` — the read marker per person. */
+  private readonly threadReads = new Map<
+    string,
+    { threadId: ThreadId; lastReadSequence: number }
+  >();
   readonly specs = new Map<SpecId, Spec>();
   readonly revisions = new Map<SpecId, SpecRevision[]>();
   readonly reviews = new Map<SpecId, SpecReviewResponse[]>();
@@ -224,8 +229,11 @@ export class InMemoryPlatformStore {
       ? authorizeEnvelope(envelope, grant)
       : { allowed: false as const, reason: "Capability Grant was not found." };
     if (!decision.allowed) {
+      const attentionPrincipalId =
+        this.humanThreadParticipant(envelope.threadId, envelope.actorId) ??
+        envelope.actorId;
       this.createInboxItem(
-        envelope.actorId,
+        attentionPrincipalId,
         "scope_expansion",
         "Stand-in action needs authorization",
         decision.reason,
@@ -234,8 +242,11 @@ export class InMemoryPlatformStore {
       return this.coordinationResult(envelope, "rejected", decision.reason);
     }
     if (decision.requiresConfirmation) {
+      const attentionPrincipalId =
+        this.humanThreadParticipant(envelope.threadId, envelope.actorId) ??
+        envelope.actorId;
       this.createInboxItem(
-        envelope.actorId,
+        attentionPrincipalId,
         "consequential_commitment",
         "Stand-in action needs confirmation",
         envelope.humanMessage,
@@ -282,9 +293,7 @@ export class InMemoryPlatformStore {
     for (const participantId of thread.participantIds) {
       this.ensurePrincipal(
         participantId,
-        thread.standInIds.includes(participantId)
-          ? "stand_in"
-          : "human",
+        thread.standInIds.includes(participantId) ? "stand_in" : "human",
       );
     }
     this.threads.set(thread.id, thread);
@@ -314,6 +323,72 @@ export class InMemoryPlatformStore {
       message,
     ]);
     return message;
+  }
+
+  /** Read markers only move forward; see the Postgres store for why. */
+  markThreadRead(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    sequence: number,
+  ): void {
+    const key = `${threadId}:${principalId}`;
+    const current = this.threadReads.get(key)?.lastReadSequence ?? 0;
+    this.threadReads.set(key, {
+      threadId,
+      lastReadSequence: Math.max(current, sequence),
+    });
+  }
+
+  listThreadReads(
+    principalId: PrincipalId,
+  ): Array<{ threadId: ThreadId; lastReadSequence: number }> {
+    return [...this.threadReads.entries()]
+      .filter(([key]) => key.endsWith(`:${principalId}`))
+      .map(([, value]) => value);
+  }
+
+  concludeThreadIntoParent(input: {
+    threadId: ThreadId;
+    actorId: PrincipalId;
+    conclusion: string;
+    messageId: ThreadMessage["id"];
+    at: string;
+  }): { thread: ConversationThread; parentMessage: ThreadMessage } {
+    const thread = this.threads.get(input.threadId);
+    if (!thread) throw new Error("Thread was not found.");
+    if (!thread.parentThreadId) {
+      throw new Error("Thread did not branch from another conversation.");
+    }
+    if (thread.concludedAt) throw new Error("Thread was already concluded.");
+    if (!thread.participantIds.includes(input.actorId)) {
+      throw new Error("Only a participant can conclude the Thread.");
+    }
+    const parent = this.threads.get(thread.parentThreadId);
+    if (!parent) throw new Error("Parent Thread was not found.");
+    if (!parent.participantIds.includes(input.actorId)) {
+      throw new Error("Only a participant of the parent can conclude.");
+    }
+    const parentMessage = buildThreadMessage(parent, {
+      id: input.messageId,
+      senderId: input.actorId,
+      body: input.conclusion,
+      createdAt: input.at,
+    });
+    this.threads.set(parent.id, {
+      ...parent,
+      sequence: parentMessage.sequence,
+    });
+    this.messages.set(parent.id, [
+      ...(this.messages.get(parent.id) ?? []),
+      parentMessage,
+    ]);
+    const concluded: ConversationThread = {
+      ...thread,
+      concludedAt: input.at,
+      concludedBy: input.actorId,
+    };
+    this.threads.set(thread.id, concluded);
+    return { thread: concluded, parentMessage };
   }
 
   addStandInToThread(
@@ -402,9 +477,7 @@ export class InMemoryPlatformStore {
     }
     this.ensurePrincipal(
       review.reviewerId,
-      review.kind === "stand_in_impact_analysis"
-        ? "stand_in"
-        : "human",
+      review.kind === "stand_in_impact_analysis" ? "stand_in" : "human",
     );
     this.reviews.set(specId, [...(this.reviews.get(specId) ?? []), review]);
     if (review.kind === "human_changes_requested") {
@@ -557,9 +630,7 @@ export class InMemoryPlatformStore {
     this.principals.set(id, {
       id,
       displayName:
-        kind === "stand_in"
-          ? "Intero Stand-in"
-          : `Principal ${id.slice(0, 8)}`,
+        kind === "stand_in" ? "Intero Stand-in" : `Principal ${id.slice(0, 8)}`,
       kind,
     });
   }
@@ -582,6 +653,18 @@ export class InMemoryPlatformStore {
     };
     this.inbox.set(item.id, item);
     return item;
+  }
+
+  private humanThreadParticipant(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): PrincipalId | undefined {
+    const thread = this.threads.get(threadId);
+    return thread?.participantIds.find(
+      (principalId) =>
+        principalId !== actorId &&
+        this.principals.get(principalId)?.kind === "human",
+    );
   }
 
   private coordinationResult(
@@ -828,8 +911,7 @@ export function seedDemoStore(store: InMemoryPlatformStore): void {
   });
 
   const humanId = "019b5ac0-7600-7000-8000-000000000021" as PrincipalId;
-  const standInId =
-    "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
+  const standInId = "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
   const threadId = "019b5ac0-7600-7000-8000-000000000060" as ThreadId;
   store.createThread({
     id: threadId,

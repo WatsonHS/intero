@@ -286,13 +286,34 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
         stage: "in_development",
       },
       memberAgentActor,
+      "phase7-agent-feature-create",
     );
+    const duplicateFeature = await store.createFeature(
+      {
+        projectId,
+        title: "A replay must not create this Feature",
+        description: "",
+        stage: "planned",
+      },
+      memberAgentActor,
+      "phase7-agent-feature-create",
+    );
+    expect(duplicateFeature.id).toBe(feature.id);
     const detached = await store.updateFeature(
       projectId,
       feature.id,
       { epicId: null, ownerId: null },
       memberAgentActor,
+      "phase7-agent-feature-update",
     );
+    const duplicateUpdate = await store.updateFeature(
+      projectId,
+      feature.id,
+      { title: "A replay must not apply this title" },
+      memberAgentActor,
+      "phase7-agent-feature-update",
+    );
+    expect(duplicateUpdate.title).toBe(detached.title);
     expect(detached.epicId).toBeUndefined();
     expect(detached.ownerId).toBeUndefined();
 
@@ -338,6 +359,14 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
       [memberId],
       adminActor,
     );
+    const targetedReview = await admin.query(
+      `SELECT principal_id,resolved_at FROM action_inbox
+       WHERE organization_id=$1 AND principal_id=$2 AND kind='review_request'`,
+      [organizationId, memberId],
+    );
+    expect(targetedReview.rows).toEqual([
+      expect.objectContaining({ principal_id: memberId, resolved_at: null }),
+    ]);
     await expect(
       store.confirmSpec(projectId, v1.spec.id, adminActor),
     ).rejects.toThrow("author cannot confirm");
@@ -349,6 +378,15 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
     expect(confirmedV1.spec.confirmedRevisionId).toBe(
       confirmedV1.spec.currentRevisionId,
     );
+    expect(
+      (
+        await admin.query(
+          `SELECT resolved_at FROM action_inbox
+           WHERE organization_id=$1 AND principal_id=$2 AND kind='review_request'`,
+          [organizationId, memberId],
+        )
+      ).rows[0]?.resolved_at,
+    ).toBeTruthy();
 
     const v2 = await store.createSpecVersion({
       projectId,
@@ -363,6 +401,17 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
     });
     const stillConfirmed = await store.getConfirmed(projectId, v1.spec.id);
     expect(stillConfirmed?.revision.revision).toBe(1);
+    await store.requestSpecReview(projectId, v1.spec.id, [], memberActor);
+    expect(
+      (
+        await admin.query(
+          `SELECT count(*)::int AS count FROM action_inbox
+           WHERE organization_id=$1 AND resolved_at IS NULL
+             AND dedupe_key LIKE $2`,
+          [organizationId, `spec-review:${v2.spec.currentRevisionId}:%`],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
 
     const commented = await store.addSpecComment({
       projectId,
@@ -476,10 +525,9 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
     const client = new Client({ connectionString: databaseAppUrl });
     await client.connect();
     await client.query("BEGIN");
-    await client.query(
-      "SELECT set_config('intero.organization_id',$1,true)",
-      [otherOrganizationId],
-    );
+    await client.query("SELECT set_config('intero.organization_id',$1,true)", [
+      otherOrganizationId,
+    ]);
     for (const table of phase5Tables) {
       const hidden = await client.query<{ count: string }>(
         `SELECT count(*) FROM ${table} WHERE organization_id = $1`,
@@ -519,6 +567,7 @@ const phase5Tables = [
 ] as const;
 
 const cleanupTables = [
+  "action_inbox",
   "project_spec_confirmations",
   "project_spec_comments",
   "project_spec_comment_threads",
@@ -537,4 +586,5 @@ const cleanupTables = [
   "project_epics",
   "outbox",
   "activity_events",
+  "idempotency_keys",
 ] as const;

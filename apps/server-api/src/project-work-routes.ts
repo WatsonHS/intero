@@ -50,16 +50,21 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/epics",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        title: z.string().min(1).max(240),
-        description: z.string().max(8_000).default(""),
-      }).strict().parse(request.body);
-      return reply.status(201).send(
-        await options.store.createEpic(
-          { projectId: access.projectId, ...input },
-          access.actor,
-        ),
-      );
+      const input = z
+        .object({
+          title: z.string().min(1).max(240),
+          description: z.string().max(8_000).default(""),
+        })
+        .strict()
+        .parse(request.body);
+      return reply
+        .status(201)
+        .send(
+          await options.store.createEpic(
+            { projectId: access.projectId, ...input },
+            access.actor,
+          ),
+        );
     },
   );
 
@@ -104,6 +109,7 @@ export async function registerProjectWorkRoutes(
         })
         .strict()
         .parse(request.body);
+      assertAgentFeatureBoundaries(access, input);
       return options.store.updateFeature(
         access.projectId,
         FeatureId.parse(request.params.featureId),
@@ -145,6 +151,7 @@ export async function registerProjectWorkRoutes(
               }),
         } as Parameters<PostgresProjectWorkStore["updateFeature"]>[2],
         access.actor,
+        idempotencyKey(request),
       );
     },
   );
@@ -153,15 +160,19 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/features",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        title: z.string().min(1).max(240),
-        description: z.string().max(8_000).default(""),
-        stage: FeatureStage.default("planned"),
-        epicId: z.uuid().optional(),
-        ownerId: z.uuid().optional(),
-        piId: z.uuid().optional(),
-        sprintId: z.uuid().optional(),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          title: z.string().min(1).max(240),
+          description: z.string().max(8_000).default(""),
+          stage: FeatureStage.default("planned"),
+          epicId: z.uuid().optional(),
+          ownerId: z.uuid().optional(),
+          piId: z.uuid().optional(),
+          sprintId: z.uuid().optional(),
+        })
+        .strict()
+        .parse(request.body);
+      assertAgentFeatureBoundaries(access, input);
       return reply.status(201).send(
         await options.store.createFeature(
           {
@@ -181,6 +192,7 @@ export async function registerProjectWorkRoutes(
               : {}),
           },
           access.actor,
+          idempotencyKey(request),
         ),
       );
     },
@@ -191,6 +203,7 @@ export async function registerProjectWorkRoutes(
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
       const input = workItemMutation.parse(request.body);
+      assertAgentWorkItemBoundaries(access, input, true);
       return reply.status(201).send(
         await options.store.createWorkItem(
           {
@@ -235,6 +248,7 @@ export async function registerProjectWorkRoutes(
     async (request) => {
       const access = await requireProjectAccess(request, options, "either");
       const input = workItemMutation.partial().parse(request.body);
+      assertAgentWorkItemBoundaries(access, input, false);
       return options.store.updateWorkItem(
         access.projectId,
         WorkItemId.parse(request.params.workItemId),
@@ -280,10 +294,13 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId/comments",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        body: z.string().min(1).max(16_000),
-        parentId: z.uuid().optional(),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          body: z.string().min(1).max(16_000),
+          parentId: z.uuid().optional(),
+        })
+        .strict()
+        .parse(request.body);
       return reply.status(201).send(
         await options.store.addWorkComment(access.projectId, {
           id: WorkCommentId.parse(uuidv7()),
@@ -303,13 +320,16 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId/code-references",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        kind: CodeReferenceKind,
-        label: z.string().min(1).max(240),
-        value: z.string().min(1).max(500),
-        url: z.url().optional(),
-        repository: z.string().max(240).optional(),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          kind: CodeReferenceKind,
+          label: z.string().min(1).max(240),
+          value: z.string().min(1).max(500),
+          url: z.url().optional(),
+          repository: z.string().max(240).optional(),
+        })
+        .strict()
+        .parse(request.body);
       return reply.status(201).send(
         await options.store.addCodeReference(access.projectId, {
           id: uuidv7(),
@@ -338,18 +358,25 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId/relations",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        targetId: z.uuid(),
-        kind: WorkRelationKind,
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          targetId: z.uuid(),
+          kind: WorkRelationKind,
+        })
+        .strict()
+        .parse(request.body);
       return reply.status(201).send(
-        await options.store.addRelation(access.projectId, {
-          sourceId: WorkItemId.parse(request.params.workItemId),
-          targetId: WorkItemId.parse(input.targetId),
-          kind: input.kind,
-          createdBy: access.actor,
-          createdAt: new Date().toISOString(),
-        }),
+        await options.store.addRelation(
+          access.projectId,
+          {
+            sourceId: WorkItemId.parse(request.params.workItemId),
+            targetId: WorkItemId.parse(input.targetId),
+            kind: input.kind,
+            createdBy: access.actor,
+            createdAt: new Date().toISOString(),
+          },
+          idempotencyKey(request),
+        ),
       );
     },
   );
@@ -358,18 +385,23 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/program-increments",
     async (request, reply) => {
       const access = await requireProjectGovernor(request, options);
-      const input = z.object({
-        startDate: z.iso.date(),
-        sprintCount: z.number().int().min(1).max(12),
-        sprintDurationWeeks: z.number().int().min(1).max(8),
-        timezone: z.string().min(1).max(80),
-      }).strict().parse(request.body);
-      return reply.status(201).send(
-        await options.store.createProgramIncrement(
-          { projectId: access.projectId, ...input },
-          access.actor,
-        ),
-      );
+      const input = z
+        .object({
+          startDate: z.iso.date(),
+          sprintCount: z.number().int().min(1).max(12),
+          sprintDurationWeeks: z.number().int().min(1).max(8),
+          timezone: z.string().min(1).max(80),
+        })
+        .strict()
+        .parse(request.body);
+      return reply
+        .status(201)
+        .send(
+          await options.store.createProgramIncrement(
+            { projectId: access.projectId, ...input },
+            access.actor,
+          ),
+        );
     },
   );
 
@@ -501,14 +533,18 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/specs/:specId/request-review",
     async (request) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        reviewerIds: z.array(z.uuid()).max(20).default([]),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          reviewerIds: z.array(z.uuid()).max(20).default([]),
+        })
+        .strict()
+        .parse(request.body);
       return options.store.requestSpecReview(
         access.projectId,
         request.params.specId,
         input.reviewerIds,
         access.actor,
+        idempotencyKey(request),
       );
     },
   );
@@ -517,15 +553,20 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/specs/:specId/comments",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        revisionId: z.uuid(),
-        threadId: z.uuid().optional(),
-        parentId: z.uuid().optional(),
-        lineStart: z.number().int().positive(),
-        lineEnd: z.number().int().positive(),
-        selection: z.string().max(2_000).optional(),
-        body: z.string().min(1).max(16_000),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          revisionId: z.uuid(),
+          threadId: z.uuid().optional(),
+          parentId: z.uuid().optional(),
+          lineStart: z.number().int().positive(),
+          lineEnd: z.number().int().positive(),
+          charStart: z.number().int().nonnegative().optional(),
+          charEnd: z.number().int().nonnegative().optional(),
+          selection: z.string().max(2_000).optional(),
+          body: z.string().min(1).max(16_000),
+        })
+        .strict()
+        .parse(request.body);
       return reply.status(201).send(
         await options.store.addSpecComment({
           projectId: access.projectId,
@@ -533,6 +574,10 @@ export async function registerProjectWorkRoutes(
           revisionId: input.revisionId,
           lineStart: input.lineStart,
           lineEnd: input.lineEnd,
+          ...(input.charStart === undefined
+            ? {}
+            : { charStart: input.charStart }),
+          ...(input.charEnd === undefined ? {} : { charEnd: input.charEnd }),
           body: input.body,
           ...(input.threadId ? { threadId: input.threadId } : {}),
           ...(input.parentId ? { parentId: input.parentId } : {}),
@@ -547,9 +592,12 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/spec-comment-threads/:threadId",
     async (request) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = z.object({
-        status: z.enum(["open", "resolved"]),
-      }).strict().parse(request.body);
+      const input = z
+        .object({
+          status: z.enum(["open", "resolved"]),
+        })
+        .strict()
+        .parse(request.body);
       return options.store.setSpecCommentStatus({
         projectId: access.projectId,
         threadId: request.params.threadId,
@@ -610,35 +658,41 @@ export async function registerProjectWorkRoutes(
         access.projectId,
         request.params.specId,
       );
-      return item ? item : reply.status(404).send({
-        code: "CONFIRMED_SPEC_NOT_FOUND",
-        message: "No confirmed version is available.",
-      });
+      return item
+        ? item
+        : reply.status(404).send({
+            code: "CONFIRMED_SPEC_NOT_FOUND",
+            message: "No confirmed version is available.",
+          });
     },
   );
 }
 
-const workItemMutation = z.object({
-  title: z.string().min(1).max(240),
-  description: z.string().max(16_000).optional(),
-  status: WorkItemStatus.optional(),
-  ownerId: z.uuid().nullable().optional(),
-  featureId: z.uuid().nullable().optional(),
-  specId: z.uuid().nullable().optional(),
-  priority: WorkPriority.optional(),
-  points: z.number().finite().nonnegative().nullable().optional(),
-  piId: z.uuid().nullable().optional(),
-  sprintId: z.uuid().nullable().optional(),
-  completionEvidence: z.string().max(4_000).nullable().optional(),
-  coordinationThreadIds: z.array(z.uuid()).max(50).optional(),
-}).strict();
+const workItemMutation = z
+  .object({
+    title: z.string().min(1).max(240),
+    description: z.string().max(16_000).optional(),
+    status: WorkItemStatus.optional(),
+    ownerId: z.uuid().nullable().optional(),
+    featureId: z.uuid().nullable().optional(),
+    specId: z.uuid().nullable().optional(),
+    priority: WorkPriority.optional(),
+    points: z.number().finite().nonnegative().nullable().optional(),
+    piId: z.uuid().nullable().optional(),
+    sprintId: z.uuid().nullable().optional(),
+    completionEvidence: z.string().max(4_000).nullable().optional(),
+    coordinationThreadIds: z.array(z.uuid()).max(50).optional(),
+  })
+  .strict();
 
-const specVersionMutation = z.object({
-  title: z.string().min(1).max(240),
-  markdown: z.string().min(1).max(500_000),
-  changeSummary: z.string().max(2_000).default(""),
-  affectedScopes: z.array(z.string().max(300)).max(100).default([]),
-}).strict();
+const specVersionMutation = z
+  .object({
+    title: z.string().min(1).max(240),
+    markdown: z.string().min(1).max(500_000),
+    changeSummary: z.string().max(2_000).default(""),
+    affectedScopes: z.array(z.string().max(300)).max(100).default([]),
+  })
+  .strict();
 
 type Access = {
   projectId: ProjectId;
@@ -691,7 +745,9 @@ async function requireProjectGovernor(
   },
 ): Promise<Access> {
   const access = await requireProjectAccess(request, options, "human");
-  const projects = await options.pilotStore.listProjects(access.actor.principalId);
+  const projects = await options.pilotStore.listProjects(
+    access.actor.principalId,
+  );
   const project = projects.find((item) => item.id === access.projectId)!;
   const organizationRole = await options.pilotStore.getOrganizationRole(
     access.actor.principalId,
@@ -732,23 +788,18 @@ function workItemPatch(
       ? {}
       : {
           ownerId:
-            input.ownerId === null
-              ? null
-              : PrincipalId.parse(input.ownerId),
+            input.ownerId === null ? null : PrincipalId.parse(input.ownerId),
         }),
     ...(input.featureId === undefined
       ? {}
       : {
           featureId:
-            input.featureId === null
-              ? null
-              : FeatureId.parse(input.featureId),
+            input.featureId === null ? null : FeatureId.parse(input.featureId),
         }),
     ...(input.specId === undefined
       ? {}
       : {
-          specId:
-            input.specId === null ? null : SpecId.parse(input.specId),
+          specId: input.specId === null ? null : SpecId.parse(input.specId),
         }),
     ...(input.priority === undefined ? {} : { priority: input.priority }),
     ...(input.points === undefined ? {} : { points: input.points }),
@@ -756,17 +807,13 @@ function workItemPatch(
       ? {}
       : {
           piId:
-            input.piId === null
-              ? null
-              : ProgramIncrementId.parse(input.piId),
+            input.piId === null ? null : ProgramIncrementId.parse(input.piId),
         }),
     ...(input.sprintId === undefined
       ? {}
       : {
           sprintId:
-            input.sprintId === null
-              ? null
-              : SprintId.parse(input.sprintId),
+            input.sprintId === null ? null : SprintId.parse(input.sprintId),
         }),
     ...(input.completionEvidence === undefined
       ? {}
@@ -795,4 +842,50 @@ function forbidden() {
     403,
     "This identity cannot access the Project.",
   );
+}
+
+function assertAgentFeatureBoundaries(
+  access: Access,
+  input: {
+    ownerId?: string | null | undefined;
+    stage?: "planned" | "in_development" | "released" | undefined;
+  },
+): void {
+  if (access.actor.kind !== "agent") return;
+  if (input.ownerId !== undefined) {
+    throw automationAuthorityDenied(
+      "A connected Agent cannot assign or change a Feature owner.",
+    );
+  }
+  if (input.stage === "released") {
+    throw automationAuthorityDenied(
+      "A connected Agent cannot make the human release decision.",
+    );
+  }
+}
+
+function assertAgentWorkItemBoundaries(
+  access: Access,
+  input: {
+    ownerId?: string | null | undefined;
+    priority?: "P0" | "P1" | "P2" | "P3" | undefined;
+    status?: "todo" | "in_progress" | "ready_for_test" | "done" | undefined;
+  },
+  creating: boolean,
+): void {
+  if (access.actor.kind !== "agent") return;
+  if (input.ownerId !== undefined || input.priority !== undefined) {
+    throw automationAuthorityDenied(
+      "A connected Agent cannot assign an owner or change priority.",
+    );
+  }
+  if (creating && input.status === "done") {
+    throw automationAuthorityDenied(
+      "A connected Agent cannot create work already marked done.",
+    );
+  }
+}
+
+function automationAuthorityDenied(message: string): PilotStoreError {
+  return new PilotStoreError("AUTOMATION_AUTHORITY_DENIED", 403, message);
 }

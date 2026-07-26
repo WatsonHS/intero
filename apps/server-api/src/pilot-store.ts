@@ -110,6 +110,14 @@ export interface PilotMutationContext {
   aggregateId: string;
   visibility: "private" | "project" | "organization";
   projectId?: ProjectId;
+  /** Who the change was made to, when that differs from the aggregate. */
+  subjectId?: PrincipalId;
+  /**
+   * Structured facts about the change — role names, invitation addresses, and
+   * nothing else. Never prompts, model output or file contents: this metadata
+   * is what the audit log renders, so it must stay safe to show.
+   */
+  detail?: Record<string, string>;
 }
 
 export interface PilotStore {
@@ -507,8 +515,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
   ): Promise<PilotTeamRole | undefined> {
     return (await this.readSnapshot()).memberships.find(
       (membership) =>
-        membership.teamId === teamId &&
-        membership.principalId === principalId,
+        membership.teamId === teamId && membership.principalId === principalId,
     )?.role;
   }
 
@@ -569,6 +576,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateType: "pilot_team_invitation",
         aggregateId: invitation.id,
         visibility: "organization",
+        detail: { email: invitation.email, teamId: invitation.teamId },
       },
     );
   }
@@ -635,6 +643,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
     principalId: PrincipalId,
     now: string,
   ): Promise<PilotTeamInvitation> {
+    let revokedEmail: string | undefined;
     return this.updateSnapshot(
       (snapshot) => {
         requireOrganizationAdministrator(snapshot, principalId);
@@ -649,6 +658,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "An accepted invitation cannot be revoked.",
           );
         }
+        revokedEmail = invitation.email;
         invitation.revokedAt = now;
         invitation.updatedAt = now;
         return invitation;
@@ -659,6 +669,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateType: "pilot_team_invitation",
         aggregateId: invitationId,
         visibility: "organization",
+        get detail() {
+          return { email: revokedEmail ?? "" };
+        },
       },
     );
   }
@@ -756,15 +769,17 @@ export abstract class SnapshotPilotStore implements PilotStore {
     principalId: PrincipalId;
     now: string;
   }): Promise<PilotTeamMembership> {
+    // The previous role is captured for the audit trail before it is replaced.
+    let previousRole: PilotTeamRole | undefined;
     return this.updateSnapshot(
       (snapshot) => {
         requireTeamManager(snapshot, input.teamId, input.principalId);
         const membership = snapshot.memberships.find(
           (item) =>
-            item.teamId === input.teamId &&
-            item.principalId === input.memberId,
+            item.teamId === input.teamId && item.principalId === input.memberId,
         );
         if (!membership) throw notFound("Team membership");
+        previousRole = membership.role;
         membership.role = input.role;
         return membership;
       },
@@ -774,6 +789,13 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateType: "pilot_team",
         aggregateId: input.teamId,
         visibility: "organization",
+        subjectId: input.memberId,
+        get detail() {
+          return {
+            ...(previousRole ? { from: previousRole } : {}),
+            to: input.role,
+          };
+        },
       },
     );
   }
@@ -788,8 +810,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
         requireTeamManager(snapshot, input.teamId, input.principalId);
         const index = snapshot.memberships.findIndex(
           (item) =>
-            item.teamId === input.teamId &&
-            item.principalId === input.memberId,
+            item.teamId === input.teamId && item.principalId === input.memberId,
         );
         if (index === -1) throw notFound("Team membership");
         snapshot.memberships.splice(index, 1);
@@ -800,6 +821,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateType: "pilot_team",
         aggregateId: input.teamId,
         visibility: "organization",
+        subjectId: input.memberId,
       },
     );
   }
@@ -810,6 +832,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
     principalId: PrincipalId;
     now: string;
   }): Promise<PilotOrganizationMembership> {
+    let previousRole: PilotOrganizationRole | undefined;
     return this.updateSnapshot(
       (snapshot) => {
         requireOrganizationAdministrator(snapshot, input.principalId);
@@ -817,6 +840,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
           (item) => item.principalId === input.memberId,
         );
         if (!membership) throw notFound("Organization membership");
+        previousRole = membership.role;
         if (
           membership.role === "admin" &&
           input.role === "member" &&
@@ -847,6 +871,13 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateType: "pilot_organization",
         aggregateId: input.memberId,
         visibility: "organization",
+        subjectId: input.memberId,
+        get detail() {
+          return {
+            ...(previousRole ? { from: previousRole } : {}),
+            to: input.role,
+          };
+        },
       },
     );
   }
@@ -2183,8 +2214,7 @@ function requireOrganizationAdministrator(
   if (
     !snapshot.organizationMemberships.some(
       (membership) =>
-        membership.principalId === principalId &&
-        membership.role === "admin",
+        membership.principalId === principalId && membership.role === "admin",
     ) &&
     snapshot.administratorId !== principalId
   ) {
@@ -2230,8 +2260,7 @@ function requireTeamManager(
   if (
     snapshot.organizationMemberships.some(
       (membership) =>
-        membership.principalId === principalId &&
-        membership.role === "admin",
+        membership.principalId === principalId && membership.role === "admin",
     ) ||
     snapshot.administratorId === principalId ||
     snapshot.memberships.some(
@@ -2272,9 +2301,7 @@ function requireStandInJob(
   snapshot: PilotSnapshot,
   jobKey: string,
 ): PilotStoredStandInJob {
-  const job = snapshot.standInJobs.find(
-    (item) => item.jobKey === jobKey,
-  );
+  const job = snapshot.standInJobs.find((item) => item.jobKey === jobKey);
   if (!job) throw notFound("Stand-in job");
   return job;
 }

@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  ACTIVATION_BOOTSTRAP_HEADER,
   createInteroAuth,
   mountAuth,
   resolvePrincipalForAuthUser,
@@ -15,9 +16,10 @@ const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 
 databaseSuite("Better Auth database integration", () => {
   const pool = new Pool({ connectionString: databaseAppUrl });
-  const sent: Array<{ email: string; url: string }> = [];
+  const authSecret = "intero-auth-integration-secret-at-least-32-bytes";
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `auth-${suffix}@intero.test`;
+  const mappingEmail = `auth-mapping-${suffix}@intero.test`;
   const mountedEmail = `mounted-auth-${suffix}@intero.test`;
   const authUserId = `auth-user-${suffix}`;
   const clientId = `intero-desktop:${suffix}`;
@@ -35,46 +37,59 @@ databaseSuite("Better Auth database integration", () => {
     await pool.query('DELETE FROM "deviceCode" WHERE "clientId" = $1', [
       clientId,
     ]);
-    await pool.query('DELETE FROM "user" WHERE "id" = $1', [authUserId]);
+    await pool.query('DELETE FROM "user" WHERE "id" = $1 OR email = $2', [
+      authUserId,
+      email,
+    ]);
     if (principalId)
       await pool.query("DELETE FROM principals WHERE id = $1", [principalId]);
     await pool.end();
   });
 
-  it("persists a hashed magic-link verification and issues a desktop device code", async () => {
-    const auth = createInteroAuth(
-      {
-        publicUrl: "http://localhost:4310",
-        secret: "intero-auth-integration-secret-at-least-32-bytes",
-        rpId: "localhost",
-        database: pool,
-      },
-      {
-        async send(input) {
-          sent.push({ email: input.email, url: input.url });
-        },
-      },
-    );
+  it("only bootstraps a hashed password through the server-only activation boundary", async () => {
+    const auth = createInteroAuth({
+      publicUrl: "http://localhost:4310",
+      secret: authSecret,
+      rpId: "localhost",
+      database: pool,
+    });
     await expect(
-      auth.api.signInMagicLink({
-        body: { email },
+      auth.api.signUpEmail({
+        body: {
+          name: "Activation fixture",
+          email,
+          password: "activation-password-123",
+        },
         headers: new Headers({ origin: "http://localhost:4310" }),
       }),
-    ).resolves.toEqual({ status: true });
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.url).not.toContain(email);
-    const verification = await pool.query<{
-      identifier: string;
-      value: string;
-    }>(
-      'SELECT "identifier", "value" FROM "verification" WHERE "value" LIKE $1',
-      [`%${email}%`],
+    ).rejects.toMatchObject({ status: "FORBIDDEN" });
+    await expect(
+      auth.api.signUpEmail({
+        body: {
+          name: "Activation fixture",
+          email,
+          password: "activation-password-123",
+        },
+        headers: new Headers({
+          origin: "http://localhost:4310",
+          [ACTIVATION_BOOTSTRAP_HEADER]: authSecret,
+        }),
+      }),
+    ).resolves.toMatchObject({ user: { email } });
+    const account = await pool.query<{ password: string | null }>(
+      `SELECT password FROM account
+       WHERE "userId" = (SELECT id FROM "user" WHERE email = $1)
+         AND "providerId" = 'credential'`,
+      [email],
     );
-    const rawToken = new URL(sent[0]!.url).searchParams.get("token");
-    expect(rawToken).toBeTruthy();
-    expect(verification.rows[0]?.identifier).not.toBe(rawToken);
-    expect(verification.rows[0]?.value).not.toContain(rawToken!);
-    expect(verification.rows[0]?.value).toContain(email);
+    expect(account.rows[0]?.password).toBeTruthy();
+    expect(account.rows[0]?.password).not.toBe("activation-password-123");
+    await expect(
+      auth.api.signInEmail({
+        body: { email, password: "activation-password-123" },
+        headers: new Headers({ origin: "http://localhost:4310" }),
+      }),
+    ).resolves.toMatchObject({ user: { email } });
 
     const device = await auth.api.deviceCode({
       body: { client_id: clientId, scope: "openid profile" },
@@ -88,7 +103,7 @@ databaseSuite("Better Auth database integration", () => {
       `INSERT INTO "user"
         ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
        VALUES ($1, 'Auth fixture', $2, true, now(), now())`,
-      [authUserId, email],
+      [authUserId, mappingEmail],
     );
     principalId = await resolvePrincipalForAuthUser(pool, {
       authUserId,
@@ -107,22 +122,28 @@ databaseSuite("Better Auth database integration", () => {
   });
 
   it("mounts Better Auth through Fastify with parsed JSON and credentialed CORS", async () => {
-    const mounted = createInteroAuth(
-      {
-        publicUrl: "http://localhost:4310",
-        secret: "intero-auth-integration-secret-at-least-32-bytes",
-        rpId: "localhost",
-        database: pool,
-      },
-      {
-        async send(input) {
-          sent.push({ email: input.email, url: input.url });
-        },
-      },
-    );
+    const mounted = createInteroAuth({
+      publicUrl: "http://localhost:4310",
+      secret: authSecret,
+      rpId: "localhost",
+      database: pool,
+    });
     const app = Fastify();
     mountAuth(app, mounted, ["http://127.0.0.1:5174"]);
     const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-up/email",
+      headers: {
+        origin: "http://127.0.0.1:5174",
+        "content-type": "application/json",
+      },
+      payload: {
+        name: "Blocked registration",
+        email: mountedEmail,
+        password: "blocked-registration-123",
+      },
+    });
+    const removedLinkLogin = await app.inject({
       method: "POST",
       url: "/api/auth/sign-in/magic-link",
       headers: {
@@ -131,13 +152,26 @@ databaseSuite("Better Auth database integration", () => {
       },
       payload: { email: mountedEmail },
     });
+    const unavailableRecovery = await app.inject({
+      method: "POST",
+      url: "/api/auth/forget-password",
+      headers: {
+        origin: "http://127.0.0.1:5174",
+        "content-type": "application/json",
+      },
+      payload: { email: mountedEmail, redirectTo: "/" },
+    });
     await app.close();
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(403);
+    expect(removedLinkLogin.statusCode).toBe(404);
+    expect(unavailableRecovery.statusCode).toBe(404);
     expect(response.headers["access-control-allow-origin"]).toBe(
       "http://127.0.0.1:5174",
     );
     expect(response.headers["access-control-allow-credentials"]).toBe("true");
-    expect(sent.at(-1)?.email).toBe(mountedEmail);
+    expect(
+      await pool.query(`SELECT 1 FROM "user" WHERE email = $1`, [mountedEmail]),
+    ).toHaveProperty("rowCount", 0);
   });
 });

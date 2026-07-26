@@ -26,6 +26,11 @@ const timestamps = {
 export const principals = pgTable("principals", {
   id: uuid("id").primaryKey(),
   displayName: text("display_name").notNull(),
+  avatarTone: text("avatar_tone", {
+    enum: ["accent", "green", "amber", "cool"],
+  })
+    .notNull()
+    .default("accent"),
   kind: text("kind", {
     enum: ["human", "stand_in", "service"],
   }).notNull(),
@@ -55,6 +60,7 @@ export const memberships = pgTable(
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id),
+    projectId: uuid("project_id").references(() => projects.id),
     role: text("role", { enum: ["member", "admin", "owner"] }).notNull(),
     ...timestamps,
   },
@@ -236,10 +242,48 @@ export const threads = pgTable(
       .notNull()
       .default(false),
     sequence: integer("sequence").notNull().default(0),
+    /** Optional owning team. A thread may deliberately belong to no team. */
+    teamId: uuid("team_id"),
+    /** Set when this thread was branched out of another conversation. */
+    parentThreadId: uuid("parent_thread_id"),
+    concludedAt: timestamp("concluded_at", { withTimezone: true }),
+    concludedBy: uuid("concluded_by").references(() => principals.id),
     ...timestamps,
   },
   (table) => [
     index("threads_org_project_idx").on(table.organizationId, table.projectId),
+    index("threads_parent_idx").on(table.parentThreadId),
+    index("threads_team_idx").on(table.organizationId, table.teamId),
+  ],
+);
+
+/**
+ * Per-person read position in a thread. Unread counts derive from this plus the
+ * message sequence, so there is no counter to fall out of sync.
+ */
+export const threadReads = pgTable(
+  "thread_reads",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => threads.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    lastReadSequence: integer("last_read_sequence").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.principalId] }),
+    index("thread_reads_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+    ),
   ],
 );
 
@@ -439,6 +483,8 @@ export const actionInbox = pgTable(
     detail: text("detail").notNull(),
     sourceRef: text("source_ref").notNull(),
     dedupeKey: text("dedupe_key").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     ...timestamps,
   },
@@ -451,6 +497,44 @@ export const actionInbox = pgTable(
       table.createdAt,
     ),
   ],
+);
+
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    mutedKinds: jsonb("muted_kinds").notNull().default([]),
+    muteUntil: timestamp("mute_until", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.principalId] }),
+  ],
+);
+
+export const authActivationAttempts = pgTable(
+  "auth_activation_attempts",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    keyHash: text("key_hash").notNull(),
+    windowStartedAt: timestamp("window_started_at", {
+      withTimezone: true,
+    }).notNull(),
+    attempts: integer("attempts").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.organizationId, table.keyHash] })],
 );
 
 export const canonicalEvents = pgTable(
@@ -505,10 +589,7 @@ export const publicStandInRuns = pgTable(
     ...timestamps,
   },
   (table) => [
-    index("public_stand_in_runs_status_idx").on(
-      table.status,
-      table.createdAt,
-    ),
+    index("public_stand_in_runs_status_idx").on(table.status, table.createdAt),
   ],
 );
 
@@ -719,13 +800,7 @@ export const projectWorkRelations = pgTable(
       .notNull()
       .references(() => projectWorkItems.id),
     kind: text("kind", {
-      enum: [
-        "blocks",
-        "blocked_by",
-        "related",
-        "duplicate",
-        "duplicated_by",
-      ],
+      enum: ["blocks", "blocked_by", "related", "duplicate", "duplicated_by"],
     }).notNull(),
     createdBy: jsonb("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -737,29 +812,26 @@ export const projectWorkRelations = pgTable(
   ],
 );
 
-export const projectWorkCodeRefs = pgTable(
-  "project_work_code_refs",
-  {
-    id: uuid("id").primaryKey(),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organizations.id),
-    workItemId: uuid("work_item_id")
-      .notNull()
-      .references(() => projectWorkItems.id),
-    kind: text("kind", {
-      enum: ["pull_request", "commit", "branch"],
-    }).notNull(),
-    label: text("label").notNull(),
-    url: text("url"),
-    repository: text("repository"),
-    value: text("value").notNull(),
-    reportedBy: jsonb("reported_by").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-);
+export const projectWorkCodeRefs = pgTable("project_work_code_refs", {
+  id: uuid("id").primaryKey(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  workItemId: uuid("work_item_id")
+    .notNull()
+    .references(() => projectWorkItems.id),
+  kind: text("kind", {
+    enum: ["pull_request", "commit", "branch"],
+  }).notNull(),
+  label: text("label").notNull(),
+  url: text("url"),
+  repository: text("repository"),
+  value: text("value").notNull(),
+  reportedBy: jsonb("reported_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 export const projectWorkComments = pgTable(
   "project_work_comments",
@@ -860,9 +932,7 @@ export const projectSpecReviewerNominations = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [
-    primaryKey({ columns: [table.revisionId, table.reviewerId] }),
-  ],
+  (table) => [primaryKey({ columns: [table.revisionId, table.reviewerId] })],
 );
 
 export const projectSpecCommentThreads = pgTable(
@@ -880,6 +950,10 @@ export const projectSpecCommentThreads = pgTable(
       .references(() => specRevisions.id),
     lineStart: integer("line_start").notNull(),
     lineEnd: integer("line_end").notNull(),
+    /** Offsets into the anchored block's rendered text, when the reader
+        selected a run rather than the whole block. */
+    charStart: integer("char_start"),
+    charEnd: integer("char_end"),
     selection: text("selection"),
     status: text("status", { enum: ["open", "resolved"] })
       .notNull()
@@ -938,9 +1012,7 @@ export const projectSpecConfirmations = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [
-    primaryKey({ columns: [table.revisionId, table.confirmerId] }),
-  ],
+  (table) => [primaryKey({ columns: [table.revisionId, table.confirmerId] })],
 );
 
 export const specReviews = pgTable(
@@ -1563,12 +1635,11 @@ export const pilotCoordinationThreads = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id),
-    workStateId: uuid("work_state_id")
-      .notNull()
-      .references(() => pilotWorkStates.id),
-    sourceBindingId: uuid("source_binding_id")
-      .notNull()
-      .references(() => pilotAgentBindings.id),
+    workStateId: uuid("work_state_id").references(() => pilotWorkStates.id),
+    sourceBindingId: uuid("source_binding_id").references(
+      () => pilotAgentBindings.id,
+    ),
+    automationSignalId: uuid("automation_signal_id"),
     status: text("status", {
       enum: ["open", "needs_confirmation", "resolved"],
     }).notNull(),
@@ -1581,6 +1652,109 @@ export const pilotCoordinationThreads = pgTable(
       table.updatedAt,
     ),
     index("pilot_coordination_work_state_idx").on(table.workStateId),
+  ],
+);
+
+export const projectAutomationPolicies = pgTable(
+  "project_automation_policies",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .primaryKey()
+      .references(() => projects.id),
+    enabled: boolean("enabled").notNull().default(false),
+    enabledSignals: text("enabled_signals").array().notNull(),
+    staleSpecReviewHours: integer("stale_spec_review_hours")
+      .notNull()
+      .default(48),
+    unresolvedCoordinationHours: integer("unresolved_coordination_hours")
+      .notNull()
+      .default(24),
+    quietUntil: timestamp("quiet_until", { withTimezone: true }),
+    updatedBy: uuid("updated_by").references(() => principals.id),
+    ...timestamps,
+  },
+  (table) => [
+    index("project_automation_policy_organization_idx").on(
+      table.organizationId,
+    ),
+  ],
+);
+
+export const projectAutomationSignals = pgTable(
+  "project_automation_signals",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    kind: text("kind").notNull(),
+    status: text("status").notNull().default("pending"),
+    fingerprint: text("fingerprint").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    safeContext: text("safe_context").notNull(),
+    candidateNextSteps: jsonb("candidate_next_steps").notNull(),
+    participantIds: uuid("participant_ids").array().notNull(),
+    targetIds: uuid("target_ids").array().notNull(),
+    coordinationThreadId: uuid("coordination_thread_id").references(
+      () => pilotCoordinationThreads.id,
+    ),
+    detectedAt: timestamp("detected_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastErrorCode: text("last_error_code"),
+  },
+  (table) => [
+    uniqueIndex("project_automation_signal_fingerprint_idx").on(
+      table.organizationId,
+      table.projectId,
+      table.fingerprint,
+    ),
+    index("project_automation_signal_queue_idx").on(
+      table.status,
+      table.detectedAt,
+    ),
+    index("project_automation_signal_project_idx").on(
+      table.projectId,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const projectAutomationAudit = pgTable(
+  "project_automation_audit",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    signalId: uuid("signal_id")
+      .notNull()
+      .references(() => projectAutomationSignals.id),
+    action: text("action").notNull(),
+    actorId: uuid("actor_id").references(() => principals.id),
+    detail: text("detail").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("project_automation_audit_signal_idx").on(
+      table.signalId,
+      table.createdAt,
+    ),
   ],
 );
 

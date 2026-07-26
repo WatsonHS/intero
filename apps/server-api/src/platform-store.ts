@@ -38,6 +38,9 @@ export interface PlatformStore {
   createThread: StoreMethod<"createThread">;
   appendMessage: StoreMethod<"appendMessage">;
   addStandInToThread: StoreMethod<"addStandInToThread">;
+  markThreadRead: StoreMethod<"markThreadRead">;
+  listThreadReads: StoreMethod<"listThreadReads">;
+  concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;
   addReview: StoreMethod<"addReview">;

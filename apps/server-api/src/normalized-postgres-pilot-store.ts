@@ -204,13 +204,11 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
          ORDER BY created_at, principal_id`,
         [this.organizationId],
       )
-    ).rows.map(
-      (row): PilotOrganizationMembership => ({
-        principalId: row.principal_id,
-        role: row.role === "member" ? "member" : "admin",
-        joinedAt: row.created_at.toISOString(),
-      }),
-    );
+    ).rows.map((row): PilotOrganizationMembership => ({
+      principalId: row.principal_id,
+      role: row.role === "member" ? "member" : "admin",
+      joinedAt: row.created_at.toISOString(),
+    }));
     snapshot.memberships = (
       await client.query<{
         team_id: string;
@@ -281,12 +279,11 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       "pilot_agent_bindings",
       "created_at, id",
     );
-    snapshot.standInJobs =
-      await this.readDataRows<PilotStoredStandInJob>(
-        client,
-        "pilot_stand_in_jobs",
-        "queued_at, id",
-      );
+    snapshot.standInJobs = await this.readDataRows<PilotStoredStandInJob>(
+      client,
+      "pilot_stand_in_jobs",
+      "queued_at, id",
+    );
 
     const workStates = await this.readDataRows<
       Omit<PilotPrivateWorkState, "claims"> & { claims?: PilotPrivateClaim[] }
@@ -333,12 +330,11 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         .filter((participant) => participant.thread_id === thread.id)
         .map((participant) => participant.principal_id),
     }));
-    snapshot.standInExchanges =
-      await this.readDataRows<PilotStandInExchange>(
-        client,
-        "pilot_stand_in_exchanges",
-        "created_at, id",
-      );
+    snapshot.standInExchanges = await this.readDataRows<PilotStandInExchange>(
+      client,
+      "pilot_stand_in_exchanges",
+      "created_at, id",
+    );
 
     const idempotency = await client.query<{
       client_event_id: string;
@@ -883,8 +879,8 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           thread.id,
           this.organizationId,
           thread.projectId,
-          thread.workStateId,
-          thread.sourceBindingId,
+          thread.workStateId ?? null,
+          thread.sourceBindingId ?? null,
           thread.status,
           json(thread),
           thread.createdAt,
@@ -958,6 +954,15 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       adapter: "normalized_postgres",
       contractVersion: 1,
       persistenceVersion: 1,
+      // Flattened with a prefix: ActivityEvent metadata is a flat map of
+      // scalars, and prefixing keeps audit facts from colliding with it.
+      ...(context.subjectId ? { "audit.subjectId": context.subjectId } : {}),
+      ...Object.fromEntries(
+        Object.entries(context.detail ?? {}).map(([key, value]) => [
+          `audit.${key}`,
+          value,
+        ]),
+      ),
     };
     const activity = await client.query<{ sequence: number }>(
       `INSERT INTO activity_events
