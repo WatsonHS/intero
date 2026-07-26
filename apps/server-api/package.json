@@ -12,6 +12,9 @@
     "migrate": "tsx src/database/migrate.ts",
     "migrate:spicedb": "tsx src/spicedb-migrate.ts",
     "reset:pilot": "tsx src/reset-normalized-pilot.ts",
+    "demo:seed": "tsx src/demo-data-cli.ts seed",
+    "demo:reset": "tsx src/demo-data-cli.ts reset",
+    "demo:reset-and-seed": "tsx src/demo-data-cli.ts reset-and-seed",
     "test:database": "vitest run --root ../.. apps/server-api/src/database/rls.integration.test.ts apps/server-api/src/postgres-store.integration.test.ts",
     "test": "vitest run"
   },
