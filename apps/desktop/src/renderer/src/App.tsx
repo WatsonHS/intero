@@ -232,7 +232,6 @@ export function App() {
           />
         ) : null}
         <ScopeBar
-          organizationName={organization?.name}
           viewTitle={t(TITLES[view])}
           projectScoped={SCOPED_VIEWS.has(view)}
           pendingByProject={pendingByProject}

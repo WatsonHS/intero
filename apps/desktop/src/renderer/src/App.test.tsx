@@ -55,4 +55,28 @@ describe("desktop application shell", () => {
     // The breadcrumb falls back to the product name and still names the view.
     expect(output).toContain("Intero");
   });
+
+  it("keeps the titlebar brand fixed when an organization is active", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(["bootstrap"], {
+      organization: { id: "org-demo", name: "演示组织" },
+    });
+
+    const output = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider>
+          <ThemeProvider>
+            <App />
+          </ThemeProvider>
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(output).toMatch(/data-testid="app-brand"[^>]*>Intero<\/span>/);
+    expect(output).not.toMatch(
+      /data-testid="app-brand"[^>]*>演示组织<\/span>/,
+    );
+  });
 });

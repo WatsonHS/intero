@@ -37,13 +37,11 @@ interface ScopeEntry {
  * because switching a project has no meaning on the org-wide surfaces.
  */
 export function ScopeBar({
-  organizationName,
   viewTitle,
   projectScoped,
   pendingByProject,
   onCreateProject,
 }: {
-  organizationName: string | undefined;
   viewTitle: string;
   projectScoped: boolean;
   pendingByProject: Map<string, number>;
@@ -129,8 +127,11 @@ export function ScopeBar({
 
   return (
     <span className="flex min-w-0 items-center gap-[3px] [-webkit-app-region:no-drag]">
-      <span className="whitespace-nowrap px-[3px] text-[11.5px] font-[570] text-ink-muted">
-        {organizationName ?? "Intero"}
+      <span
+        data-testid="app-brand"
+        className="whitespace-nowrap px-[3px] text-[11.5px] font-[570] text-ink-muted"
+      >
+        Intero
       </span>
 
       {team ? (
