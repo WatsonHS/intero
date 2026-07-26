@@ -36,7 +36,10 @@ export class PostgresOutboxRepository implements OutboxRepository {
            FROM outbox
            WHERE completed_at IS NULL
              AND available_at <= now()
-             AND topic <> 'pilot.stand_in.enqueue'
+             AND topic NOT IN (
+               'pilot.stand_in.enqueue',
+               'project.automation.enqueue'
+             )
            ORDER BY available_at, operation_id
            FOR UPDATE SKIP LOCKED
            LIMIT $1

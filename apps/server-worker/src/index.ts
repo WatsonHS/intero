@@ -12,6 +12,7 @@ import {
 import { Pool } from "pg";
 
 import { NormalizedPostgresPilotStore } from "../../server-api/src/normalized-postgres-pilot-store.js";
+import { PostgresAutomationStore } from "../../server-api/src/automation-store.js";
 import {
   InstrumentedModelGateway,
   MembershipAuthorizationAdapter,
@@ -23,6 +24,15 @@ import { AesGcmProviderSecretCipher } from "../../server-api/src/provider-secret
 import { SpiceDbAuthorization } from "../../server-api/src/spicedb-authorization.js";
 import { SpiceDbPilotAuthorization } from "../../server-api/src/spicedb-pilot-authorization.js";
 import { VercelAiModelGateway } from "../../server-api/src/vercel-model-gateway.js";
+import {
+  AUTOMATION_DETECT_TASK,
+  AUTOMATION_DISPATCH_TASK,
+  AUTOMATION_RECONCILE_TASK,
+  AUTOMATION_SIGNAL_TASK,
+  AutomationOutboxDispatcher,
+  GraphileAutomationJobRunner,
+  type AutomationJobReference,
+} from "./automation-jobs.js";
 import {
   CentrifugoRealtime,
   OutboxDispatcher,
@@ -38,10 +48,7 @@ import {
   PostgresPilotJobRepository,
 } from "./pilot-jobs.js";
 import { PostgresPublicStandInRepository } from "./postgres-repository.js";
-import {
-  PublicStandInWorker,
-  type PublicStandInRun,
-} from "./runtime.js";
+import { PublicStandInWorker, type PublicStandInRun } from "./runtime.js";
 
 const serviceConfig = loadWorkerServiceConfig();
 const pilotAdapterConfig = serviceConfig.pilot;
@@ -107,12 +114,69 @@ const pilotOutbox = new PilotJobOutboxDispatcher(
   pilotJobRepository,
   graphileJobs,
 );
+const automationStore = new PostgresAutomationStore(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const automationJobs = new GraphileAutomationJobRunner(
+  workerUtils,
+  organizationId,
+);
+const automationOutbox = new AutomationOutboxDispatcher(
+  automationStore,
+  automationJobs,
+);
 
 const tasks: TaskList = {
-  [PILOT_STAND_IN_TASK]: async (
-    payload: unknown,
-    helpers: JobHelpers,
-  ) => {
+  [AUTOMATION_SIGNAL_TASK]: async (payload: unknown) => {
+    const reference = payload as AutomationJobReference;
+    if (reference.organizationId !== organizationId || !reference.signalId) {
+      throw new Error("invalid_automation_job_reference");
+    }
+    await automationStore.openCoordination(reference.signalId);
+  },
+  [AUTOMATION_DETECT_TASK]: async (_payload, helpers) => {
+    await automationStore.detectMeaningfulSignals();
+    await automationOutbox.dispatch();
+    await helpers.addJob(
+      AUTOMATION_DETECT_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 15_000),
+        maxAttempts: 25,
+        jobKey: "intero-project-automation-detect-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+  [AUTOMATION_DISPATCH_TASK]: async (_payload, helpers) => {
+    await automationOutbox.dispatch();
+    await helpers.addJob(
+      AUTOMATION_DISPATCH_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 1_000),
+        maxAttempts: 25,
+        jobKey: "intero-project-automation-dispatch-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+  [AUTOMATION_RECONCILE_TASK]: async (_payload, helpers) => {
+    await automationStore.reconcilePending();
+    await automationOutbox.dispatch();
+    await helpers.addJob(
+      AUTOMATION_RECONCILE_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 30_000),
+        maxAttempts: 25,
+        jobKey: "intero-project-automation-reconcile-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+  [PILOT_STAND_IN_TASK]: async (payload: unknown, helpers: JobHelpers) => {
     const reference = payload as PilotJobReference;
     try {
       await standInHandler.handleJobKey(reference.jobKey, {
@@ -213,6 +277,33 @@ await pilotJobRepository.heartbeat({
   metadata: { runtime: "graphile-worker", concurrency: workerConcurrency() },
 });
 await Promise.all([
+  workerUtils.addJob(
+    AUTOMATION_DETECT_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-project-automation-detect-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  workerUtils.addJob(
+    AUTOMATION_DISPATCH_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-project-automation-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  workerUtils.addJob(
+    AUTOMATION_RECONCILE_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-project-automation-reconcile-loop",
+      jobKeyMode: "replace",
+    },
+  ),
   workerUtils.addJob(
     PILOT_DISPATCH_TASK,
     {},
@@ -351,6 +442,7 @@ try {
   );
   await publicRepository?.close();
   await realtimeOutboxRepository?.close();
+  await automationStore.close();
   spiceDb?.close();
   await pilotStore.close();
   await pilotJobRepository

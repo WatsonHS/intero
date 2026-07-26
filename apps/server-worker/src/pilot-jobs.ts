@@ -226,7 +226,10 @@ export class PostgresPilotJobRepository {
             FROM outbox
             WHERE organization_id = $1
               AND completed_at IS NULL
-              AND topic <> 'pilot.stand_in.enqueue')
+              AND topic NOT IN (
+                'pilot.stand_in.enqueue',
+                'project.automation.enqueue'
+              ))
              AS realtime_outbox_depth,
            (SELECT count(*)
             FROM pilot_stand_in_jobs
@@ -284,9 +287,7 @@ export class PilotJobOutboxDispatcher {
         await this.repository.markOutboxCompleted(entry.operationId);
       } catch (error) {
         const normalized =
-          error instanceof Error
-            ? error
-            : new Error("stand_in_enqueue_failed");
+          error instanceof Error ? error : new Error("stand_in_enqueue_failed");
         await this.repository.markOutboxFailed(
           entry.operationId,
           entry.attempts,
