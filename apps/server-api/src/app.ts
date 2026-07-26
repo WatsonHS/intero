@@ -59,6 +59,7 @@ import {
   type PilotStore,
   PilotStoreError,
 } from "./pilot-store.js";
+import { registerPilotMcpRoutes } from "./pilot-mcp.js";
 import {
   type CoordinationTransport,
   DisabledObjectStoreAdapter,
@@ -96,10 +97,16 @@ import { VercelAiModelGateway } from "./vercel-model-gateway.js";
 /** Membership and invitation changes — the events the audit log renders. */
 const GOVERNANCE_EVENT_TYPES = new Set([
   "pilot.team_member.role_changed",
+  "pilot.team_member.added",
   "pilot.team_member.removed",
   "pilot.organization_member.role_changed",
   "pilot.team_invitation.created",
   "pilot.team_invitation.revoked",
+  "pilot.team.created",
+  "pilot.team.renamed",
+  "pilot.project.created",
+  "pilot.project.updated",
+  "pilot.organization.renamed",
 ]);
 
 export interface BuildAppOptions {
@@ -335,16 +342,19 @@ export async function buildApp(
   });
 
   app.get("/v1/bootstrap", async (request) => {
-    const resolvedPrincipal =
-      (await requestAuth.resolve(request, false)) ?? currentPrincipal;
+    const resolvedPrincipal = await requestAuth.resolve(request, false);
     return {
       organization,
-      currentPrincipal: resolvedPrincipal,
-      standInPrincipal: {
-        id: personalStandInId(resolvedPrincipal.id),
-        displayName: `${resolvedPrincipal.displayName} 的替身`,
-        kind: "stand_in" as const,
-      },
+      ...(resolvedPrincipal
+        ? {
+            currentPrincipal: resolvedPrincipal,
+            standInPrincipal: {
+              id: personalStandInId(resolvedPrincipal.id),
+              displayName: `${resolvedPrincipal.displayName} 的替身`,
+              kind: "stand_in" as const,
+            },
+          }
+        : {}),
     };
   });
 
@@ -387,6 +397,10 @@ export async function buildApp(
     ...(options.deploymentProbe
       ? { deploymentProbe: options.deploymentProbe }
       : {}),
+  });
+  await registerPilotMcpRoutes(app, {
+    store: pilotStore,
+    checkpointService: pilotCheckpointService,
   });
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {

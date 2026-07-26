@@ -3,6 +3,7 @@ import {
   CaretDownIcon,
   ClockCountdownIcon,
   EnvelopeSimpleIcon,
+  KanbanIcon,
   KeyIcon,
   LockSimpleIcon,
   ScrollIcon,
@@ -14,7 +15,9 @@ import {
 } from "@phosphor-icons/react";
 import type {
   PilotOrganizationRole,
+  PilotProject,
   PilotTeamRole,
+  PrincipalId,
   ProjectAutomationSignalKind,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -36,7 +39,6 @@ import {
   ScopeMark,
   SectionLabel,
   SelectMenu,
-  StatCard,
   StatusPill,
   Switch,
   TableHead,
@@ -49,18 +51,27 @@ import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import {
   createPilotInvitation,
   getPilotInvitations,
+  getPilotOrganizationDirectory,
   removePilotMember,
   revokePilotInvitation,
   updatePilotMember,
+  type PilotOrganizationDirectoryPayload,
+  type PilotTeamPayload,
 } from "../pilot/api.js";
 import {
   projectInTeam,
   useGovernance,
   usePilotOptional,
 } from "../pilot/context.js";
+import { AddMemberModal } from "./admin/AddMemberModal.js";
+import { OrganizationTab } from "./admin/OrganizationTab.js";
+import { ProjectsTab } from "./admin/ProjectsTab.js";
+import { TeamPicker } from "./admin/TeamPicker.js";
+import { TeamsTab } from "./admin/TeamsTab.js";
 import { OrganizationServiceSettings } from "./settings/OrganizationServiceSettings.js";
 
-type Tab = "members" | "policy" | "org" | "service" | "audit";
+type Tab =
+  "members" | "teams" | "projects" | "policy" | "org" | "service" | "audit";
 
 /** Escalation windows offered for the two automation SLAs. */
 const SLA_HOURS = [8, 24, 48, 72];
@@ -96,22 +107,50 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>("members");
+  const [rosterTeamId, setRosterTeamId] = useState<string>();
 
   const teams = pilot?.teams.data?.teams ?? [];
   const projects = pilot?.projects.data?.projects ?? [];
-  const organizationName = pilot?.bootstrap.data?.organization?.name;
+  const organization = pilot?.bootstrap.data?.organization;
   const teamId = pilot?.selectedTeamId;
   const team = teams.find((candidate) => candidate.id === teamId);
   const projectId = pilot?.selectedProjectId;
-  const { isOrgAdmin, isTeamLead, canGovern, pending } = useGovernance();
-  // Leading a *different* team is enough to open this page, but not to edit the
-  // team currently in scope — that still needs org admin or leading this one.
-  const canManage = isOrgAdmin || isTeamLead;
+  const identityId = pilot?.identityId;
+  // Under development identity there is no session cookie behind the request,
+  // so the governing calls have to carry the identity header explicitly.
+  const developmentIdentityId =
+    pilot?.bootstrap.data?.authMode === "development_identity"
+      ? identityId
+      : undefined;
+  const { isOrgAdmin, canGovern, pending } = useGovernance();
 
+  // Organization-wide teams, projects and people. Only an admin may read it,
+  // and only an admin has anything to do with the teams they are not in.
+  const directory = useQuery({
+    queryKey: ["pilot", "organization-directory", identityId],
+    queryFn: ({ signal }) => getPilotOrganizationDirectory(identityId!, signal),
+    enabled: Boolean(identityId) && isOrgAdmin,
+  });
+  // An admin governs the whole organization, including the teams and projects
+  // they are not part of; a Team Lead governs what they belong to. The own-team
+  // fallback keeps the tables populated while the directory is still loading.
+  const governedTeams: PilotTeamPayload[] = isOrgAdmin
+    ? (directory.data?.teams ?? teams)
+    : teams;
+  // Which team the roster surface is acting on. It starts at the shell's scope
+  // but is chosen on the surface itself, so reading one team's members never
+  // depends on a selection made somewhere else — nor moves it.
+  const governedTeam =
+    governedTeams.find((candidate) => candidate.id === rosterTeamId) ??
+    governedTeams.find((candidate) => candidate.id === teamId) ??
+    governedTeams[0];
   const invitations = useQuery({
-    queryKey: ["pilot", "invitations", teamId],
-    queryFn: ({ signal }) => getPilotInvitations(teamId!, signal),
-    enabled: Boolean(teamId) && canManage,
+    queryKey: ["pilot", "invitations", governedTeam?.id],
+    queryFn: ({ signal }) =>
+      getPilotInvitations(governedTeam!.id, signal, developmentIdentityId),
+    // Only an organization admin may read or write invitations, so a Team Lead
+    // asking for them would earn nothing but a 403.
+    enabled: Boolean(governedTeam) && isOrgAdmin,
   });
   const automation = useQuery({
     queryKey: ["project-automation", projectId],
@@ -135,6 +174,11 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
   };
   const refreshAutomation = () =>
     queryClient.invalidateQueries({ queryKey: ["project-automation"] });
+  /** Teams, projects, the organization directory and the trail they leave. */
+  const refreshScope = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+    await queryClient.invalidateQueries({ queryKey: ["governance-audit"] });
+  };
 
   const changeMember = useMutation({
     mutationFn: (input: {
@@ -142,21 +186,31 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
       teamRole?: PilotTeamRole;
       organizationRole?: PilotOrganizationRole;
     }) =>
-      updatePilotMember(team!.id, input.memberId as never, {
-        ...(input.teamRole ? { teamRole: input.teamRole } : {}),
-        ...(input.organizationRole
-          ? { organizationRole: input.organizationRole }
-          : {}),
-      }),
+      updatePilotMember(
+        governedTeam!.id,
+        input.memberId as never,
+        {
+          ...(input.teamRole ? { teamRole: input.teamRole } : {}),
+          ...(input.organizationRole
+            ? { organizationRole: input.organizationRole }
+            : {}),
+        },
+        developmentIdentityId,
+      ),
     onSuccess: refreshTeams,
   });
   const removeMember = useMutation({
     mutationFn: (memberId: string) =>
-      removePilotMember(team!.id, memberId as never),
+      removePilotMember(
+        governedTeam!.id,
+        memberId as never,
+        developmentIdentityId,
+      ),
     onSuccess: refreshTeams,
   });
   const revoke = useMutation({
-    mutationFn: revokePilotInvitation,
+    mutationFn: (invitationId: string) =>
+      revokePilotInvitation(invitationId, developmentIdentityId),
     onSuccess: refreshInvites,
   });
   const saveAutomation = useMutation({
@@ -196,7 +250,23 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
     );
   }
 
-  const members = team?.members ?? [];
+  const members = governedTeam?.members ?? [];
+  const governedProjects: PilotProject[] = isOrgAdmin
+    ? (directory.data?.projects ?? projects)
+    : projects.filter((project) =>
+        teams.some((candidate) => projectInTeam(project, candidate.id)),
+      );
+  const directoryMembers = directory.data?.members ?? [];
+  const displayNames = new Map<string, string>([
+    ...governedTeams.flatMap((candidate) =>
+      candidate.members.map(
+        (member) => [member.id, member.displayName] as const,
+      ),
+    ),
+    ...directoryMembers.map(
+      (member) => [member.id, member.displayName] as const,
+    ),
+  ]);
   const pendingInvites = (invitations.data?.invitations ?? []).filter(
     (invitation) => invitation.status === "pending",
   );
@@ -261,14 +331,18 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
           {t("nav.admin")}
         </h1>
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          {team ? (
+          {organization ? (
             <>
-              <ScopeMark id={team.id} label={team.name} size="sm" filled />
-              <strong className="text-[13px] font-[620]">{team.name}</strong>
+              <ScopeMark
+                id={organization.id}
+                label={organization.name}
+                size="sm"
+                filled
+              />
+              <strong className="text-[13px] font-[620]">
+                {organization.name}
+              </strong>
             </>
-          ) : null}
-          {organizationName ? (
-            <Meta className="text-[11px]">· {organizationName}</Meta>
           ) : null}
         </div>
         <p className="mt-3 max-w-[620px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
@@ -301,7 +375,17 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
             {
               id: "members" as const,
               label: t("admin.tab.members"),
+              icon: <UserIcon size={14} />,
+            },
+            {
+              id: "teams" as const,
+              label: t("admin.tab.teams"),
               icon: <UsersThreeIcon size={14} />,
+            },
+            {
+              id: "projects" as const,
+              label: t("admin.tab.projects"),
+              icon: <KanbanIcon size={14} />,
             },
             {
               id: "policy" as const,
@@ -332,15 +416,64 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
 
         {tab === "members" ? (
           <MembersTab
-            teamId={team?.id}
+            team={governedTeam}
+            teams={governedTeams}
+            onSelectTeam={setRosterTeamId}
             members={members}
             currentId={pilot.identityId}
+            identityId={identityId}
             canSetOrgRole={Boolean(isOrgAdmin)}
+            canInvite={Boolean(isOrgAdmin)}
+            orgMembers={directoryMembers}
             invitations={invitations.data?.invitations ?? []}
             onChangeRole={(input) => changeMember.mutate(input)}
             onRemove={(memberId) => removeMember.mutate(memberId)}
             onRevoke={(invitationId) => revoke.mutate(invitationId)}
             onInvited={refreshInvites}
+            onChanged={refreshScope}
+            developmentIdentityId={developmentIdentityId}
+          />
+        ) : null}
+
+        {tab === "teams" && identityId ? (
+          <TeamsTab
+            teams={governedTeams}
+            projects={governedProjects}
+            currentTeamId={teamId}
+            identityId={identityId}
+            canCreate={Boolean(isOrgAdmin)}
+            canManage={(candidateId) =>
+              Boolean(
+                isOrgAdmin ||
+                teams
+                  .find((candidate) => candidate.id === candidateId)
+                  ?.members.some(
+                    (member) =>
+                      member.id === identityId && member.teamRole === "leader",
+                  ),
+              )
+            }
+            scopedToOwnTeams={!isOrgAdmin}
+            onOpenMembers={(nextTeamId) => {
+              setRosterTeamId(nextTeamId);
+              setTab("members");
+            }}
+            onOpenTeam={(nextTeamId) => pilot.setSelectedTeamId(nextTeamId)}
+            onChanged={refreshScope}
+          />
+        ) : null}
+
+        {tab === "projects" && identityId ? (
+          <ProjectsTab
+            projects={governedProjects}
+            teams={governedTeams}
+            ownTeamIds={teams.map((candidate) => candidate.id)}
+            names={displayNames}
+            identityId={identityId}
+            canManage={(project) =>
+              Boolean(isOrgAdmin) || project.ownerId === identityId
+            }
+            onChanged={refreshScope}
           />
         ) : null}
 
@@ -360,12 +493,16 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
           <OrganizationServiceSettings canManage={isOrgAdmin} />
         ) : null}
 
-        {tab === "org" && isOrgAdmin ? (
-          <OrgTab
-            teams={teams}
-            projects={projects}
-            currentTeamId={teamId}
-            onOpenTeam={(id) => pilot.setSelectedTeamId(id)}
+        {tab === "org" && isOrgAdmin && identityId ? (
+          <OrganizationTab
+            organization={organization}
+            teams={governedTeams}
+            projects={governedProjects}
+            members={directoryMembers}
+            identityId={identityId}
+            canManage={isOrgAdmin}
+            onOpenService={() => setTab("service")}
+            onChanged={refreshScope}
           />
         ) : null}
 
@@ -505,7 +642,6 @@ function governanceLine(
   nameOf: (id: string | undefined) => string,
   t: (key: TranslationKey, values?: Record<string, string | number>) => string,
 ): string {
-  if (!entry.subjectId && !entry.detail.email) return "";
   const subject = nameOf(entry.subjectId);
   const roleLabel = (value: unknown, scope: "team" | "org") => {
     if (typeof value !== "string") return "—";
@@ -516,49 +652,110 @@ function governanceLine(
       value === "admin" ? "admin.role.orgAdmin" : "admin.role.orgMember",
     );
   };
+  const renamed = () =>
+    entry.detail.from === undefined || entry.detail.to === undefined
+      ? ""
+      : t("admin.audit.line.renamed", {
+          from: String(entry.detail.from),
+          to: String(entry.detail.to),
+        });
   switch (entry.eventType) {
+    case "pilot.team.created":
+    case "pilot.project.created":
+      return entry.detail.name
+        ? t("admin.audit.line.created", { name: String(entry.detail.name) })
+        : "";
+    case "pilot.team.renamed":
+    case "pilot.organization.renamed":
+      return renamed();
+    case "pilot.team_member.added":
+      return entry.subjectId
+        ? t("admin.audit.line.added", {
+            name: subject,
+            role: roleLabel(entry.detail.to, "team"),
+          })
+        : "";
+    case "pilot.project.updated": {
+      // Only what actually changed was recorded, so only that is stated.
+      const parts = [
+        renamed(),
+        entry.detail.primaryTeamId ? t("admin.audit.line.primaryTeam") : "",
+        entry.detail.teams
+          ? t("admin.audit.line.teams", { count: String(entry.detail.teams) })
+          : "",
+        entry.detail.posture
+          ? t("admin.audit.line.posture", {
+              posture: t(
+                `admin.projects.posture.${entry.detail.posture}` as TranslationKey,
+              ),
+            })
+          : "",
+      ].filter(Boolean);
+      return parts.join(" ");
+    }
     case "pilot.team_member.role_changed":
-      return t("admin.audit.line.teamRole", {
-        name: subject,
-        from: roleLabel(entry.detail.from, "team"),
-        to: roleLabel(entry.detail.to, "team"),
-      });
+      return entry.subjectId
+        ? t("admin.audit.line.teamRole", {
+            name: subject,
+            from: roleLabel(entry.detail.from, "team"),
+            to: roleLabel(entry.detail.to, "team"),
+          })
+        : "";
     case "pilot.organization_member.role_changed":
-      return t("admin.audit.line.orgRole", {
-        name: subject,
-        from: roleLabel(entry.detail.from, "org"),
-        to: roleLabel(entry.detail.to, "org"),
-      });
+      return entry.subjectId
+        ? t("admin.audit.line.orgRole", {
+            name: subject,
+            from: roleLabel(entry.detail.from, "org"),
+            to: roleLabel(entry.detail.to, "org"),
+          })
+        : "";
     case "pilot.team_member.removed":
-      return t("admin.audit.line.removed", { name: subject });
+      return entry.subjectId
+        ? t("admin.audit.line.removed", { name: subject })
+        : "";
     case "pilot.team_invitation.created":
-      return t("admin.audit.line.invited", {
-        email: String(entry.detail.email),
-      });
+      return entry.detail.email
+        ? t("admin.audit.line.invited", { email: String(entry.detail.email) })
+        : "";
     case "pilot.team_invitation.revoked":
-      return t("admin.audit.line.revoked", {
-        email: String(entry.detail.email),
-      });
+      return entry.detail.email
+        ? t("admin.audit.line.revoked", { email: String(entry.detail.email) })
+        : "";
     default:
       return entry.eventType;
   }
 }
 
 const MEMBER_COLUMNS = "minmax(0,1.4fr) 132px 120px minmax(0,1fr) 46px";
-const TEAM_COLUMNS = "32px minmax(0,1fr) 88px 88px 72px";
 
+/**
+ * 成员与权限 — one team's roster, named by the picker in its own header.
+ *
+ * The team is chosen here rather than inherited from the shell's scope: which
+ * roster you are editing has to be visible on the surface that edits it, and
+ * changing it must not drag every other view along.
+ */
 function MembersTab({
-  teamId,
+  team,
+  teams,
+  onSelectTeam,
   members,
   currentId,
+  identityId,
   canSetOrgRole,
+  canInvite,
+  orgMembers,
   invitations,
   onChangeRole,
   onRemove,
   onRevoke,
   onInvited,
+  onChanged,
+  developmentIdentityId,
 }: {
-  teamId: string | undefined;
+  team: PilotTeamPayload | undefined;
+  teams: PilotTeamPayload[];
+  onSelectTeam: (teamId: string) => void;
   members: Array<{
     id: string;
     displayName: string;
@@ -567,7 +764,11 @@ function MembersTab({
     organizationRole?: PilotOrganizationRole | undefined;
   }>;
   currentId: string | undefined;
+  identityId: PrincipalId | undefined;
   canSetOrgRole: boolean;
+  /** Only an organization admin may invite or add people to a team. */
+  canInvite: boolean;
+  orgMembers: PilotOrganizationDirectoryPayload["members"];
   invitations: Array<{
     id: string;
     displayName: string;
@@ -583,17 +784,21 @@ function MembersTab({
   onRemove: (memberId: string) => void;
   onRevoke: (invitationId: string) => void;
   onInvited: () => void;
+  onChanged: () => Promise<void> | void;
+  developmentIdentityId: PrincipalId | undefined;
 }) {
   const { t, formatRelative } = useI18n();
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const invite = useMutation({
     mutationFn: () =>
-      createPilotInvitation(teamId!, {
-        displayName: displayName.trim(),
-        email: email.trim(),
-      }),
+      createPilotInvitation(
+        team!.id,
+        { displayName: displayName.trim(), email: email.trim() },
+        developmentIdentityId,
+      ),
     onSuccess: () => {
       setDisplayName("");
       setEmail("");
@@ -611,22 +816,39 @@ function MembersTab({
 
   return (
     <div className="mt-[26px]">
-      <div className="flex items-center gap-3">
-        <strong className="text-[14px] font-[620]">
+      <div className="flex flex-wrap items-center gap-3">
+        <strong className="shrink-0 text-[14px] font-[620]">
           {t("admin.members.title")}
         </strong>
+        <TeamPicker teams={teams} value={team} onChange={onSelectTeam} />
         <Meta className="text-[10.5px]">
           {t("admin.members.count", { count: members.length })}
         </Meta>
-        <button
-          type="button"
-          onClick={() => setInviteOpen((shown) => !shown)}
-          className="ml-auto inline-flex h-8 cursor-pointer items-center gap-[7px] rounded-btn border-0 bg-accent-strong px-[13px] text-[12px] font-[560] text-on-accent"
-        >
-          <UserPlusIcon size={14} />
-          {t("admin.members.invite")}
-        </button>
+        {canInvite && team ? (
+          <span className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              data-testid="admin-add-existing-member"
+              className="inline-flex h-8 cursor-pointer items-center gap-[7px] rounded-btn border border-line2 bg-transparent px-[13px] text-[12px] text-ink-muted hover:border-accent-strong hover:text-ink"
+            >
+              <UserPlusIcon size={14} />
+              {t("admin.members.addExisting")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setInviteOpen((shown) => !shown)}
+              className="inline-flex h-8 cursor-pointer items-center gap-[7px] rounded-btn border-0 bg-accent-strong px-[13px] text-[12px] font-[560] text-on-accent"
+            >
+              <EnvelopeSimpleIcon size={14} />
+              {t("admin.members.invite")}
+            </button>
+          </span>
+        ) : null}
       </div>
+      <p className="mt-2 max-w-[620px] text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
+        {t(canInvite ? "admin.members.ledeAdmin" : "admin.members.ledeLead")}
+      </p>
 
       {inviteOpen ? (
         <form
@@ -793,72 +1015,86 @@ function MembersTab({
         {t("admin.members.roleFoot")}
       </p>
 
-      <div className="mt-[30px]">
-        <div className="flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">
-            {t("admin.invites.title")}
-          </strong>
-          <span className="text-[11px] text-faint">
-            {t("admin.invites.hint")}
-          </span>
-          {accepted > 0 ? (
-            <Meta className="ml-auto text-[10.5px]">
-              {t("admin.invites.acceptedHidden", { count: accepted })}
-            </Meta>
-          ) : null}
-        </div>
-        <div className="mt-3.5 flex flex-col gap-1.5">
-          {open.map((invitation) => (
-            <div
-              key={invitation.id}
-              className="grid grid-cols-[32px_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-[13px] border border-line bg-panel2 px-4 py-3"
-            >
-              <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-raise text-ink-muted">
-                <EnvelopeSimpleIcon size={15} />
-              </span>
-              <span className="grid min-w-0">
-                <strong className="truncate font-mono text-[11.5px] font-[500]">
-                  {invitation.email}
-                </strong>
-                <small className="mt-1 text-[10.5px] text-faint">
-                  {invitation.displayName} ·{" "}
-                  {t("admin.invites.expires", {
-                    when: formatRelative(invitation.expiresAt),
-                  })}
-                </small>
-              </span>
-              <StatusPill
-                tone={
-                  invitation.status === "pending"
-                    ? "amber"
-                    : invitation.status === "accepted"
-                      ? "green"
-                      : "faint"
-                }
-                size="sm"
+      {canInvite ? (
+        <div className="mt-[30px]">
+          <div className="flex items-center gap-2.5">
+            <strong className="text-[14px] font-[620]">
+              {t("admin.invites.title")}
+            </strong>
+            <span className="text-[11px] text-faint">
+              {t("admin.invites.hint")}
+            </span>
+            {accepted > 0 ? (
+              <Meta className="ml-auto text-[10.5px]">
+                {t("admin.invites.acceptedHidden", { count: accepted })}
+              </Meta>
+            ) : null}
+          </div>
+          <div className="mt-3.5 flex flex-col gap-1.5">
+            {open.map((invitation) => (
+              <div
+                key={invitation.id}
+                className="grid grid-cols-[32px_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-[13px] border border-line bg-panel2 px-4 py-3"
               >
-                {t(
-                  `admin.invites.status.${invitation.status}` as TranslationKey,
-                )}
-              </StatusPill>
-              {invitation.status === "pending" ? (
-                <button
-                  type="button"
-                  onClick={() => onRevoke(invitation.id)}
-                  className="h-7 cursor-pointer rounded-quiet border border-line2 bg-transparent px-[11px] text-[11.5px] text-ink-muted hover:border-danger hover:text-danger"
+                <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-raise text-ink-muted">
+                  <EnvelopeSimpleIcon size={15} />
+                </span>
+                <span className="grid min-w-0">
+                  <strong className="truncate font-mono text-[11.5px] font-[500]">
+                    {invitation.email}
+                  </strong>
+                  <small className="mt-1 text-[10.5px] text-faint">
+                    {invitation.displayName} ·{" "}
+                    {t("admin.invites.expires", {
+                      when: formatRelative(invitation.expiresAt),
+                    })}
+                  </small>
+                </span>
+                <StatusPill
+                  tone={
+                    invitation.status === "pending"
+                      ? "amber"
+                      : invitation.status === "accepted"
+                        ? "green"
+                        : "faint"
+                  }
+                  size="sm"
                 >
-                  {t("admin.invites.revoke")}
-                </button>
-              ) : (
-                <span />
-              )}
-            </div>
-          ))}
-          {open.length === 0 ? (
-            <EmptySlot>{t("admin.invites.empty")}</EmptySlot>
-          ) : null}
+                  {t(
+                    `admin.invites.status.${invitation.status}` as TranslationKey,
+                  )}
+                </StatusPill>
+                {invitation.status === "pending" ? (
+                  <button
+                    type="button"
+                    onClick={() => onRevoke(invitation.id)}
+                    className="h-7 cursor-pointer rounded-quiet border border-line2 bg-transparent px-[11px] text-[11.5px] text-ink-muted hover:border-danger hover:text-danger"
+                  >
+                    {t("admin.invites.revoke")}
+                  </button>
+                ) : (
+                  <span />
+                )}
+              </div>
+            ))}
+            {open.length === 0 ? (
+              <EmptySlot>{t("admin.invites.empty")}</EmptySlot>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
+
+      {addOpen && team && identityId ? (
+        <AddMemberModal
+          teamId={team.id}
+          teamName={team.name}
+          existingMemberIds={members.map((member) => member.id)}
+          candidates={orgMembers}
+          identityId={identityId}
+          onClose={() => setAddOpen(false)}
+          onChanged={onChanged}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1067,135 +1303,6 @@ function PolicyTab({
       <p className="m-0 max-w-[660px] rounded-[13px] bg-raise px-[18px] py-4 text-[11.5px] leading-[1.75] text-faint [text-wrap:pretty]">
         {t("admin.policy.foot")}
       </p>
-    </div>
-  );
-}
-
-function OrgTab({
-  teams,
-  projects,
-  currentTeamId,
-  onOpenTeam,
-}: {
-  teams: Array<{
-    id: string;
-    name: string;
-    members: Array<{
-      id: string;
-      displayName: string;
-      teamRole: PilotTeamRole;
-      organizationRole?: PilotOrganizationRole | undefined;
-    }>;
-  }>;
-  projects: Array<{
-    id: string;
-    primaryTeamId: string;
-    participatingTeamIds: string[];
-  }>;
-  currentTeamId: string | undefined;
-  onOpenTeam: (teamId: string) => void;
-}) {
-  const { t } = useI18n();
-  const people = new Set(
-    teams.flatMap((team) => team.members.map((member) => member.id)),
-  );
-  const admins = new Set(
-    teams.flatMap((team) =>
-      team.members
-        .filter((member) => member.organizationRole === "admin")
-        .map((member) => member.id),
-    ),
-  );
-
-  return (
-    <div className="mt-[26px]">
-      <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(210px,1fr))]">
-        <StatCard
-          title={t("admin.org.people")}
-          value={people.size}
-          detail={t("admin.org.peopleDetail", { count: admins.size })}
-        />
-        <StatCard
-          title={t("admin.org.teams")}
-          value={teams.length}
-          detail={t("admin.org.teamsDetail")}
-        />
-        <StatCard
-          title={t("admin.org.projects")}
-          value={projects.length}
-          detail={t("admin.org.projectsDetail")}
-        />
-      </div>
-
-      <div className="mt-[30px]">
-        <div className="flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">
-            {t("admin.org.teamList")}
-          </strong>
-          <span className="text-[11px] text-faint">
-            {t("admin.org.teamListHint")}
-          </span>
-        </div>
-        <div className="mt-3.5">
-          <TableHead
-            template={TEAM_COLUMNS}
-            columns={[
-              "",
-              t("admin.org.teamList"),
-              t("admin.org.people"),
-              t("admin.org.projects"),
-              "",
-            ]}
-          />
-        </div>
-        <div className="mt-1.5 flex flex-col gap-1.5">
-          {teams.map((team) => {
-            const leader = team.members.find(
-              (member) => member.teamRole === "leader",
-            );
-            const owned = projects.filter((project) =>
-              projectInTeam(project, team.id),
-            ).length;
-            return (
-              <div
-                key={team.id}
-                className="grid items-center gap-3 rounded-[13px] border border-line bg-panel2 px-4 py-3"
-                style={{ gridTemplateColumns: TEAM_COLUMNS }}
-              >
-                <ScopeMark id={team.id} label={team.name} size="lg" filled />
-                <span className="grid min-w-0">
-                  <strong className="truncate text-[12.5px] font-[600]">
-                    {team.name}
-                  </strong>
-                  <small className="mt-[3px] text-[10.5px] text-faint">
-                    {leader
-                      ? t("admin.org.ledBy", { name: leader.displayName })
-                      : t("scope.teamNoLeader")}
-                  </small>
-                </span>
-                <Meta className="text-[11px]" tone="muted">
-                  {t("admin.org.memberCount", { count: team.members.length })}
-                </Meta>
-                <span className="text-[11px] text-ink-muted">
-                  {t("admin.org.projectCount", { count: owned })}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onOpenTeam(team.id)}
-                  disabled={team.id === currentTeamId}
-                  className="cursor-pointer border-0 bg-transparent p-0 text-[11px] text-ink-muted hover:text-accent-strong disabled:cursor-default disabled:text-faint"
-                >
-                  {t(
-                    team.id === currentTeamId
-                      ? "admin.org.current"
-                      : "admin.org.open",
-                  )}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

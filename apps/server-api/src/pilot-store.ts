@@ -120,6 +120,20 @@ export interface PilotMutationContext {
   detail?: Record<string, string>;
 }
 
+/**
+ * Everything an organization administrator governs, in one read.
+ *
+ * `listTeams` is deliberately scoped to the caller's own memberships, so the
+ * organization surface cannot be built from it: an admin has to see the teams
+ * and projects they are not a member of in order to govern them.
+ */
+export interface PilotOrganizationDirectory {
+  teams: PilotTeam[];
+  teamMemberships: PilotTeamMembership[];
+  organizationMemberships: PilotOrganizationMembership[];
+  projects: PilotProject[];
+}
+
 export interface PilotStore {
   getOrganization(): Promise<PilotOrganization | undefined>;
   getAdministratorId(): Promise<PrincipalId | undefined>;
@@ -143,6 +157,13 @@ export interface PilotStore {
     defaultModel: string;
     encryptedApiKey: string;
   }): Promise<PilotOrganization>;
+  renameOrganization(input: {
+    name: string;
+    principalId: PrincipalId;
+  }): Promise<PilotOrganization>;
+  getOrganizationDirectory(
+    principalId: PrincipalId,
+  ): Promise<PilotOrganizationDirectory>;
   getTeam(teamId: string): Promise<PilotTeam | undefined>;
   getTeamRole(
     teamId: string,
@@ -153,6 +174,22 @@ export interface PilotStore {
     teamId: string,
     principalId: PrincipalId,
   ): Promise<PilotTeamMembership[]>;
+  createTeam(input: {
+    team: PilotTeam;
+    principalId: PrincipalId;
+  }): Promise<PilotTeam>;
+  renameTeam(input: {
+    teamId: string;
+    name: string;
+    principalId: PrincipalId;
+  }): Promise<PilotTeam>;
+  addTeamMember(input: {
+    teamId: string;
+    memberId: PrincipalId;
+    role: PilotTeamRole;
+    principalId: PrincipalId;
+    now: string;
+  }): Promise<PilotTeamMembership>;
   createInvitation(
     invitation: PilotTeamInvitation,
     principalId: PrincipalId,
@@ -223,6 +260,15 @@ export interface PilotStore {
     posture: PilotCollaborationPosture,
     now: string,
   ): Promise<PilotProject>;
+  updateProject(input: {
+    projectId: ProjectId;
+    principalId: PrincipalId;
+    now: string;
+    name?: string;
+    primaryTeamId?: string;
+    participatingTeamIds?: string[];
+    posture?: PilotCollaborationPosture;
+  }): Promise<PilotProject>;
   listDirectMessageThreads(
     principalId: PrincipalId,
   ): Promise<
@@ -255,6 +301,11 @@ export interface PilotStore {
     projectId: ProjectId,
     principalId: PrincipalId,
   ): Promise<PilotAgentBinding[]>;
+  validateAgentBinding(
+    bindingId: string,
+    ownerId: PrincipalId,
+    now: string,
+  ): Promise<PilotAgentBinding>;
   disconnectAgentBinding(
     bindingId: string,
     principalId: PrincipalId,
@@ -482,6 +533,54 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
   }
 
+  async renameOrganization(input: {
+    name: string;
+    principalId: PrincipalId;
+  }): Promise<PilotOrganization> {
+    let previousName: string | undefined;
+    return this.updateSnapshot(
+      (snapshot) => {
+        const organization = requireOrganization(snapshot);
+        requireOrganizationAdministrator(snapshot, input.principalId);
+        previousName = organization.name;
+        snapshot.organization = { ...organization, name: input.name };
+        return snapshot.organization;
+      },
+      {
+        eventType: "pilot.organization.renamed",
+        actorId: input.principalId,
+        aggregateType: "pilot_organization",
+        aggregateId: input.principalId,
+        visibility: "organization",
+        get detail() {
+          return { from: previousName ?? "", to: input.name };
+        },
+      },
+    );
+  }
+
+  /**
+   * The organization-wide view an administrator governs from. Unlike
+   * `listTeams`, it is not filtered by the caller's own memberships — an admin
+   * has to reach the teams and projects they do not belong to.
+   */
+  async getOrganizationDirectory(
+    principalId: PrincipalId,
+  ): Promise<PilotOrganizationDirectory> {
+    const snapshot = await this.readSnapshot();
+    requireOrganizationAdministrator(snapshot, principalId);
+    return {
+      teams: snapshot.teams.toSorted((left, right) =>
+        left.name.localeCompare(right.name),
+      ),
+      teamMemberships: snapshot.memberships,
+      organizationMemberships: snapshot.organizationMemberships,
+      projects: snapshot.projects.toSorted((left, right) =>
+        left.name.localeCompare(right.name),
+      ),
+    };
+  }
+
   async updateDeploymentEndpoint(input: {
     administratorId: PrincipalId;
     deploymentBaseUrl: string;
@@ -545,6 +644,139 @@ export abstract class SnapshotPilotStore implements PilotStore {
           ? left.principalId.localeCompare(right.principalId)
           : left.joinedAt.localeCompare(right.joinedAt),
       );
+  }
+
+  /**
+   * Creating a team also puts the administrator in it as its leader.
+   *
+   * `listTeams` only returns teams you belong to, so a team created into thin
+   * air would be invisible to the person who just created it — and a team with
+   * no leader has nobody able to manage it.
+   */
+  async createTeam(input: {
+    team: PilotTeam;
+    principalId: PrincipalId;
+  }): Promise<PilotTeam> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        requireOrganization(snapshot);
+        requireOrganizationAdministrator(snapshot, input.principalId);
+        requireUnusedTeamName(snapshot, input.team.name);
+        snapshot.teams.push(input.team);
+        snapshot.memberships.push({
+          teamId: input.team.id,
+          principalId: input.principalId,
+          role: "leader",
+          joinedAt: input.team.createdAt,
+        });
+        if (
+          !snapshot.organizationMemberships.some(
+            (membership) => membership.principalId === input.principalId,
+          )
+        ) {
+          snapshot.organizationMemberships.push({
+            principalId: input.principalId,
+            role: "admin",
+            joinedAt: input.team.createdAt,
+          });
+        }
+        return input.team;
+      },
+      {
+        eventType: "pilot.team.created",
+        actorId: input.principalId,
+        aggregateType: "pilot_team",
+        aggregateId: input.team.id,
+        visibility: "organization",
+        detail: { name: input.team.name },
+      },
+    );
+  }
+
+  async renameTeam(input: {
+    teamId: string;
+    name: string;
+    principalId: PrincipalId;
+  }): Promise<PilotTeam> {
+    let previousName: string | undefined;
+    return this.updateSnapshot(
+      (snapshot) => {
+        requireTeamManager(snapshot, input.teamId, input.principalId);
+        const team = requireTeam(snapshot, input.teamId);
+        requireUnusedTeamName(snapshot, input.name, input.teamId);
+        previousName = team.name;
+        team.name = input.name;
+        return team;
+      },
+      {
+        eventType: "pilot.team.renamed",
+        actorId: input.principalId,
+        aggregateType: "pilot_team",
+        aggregateId: input.teamId,
+        visibility: "organization",
+        get detail() {
+          return { from: previousName ?? "", to: input.name };
+        },
+      },
+    );
+  }
+
+  /**
+   * Puts an existing colleague into a team directly. Only people the
+   * organization already holds a membership for can be added this way; anyone
+   * else has to come through an invitation, which is what establishes their
+   * account in the first place.
+   */
+  async addTeamMember(input: {
+    teamId: string;
+    memberId: PrincipalId;
+    role: PilotTeamRole;
+    principalId: PrincipalId;
+    now: string;
+  }): Promise<PilotTeamMembership> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        requireOrganizationAdministrator(snapshot, input.principalId);
+        requireTeam(snapshot, input.teamId);
+        if (
+          !snapshot.organizationMemberships.some(
+            (membership) => membership.principalId === input.memberId,
+          )
+        ) {
+          throw notFound("Organization membership");
+        }
+        if (
+          snapshot.memberships.some(
+            (membership) =>
+              membership.teamId === input.teamId &&
+              membership.principalId === input.memberId,
+          )
+        ) {
+          throw new PilotStoreError(
+            "TEAM_MEMBERSHIP_EXISTS",
+            409,
+            "This person is already a member of the team.",
+          );
+        }
+        const membership: PilotTeamMembership = {
+          teamId: input.teamId,
+          principalId: input.memberId,
+          role: input.role,
+          joinedAt: input.now,
+        };
+        snapshot.memberships.push(membership);
+        return membership;
+      },
+      {
+        eventType: "pilot.team_member.added",
+        actorId: input.principalId,
+        aggregateType: "pilot_team",
+        aggregateId: input.teamId,
+        visibility: "organization",
+        subjectId: input.memberId,
+        detail: { to: input.role },
+      },
+    );
   }
 
   async createInvitation(
@@ -1021,6 +1253,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateId: project.id,
         visibility: "project",
         projectId: project.id,
+        detail: { name: project.name },
       },
     );
   }
@@ -1052,6 +1285,92 @@ export abstract class SnapshotPilotStore implements PilotStore {
         aggregateId: projectId,
         visibility: "project",
         projectId,
+      },
+    );
+  }
+
+  /**
+   * Renames a project and re-scopes which teams take part in it.
+   *
+   * Posture is accepted here too so an administrator can pause a project they
+   * do not own; `updateProjectPosture` stays owner-only and is what the
+   * project's own surface uses.
+   */
+  async updateProject(input: {
+    projectId: ProjectId;
+    principalId: PrincipalId;
+    now: string;
+    name?: string;
+    primaryTeamId?: string;
+    participatingTeamIds?: string[];
+    posture?: PilotCollaborationPosture;
+  }): Promise<PilotProject> {
+    const changed: Record<string, string> = {};
+    return this.updateSnapshot(
+      (snapshot) => {
+        const project = requireProject(snapshot, input.projectId);
+        requireProjectManager(snapshot, project, input.principalId);
+        const primaryTeamId = input.primaryTeamId ?? project.primaryTeamId;
+        const participatingTeamIds = [
+          ...new Set(
+            input.participatingTeamIds ?? project.participatingTeamIds,
+          ),
+        ];
+        for (const teamId of participatingTeamIds) {
+          requireTeam(snapshot, teamId);
+        }
+        if (!participatingTeamIds.includes(primaryTeamId)) {
+          throw new PilotStoreError(
+            "PRIMARY_TEAM_NOT_ASSOCIATED",
+            400,
+            "The primary team must participate in the project.",
+          );
+        }
+        if (
+          primaryTeamId !== project.primaryTeamId &&
+          !snapshot.memberships.some(
+            (membership) =>
+              membership.teamId === primaryTeamId &&
+              membership.principalId === project.ownerId,
+          )
+        ) {
+          throw new PilotStoreError(
+            "PROJECT_OWNER_NOT_IN_TEAM",
+            409,
+            "The project owner must be a member of the primary team.",
+          );
+        }
+        if (input.name !== undefined && input.name !== project.name) {
+          changed.from = project.name;
+          changed.to = input.name;
+          project.name = input.name;
+        }
+        if (primaryTeamId !== project.primaryTeamId) {
+          changed.primaryTeamId = primaryTeamId;
+          project.primaryTeamId = primaryTeamId;
+        }
+        if (
+          participatingTeamIds.join(",") !==
+          project.participatingTeamIds.join(",")
+        ) {
+          changed.teams = String(participatingTeamIds.length);
+          project.participatingTeamIds = participatingTeamIds;
+        }
+        if (input.posture !== undefined && input.posture !== project.posture) {
+          changed.posture = input.posture;
+          project.posture = input.posture;
+        }
+        project.updatedAt = input.now;
+        return project;
+      },
+      {
+        eventType: "pilot.project.updated",
+        actorId: input.principalId,
+        aggregateType: "pilot_project",
+        aggregateId: input.projectId,
+        visibility: "project",
+        projectId: input.projectId,
+        detail: changed,
       },
     );
   }
@@ -1255,7 +1574,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
         return binding;
       },
       {
-        eventType: "pilot.agent.connected",
+        eventType: "pilot.agent.credentials_issued",
         actorId: binding.ownerId,
         aggregateType: "pilot_agent_binding",
         aggregateId: binding.id,
@@ -1277,6 +1596,48 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
     return snapshot.agentBindings.filter(
       (binding) => binding.projectId === projectId,
+    );
+  }
+
+  async validateAgentBinding(
+    bindingId: string,
+    ownerId: PrincipalId,
+    now: string,
+  ): Promise<PilotAgentBinding> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        const binding = snapshot.agentBindings.find(
+          (item) => item.id === bindingId && !item.disconnectedAt,
+        );
+        if (!binding || binding.ownerId !== ownerId) {
+          throw new PilotStoreError(
+            "AGENT_CONNECTION_INACTIVE",
+            401,
+            "Agent connection is not active.",
+          );
+        }
+        for (const existing of snapshot.agentBindings) {
+          if (
+            existing.id !== binding.id &&
+            !existing.disconnectedAt &&
+            existing.projectId === binding.projectId &&
+            existing.ownerId === binding.ownerId &&
+            existing.client === binding.client
+          ) {
+            existing.disconnectedAt = now;
+          }
+        }
+        binding.validatedAt ??= now;
+        binding.lastSeenAt = now;
+        return binding;
+      },
+      {
+        eventType: "pilot.agent.connected",
+        actorId: ownerId,
+        aggregateType: "pilot_agent_binding",
+        aggregateId: bindingId,
+        visibility: "private",
+      },
     );
   }
 
@@ -2328,6 +2689,38 @@ function requireTeamManager(
     403,
     "An organization administrator or Team Leader is required.",
   );
+}
+
+/**
+ * Team names are how people pick a scope in the shell, so two teams sharing one
+ * name would make the picker ambiguous. Compared case-insensitively.
+ */
+function requireUnusedTeamName(
+  snapshot: PilotSnapshot,
+  name: string,
+  exceptTeamId?: string,
+): void {
+  const taken = snapshot.teams.some(
+    (team) =>
+      team.id !== exceptTeamId &&
+      team.name.trim().toLowerCase() === name.trim().toLowerCase(),
+  );
+  if (taken) {
+    throw new PilotStoreError(
+      "TEAM_NAME_TAKEN",
+      409,
+      "Another team already uses this name.",
+    );
+  }
+}
+
+function requireProjectManager(
+  snapshot: PilotSnapshot,
+  project: PilotProject,
+  principalId: PrincipalId,
+): void {
+  if (project.ownerId === principalId) return;
+  requireOrganizationAdministrator(snapshot, principalId);
 }
 
 function requireProject(

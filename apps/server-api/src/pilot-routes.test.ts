@@ -4,6 +4,9 @@ import {
   type PrincipalId,
   uuidv7,
 } from "@intero/domain";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -176,12 +179,17 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(chineseTicket.statusCode).toBe(201);
     expect(chineseTicket.json().connectPrompt).toContain(
-      "所有 narrative 字段、协作请求和人类可读 evidence",
+      "最后必须实际调用 intero.validate_connection",
     );
     expect(chineseTicket.json().connectPrompt).toContain("zh-CN");
+    expect(chineseTicket.json().connectPrompt).toContain(".codex/config.toml");
+    expect(chineseTicket.json().connectPrompt).toContain(".codex/hooks.json");
+    expect(chineseTicket.json().connectPrompt).toContain("AGENTS.md");
+    expect(chineseTicket.json().connectPrompt).toContain("/v1/pilot/mcp");
+    expect(chineseTicket.json().connectPrompt).not.toContain("intero-mcp");
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
-    ).match(/--connect-ticket (ticket_[A-Za-z0-9_-]+)/)?.[1];
+    ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
     expect(chineseRawTicket).toBeDefined();
     const chineseBinding = await app.inject({
       method: "POST",
@@ -210,9 +218,29 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(englishTicket.statusCode).toBe(201);
     expect(englishTicket.json().connectPrompt).toContain(
-      "Write every narrative field, collaboration request, and human-readable evidence item",
+      "make one real intero.validate_connection tool call",
     );
     expect(englishTicket.json().connectPrompt).toContain("en-US");
+    expect(englishTicket.json().connectPrompt).toContain(".mcp.json");
+    expect(englishTicket.json().connectPrompt).toContain(
+      ".claude/settings.json",
+    );
+    expect(englishTicket.json().connectPrompt).toContain("CLAUDE.md");
+    expect(englishTicket.json().connectPrompt).not.toContain("intero-mcp");
+
+    const openCodeTicket = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "opencode" },
+    });
+    expect(openCodeTicket.statusCode).toBe(201);
+    expect(openCodeTicket.json().connectPrompt).toContain("opencode.json");
+    expect(openCodeTicket.json().connectPrompt).toContain(
+      ".opencode/plugins/intero.ts",
+    );
+    expect(openCodeTicket.json().connectPrompt).toContain("AGENTS.md");
+    expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
   });
 
   it("requires a selected identity and keeps provider credentials server-only", async () => {
@@ -466,6 +494,250 @@ describe("pilot cloud-first vertical slice", () => {
     expect(lastAdmin.json().code).toBe("LAST_ORGANIZATION_ADMIN");
   });
 
+  it("creates and renames teams, and only admins put existing people in them", async () => {
+    await setupAsA(app);
+    const firstTeam = await firstTeamId(app, A);
+    const join = await createJoinLink(app, firstTeam);
+    await app.inject({
+      method: "POST",
+      url: `/v1/pilot/join/${join.code}`,
+      headers: identity(B),
+    });
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(B),
+      payload: { name: "Developer Platform" },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "Developer Platform" },
+    });
+    expect(created.statusCode).toBe(201);
+    const teamId = created.json().team.id as string;
+
+    // The creator has to end up inside the team: team reads are scoped to
+    // membership, so otherwise the admin could not see what they just made.
+    const own = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+    });
+    const createdTeam = own
+      .json()
+      .teams.find((team: { id: string }) => team.id === teamId);
+    expect(createdTeam.members).toHaveLength(1);
+    expect(createdTeam.members[0]).toMatchObject({ id: A, teamRole: "leader" });
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "developer platform" },
+    });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json().code).toBe("TEAM_NAME_TAKEN");
+
+    const renameDenied = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/teams/${teamId}`,
+      headers: identity(B),
+      payload: { name: "Platform Tools" },
+    });
+    expect(renameDenied.statusCode).toBe(403);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/teams/${teamId}`,
+      headers: identity(A),
+      payload: { name: "Platform Tools" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().team.name).toBe("Platform Tools");
+
+    // Someone with no organization membership cannot be added this way — that
+    // is what an invitation is for.
+    const stranger = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${teamId}/members`,
+      headers: identity(A),
+      payload: { memberId: C },
+    });
+    expect(stranger.statusCode).toBe(404);
+
+    const added = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${teamId}/members`,
+      headers: identity(A),
+      payload: { memberId: B, role: "leader" },
+    });
+    expect(added.statusCode).toBe(201);
+    expect(added.json().membership).toMatchObject({ teamId, role: "leader" });
+
+    const again = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${teamId}/members`,
+      headers: identity(A),
+      payload: { memberId: B },
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().code).toBe("TEAM_MEMBERSHIP_EXISTS");
+
+    const visible = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/teams",
+      headers: identity(B),
+    });
+    expect(
+      visible.json().teams.map((team: { id: string }) => team.id),
+    ).toContain(teamId);
+  });
+
+  it("renames and re-scopes a project, keeping the owner inside its primary team", async () => {
+    const { teamId, project } = await readyProject(app);
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "Developer Platform" },
+    });
+    const secondTeamId = second.json().team.id as string;
+
+    const outsider = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(B),
+      payload: { name: "Not yours" },
+    });
+    expect(outsider.statusCode).toBe(403);
+
+    const rescoped = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: {
+        name: "Collaboration Chain",
+        participatingTeamIds: [teamId, secondTeamId],
+        posture: "paused",
+      },
+    });
+    expect(rescoped.statusCode).toBe(200);
+    expect(rescoped.json().project).toMatchObject({
+      name: "Collaboration Chain",
+      posture: "paused",
+      primaryTeamId: teamId,
+    });
+    expect(rescoped.json().project.participatingTeamIds).toEqual([
+      teamId,
+      secondTeamId,
+    ]);
+
+    // Taking a team back off the project has to stick, not just be ignored.
+    const narrowed = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: { participatingTeamIds: [teamId] },
+    });
+    expect(narrowed.json().project.participatingTeamIds).toEqual([teamId]);
+
+    const orphaned = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: { participatingTeamIds: [secondTeamId] },
+    });
+    expect(orphaned.statusCode).toBe(400);
+    expect(orphaned.json().code).toBe("PRIMARY_TEAM_NOT_ASSOCIATED");
+
+    // A owns the project but leaves the second team, so it can no longer be
+    // the primary team — the owner has to be a member of that one.
+    await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${secondTeamId}/members`,
+      headers: identity(A),
+      payload: { memberId: B, role: "leader" },
+    });
+    await app.inject({
+      method: "DELETE",
+      url: `/v1/pilot/teams/${secondTeamId}/members/${A}`,
+      headers: identity(A),
+    });
+    const handover = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: {
+        primaryTeamId: secondTeamId,
+        participatingTeamIds: [teamId, secondTeamId],
+      },
+    });
+    expect(handover.statusCode).toBe(409);
+    expect(handover.json().code).toBe("PROJECT_OWNER_NOT_IN_TEAM");
+  });
+
+  it("serves the organization directory and org-wide roles to administrators only", async () => {
+    const { teamId, project } = await readyProject(app);
+
+    const denied = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/organization/directory",
+      headers: identity(B),
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const directory = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/organization/directory",
+      headers: identity(A),
+    });
+    expect(directory.statusCode).toBe(200);
+    const body = directory.json();
+    expect(body.teams.map((team: { id: string }) => team.id)).toContain(teamId);
+    expect(body.projects.map((entry: { id: string }) => entry.id)).toContain(
+      project.id,
+    );
+    expect(
+      body.members.find((member: { id: string }) => member.id === A),
+    ).toMatchObject({ organizationRole: "admin", teamIds: [teamId] });
+
+    const renameDenied = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/organization",
+      headers: identity(B),
+      payload: { name: "Intero Labs" },
+    });
+    expect(renameDenied.statusCode).toBe(403);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/organization",
+      headers: identity(A),
+      payload: { name: "Intero Labs" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().organization.name).toBe("Intero Labs");
+
+    const promoted = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/organization/members/${B}`,
+      headers: identity(A),
+      payload: { organizationRole: "admin" },
+    });
+    expect(promoted.statusCode).toBe(200);
+    const afterPromotion = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/organization/directory",
+      headers: identity(B),
+    });
+    expect(afterPromotion.statusCode).toBe(200);
+  });
+
   it("rejects revoked invitations and does not expose their bearer token", async () => {
     await setupAsA(app);
     const teamId = await firstTeamId(app, A);
@@ -524,6 +796,153 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(accept.statusCode).toBe(410);
     expect(accept.json().code).toBe("INVITATION_EXPIRED");
+  });
+
+  it("shows awaiting validation until a real remote MCP handshake succeeds", async () => {
+    const fixture = await readyProject(app);
+    const ticketResponse = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "codex" },
+    });
+    const prompt = ticketResponse.json().connectPrompt as string;
+    const ticket = prompt.match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
+    const connected = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket,
+        client: "codex",
+        name: "Codex · remote-mcp-test",
+        workspaceId: uuidv7(),
+      },
+    });
+    expect(connected.statusCode).toBe(201);
+    expect(connected.json().binding.validatedAt).toBeUndefined();
+
+    const before = await overview(app, fixture.project.id, A);
+    expect(before.bindings[0]).toMatchObject({
+      client: "codex",
+      name: "Codex · remote-mcp-test",
+    });
+    expect(before.bindings[0].validatedAt).toBeUndefined();
+
+    const rejectedBeforeValidation = await sendCheckpoint(
+      app,
+      connected.json().credential,
+      checkpoint(fixture.project.id),
+    );
+    expect(rejectedBeforeValidation.statusCode).toBe(409);
+    expect(rejectedBeforeValidation.json().code).toBe(
+      "AGENT_VALIDATION_REQUIRED",
+    );
+
+    const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
+    const mcpClient = new Client({
+      name: "codex-native-connection-test",
+      version: "1.0.0",
+    });
+    const transport = new StreamableHTTPClientTransport(
+      new URL("/v1/pilot/mcp", baseUrl),
+      {
+        requestInit: {
+          headers: {
+            authorization: `Bearer ${connected.json().credential as string}`,
+          },
+        },
+      },
+    );
+    await mcpClient.connect(transport as unknown as Transport);
+    const tools = await mcpClient.listTools();
+    expect(tools.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "intero.validate_connection",
+        "stand_in.current_context",
+        "stand_in.report_checkpoint",
+      ]),
+    );
+    const validation = await mcpClient.callTool({
+      name: "intero.validate_connection",
+      arguments: {},
+    });
+    const validationContent = (
+      validation as {
+        content: Array<{ type: string; text?: string }>;
+      }
+    ).content;
+    const validationText = validationContent.find(
+      (item) => item.type === "text",
+    );
+    expect(validationText?.type).toBe("text");
+    expect(
+      validationText?.type === "text" && validationText.text
+        ? JSON.parse(validationText.text).status
+        : undefined,
+    ).toBe("connected");
+    const firstValidatedAt =
+      validationText?.type === "text" && validationText.text
+        ? JSON.parse(validationText.text).validatedAt
+        : undefined;
+    const repeatedValidation = (await mcpClient.callTool({
+      name: "intero.validate_connection",
+      arguments: {},
+    })) as { content: Array<{ type: string; text?: string }> };
+    const repeatedText = repeatedValidation.content.find(
+      (item) => item.type === "text",
+    )?.text;
+    expect(
+      repeatedText ? JSON.parse(repeatedText).validatedAt : undefined,
+    ).toBe(firstValidatedAt);
+    await mcpClient.close();
+
+    const after = await overview(app, fixture.project.id, A);
+    expect(after.bindings[0].validatedAt).toEqual(expect.any(String));
+    expect(after.bindings[0].lastSeenAt).toBe(after.bindings[0].validatedAt);
+
+    const hook = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/hooks",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+      },
+      payload: {
+        clientEventId: "hook-session-start-0001",
+        lifecycle: "session_started",
+        workstreamKey: "remote-mcp-test",
+        workstreamTitle: "Remote MCP test",
+      },
+    });
+    expect(hook.statusCode).toBe(202);
+    expect(hook.json().accepted).toBe(true);
+
+    const disconnected = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/agent-bindings/${connected.json().binding.id}/disconnect`,
+      headers: identity(A),
+      payload: {},
+    });
+    expect(disconnected.statusCode).toBe(200);
+
+    const rejectedAfterDisconnect = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/mcp",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: "revalidate",
+        method: "tools/call",
+        params: {
+          name: "intero.validate_connection",
+          arguments: {},
+        },
+      },
+    });
+    expect(rejectedAfterDisconnect.statusCode).toBe(401);
   });
 
   it("accepts a scoped idempotent Agent checkpoint and separates private state from Team Pulse", async () => {
@@ -864,9 +1283,7 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     expect(noSharedStateForB.statusCode).toBe(409);
-    expect(noSharedStateForB.json().code).toBe(
-      "STAND_IN_CONTEXT_UNAVAILABLE",
-    );
+    expect(noSharedStateForB.json().code).toBe("STAND_IN_CONTEXT_UNAVAILABLE");
 
     const unauthorizedTarget = await app.inject({
       method: "POST",
@@ -965,7 +1382,6 @@ describe("pilot cloud-first vertical slice", () => {
     expect(retried.json().duplicate).toBe(true);
     expect((await overview(app, fixture.project.id, B)).pulse).toEqual([]);
   });
-
 });
 
 function setupPayload() {
@@ -1069,7 +1485,7 @@ async function connectAgent(
   });
   expect(ticketResponse.statusCode).toBe(201);
   const prompt = ticketResponse.json().connectPrompt as string;
-  const ticket = prompt.match(/--connect-ticket (ticket_[A-Za-z0-9_-]+)/)?.[1];
+  const ticket = prompt.match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
   expect(ticket).toBeDefined();
   const payload = {
     ticket,
@@ -1083,6 +1499,28 @@ async function connectAgent(
     payload,
   });
   expect(connected.statusCode).toBe(201);
+  const validation = await app.inject({
+    method: "POST",
+    url: "/v1/pilot/mcp",
+    headers: {
+      authorization: `Bearer ${connected.json().credential as string}`,
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    payload: {
+      jsonrpc: "2.0",
+      id: "validate-connection",
+      method: "tools/call",
+      params: {
+        name: "intero.validate_connection",
+        arguments: {},
+      },
+    },
+  });
+  expect(validation.statusCode).toBe(200);
+  expect(JSON.parse(validation.json().result.content[0].text).status).toBe(
+    "connected",
+  );
   const connectReuse = await app.inject({
     method: "POST",
     url: "/v1/pilot/agent/connect",

@@ -522,10 +522,18 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.queue.noAdminDetail":
     "At least one person has to be able to change org-level policy.",
   "admin.tab.members": "Members and permissions",
+  "admin.tab.teams": "Teams",
+  "admin.tab.projects": "Projects",
   "admin.tab.policy": "Policy",
   "admin.tab.org": "Organization",
   "admin.tab.audit": "Audit log",
   "admin.members.title": "Members and permissions",
+  "admin.members.teamPicker": "Pick a team",
+  "admin.members.addExisting": "Add existing member",
+  "admin.members.ledeAdmin":
+    "Pick a team to edit its members and roles. Invite a new colleague into the organization, or add someone it already knows to this team.",
+  "admin.members.ledeLead":
+    "Members and roles of the team you lead. Inviting someone new into the organization needs an organization admin.",
   "admin.members.count": "{count} people",
   "admin.members.invite": "Invite member",
   "admin.members.inviteName": "Name",
@@ -603,6 +611,93 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.audit.action.reverted": "Reverted",
   "admin.audit.action.dismissed": "Dismissed",
   "admin.audit.action.quieted": "Quieted",
+  "admin.form.save": "Save",
+  "admin.form.cancel": "Cancel",
+
+  "admin.teams.title": "Teams",
+  "admin.teams.count": "{count} teams",
+  "admin.teams.ledeOrg":
+    "Every team in the organization. Create one, rename it, or open its roster.",
+  "admin.teams.ledeTeam":
+    "The teams you belong to. You can rename the ones you lead; creating a team and adding people needs an organization admin.",
+  "admin.teams.empty": "No teams yet.",
+  "admin.teams.create": "New team",
+  "admin.teams.createTitle": "New team",
+  "admin.teams.createSubmit": "Create team",
+  "admin.teams.createHint":
+    "You become the lead of the team you create, and can then add other people from the organization.",
+  "admin.teams.rename": "Rename",
+  "admin.teams.renameTitle": "Rename team",
+  "admin.teams.renameSubmit": "Save",
+  "admin.teams.renameHint":
+    "A rename only changes the label. Members, projects and history stay as they are.",
+  "admin.teams.nameLabel": "Team name",
+  "admin.teams.namePlaceholder": "For example: Developer Platform",
+  "admin.teams.nameTaken": "Another team already uses this name.",
+  "admin.teams.failed": "That did not save. Try again.",
+  "admin.teams.members": "Members",
+  "admin.teams.addMemberTitle": "Add people to {team}",
+  "admin.teams.addMemberHint":
+    "Only people in the organization who are not in this team yet. Anyone without an account has to be invited by email.",
+  "admin.teams.addMemberSubmit": "Add",
+  "admin.teams.addMemberEmpty":
+    "Everyone in the organization is already in this team.",
+  "admin.teams.asLeader": "Add as Team Lead",
+
+  "admin.projects.title": "Projects",
+  "admin.projects.count": "{count} projects",
+  "admin.projects.lede":
+    "Which team a project belongs to, which teams take part, and how it collaborates. Changes take effect immediately.",
+  "admin.projects.empty": "No projects yet.",
+  "admin.projects.create": "New project",
+  "admin.projects.createTitle": "New project",
+  "admin.projects.createSubmit": "Create project",
+  "admin.projects.edit": "Edit",
+  "admin.projects.editTitle": "Edit project",
+  "admin.projects.save": "Save",
+  "admin.projects.nameLabel": "Project name",
+  "admin.projects.namePlaceholder": "For example: Collaboration chain rework",
+  "admin.projects.primaryTeam": "Owning team",
+  "admin.projects.primaryTeamHint":
+    "The owning team is whose project this is. A new project can only sit under a team you belong to — the project owner has to be a member of it.",
+  "admin.projects.primaryOf": "Owned by {team}",
+  "admin.projects.participating": "Participating teams",
+  "admin.projects.participatingHint":
+    "Members of a participating team see every collaboration surface of this project. Unchecking one takes that access away.",
+  "admin.projects.isPrimary": "Owner",
+  "admin.projects.posture": "Collaboration posture",
+  "admin.projects.posture.collaborative": "Collaborative",
+  "admin.projects.posture.paused": "Paused",
+  "admin.projects.posture.private": "Private",
+  "admin.projects.colProject": "Project",
+  "admin.projects.colTeams": "Participating teams",
+  "admin.projects.colPosture": "Posture",
+  "admin.projects.colOwner": "Owner",
+  "admin.projects.moreTeams": "+{count}",
+  "admin.projects.failed": "That did not save. Try again.",
+  "admin.projects.ownerNotInTeam":
+    "The project owner is not in that team. Add them to it first, then change the owning team.",
+
+  "admin.org.profile": "Organization",
+  "admin.org.profileDetail":
+    "The organization name appears in everyone's sidebar and in every invitation.",
+  "admin.org.name": "Organization name",
+  "admin.org.rename": "Rename",
+  "admin.org.renameFailed": "The organization name did not save. Try again.",
+  "admin.org.deploymentHint":
+    "Deployment endpoint and model service live under",
+  "admin.org.projectsDetailAll": "Every project in the organization.",
+  "admin.org.directory": "People",
+  "admin.org.directoryHint": "Everyone, across every team",
+  "admin.org.directoryEmpty": "Nobody in the organization yet.",
+  "admin.org.directoryFoot":
+    "The organization role is the one permission that is not scoped to a team: an admin governs every team, project and service setting. Team roles are set under Members and permissions.",
+  "admin.org.colTeams": "Teams",
+  "admin.org.noTeam": "No team yet",
+  "admin.org.lastAdmin":
+    "At least one organization administrator has to remain.",
+  "admin.org.roleFailed": "That role did not change. Try again.",
+
   "admin.org.people": "People",
   "admin.org.peopleDetail": "{count} of them are organization admins",
   "admin.org.teams": "Teams",
@@ -699,6 +794,19 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.audit.event.pilot.team_member.removed": "Member removed",
   "admin.audit.event.pilot.team_invitation.created": "Invitation sent",
   "admin.audit.event.pilot.team_invitation.revoked": "Invitation revoked",
+  "admin.audit.event.pilot.team.created": "Team created",
+  "admin.audit.event.pilot.team.renamed": "Team renamed",
+  "admin.audit.event.pilot.team_member.added": "Member added",
+  "admin.audit.event.pilot.project.created": "Project created",
+  "admin.audit.event.pilot.project.updated": "Project changed",
+  "admin.audit.event.pilot.organization.renamed": "Organization renamed",
+  "admin.audit.line.created": "Created \u201c{name}\u201d.",
+  "admin.audit.line.renamed":
+    "Renamed from \u201c{from}\u201d to \u201c{to}\u201d.",
+  "admin.audit.line.added": "{name} was added to the team as {role}.",
+  "admin.audit.line.primaryTeam": "The owning team changed.",
+  "admin.audit.line.teams": "Now scoped to {count} teams.",
+  "admin.audit.line.posture": "Collaboration posture set to {posture}.",
   "admin.audit.line.teamRole":
     "{name}'s team role changed from “{from}” to “{to}”.",
   "admin.audit.line.orgRole":

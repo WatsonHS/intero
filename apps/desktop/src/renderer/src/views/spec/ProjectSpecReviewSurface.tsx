@@ -350,10 +350,16 @@ export function ProjectSpecReviewSurface({
                   label={project?.name ?? ""}
                   size="sm"
                 />
-                <strong className="truncate text-[13.5px] font-[620]">
+                {/* `min-w-0` is what lets the name actually truncate: a flex
+                    item defaults to its content width, and a project named at
+                    any length would otherwise widen the whole pane. */}
+                <strong className="min-w-0 truncate text-[13.5px] font-[620]">
                   {project?.name}
                 </strong>
-                <CaretDownIcon size={10} className="ml-auto text-faint" />
+                <CaretDownIcon
+                  size={10}
+                  className="ml-auto shrink-0 text-faint"
+                />
               </button>
               {projectMenuOpen ? (
                 <div className="absolute left-0 right-0 top-[34px] z-20 grid gap-0.5 rounded-inset border border-line2 bg-panel2 p-1.5 shadow-[0_18px_40px_rgba(0,0,0,0.34)]">
@@ -366,7 +372,7 @@ export function ProjectSpecReviewSurface({
                         setProjectMenuOpen(false);
                       }}
                       className={cn(
-                        "cursor-pointer rounded-quiet border-0 px-2.5 py-2 text-left text-[12px] text-ink",
+                        "cursor-pointer truncate rounded-quiet border-0 px-2.5 py-2 text-left text-[12px] text-ink",
                         option.id === projectId
                           ? "bg-sel"
                           : "bg-transparent hover:bg-hover-wash",

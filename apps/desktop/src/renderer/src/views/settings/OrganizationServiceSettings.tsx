@@ -24,6 +24,10 @@ export function OrganizationServiceSettings({
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
   const organization = pilot?.bootstrap.data?.organization;
+  const developmentIdentityId =
+    pilot?.bootstrap.data?.authMode === "development_identity"
+      ? pilot.identityId
+      : undefined;
 
   const [editingDeployment, setEditingDeployment] = useState(false);
   const [deploymentEndpoint, setDeploymentEndpoint] = useState("");
@@ -34,7 +38,8 @@ export function OrganizationServiceSettings({
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["pilot"] });
   const updateDeployment = useMutation({
-    mutationFn: () => updatePilotDeploymentEndpoint(deploymentEndpoint),
+    mutationFn: () =>
+      updatePilotDeploymentEndpoint(deploymentEndpoint, developmentIdentityId),
     onSuccess: async () => {
       setEditingDeployment(false);
       await refresh();

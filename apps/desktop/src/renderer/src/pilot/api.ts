@@ -17,13 +17,16 @@ import type {
 } from "@intero/domain";
 
 import type { PrincipalSummary } from "../api.js";
+import { handleAuthenticationFailure } from "./auth-state.js";
+
+export {
+  PILOT_IDENTITY_STORAGE_KEY,
+  PILOT_PROJECT_STORAGE_KEY,
+  PILOT_TEAM_STORAGE_KEY,
+} from "./auth-state.js";
 
 export const PILOT_API_URL =
   import.meta.env.VITE_INTERO_API_URL ?? "http://127.0.0.1:4310";
-
-export const PILOT_IDENTITY_STORAGE_KEY = "intero.pilot.identity.v1";
-export const PILOT_PROJECT_STORAGE_KEY = "intero.pilot.project.v1";
-export const PILOT_TEAM_STORAGE_KEY = "intero.pilot.team.v1";
 
 export interface PilotBootstrapPayload {
   authMode: "session" | "development_identity" | "unavailable";
@@ -57,6 +60,24 @@ export interface PilotTeamPayload extends PilotTeam {
       email: string;
       teamRole: PilotTeamRole;
       organizationRole?: PilotOrganizationRole;
+    }
+  >;
+}
+
+/**
+ * The whole organization, as an administrator governs it. `getPilotTeams` only
+ * returns the teams you belong to, so the organization surfaces read from here
+ * instead — an admin manages teams and projects they are not a member of.
+ */
+export interface PilotOrganizationDirectoryPayload {
+  teams: PilotTeamPayload[];
+  projects: PilotProject[];
+  members: Array<
+    Omit<PrincipalSummary, "id"> & {
+      id: PrincipalId;
+      email: string;
+      organizationRole: PilotOrganizationRole;
+      teamIds: string[];
     }
   >;
 }
@@ -152,14 +173,24 @@ export function configurePilotProvider(
   );
 }
 
-export function updatePilotDeploymentEndpoint(deploymentBaseUrl: string) {
+export function updatePilotDeploymentEndpoint(
+  deploymentBaseUrl: string,
+  developmentIdentityId?: PrincipalId,
+) {
   return request<{ organization: PilotOrganization }>(
     "/v1/pilot/settings/deployment",
-    { method: "PATCH", body: { deploymentBaseUrl } },
+    {
+      method: "PATCH",
+      ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
+      body: { deploymentBaseUrl },
+    },
   );
 }
 
-export function getPilotProfile(signal?: AbortSignal) {
+export function getPilotProfile(
+  developmentIdentityId?: PrincipalId,
+  signal?: AbortSignal,
+) {
   return request<{
     profile: PrincipalSummary & {
       email: string;
@@ -167,14 +198,20 @@ export function getPilotProfile(signal?: AbortSignal) {
       avatarTone?: "accent" | "green" | "amber" | "cool";
       preferredLanguage?: "zh-CN" | "en-US";
     };
-  }>("/v1/pilot/profile", { ...(signal ? { signal } : {}) });
+  }>("/v1/pilot/profile", {
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
+    ...(signal ? { signal } : {}),
+  });
 }
 
-export function updatePilotProfile(input: {
-  displayName?: string;
-  avatarTone?: "accent" | "green" | "amber" | "cool";
-  preferredLanguage?: "zh-CN" | "en-US";
-}) {
+export function updatePilotProfile(
+  input: {
+    displayName?: string;
+    avatarTone?: "accent" | "green" | "amber" | "cool";
+    preferredLanguage?: "zh-CN" | "en-US";
+  },
+  developmentIdentityId?: PrincipalId,
+) {
   return request<{
     profile: PrincipalSummary & {
       email: string;
@@ -183,6 +220,7 @@ export function updatePilotProfile(input: {
     };
   }>("/v1/pilot/profile", {
     method: "PATCH",
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
     body: input,
   });
 }
@@ -194,6 +232,70 @@ export async function getPilotTeams(
   return request<{ teams: PilotTeamPayload[] }>("/v1/pilot/teams", {
     identityId,
     ...(signal ? { signal } : {}),
+  });
+}
+
+export function getPilotOrganizationDirectory(
+  identityId: PrincipalId,
+  signal?: AbortSignal,
+) {
+  return request<PilotOrganizationDirectoryPayload>(
+    "/v1/pilot/organization/directory",
+    { identityId, ...(signal ? { signal } : {}) },
+  );
+}
+
+export function createPilotTeam(identityId: PrincipalId, name: string) {
+  return request<{ team: PilotTeam }>("/v1/pilot/teams", {
+    method: "POST",
+    identityId,
+    body: { name },
+  });
+}
+
+export function renamePilotTeam(
+  identityId: PrincipalId,
+  teamId: string,
+  name: string,
+) {
+  return request<{ team: PilotTeam }>(`/v1/pilot/teams/${teamId}`, {
+    method: "PATCH",
+    identityId,
+    body: { name },
+  });
+}
+
+export function addPilotTeamMember(
+  identityId: PrincipalId,
+  teamId: string,
+  input: { memberId: PrincipalId; role: PilotTeamRole },
+) {
+  return request<{ membership: { teamId: string; principalId: PrincipalId } }>(
+    `/v1/pilot/teams/${teamId}/members`,
+    { method: "POST", identityId, body: input },
+  );
+}
+
+export function renamePilotOrganization(identityId: PrincipalId, name: string) {
+  return request<{ organization: PilotOrganization }>(
+    "/v1/pilot/organization",
+    {
+      method: "PATCH",
+      identityId,
+      body: { name },
+    },
+  );
+}
+
+export function updatePilotOrganizationMember(
+  identityId: PrincipalId,
+  memberId: PrincipalId,
+  organizationRole: PilotOrganizationRole,
+) {
+  return request<unknown>(`/v1/pilot/organization/members/${memberId}`, {
+    method: "PATCH",
+    identityId,
+    body: { organizationRole },
   });
 }
 
@@ -214,16 +316,27 @@ export function createPilotJoinLink(identityId: PrincipalId, teamId: string) {
   });
 }
 
-export function getPilotInvitations(teamId: string, signal?: AbortSignal) {
+// The governance calls below take the development identity explicitly: under
+// `development_identity` auth there is no session cookie to fall back on, so a
+// request without the header resolves to nobody and is rejected.
+export function getPilotInvitations(
+  teamId: string,
+  signal?: AbortSignal,
+  developmentIdentityId?: PrincipalId,
+) {
   return request<{ invitations: PilotInvitationPayload[] }>(
     `/v1/pilot/teams/${teamId}/invitations`,
-    { ...(signal ? { signal } : {}) },
+    {
+      ...(signal ? { signal } : {}),
+      ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
+    },
   );
 }
 
 export function createPilotInvitation(
   teamId: string,
   input: { displayName: string; email: string; expiresInDays?: number },
+  developmentIdentityId?: PrincipalId,
 ) {
   return request<{
     invitation: PilotInvitationPayload;
@@ -231,6 +344,7 @@ export function createPilotInvitation(
     activationPath: string;
   }>(`/v1/pilot/teams/${teamId}/invitations`, {
     method: "POST",
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
     body: input,
   });
 }
@@ -238,6 +352,7 @@ export function createPilotInvitation(
 export function regeneratePilotInvitation(
   invitationId: string,
   expiresInDays = 7,
+  developmentIdentityId?: PrincipalId,
 ) {
   return request<{
     invitation: PilotInvitationPayload;
@@ -245,14 +360,22 @@ export function regeneratePilotInvitation(
     activationPath: string;
   }>(`/v1/pilot/invitations/${invitationId}/regenerate`, {
     method: "POST",
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
     body: { expiresInDays },
   });
 }
 
-export function revokePilotInvitation(invitationId: string) {
+export function revokePilotInvitation(
+  invitationId: string,
+  developmentIdentityId?: PrincipalId,
+) {
   return request<{ invitation: PilotInvitationPayload }>(
     `/v1/pilot/invitations/${invitationId}/revoke`,
-    { method: "POST", body: {} },
+    {
+      method: "POST",
+      ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
+      body: {},
+    },
   );
 }
 
@@ -302,16 +425,23 @@ export function updatePilotMember(
     teamRole?: PilotTeamRole;
     organizationRole?: PilotOrganizationRole;
   },
+  developmentIdentityId?: PrincipalId,
 ) {
   return request<unknown>(`/v1/pilot/teams/${teamId}/members/${memberId}`, {
     method: "PATCH",
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
     body: input,
   });
 }
 
-export function removePilotMember(teamId: string, memberId: PrincipalId) {
+export function removePilotMember(
+  teamId: string,
+  memberId: PrincipalId,
+  developmentIdentityId?: PrincipalId,
+) {
   return request<void>(`/v1/pilot/teams/${teamId}/members/${memberId}`, {
     method: "DELETE",
+    ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
   });
 }
 
@@ -364,6 +494,23 @@ export function getPilotOverview(
     `/v1/pilot/projects/${projectId}/overview`,
     { identityId, ...(signal ? { signal } : {}) },
   );
+}
+
+export function updatePilotProject(
+  identityId: PrincipalId,
+  projectId: string,
+  input: {
+    name?: string;
+    primaryTeamId?: string;
+    participatingTeamIds?: string[];
+    posture?: PilotCollaborationPosture;
+  },
+) {
+  return request<{ project: PilotProject }>(`/v1/pilot/projects/${projectId}`, {
+    method: "PATCH",
+    identityId,
+    body: input,
+  });
 }
 
 export function updatePilotPosture(
@@ -453,14 +600,11 @@ export function askPilotStandIn(
     exchange: PilotStandInExchange;
     standInOwner: PrincipalSummary;
     standIn: PrincipalSummary;
-  }>(
-    `/v1/pilot/projects/${projectId}/stand-in`,
-    {
-      method: "POST",
-      identityId,
-      body: { question, standInOwnerId },
-    },
-  );
+  }>(`/v1/pilot/projects/${projectId}/stand-in`, {
+    method: "POST",
+    identityId,
+    body: { question, standInOwnerId },
+  });
 }
 
 export function createPilotAgentTicket(
@@ -553,6 +697,7 @@ async function request<T>(
     message?: string;
   };
   if (!response.ok) {
+    handleAuthenticationFailure(response.status);
     throw new PilotApiError(
       body.code ?? "PILOT_API_ERROR",
       response.status,
@@ -577,6 +722,7 @@ async function requestAuth<T>(
     message?: string;
   };
   if (!response.ok) {
+    handleAuthenticationFailure(response.status);
     throw new PilotApiError(
       body.code ?? "AUTH_ERROR",
       response.status,

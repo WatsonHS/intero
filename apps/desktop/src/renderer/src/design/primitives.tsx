@@ -450,11 +450,15 @@ export function ListPane({
   width?: number;
 }) {
   return (
+    // The explicit `minmax(0,…)` column is load-bearing: grid rows size to
+    // their min-content by default, so one unshrinkable child (a long project
+    // name, say) would widen the header past the pane and spill its contents
+    // over whatever sits in the next column.
     <div
-      className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] border-r border-line bg-panel"
+      className="grid min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] border-r border-line bg-panel"
       style={{ width }}
     >
-      <div className="px-5 pb-3.5 pt-5">
+      <div className="min-w-0 px-5 pb-3.5 pt-5">
         {header}
         <div className="flex items-baseline gap-2.5">
           <strong className="text-[13.5px] font-[650]">{title}</strong>
@@ -970,6 +974,60 @@ export function SearchField({
         aria-label={placeholder}
         className="border-0 bg-transparent text-[11.5px] text-ink outline-none placeholder:text-faint"
         style={{ width }}
+      />
+    </label>
+  );
+}
+
+/**
+ * Labelled single-line input — the kit's field face, so the governance forms
+ * do not each restate the same border, height and focus treatment.
+ */
+export function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  mono = false,
+  disabled = false,
+  onEnter,
+  className,
+  testId,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: "text" | "email" | "url";
+  /** Monospace face for addresses and identifiers. */
+  mono?: boolean;
+  disabled?: boolean;
+  onEnter?: () => void;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <label className={cn("grid gap-1.5", className)}>
+      <SectionLabel>{label}</SectionLabel>
+      <input
+        type={type}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && onEnter) {
+            event.preventDefault();
+            onEnter();
+          }
+        }}
+        {...(testId ? { "data-testid": testId } : {})}
+        className={cn(
+          "h-8 rounded-btn border border-line bg-panel px-2.5 text-ink outline-none",
+          "placeholder:text-faint focus:border-accent-strong disabled:opacity-50",
+          mono ? "font-mono text-[11.5px]" : "text-[12px]",
+        )}
       />
     </label>
   );

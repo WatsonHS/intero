@@ -499,6 +499,13 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         ],
       );
     }
+    // Project team association is rewritten rather than upserted: re-scoping a
+    // project can take a team *off* it, and an insert-only pass would leave the
+    // removed team associated forever.
+    await client.query(
+      "DELETE FROM pilot_project_teams WHERE organization_id = $1",
+      [this.organizationId],
+    );
     for (const project of snapshot.projects) {
       await client.query(
         `INSERT INTO projects
@@ -647,10 +654,11 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       await client.query(
         `INSERT INTO pilot_agent_bindings
           (id, organization_id, project_id, owner_id, credential_hash,
-           disconnected_at, last_seen_at, data, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+           disconnected_at, validated_at, last_seen_at, data, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
          ON CONFLICT (id) DO UPDATE SET
            disconnected_at = EXCLUDED.disconnected_at,
+           validated_at = EXCLUDED.validated_at,
            last_seen_at = EXCLUDED.last_seen_at,
            data = EXCLUDED.data,
            updated_at = now()`,
@@ -661,6 +669,7 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           binding.ownerId,
           binding.credentialHash,
           binding.disconnectedAt ?? null,
+          binding.validatedAt ?? null,
           binding.lastSeenAt ?? null,
           json(binding),
           binding.createdAt,

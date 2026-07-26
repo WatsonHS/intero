@@ -32,10 +32,14 @@ export function OnboardingAdminSettings({
     pilot.projects.data?.projects.find(
       (candidate) => candidate.id === pilot.selectedProjectId,
     ) ?? pilot.projects.data?.projects[0];
+  const developmentIdentityId =
+    pilot.bootstrap.data?.authMode === "development_identity"
+      ? pilot.identityId
+      : undefined;
   const profile = useQuery({
-    queryKey: ["pilot", "profile"],
-    queryFn: ({ signal }) => getPilotProfile(signal),
-    enabled: Boolean(pilot.identityId),
+    queryKey: ["pilot", "profile", pilot.identityId],
+    queryFn: ({ signal }) => getPilotProfile(developmentIdentityId, signal),
+    enabled: Boolean(pilot.effectiveIdentity),
   });
   const currentMembership = team?.members.find(
     (member) => member.id === pilot.identityId,
@@ -44,7 +48,8 @@ export function OnboardingAdminSettings({
   const canManageMembers = isAdmin || currentMembership?.teamRole === "leader";
   const invitations = useQuery({
     queryKey: ["pilot", "invitations", team?.id],
-    queryFn: ({ signal }) => getPilotInvitations(team!.id, signal),
+    queryFn: ({ signal }) =>
+      getPilotInvitations(team!.id, signal, developmentIdentityId),
     enabled: Boolean(team && isAdmin),
     refetchInterval: 10_000,
   });
@@ -60,17 +65,19 @@ export function OnboardingAdminSettings({
   }, [profile.data?.profile.displayName]);
 
   const saveProfile = useMutation({
-    mutationFn: () => updatePilotProfile({ displayName }),
+    mutationFn: () =>
+      updatePilotProfile({ displayName }, developmentIdentityId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
   });
   const createInvitation = useMutation({
     mutationFn: () =>
-      createPilotInvitation(team!.id, {
-        displayName: inviteName,
-        email: inviteEmail,
-      }),
+      createPilotInvitation(
+        team!.id,
+        { displayName: inviteName, email: inviteEmail },
+        developmentIdentityId,
+      ),
     onSuccess: async (result) => {
       const link = absoluteInvitationLink(result.activationPath);
       setCopiedLink(link);
@@ -84,7 +91,7 @@ export function OnboardingAdminSettings({
   });
   const regenerateInvitation = useMutation({
     mutationFn: (invitationId: string) =>
-      regeneratePilotInvitation(invitationId),
+      regeneratePilotInvitation(invitationId, 7, developmentIdentityId),
     onSuccess: async (result) => {
       const link = absoluteInvitationLink(result.activationPath);
       setCopiedLink(link);
@@ -95,7 +102,8 @@ export function OnboardingAdminSettings({
     },
   });
   const revokeInvitation = useMutation({
-    mutationFn: revokePilotInvitation,
+    mutationFn: (invitationId: string) =>
+      revokePilotInvitation(invitationId, developmentIdentityId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: ["pilot", "invitations", team?.id],
@@ -108,19 +116,24 @@ export function OnboardingAdminSettings({
       teamRole?: "member" | "leader";
       organizationRole?: "member" | "admin";
     }) =>
-      updatePilotMember(team!.id, input.memberId, {
-        ...(input.teamRole ? { teamRole: input.teamRole } : {}),
-        ...(input.organizationRole
-          ? { organizationRole: input.organizationRole }
-          : {}),
-      }),
+      updatePilotMember(
+        team!.id,
+        input.memberId,
+        {
+          ...(input.teamRole ? { teamRole: input.teamRole } : {}),
+          ...(input.organizationRole
+            ? { organizationRole: input.organizationRole }
+            : {}),
+        },
+        developmentIdentityId,
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
   });
   const removeMember = useMutation({
     mutationFn: (memberId: PrincipalId) =>
-      removePilotMember(team!.id, memberId),
+      removePilotMember(team!.id, memberId, developmentIdentityId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },

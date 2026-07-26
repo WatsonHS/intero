@@ -224,6 +224,161 @@ export async function registerPilotRoutes(
     };
   });
 
+  app.post("/v1/pilot/teams", async (request, reply) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    const input = z
+      .object({ name: z.string().trim().min(1).max(160) })
+      .strict()
+      .parse(request.body);
+    const team: PilotTeam = {
+      id: uuidv7(),
+      organizationId: options.organizationId,
+      name: input.name,
+      createdAt: new Date().toISOString(),
+    };
+    return reply.status(201).send({
+      team: await options.store.createTeam({ team, principalId: principal.id }),
+    });
+  });
+
+  app.patch<{ Params: { teamId: string } }>(
+    "/v1/pilot/teams/:teamId",
+    async (request) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({ name: z.string().trim().min(1).max(160) })
+        .strict()
+        .parse(request.body);
+      return {
+        team: await options.store.renameTeam({
+          teamId: request.params.teamId,
+          name: input.name,
+          principalId: principal.id,
+        }),
+      };
+    },
+  );
+
+  app.post<{ Params: { teamId: string } }>(
+    "/v1/pilot/teams/:teamId/members",
+    async (request, reply) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({
+          memberId: PrincipalId,
+          role: PilotTeamRole.default("member"),
+        })
+        .strict()
+        .parse(request.body);
+      return reply.status(201).send({
+        membership: await options.store.addTeamMember({
+          teamId: request.params.teamId,
+          memberId: input.memberId,
+          role: input.role,
+          principalId: principal.id,
+          now: new Date().toISOString(),
+        }),
+      });
+    },
+  );
+
+  app.patch("/v1/pilot/organization", async (request) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    const input = z
+      .object({ name: z.string().trim().min(1).max(160) })
+      .strict()
+      .parse(request.body);
+    return {
+      organization: await options.store.renameOrganization({
+        name: input.name,
+        principalId: principal.id,
+      }),
+    };
+  });
+
+  app.patch<{ Params: { memberId: string } }>(
+    "/v1/pilot/organization/members/:memberId",
+    async (request) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({ organizationRole: PilotOrganizationRole })
+        .strict()
+        .parse(request.body);
+      return {
+        organizationMembership: await options.store.updateOrganizationRole({
+          memberId: request.params.memberId as PrincipalId,
+          role: input.organizationRole,
+          principalId: principal.id,
+          now: new Date().toISOString(),
+        }),
+      };
+    },
+  );
+
+  /**
+   * The whole organization, for the people who govern it. Every other team read
+   * is scoped to the caller's memberships; an administrator has to see the
+   * teams and projects they do not belong to in order to manage them.
+   */
+  app.get("/v1/pilot/organization/directory", async (request) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    const directory = await options.store.getOrganizationDirectory(
+      principal.id,
+    );
+    const people = await options.principalDirectory.list([
+      ...new Set([
+        ...directory.organizationMemberships.map(
+          (membership) => membership.principalId,
+        ),
+        ...directory.teamMemberships.map(
+          (membership) => membership.principalId,
+        ),
+        ...directory.projects.map((project) => project.ownerId),
+      ]),
+    ]);
+    const personById = new Map(people.map((person) => [person.id, person]));
+    const organizationRoleById = new Map(
+      directory.organizationMemberships.map((membership) => [
+        membership.principalId,
+        membership.role,
+      ]),
+    );
+    return {
+      teams: directory.teams.map((team) => ({
+        ...team,
+        members: directory.teamMemberships
+          .filter((membership) => membership.teamId === team.id)
+          .flatMap((membership) => {
+            const person = personById.get(membership.principalId);
+            return person
+              ? [
+                  {
+                    ...person,
+                    teamRole: membership.role,
+                    organizationRole: organizationRoleById.get(person.id),
+                  },
+                ]
+              : [];
+          }),
+      })),
+      projects: directory.projects,
+      members: directory.organizationMemberships.flatMap((membership) => {
+        const person = personById.get(membership.principalId);
+        return person
+          ? [
+              {
+                ...person,
+                organizationRole: membership.role,
+                teamIds: directory.teamMemberships
+                  .filter((team) => team.principalId === membership.principalId)
+                  .map((team) => team.teamId),
+              },
+            ]
+          : [];
+      }),
+    };
+  });
+
   app.get("/v1/pilot/profile", async (request) => {
     const principal = await requireIdentity(request, options.requestAuth);
     return {
@@ -693,6 +848,45 @@ export async function registerPilotRoutes(
   });
 
   app.patch<{ Params: { projectId: string } }>(
+    "/v1/pilot/projects/:projectId",
+    async (request) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({
+          name: z.string().trim().min(1).max(160).optional(),
+          primaryTeamId: z.uuid().optional(),
+          participatingTeamIds: z.array(z.uuid()).min(1).max(50).optional(),
+          posture: PilotCollaborationPosture.optional(),
+        })
+        .strict()
+        .refine(
+          (value) =>
+            value.name !== undefined ||
+            value.primaryTeamId !== undefined ||
+            value.participatingTeamIds !== undefined ||
+            value.posture !== undefined,
+          "At least one project field must be provided.",
+        )
+        .parse(request.body);
+      return {
+        project: await options.store.updateProject({
+          projectId: ProjectId.parse(request.params.projectId),
+          principalId: principal.id,
+          now: new Date().toISOString(),
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.primaryTeamId !== undefined
+            ? { primaryTeamId: input.primaryTeamId }
+            : {}),
+          ...(input.participatingTeamIds !== undefined
+            ? { participatingTeamIds: input.participatingTeamIds }
+            : {}),
+          ...(input.posture !== undefined ? { posture: input.posture } : {}),
+        }),
+      };
+    },
+  );
+
+  app.patch<{ Params: { projectId: string } }>(
     "/v1/pilot/projects/:projectId/posture",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
@@ -808,30 +1002,27 @@ export async function registerPilotRoutes(
   app.get<{
     Params: { projectId: string };
     Querystring: { standInOwnerId?: string };
-  }>(
-    "/v1/pilot/projects/:projectId/stand-in",
-    async (request) => {
-      const principal = await requireIdentity(request, options.requestAuth);
-      const projectId = ProjectId.parse(request.params.projectId);
-      const standInOwnerId = PrincipalId.parse(
-        request.query.standInOwnerId ?? principal.id,
-      );
-      const exchanges = await options.store.listStandInExchanges(
-        projectId,
-        principal.id,
-        standInOwnerId,
-      );
-      const standInOwner = await requireDirectoryPrincipal(
-        options,
-        standInOwnerId,
-      );
-      return {
-        exchanges,
-        standInOwner,
-        standIn: personalStandInPrincipal(standInOwner),
-      };
-    },
-  );
+  }>("/v1/pilot/projects/:projectId/stand-in", async (request) => {
+    const principal = await requireIdentity(request, options.requestAuth);
+    const projectId = ProjectId.parse(request.params.projectId);
+    const standInOwnerId = PrincipalId.parse(
+      request.query.standInOwnerId ?? principal.id,
+    );
+    const exchanges = await options.store.listStandInExchanges(
+      projectId,
+      principal.id,
+      standInOwnerId,
+    );
+    const standInOwner = await requireDirectoryPrincipal(
+      options,
+      standInOwnerId,
+    );
+    return {
+      exchanges,
+      standInOwner,
+      standIn: personalStandInPrincipal(standInOwner),
+    };
+  });
 
   app.post<{ Params: { projectId: string } }>(
     "/v1/pilot/projects/:projectId/stand-in",
@@ -971,6 +1162,16 @@ export async function registerPilotRoutes(
           "Intero setup must be completed first.",
         );
       }
+      const project = (await options.store.listProjects(principal.id)).find(
+        (item) => item.id === ticket.projectId,
+      );
+      if (!project) {
+        throw new PilotStoreError(
+          "PROJECT_NOT_FOUND",
+          404,
+          "Project was not found.",
+        );
+      }
       return reply.status(201).send({
         ticket: {
           id: ticket.id,
@@ -981,6 +1182,8 @@ export async function registerPilotRoutes(
           input.client,
           organization.deploymentBaseUrl,
           rawTicket,
+          ticket.expiresAt,
+          project,
           ticket.preferredLanguage,
         ),
       });
@@ -1264,6 +1467,13 @@ async function requireAgentBinding(
       "A valid bound Agent credential is required.",
     );
   }
+  if (!binding.validatedAt) {
+    throw new PilotStoreError(
+      "AGENT_VALIDATION_REQUIRED",
+      409,
+      "Call intero.validate_connection before using Project APIs.",
+    );
+  }
   return binding;
 }
 
@@ -1400,29 +1610,155 @@ function buildConnectPrompt(
   client: PilotAgentBinding["client"],
   deploymentBaseUrl: string,
   ticket: string,
+  expiresAt: string,
+  project: Pick<PilotProject, "id" | "name">,
   preferredLanguage: PilotAgentBinding["preferredLanguage"],
 ): string {
-  const command = `intero-mcp cloud connect --client ${client} --cloud-url ${deploymentBaseUrl} --connect-ticket ${ticket}`;
-  const mcpCommand = `intero-mcp --mcp-source ${client} --cloud`;
+  const baseUrl = deploymentBaseUrl.replace(/\/+$/, "");
+  const clientLabel =
+    client === "claude-code"
+      ? "Claude Code"
+      : client === "opencode"
+        ? "OpenCode"
+        : "Codex";
+  const artifacts =
+    client === "codex"
+      ? {
+          mcp: ".codex/config.toml",
+          hooks: ".codex/hooks.json",
+          instructions: "AGENTS.md",
+          hookImplementation: ".intero/hook.mjs",
+        }
+      : client === "claude-code"
+        ? {
+            mcp: ".mcp.json",
+            hooks: ".claude/settings.json",
+            instructions: "CLAUDE.md",
+            hookImplementation: ".intero/hook.mjs",
+          }
+        : {
+            mcp: "opencode.json",
+            hooks: ".opencode/plugins/intero.ts",
+            instructions: "AGENTS.md",
+            hookImplementation: ".opencode/plugins/intero.ts",
+          };
+  const nativeConfiguration =
+    client === "codex"
+      ? {
+          mcp: "Merge [mcp_servers.intero] with url and an Authorization http_headers entry into .codex/config.toml.",
+          hooks:
+            "Merge SessionStart and SessionEnd command hooks that invoke the Project-local privacy filter into .codex/hooks.json.",
+        }
+      : client === "claude-code"
+        ? {
+            mcp: "Merge mcpServers.intero as a remote HTTP server with an Authorization header into .mcp.json.",
+            hooks:
+              "Merge SessionStart and SessionEnd command hooks that invoke the Project-local privacy filter into .claude/settings.json.",
+          }
+        : {
+            mcp: "Merge mcp.intero as an enabled remote server with url and Authorization headers into opencode.json.",
+            hooks:
+              "Merge a privacy-filtering session.created/session.idle/session.deleted plugin into .opencode/plugins/intero.ts.",
+          };
+  const manifest = {
+    protocol: "intero-agent-setup/v1",
+    desiredState: {
+      project: { id: project.id, name: project.name },
+      agent: { client, label: clientLabel },
+      setupAuthorization: {
+        exchangeUrl: `${baseUrl}/v1/pilot/agent/connect`,
+        ticket,
+        expiresAt,
+        singleUse: true,
+      },
+      mcp: {
+        name: "intero",
+        transport: "streamable-http",
+        url: `${baseUrl}/v1/pilot/mcp`,
+        authorization: "Bearer credential returned by setup exchange",
+        requiredValidationTool: "intero.validate_connection",
+      },
+      hooks: {
+        endpoint: `${baseUrl}/v1/pilot/agent/hooks`,
+        events:
+          client === "opencode"
+            ? ["session.created", "session.idle", "session.deleted"]
+            : ["SessionStart", "SessionEnd"],
+        allowedPayload: [
+          "clientEventId",
+          "lifecycle",
+          "occurredAt",
+          "workstreamKey",
+          "workstreamTitle",
+          "evidenceRefs",
+        ],
+        idempotency:
+          "Derive clientEventId deterministically from client, lifecycle event, and a local hash of the native event/session ID. Never transmit the raw session ID.",
+      },
+      projectInstructions: {
+        preferredLanguage,
+        checkpointTool: "stand_in.report_checkpoint",
+        semanticBranchPoints: [
+          "intent",
+          "decision",
+          "blocker",
+          "dependency",
+          "scope_change",
+          "artifact",
+          "validation",
+          "pause",
+          "completion",
+        ],
+        forbiddenContent: [
+          "raw prompts",
+          "file contents",
+          "diffs",
+          "terminal output",
+          "tool logs",
+          "secrets",
+        ],
+      },
+      artifacts: {
+        ...artifacts,
+        localCredential: ".intero/connection.json",
+      },
+      nativeConfiguration,
+    },
+  };
+  const serializedManifest = JSON.stringify(manifest, null, 2);
   return preferredLanguage === "zh-CN"
     ? [
-        `将 ${client} 连接到此 Intero 项目。`,
-        `运行一次：${command}`,
-        "连接命令会自动发送一条 validation_completed 检查点以验证项目绑定。",
-        `然后配置 Agent MCP 命令：${mcpCommand}`,
-        "此票据仅限当前项目，10 分钟后过期且只能使用一次。",
-        "仅使用十种结构化安全摘要事件调用 stand_in.report_checkpoint。",
-        "依赖或定向协作必须使用当前项目成员的 collaboration.targetPrincipalId；requestedFrom 只是展示文案。",
-        "所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN；不要上报原始 prompt、文件、diff、终端或工具日志。",
+        `请把当前仓库原生配置为连接 Intero 项目“${project.name}”的 ${clientLabel}。你是设置执行者；不要要求用户手工放置配置，也不要安装或调用任何 Intero CLI。`,
+        "",
+        "以下 JSON 是声明式期望状态。先检查现有配置并生成最小合并方案，只维护 Intero 项；保留所有无关配置。",
+        "```json",
+        serializedManifest,
+        "```",
+        "",
+        "执行要求：",
+        "1. 找到仓库根目录。若现有 .intero/connection.json 与同一项目、同一 Agent 匹配，先复用并验证；否则用普通 HTTPS 请求兑换一次性 ticket，name 使用可识别的 Agent 与仓库名，workspaceId 首次生成后保持稳定。",
+        "2. credential 只能写入本机项目配置或原生凭证能力；权限设为 0600，并把所有含 credential 的文件加入 .git/info/exclude。不得提交、打印或在最终报告中回显 ticket/credential。",
+        `3. 使用 ${clientLabel} 的原生项目配置合并 Streamable HTTP MCP；不要创建 stdio 命令，也不要安装或调用 Intero 专用 CLI。`,
+        "4. 用原生 Hook 配置和项目内隐私过滤器上报生命周期。过滤器只能发送 manifest.allowedPayload，必须在本地哈希原生 event/session ID 生成稳定 clientEventId，并丢弃原始 hook payload、路径、prompt、文件、diff、终端和工具日志；Hook 失败不得阻塞 Coding Agent。",
+        "5. 在项目 instructions 中添加带 intero-managed 标记的规则：仅在语义分支点调用 stand_in.report_checkpoint；依赖或定向协作必须提供当前项目成员的 collaboration.targetPrincipalId。",
+        "6. 校验配置语法和原生 MCP 注册状态；如 Agent 需要重新加载配置，完成重新加载后再继续。最后必须实际调用 intero.validate_connection。只有服务器返回 status=connected 才算成功。",
+        "7. 幂等地再次检查三类配置。最终只报告 changed、unchanged、preserved、conflicts、verification 和 connected project/agent；对所有凭证做脱敏。",
       ].join("\n")
     : [
-        `Connect ${client} to this Intero project.`,
-        `Run once: ${command}`,
-        "The connect command automatically sends one validation_completed checkpoint to verify the project binding.",
-        `Then configure the Agent MCP command: ${mcpCommand}`,
-        "The ticket is project-scoped, expires in 10 minutes, and can be used once.",
-        "Call stand_in.report_checkpoint only with one of the ten structured safe-summary event types.",
-        "Dependencies and routed collaboration must use a current Project member's collaboration.targetPrincipalId; requestedFrom is display text only.",
-        "Write every narrative field, collaboration request, and human-readable evidence item in the owner's preferred language, en-US; never report raw prompts, files, diffs, terminal output, or tool logs.",
+        `Configure this repository natively as ${clientLabel} connected to the Intero Project "${project.name}". You are the setup executor: do not ask the user to place configuration manually, and do not install or invoke any Intero CLI.`,
+        "",
+        "The JSON below is the declarative desired state. Inspect the existing configuration first and produce the smallest safe merge; own only Intero entries and preserve everything unrelated.",
+        "```json",
+        serializedManifest,
+        "```",
+        "",
+        "Execution requirements:",
+        "1. Locate the repository root. Reuse and validate an existing .intero/connection.json only when it matches this Project and Agent; otherwise exchange the one-time ticket through a normal HTTPS request. Use a recognizable Agent/repository name and keep the first generated workspaceId stable.",
+        "2. Store the credential only in native or local Project credential storage, mode 0600, and add every credential-bearing file to .git/info/exclude. Never commit, print, or echo the ticket or credential in the final report.",
+        `3. Merge the Streamable HTTP MCP server using ${clientLabel}'s native Project configuration. Do not create a stdio command or install/invoke an Intero-specific CLI.`,
+        "4. Configure native lifecycle hooks plus a Project-local privacy filter. Send only manifest.allowedPayload, derive a stable clientEventId from a local hash of the native event/session ID, and discard raw hook payloads, paths, prompts, files, diffs, terminal output, and tool logs. Hooks must fail open.",
+        "5. Add an intero-managed Project instruction: call stand_in.report_checkpoint only at semantic branch points. Dependencies and routed collaboration require a current Project member's collaboration.targetPrincipalId.",
+        "6. Validate configuration syntax and native MCP registration. Reload the Agent configuration if required, then make one real intero.validate_connection tool call. Setup succeeds only when the server returns status=connected.",
+        "7. Re-check all three artifact classes idempotently. Report only changed, unchanged, preserved, conflicts, verification, and the connected Project/Agent, with all credentials redacted.",
       ].join("\n");
 }
