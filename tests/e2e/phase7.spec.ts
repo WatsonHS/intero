@@ -99,7 +99,9 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     const prompt = admin.getByTestId("agent-connect-prompt");
     await expect(prompt).toBeVisible();
     const promptText = await prompt.inputValue();
-    const ticket = promptText.match(/--connect-ticket ([^\s]+)/)?.[1];
+    const ticket = promptText.match(
+      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+    )?.[1];
     expect(ticket).toBeTruthy();
 
     const connectOutput = await runCloudClient(

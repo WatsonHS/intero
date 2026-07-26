@@ -547,12 +547,14 @@ async function runCloudCommand() {
       cwd: process.cwd(),
       ...(configDirectory ? { configDirectory } : {}),
     });
+    const validation = await client.validateConnection();
     const connectionCheck = await client.reportConnectionCheck();
     process.stdout.write(
       `${JSON.stringify(
         {
           connected: true,
           context: client.context(),
+          validation,
           connectionCheck,
           mcp: {
             command: process.argv[1],

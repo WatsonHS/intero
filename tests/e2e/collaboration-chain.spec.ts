@@ -688,8 +688,11 @@ async function assertExternalProviderConfigured(page: Page): Promise<void> {
   expect(provider?.configured).toBe(true);
   expect(provider?.endpoint).toBeTruthy();
   expect(provider?.defaultModel).toBeTruthy();
-  const hostname = new URL(provider!.endpoint!).hostname;
-  expect(["127.0.0.1", "localhost", "::1"]).not.toContain(hostname);
+  if (provider!.defaultModel === "intero-demo-deterministic") {
+    throw new Error(
+      "A real administrator-configured provider is required; the current product environment still points at the deterministic adapter fixture.",
+    );
+  }
 }
 
 async function createCleanProject(
@@ -780,7 +783,7 @@ async function connectThroughSettings(
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
   const ticket = (await prompt.inputValue()).match(
-    /--connect-ticket ([^\s]+)/,
+    /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
   )?.[1];
   expect(ticket).toBeTruthy();
 
@@ -1053,10 +1056,15 @@ async function disconnectBinding(
   bindingId: string | undefined,
 ): Promise<void> {
   if (!bindingId || page.isClosed()) return;
-  await page.request.post(
-    `${apiUrl}/v1/pilot/agent-bindings/${bindingId}/disconnect`,
-    { data: {} },
-  );
+  try {
+    await page.request.post(
+      `${apiUrl}/v1/pilot/agent-bindings/${bindingId}/disconnect`,
+      { data: {} },
+    );
+  } catch {
+    // Cleanup must not replace the scenario's actionable failure while the
+    // watched development server is briefly restarting.
+  }
 }
 
 async function json<T>(

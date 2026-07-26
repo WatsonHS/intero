@@ -160,6 +160,29 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     expect(
       attempts.filter((attempt) => attempt.status === "rejected"),
     ).toHaveLength(1);
+    const connected = attempts.find(
+      (attempt): attempt is PromiseFulfilledResult<PilotAgentBinding> =>
+        attempt.status === "fulfilled",
+    )!.value;
+    const validated = await store.validateAgentBinding(
+      connected.id,
+      adminId,
+      "2026-07-26T01:10:02.000Z",
+    );
+    expect(validated.validatedAt).toBe("2026-07-26T01:10:02.000Z");
+    const restarted = new NormalizedPostgresPilotStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    await expect(
+      restarted.listAgentBindings(projectId, adminId),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: connected.id,
+        validatedAt: "2026-07-26T01:10:02.000Z",
+      }),
+    ]);
+    await restarted.close();
   });
 
   it("keeps checkpoint idempotency and withdrawal separate from private state", async () => {

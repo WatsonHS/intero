@@ -162,6 +162,13 @@
       "when": 1785513600000,
       "tag": "0022_work_state_coordination_correlation",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0023_agent_binding_validation",
+      "breakpoints": true
     }
   ]
 }

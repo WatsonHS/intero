@@ -3,8 +3,10 @@ import { useMutation } from "@tanstack/react-query";
 
 import { authClient } from "../../auth-client.js";
 import { signOut } from "../../pilot/api.js";
+import { usePilotOptional } from "../../pilot/context.js";
 
 export function AccountSecuritySettings() {
+  const pilot = usePilotOptional();
   const addPasskey = useMutation({
     mutationFn: async () => {
       const result = await authClient.passkey.addPasskey({
@@ -14,8 +16,12 @@ export function AccountSecuritySettings() {
     },
   });
   const logout = useMutation({
-    mutationFn: signOut,
-    onSuccess: () => window.location.reload(),
+    mutationFn: () => pilot?.signOutCurrentIdentity() ?? signOut(),
+    onSuccess: () => {
+      if (pilot?.bootstrap.data?.authMode !== "development_identity") {
+        window.location.reload();
+      }
+    },
   });
 
   return (
@@ -56,6 +62,11 @@ export function AccountSecuritySettings() {
       {addPasskey.isError ? (
         <p className="mt-2 text-[10.5px] text-danger">
           未能添加 Passkey。请确认浏览器或系统凭据管理器可用后重试。
+        </p>
+      ) : null}
+      {logout.isError ? (
+        <p role="alert" className="mt-2 text-[10.5px] text-danger">
+          退出失败，请重试。
         </p>
       ) : null}
     </section>

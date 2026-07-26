@@ -18,16 +18,25 @@ import {
   getPilotProjects,
   getPilotTeams,
   isPilotBrowser,
+  type PilotBootstrapPayload,
+  signOut as signOutSession,
+} from "./api.js";
+import {
+  AUTHENTICATION_REQUIRED_EVENT,
+  clearStoredPilotScope,
   PILOT_IDENTITY_STORAGE_KEY,
   PILOT_PROJECT_STORAGE_KEY,
   PILOT_TEAM_STORAGE_KEY,
-} from "./api.js";
+} from "./auth-state.js";
 
 interface PilotContextValue {
   enabled: boolean;
   bootstrap: UseQueryResult<Awaited<ReturnType<typeof getPilotBootstrap>>>;
+  authenticationRequired: boolean;
+  effectiveIdentity: PilotBootstrapPayload["identities"][number] | undefined;
   identityId: PrincipalId | undefined;
   setIdentityId: (identityId: PrincipalId | undefined) => void;
+  signOutCurrentIdentity: () => Promise<void>;
   teams: UseQueryResult<Awaited<ReturnType<typeof getPilotTeams>>>;
   projects: UseQueryResult<Awaited<ReturnType<typeof getPilotProjects>>>;
   /** The team the shell is scoped to. Narrows which projects are reachable. */
@@ -54,16 +63,33 @@ export function projectInTeam(
   );
 }
 
+export function resolveEffectivePilotIdentity(input: {
+  authMode: PilotBootstrapPayload["authMode"] | undefined;
+  currentPrincipal: PilotBootstrapPayload["currentPrincipal"];
+  identities: PilotBootstrapPayload["identities"];
+  selectedIdentityId: PrincipalId | undefined;
+  authenticationRequired: boolean;
+}): PilotBootstrapPayload["identities"][number] | undefined {
+  if (input.authenticationRequired) return undefined;
+  if (input.authMode === "session") return input.currentPrincipal;
+  if (input.authMode !== "development_identity") return undefined;
+  return input.identities.find(
+    (identity) => identity.id === input.selectedIdentityId,
+  );
+}
+
 export function PilotProvider({ children }: { children: ReactNode }) {
   const enabled = isPilotBrowser();
   const queryClient = useQueryClient();
-  const [identityId, setIdentityState] = useState<PrincipalId | undefined>(
-    () =>
-      enabled
-        ? ((window.localStorage.getItem(PILOT_IDENTITY_STORAGE_KEY) ??
-            undefined) as PrincipalId | undefined)
-        : undefined,
+  const [selectedIdentityId, setIdentityState] = useState<
+    PrincipalId | undefined
+  >(() =>
+    enabled
+      ? ((window.localStorage.getItem(PILOT_IDENTITY_STORAGE_KEY) ??
+          undefined) as PrincipalId | undefined)
+      : undefined,
   );
+  const [authenticationRequired, setAuthenticationRequired] = useState(false);
   const [selectedProjectId, setProjectState] = useState<string | undefined>(
     () =>
       enabled
@@ -82,6 +108,14 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     enabled,
     refetchInterval: 5_000,
   });
+  const effectiveIdentity = resolveEffectivePilotIdentity({
+    authMode: bootstrap.data?.authMode,
+    currentPrincipal: bootstrap.data?.currentPrincipal,
+    identities: bootstrap.data?.identities ?? [],
+    selectedIdentityId,
+    authenticationRequired,
+  });
+  const identityId = effectiveIdentity?.id as PrincipalId | undefined;
   const teams = useQuery({
     queryKey: ["pilot", "teams", identityId],
     queryFn: ({ signal }) => getPilotTeams(identityId!, signal),
@@ -96,12 +130,30 @@ export function PilotProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    if (bootstrap.data?.authMode !== "session") return;
-    const principalId = bootstrap.data.currentPrincipal?.id as
-      PrincipalId | undefined;
-    setIdentityState(principalId);
-    if (!principalId) setProjectState(undefined);
-  }, [bootstrap.data?.authMode, bootstrap.data?.currentPrincipal?.id]);
+    if (!enabled) return;
+    const handleAuthenticationRequired = () => {
+      setAuthenticationRequired(true);
+      setIdentityState(undefined);
+      setProjectState(undefined);
+      setTeamState(undefined);
+      void queryClient.cancelQueries({ queryKey: ["action-inbox"] });
+      void queryClient.cancelQueries({ queryKey: ["pilot"] });
+      queryClient.removeQueries({ queryKey: ["action-inbox"] });
+      queryClient.removeQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "pilot" && query.queryKey[1] !== "bootstrap",
+      });
+    };
+    window.addEventListener(
+      AUTHENTICATION_REQUIRED_EVENT,
+      handleAuthenticationRequired,
+    );
+    return () =>
+      window.removeEventListener(
+        AUTHENTICATION_REQUIRED_EVENT,
+        handleAuthenticationRequired,
+      );
+  }, [enabled, queryClient]);
 
   useEffect(() => {
     if (!identityId) return;
@@ -139,12 +191,35 @@ export function PilotProvider({ children }: { children: ReactNode }) {
 
   function setIdentityId(next: PrincipalId | undefined) {
     if (bootstrap.data?.authMode === "session") return;
+    clearStoredPilotScope(window.localStorage);
+    setAuthenticationRequired(false);
     setIdentityState(next);
     setProjectState(undefined);
+    setTeamState(undefined);
     if (next) window.localStorage.setItem(PILOT_IDENTITY_STORAGE_KEY, next);
-    else window.localStorage.removeItem(PILOT_IDENTITY_STORAGE_KEY);
-    window.localStorage.removeItem(PILOT_PROJECT_STORAGE_KEY);
+    queryClient.removeQueries({ queryKey: ["action-inbox"] });
+    queryClient.removeQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "pilot" && query.queryKey[1] !== "bootstrap",
+    });
     void queryClient.invalidateQueries({ queryKey: ["pilot"] });
+  }
+
+  async function signOutCurrentIdentity() {
+    if (bootstrap.data?.authMode === "development_identity") {
+      clearStoredPilotScope(window.localStorage);
+      setAuthenticationRequired(true);
+      setIdentityState(undefined);
+      setProjectState(undefined);
+      setTeamState(undefined);
+      return;
+    }
+    await signOutSession();
+    clearStoredPilotScope(window.localStorage);
+    setAuthenticationRequired(true);
+    setIdentityState(undefined);
+    setProjectState(undefined);
+    setTeamState(undefined);
   }
 
   function setSelectedProjectId(next: string | undefined) {
@@ -171,8 +246,11 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     () => ({
       enabled,
       bootstrap,
+      authenticationRequired,
+      effectiveIdentity,
       identityId,
       setIdentityId,
+      signOutCurrentIdentity,
       teams,
       projects,
       selectedTeamId,
@@ -184,7 +262,9 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       },
     }),
     [
+      authenticationRequired,
       bootstrap,
+      effectiveIdentity,
       enabled,
       identityId,
       projects,

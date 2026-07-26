@@ -10,6 +10,7 @@ import {
   SunIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
+import type { PilotAgentBinding } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
@@ -58,6 +59,19 @@ const SETTINGS_CATEGORIES = [
   icon: typeof UserCircleIcon;
 }>;
 
+export function agentConnectionState(
+  binding: Pick<PilotAgentBinding, "validatedAt" | "disconnectedAt">,
+): "awaiting_validation" | "connected" | "disconnected" {
+  if (binding.disconnectedAt) return "disconnected";
+  return binding.validatedAt ? "connected" : "awaiting_validation";
+}
+
+export function shouldShowDesktopGitAwareness(
+  desktopBridge: Window["interoDesktop"] | undefined,
+): boolean {
+  return Boolean(desktopBridge);
+}
+
 export function SettingsView({
   onOpenSetup,
   onOpenTestSetup,
@@ -86,11 +100,16 @@ export function SettingsView({
   const [agentPrompt, setAgentPrompt] = useState<{
     client: "codex" | "claude-code" | "opencode";
     prompt: string;
+    expiresAt: string;
   }>();
   const pilotProject =
     pilot?.projects.data?.projects.find(
       (project) => project.id === pilot.selectedProjectId,
     ) ?? pilot?.projects.data?.projects[0];
+  const developmentIdentityId =
+    pilot?.bootstrap.data?.authMode === "development_identity"
+      ? pilot.identityId
+      : undefined;
 
   const pilotOverview = useQuery({
     queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
@@ -110,12 +129,16 @@ export function SettingsView({
     mutationFn: (client: "codex" | "claude-code" | "opencode") =>
       createPilotAgentTicket(pilot!.identityId!, pilotProject!.id, client),
     onSuccess: (result, client) => {
-      setAgentPrompt({ client, prompt: result.connectPrompt });
+      setAgentPrompt({
+        client,
+        prompt: result.connectPrompt,
+        expiresAt: result.ticket.expiresAt,
+      });
     },
   });
   const updatePreferredLanguage = useMutation({
     mutationFn: (preferredLanguage: Locale) =>
-      updatePilotProfile({ preferredLanguage }),
+      updatePilotProfile({ preferredLanguage }, developmentIdentityId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot", "profile"] });
       await queryClient.invalidateQueries({ queryKey: ["pilot", "bootstrap"] });
@@ -129,7 +152,9 @@ export function SettingsView({
       (pilotOverview.data?.bindings ?? [])
         .filter(
           (binding) =>
-            binding.ownerId === pilot?.identityId && !binding.disconnectedAt,
+            binding.ownerId === pilot?.identityId &&
+            Boolean(binding.validatedAt) &&
+            !binding.disconnectedAt,
         )
         .map((binding) => binding.client),
     ),
@@ -140,7 +165,8 @@ export function SettingsView({
   const categoryLede: Record<SettingsCategory, string> = {
     personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
     project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
-    agent: "查看当前项目的 Coding Agent 状态，并生成一次性连接提示。",
+    agent:
+      "查看当前项目的云端 Coding Agent 状态，并生成由 Agent 自行执行的原生连接提示。",
   };
 
   useEffect(() => {
@@ -399,7 +425,9 @@ export function SettingsView({
             <div className="mt-8" data-testid="pilot-cloud-settings">
               <strong className="text-[14px] font-[620]">Coding Agent</strong>
               <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
-                管理当前项目的 Coding Agent 连接状态与一次性接入提示。
+                Web 与 Desktop
+                共享服务器验证后的项目连接状态；复制一次提示后，由 Coding Agent
+                自己配置原生 MCP、Hook 与项目 instructions。
               </p>
               <div className="mt-3.5 grid gap-3">
                 {activeCategory === "agent"
@@ -419,7 +447,17 @@ export function SettingsView({
                             </strong>
                             <small className="mt-1 text-[11px] text-ink-muted">
                               {binding.client} · {pilotProject?.name} ·{" "}
-                              {binding.lastSeenAt ? "已收到工作动态" : "已连接"}
+                              {agentConnectionState(binding) === "connected"
+                                ? `已连接 · 验证 ${new Date(
+                                    binding.validatedAt!,
+                                  ).toLocaleString()}${
+                                    binding.lastSeenAt
+                                      ? ` · 最近活动 ${new Date(
+                                          binding.lastSeenAt,
+                                        ).toLocaleString()}`
+                                      : ""
+                                  }`
+                                : "等待 Agent 完成真实 MCP 验证"}
                             </small>
                           </span>
                           {binding.ownerId === pilot?.identityId ? (
@@ -445,7 +483,9 @@ export function SettingsView({
                       连接 Coding Agent
                     </strong>
                     <p className="mt-1.5 text-[10.5px] leading-[1.6] text-ink-muted">
-                      生成一次性项目连接提示。无需手动创建或管理 API Key。
+                      生成一个 Agent
+                      专属、可检查且幂等的设置提示。无需手工放置配置，也不依赖
+                      Intero CLI。
                     </p>
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       {(
@@ -459,7 +499,21 @@ export function SettingsView({
                           (binding) =>
                             binding.client === client &&
                             binding.ownerId === pilot.identityId &&
+                            Boolean(binding.validatedAt) &&
                             !binding.disconnectedAt,
+                        );
+                        const pending = pilotOverview.data?.bindings.some(
+                          (binding) =>
+                            binding.client === client &&
+                            binding.ownerId === pilot.identityId &&
+                            !binding.validatedAt &&
+                            !binding.disconnectedAt,
+                        );
+                        const reconnect = pilotOverview.data?.bindings.some(
+                          (binding) =>
+                            binding.client === client &&
+                            binding.ownerId === pilot.identityId &&
+                            Boolean(binding.disconnectedAt),
                         );
                         return (
                           <button
@@ -467,6 +521,7 @@ export function SettingsView({
                             type="button"
                             disabled={
                               active ||
+                              pending ||
                               connectAgent.isPending ||
                               !pilotOrganization?.provider.configured
                             }
@@ -474,7 +529,13 @@ export function SettingsView({
                             onClick={() => connectAgent.mutate(client)}
                             className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong disabled:opacity-50"
                           >
-                            {active ? `${label} 已连接` : `连接 ${label}`}
+                            {active
+                              ? `${label} 已连接`
+                              : pending
+                                ? `${label} 等待验证`
+                                : reconnect
+                                  ? `重新连接 ${label}`
+                                  : `连接 ${label}`}
                           </button>
                         );
                       })}
@@ -488,11 +549,13 @@ export function SettingsView({
                             : agentPrompt.client === "opencode"
                               ? "OpenCode"
                               : "Codex"}
-                          ：
+                          。一次性设置授权将在{" "}
+                          {new Date(agentPrompt.expiresAt).toLocaleTimeString()}
+                          到期：
                         </span>
                         <textarea
                           readOnly
-                          rows={5}
+                          rows={12}
                           value={agentPrompt.prompt}
                           data-testid="agent-connect-prompt"
                           className="resize-none rounded-[9px] border border-line bg-bg p-3 font-mono text-[10px] leading-[1.55] text-ink-muted outline-none"
@@ -510,7 +573,9 @@ export function SettingsView({
                     ) : null}
                     {connectAgent.isError ? (
                       <p className="mt-3 text-[11px] text-danger" role="alert">
-                        无法生成连接提示。请先确认模型服务已配置。
+                        {connectAgent.error instanceof Error
+                          ? connectAgent.error.message
+                          : "无法生成连接提示。"}
                       </p>
                     ) : null}
                   </div>
@@ -519,7 +584,9 @@ export function SettingsView({
             </div>
           ) : null}
 
-          {activeCategory === "agent" ? (
+          {activeCategory === "agent" &&
+          typeof window !== "undefined" &&
+          shouldShowDesktopGitAwareness(window.interoDesktop) ? (
             <GitAwarenessSettings
               {...(pilotProject?.name
                 ? { projectName: pilotProject.name }

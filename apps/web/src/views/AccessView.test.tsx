@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SignInView } from "./AccessView.js";
+import { DevelopmentIdentityToolView, SignInView } from "./AccessView.js";
 
 describe("access view keyboard hierarchy", () => {
   it("places password sign-in before Passkey and exposes an accessible eye toggle", () => {
@@ -30,5 +30,28 @@ describe("access view keyboard hierarchy", () => {
     expect(output).toContain('aria-label="显示密码"');
     expect(output).toContain('autoComplete="current-password"');
     expect(output).not.toContain("Magic Link");
+  });
+
+  it("labels development identity entry as explicit test tooling", () => {
+    const output = renderToStaticMarkup(
+      <DevelopmentIdentityToolView
+        identities={[
+          {
+            id: "019f9a00-0000-7000-8000-000000000101",
+            displayName: "Alex",
+            kind: "human",
+          },
+        ]}
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(output).toContain('data-testid="development-identity-entry"');
+    expect(output).toContain("INTERO · 开发工具");
+    expect(output).toContain("选择测试身份");
+    expect(output).toContain("仅用于本地测试");
+    expect(output).toContain("Alex");
+    expect(output).not.toContain("已登录");
+    expect(output).not.toContain('data-testid="sign-in-password"');
   });
 });

@@ -77,6 +77,57 @@ describe("service environment schemas", () => {
     });
   });
 
+  it("allows development identity simulation only in development mode", () => {
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "development",
+        INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
+      }),
+    ).toMatchObject({
+      runtimeMode: "development",
+      allowDevelopmentIdentity: true,
+    });
+  });
+
+  it("rejects development identity behavior in product mode", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "product",
+        INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      }),
+    ).toThrow(
+      "Product runtime cannot enable INTERO_ALLOW_DEVELOPMENT_IDENTITY.",
+    );
+  });
+
+  it("requires persistent session authentication in product mode", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "product",
+        INTERO_SEED_DEMO: "true",
+      }),
+    ).toThrow("Product runtime requires INTERO_AUTH_SECRET");
+
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "product",
+        INTERO_SEED_DEMO: "true",
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      }),
+    ).toMatchObject({
+      runtimeMode: "product",
+      allowDevelopmentIdentity: false,
+      auth: {},
+    });
+  });
+
   it("validates ordered migrator dependencies", () => {
     expect(
       loadMigratorServiceConfig({

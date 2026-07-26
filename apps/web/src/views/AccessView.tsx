@@ -9,16 +9,18 @@ import {
   SignOutIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
+import type { PrincipalId } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import type { PrincipalSummary } from "../api.js";
 import { authClient } from "../auth-client.js";
+import { initials } from "../design/utils.js";
 import { Checkbox } from "../design/primitives.js";
 import {
   activatePilotInvitation,
   acceptPilotInvitation,
   getPilotInvitation,
-  signOut,
 } from "../pilot/api.js";
 import { usePilot } from "../pilot/context.js";
 
@@ -117,6 +119,65 @@ export function SignInView() {
   );
 }
 
+export function AuthenticationLoadingView() {
+  return (
+    <AccessShell eyebrow="INTERO · 登录" title="正在确认登录状态">
+      <p
+        className="text-[13px] leading-[1.75] text-ink-muted"
+        data-testid="authentication-loading"
+      >
+        正在连接 Intero，请稍候。
+      </p>
+    </AccessShell>
+  );
+}
+
+export function DevelopmentIdentityToolView({
+  identities,
+  onSelect,
+}: {
+  identities: PrincipalSummary[];
+  onSelect: (identityId: PrincipalId) => void;
+}) {
+  return (
+    <AccessShell eyebrow="INTERO · 开发工具" title="选择测试身份">
+      <p className="text-[13px] leading-[1.75] text-ink-muted">
+        此入口仅用于本地测试。选择本次浏览器会话模拟的成员身份。
+      </p>
+      <div
+        className="mt-6 grid gap-2.5"
+        data-testid="development-identity-entry"
+      >
+        {identities.map((identity) => (
+          <button
+            key={identity.id}
+            type="button"
+            data-testid={`development-identity-${identity.id}`}
+            onClick={() => onSelect(identity.id as PrincipalId)}
+            className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-card border border-line bg-panel2 p-[14px_16px] text-left hover:border-accent-strong"
+          >
+            <span className="grid h-9 w-9 place-items-center rounded-full bg-raise text-[11px] font-[650]">
+              {initials(identity.displayName)}
+            </span>
+            <span className="grid">
+              <strong className="text-[13px] font-[620]">
+                {identity.displayName}
+              </strong>
+              <small className="mt-1 text-[10.5px] text-faint">开发身份</small>
+            </span>
+            <ArrowRightIcon size={15} className="text-accent-strong" />
+          </button>
+        ))}
+      </div>
+      {identities.length === 0 ? (
+        <Notice tone="danger">
+          当前部署没有可用的开发身份，请检查服务端身份配置。
+        </Notice>
+      ) : null}
+    </AccessShell>
+  );
+}
+
 export function AcceptInvitationView({
   token,
   onEnterPulse,
@@ -189,7 +250,7 @@ export function AcceptInvitationView({
     },
   });
   const logout = useMutation({
-    mutationFn: signOut,
+    mutationFn: pilot.signOutCurrentIdentity,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },

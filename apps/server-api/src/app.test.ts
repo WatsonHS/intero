@@ -347,7 +347,7 @@ describe("Intero API vertical slice", () => {
     expect(missingProject.statusCode).toBe(404);
   });
 
-  it("returns the configured organization and principal bootstrap", async () => {
+  it("does not expose a fallback principal without effective identity", async () => {
     const response = await app.inject({
       method: "GET",
       url: "/v1/bootstrap",
@@ -357,16 +357,6 @@ describe("Intero API vertical slice", () => {
       organization: {
         id: "019b5ac0-7600-7000-8000-000000000001",
         name: "Intero Development",
-      },
-      currentPrincipal: {
-        id: "019b5ac0-7600-7000-8000-000000000002",
-        displayName: "Intero User",
-        kind: "human",
-      },
-      standInPrincipal: {
-        id: "019b5ac0-7600-5000-8000-000000000002",
-        displayName: "Intero User 的替身",
-        kind: "stand_in",
       },
     });
   });

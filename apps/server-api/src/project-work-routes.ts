@@ -763,11 +763,13 @@ async function requireProjectGovernor(
 async function agentBinding(request: FastifyRequest, store: PilotStore) {
   const value = request.headers.authorization;
   const credential = value?.startsWith("Bearer ") ? value.slice(7) : undefined;
-  return credential
+  const binding = credential
     ? store.findBindingByCredentialHash(
         createHash("sha256").update(credential).digest("hex"),
       )
     : undefined;
+  const resolved = await binding;
+  return resolved?.validatedAt ? resolved : undefined;
 }
 
 function idempotencyKey(request: FastifyRequest): string | undefined {

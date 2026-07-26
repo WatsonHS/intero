@@ -1362,6 +1362,7 @@ export const pilotAgentBindings = pgTable(
       .references(() => principals.id),
     credentialHash: text("credential_hash").notNull(),
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+    validatedAt: timestamp("validated_at", { withTimezone: true }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     data: jsonb("data").notNull(),
     ...timestamps,

@@ -157,6 +157,45 @@ export class CloudPilotClient {
     };
   }
 
+  async validateConnection(): Promise<unknown> {
+    const response = await fetch(`${this.connection.baseUrl}/v1/pilot/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.connection.credential}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: `validate-${this.connection.binding.id}`,
+        method: "tools/call",
+        params: {
+          name: "intero.validate_connection",
+          arguments: {},
+        },
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = (await response.json()) as {
+      result?: { content?: Array<{ type?: string; text?: string }> };
+      error?: { message?: string };
+    };
+    if (!response.ok || body.error) {
+      throw new Error(
+        body.error?.message ??
+          `Agent connection validation failed (${response.status}).`,
+      );
+    }
+    const text = body.result?.content?.find(
+      (item) => item.type === "text",
+    )?.text;
+    const result = text ? (JSON.parse(text) as { status?: string }) : undefined;
+    if (result?.status !== "connected") {
+      throw new Error("Agent connection validation did not complete.");
+    }
+    return result;
+  }
+
   async reportConnectionCheck(): Promise<unknown> {
     const language = this.connection.binding.preferredLanguage;
     const chinese = language === "zh-CN";

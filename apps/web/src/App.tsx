@@ -16,8 +16,17 @@ import { useState } from "react";
 import { getActionInbox, getBootstrap } from "./api.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
+import {
+  developmentIdentityToolEnabled,
+  resolveAuthenticationSurface,
+} from "./pilot/auth-state.js";
 import { useGovernance, usePilotOptional } from "./pilot/context.js";
-import { AcceptInvitationView, SignInView } from "./views/AccessView.js";
+import {
+  AcceptInvitationView,
+  AuthenticationLoadingView,
+  DevelopmentIdentityToolView,
+  SignInView,
+} from "./views/AccessView.js";
 import { AdminView } from "./views/AdminView.js";
 import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
@@ -129,18 +138,12 @@ export function App() {
     queryFn: ({ signal }) => getActionInbox(signal),
     refetchInterval: 5_000,
     refetchOnWindowFocus: true,
-    enabled:
-      !pilot?.enabled ||
-      pilot.bootstrap.data?.authMode !== "session" ||
-      Boolean(pilot.bootstrap.data.currentPrincipal),
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
 
-  const pilotIdentity =
-    pilot?.bootstrap.data?.currentPrincipal ??
-    pilot?.bootstrap.data?.identities.find(
-      (item) => item.id === pilot.identityId,
-    );
-  const identity = pilotIdentity ?? bootstrap.data?.currentPrincipal;
+  const identity = pilot?.enabled
+    ? pilot.effectiveIdentity
+    : bootstrap.data?.currentPrincipal;
   const organization =
     pilot?.bootstrap.data?.organization ?? bootstrap.data?.organization;
   const isSetup = view === "setup";
@@ -203,11 +206,35 @@ export function App() {
     );
   }
 
-  if (
-    pilot?.enabled &&
-    pilot.bootstrap.data?.authMode === "session" &&
-    !pilot.bootstrap.data.currentPrincipal
-  ) {
+  const authenticationSurface = resolveAuthenticationSurface({
+    pilotEnabled: Boolean(pilot?.enabled),
+    bootstrapPending: Boolean(pilot?.bootstrap.isPending),
+    authMode: pilot?.bootstrap.data?.authMode,
+    effectiveIdentityId: pilot?.identityId,
+    authenticationRequired: Boolean(pilot?.authenticationRequired),
+  });
+  if (authenticationSurface === "loading") {
+    return <AuthenticationLoadingView />;
+  }
+  const showDevelopmentIdentityTool =
+    pilot?.bootstrap.data?.authMode === "development_identity" &&
+    developmentIdentityToolEnabled({
+      developmentBuild: import.meta.env.DEV,
+      locationHref:
+        typeof window === "undefined"
+          ? "http://localhost/"
+          : window.location.href,
+      authenticationRequired: Boolean(pilot.authenticationRequired),
+    });
+  if (showDevelopmentIdentityTool && pilot) {
+    return (
+      <DevelopmentIdentityToolView
+        identities={pilot.bootstrap.data?.identities ?? []}
+        onSelect={pilot.setIdentityId}
+      />
+    );
+  }
+  if (authenticationSurface === "login") {
     return <SignInView />;
   }
 

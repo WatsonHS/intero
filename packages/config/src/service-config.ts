@@ -9,6 +9,8 @@ import {
 
 const ServerSecret = z.string().min(16);
 const OrganizationId = z.uuid();
+const RuntimeMode = z.enum(["development", "product"]);
+export type RuntimeMode = z.infer<typeof RuntimeMode>;
 
 const DisabledObjectStorageConfig = z.object({
   mode: z.literal("disabled"),
@@ -61,6 +63,7 @@ export type ObjectStorageConfig = z.infer<typeof ObjectStorageConfig>;
 
 export interface ApiServiceConfig {
   runtime: RuntimeConfig;
+  runtimeMode: RuntimeMode;
   pilot: PilotAdapterConfig;
   organizationId: string;
   objectStorage: ObjectStorageConfig;
@@ -138,9 +141,32 @@ export function loadApiServiceConfig(
 ): ApiServiceConfig {
   const authSecret = environment.INTERO_AUTH_SECRET;
   const runtime = loadRuntimeConfig(environment);
+  const runtimeMode = RuntimeMode.parse(
+    environment.INTERO_RUNTIME_MODE ??
+      (environment.NODE_ENV === "production" ? "product" : "development"),
+  );
+  const pilot = loadPilotAdapterConfig(environment);
+  const developmentIdentityRequested =
+    environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
+  if (runtimeMode === "product" && developmentIdentityRequested) {
+    throw new Error(
+      "Product runtime cannot enable INTERO_ALLOW_DEVELOPMENT_IDENTITY.",
+    );
+  }
+  if (runtimeMode === "product" && !authSecret) {
+    throw new Error(
+      "Product runtime requires INTERO_AUTH_SECRET for session authentication.",
+    );
+  }
+  if (runtimeMode === "product" && !pilot.databaseUrl) {
+    throw new Error(
+      "Product runtime requires INTERO_DATABASE_URL for persistent sessions.",
+    );
+  }
   return {
     runtime,
-    pilot: loadPilotAdapterConfig(environment),
+    runtimeMode,
+    pilot,
     organizationId: OrganizationId.parse(
       environment.INTERO_ORGANIZATION_ID ??
         "019b5ac0-7600-7000-8000-000000000001",
@@ -149,7 +175,7 @@ export function loadApiServiceConfig(
     metricsEnabled: environment.INTERO_METRICS_ENABLED !== "false",
     spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
     allowDevelopmentIdentity:
-      environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true",
+      runtimeMode === "development" && developmentIdentityRequested,
     ...(authSecret
       ? {
           auth: {

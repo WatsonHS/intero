@@ -110,6 +110,7 @@ function CanonicalTeamPulseView({
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
   const standInThreads = useQuery({
     queryKey: ["threads", "stand_in"],
@@ -429,7 +430,7 @@ function CanonicalTeamPulseView({
           ) : null}
           {inbox.isError ? (
             <div className="rounded-card border border-danger-soft bg-danger-soft p-3 text-[12px] text-ink-muted">
-              <p>{t("general.unavailable")}</p>
+              <p>收件箱读取失败。请重新登录，或稍后重试。</p>
               <button
                 type="button"
                 onClick={() => void inbox.refetch()}

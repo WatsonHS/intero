@@ -166,7 +166,10 @@ export function PilotTestSetupFlow({
       (binding) => binding.ownerId === pilot.identityId,
     ) ?? [];
   const activeOwnBindings = ownBindings.filter(
-    (binding) => !binding.disconnectedAt,
+    (binding) => binding.validatedAt && !binding.disconnectedAt,
+  );
+  const pendingOwnBindings = ownBindings.filter(
+    (binding) => !binding.validatedAt && !binding.disconnectedAt,
   );
   const selectedClientConnected = activeOwnBindings.some(
     (binding) => binding.client === client,
@@ -684,27 +687,34 @@ export function PilotTestSetupFlow({
                   <div className="flex items-center gap-[11px]">
                     <span
                       className={
-                        connectionCheck
+                        selectedClientConnected
                           ? "h-[9px] w-[9px] animate-breathe rounded-full bg-green"
-                          : activeOwnBindings.length > 0
+                          : pendingOwnBindings.some(
+                                (binding) => binding.client === client,
+                              )
                             ? "h-[9px] w-[9px] animate-breathe rounded-full bg-amber"
                             : "h-[9px] w-[9px] rounded-full bg-faint"
                       }
                     />
                     <strong className="text-[13px] font-[620]">
-                      {connectionCheck
-                        ? "连接测试通过"
-                        : activeOwnBindings.length > 0
-                          ? "Agent 已连接，正在发送测试信息…"
+                      {selectedClientConnected
+                        ? "真实 MCP 验证通过，Agent 已连接"
+                        : pendingOwnBindings.some(
+                              (binding) => binding.client === client,
+                            )
+                          ? "已兑换设置授权，等待 Agent 完成真实 MCP 验证"
                           : isProjectOwner
-                            ? "连接后会自动发送一条测试信息"
+                            ? "配置完成后，Agent 会执行一次真实 MCP 验证"
                             : "项目创建者可以连接 Agent"}
                     </strong>
                     <span className="ml-auto font-mono text-[10.5px] text-faint">
                       {selectedProject?.name}
                     </span>
                   </div>
-                  {!connectionCheck && activeOwnBindings.length === 0 ? (
+                  {!selectedClientConnected &&
+                  !pendingOwnBindings.some(
+                    (binding) => binding.client === client,
+                  ) ? (
                     <p className="mt-2.5 text-[11.5px] leading-[1.65] text-ink-muted">
                       这一步可以跳过，稍后再从设置中连接。
                     </p>

@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 
 import { initials } from "../design/utils.js";
 import { getPilotProfile, signOut, updatePilotProfile } from "../pilot/api.js";
+import { usePilotOptional } from "../pilot/context.js";
 
 export type AvatarTone = "accent" | "green" | "amber" | "cool";
 
@@ -49,6 +50,7 @@ export function ProfileMenu({
   onOpenPersonal: () => void;
 }) {
   const queryClient = useQueryClient();
+  const pilot = usePilotOptional();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -57,12 +59,24 @@ export function ProfileMenu({
   const [editingName, setEditingName] = useState(false);
   const [editingAvatar, setEditingAvatar] = useState(false);
   const [displayName, setDisplayName] = useState("");
+  const developmentIdentityId =
+    pilot?.bootstrap.data?.authMode === "development_identity"
+      ? pilot.identityId
+      : undefined;
   const profile = useQuery({
-    queryKey: ["pilot", "profile"],
-    queryFn: ({ signal }) => getPilotProfile(signal),
+    queryKey: ["pilot", "profile", pilot?.identityId],
+    queryFn: ({ signal }) => getPilotProfile(developmentIdentityId, signal),
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
   const identity = profile.data?.profile;
   const name = identity?.displayName ?? fallbackName ?? "—";
+  const accountDetail = identity?.email
+    ? identity.email
+    : profile.isError
+      ? "账号信息读取失败"
+      : profile.isPending
+        ? "正在读取账号…"
+        : "未登录";
 
   useEffect(() => {
     if (identity?.displayName) setDisplayName(identity.displayName);
@@ -111,22 +125,29 @@ export function ProfileMenu({
   }, [editingName]);
 
   const saveName = useMutation({
-    mutationFn: () => updatePilotProfile({ displayName }),
+    mutationFn: () =>
+      updatePilotProfile({ displayName }, developmentIdentityId),
     onSuccess: async () => {
       setEditingName(false);
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
   });
   const saveAvatar = useMutation({
-    mutationFn: (avatarTone: AvatarTone) => updatePilotProfile({ avatarTone }),
+    mutationFn: (avatarTone: AvatarTone) =>
+      updatePilotProfile({ avatarTone }, developmentIdentityId),
     onSuccess: async () => {
       setEditingAvatar(false);
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
   });
   const logout = useMutation({
-    mutationFn: signOut,
-    onSuccess: () => window.location.reload(),
+    mutationFn: () => pilot?.signOutCurrentIdentity() ?? signOut(),
+    onSuccess: () => {
+      closeMenu();
+      if (pilot?.bootstrap.data?.authMode !== "development_identity") {
+        window.location.reload();
+      }
+    },
   });
 
   function closeMenu(focusTrigger = false) {
@@ -216,7 +237,7 @@ export function ProfileMenu({
                     {name}
                   </strong>
                   <small className="mt-0.5 block truncate font-mono text-[9.5px] text-faint">
-                    {identity?.email || "正在读取账号…"}
+                    {accountDetail}
                   </small>
                   <small className="mt-1 block truncate text-[9.5px] text-green">
                     已登录 · {organizationName ?? "Intero"}
@@ -350,6 +371,14 @@ export function ProfileMenu({
                   disabled={logout.isPending}
                   onClick={() => logout.mutate()}
                 />
+                {logout.isError ? (
+                  <p
+                    role="alert"
+                    className="px-2.5 pb-1 text-[10px] text-danger"
+                  >
+                    退出失败，请重试。
+                  </p>
+                ) : null}
               </div>
             </div>,
             document.body,

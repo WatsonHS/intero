@@ -243,6 +243,7 @@ export const PilotAgentBinding = z
     preferredLanguage: PreferredLanguage,
     credentialHash: z.string().length(64),
     createdAt: z.iso.datetime(),
+    validatedAt: z.iso.datetime().optional(),
     lastSeenAt: z.iso.datetime().optional(),
     disconnectedAt: z.iso.datetime().optional(),
   })

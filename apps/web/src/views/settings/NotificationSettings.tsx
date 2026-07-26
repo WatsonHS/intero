@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getActionInbox, setNotificationPreferences } from "../../api.js";
 import { Checkbox } from "../../design/primitives.js";
+import { usePilotOptional } from "../../pilot/context.js";
 
 const OPTIONS: Array<{
   id: ActionInboxItem["kind"];
@@ -19,9 +20,11 @@ const OPTIONS: Array<{
 
 export function NotificationSettings() {
   const queryClient = useQueryClient();
+  const pilot = usePilotOptional();
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
   const update = useMutation({
     mutationFn: setNotificationPreferences,

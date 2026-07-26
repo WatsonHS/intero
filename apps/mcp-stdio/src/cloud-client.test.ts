@@ -68,9 +68,13 @@ describe("cloud MCP client", () => {
     );
   });
 
-  it("submits one idempotent validation checkpoint after connecting", async () => {
+  it("performs the real MCP handshake before the compatibility validation checkpoint", async () => {
     vi.stubEnv("INTERO_OUTBOX_KEY", "connection-test-key");
     const checkpoints: Array<Record<string, unknown>> = [];
+    const validations: Array<{
+      authorization: string | undefined;
+      body: Record<string, unknown>;
+    }> = [];
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -91,6 +95,27 @@ describe("cloud MCP client", () => {
               name: "Codex · pilot",
               workspaceId: "019f9b01-2222-7222-8222-222222222222",
               preferredLanguage: "zh-CN",
+            },
+          }),
+        );
+        return;
+      }
+      if (request.url === "/v1/pilot/mcp") {
+        validations.push({
+          authorization: request.headers.authorization,
+          body,
+        });
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "validate",
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ status: "connected" }),
+                },
+              ],
             },
           }),
         );
@@ -117,9 +142,23 @@ describe("cloud MCP client", () => {
         configDirectory: mkdtempSync(join(tmpdir(), "intero-connect-")),
       });
 
+      await client.validateConnection();
       await client.reportConnectionCheck();
 
       expect(client.context().preferredLanguage).toBe("zh-CN");
+      expect(validations).toEqual([
+        {
+          authorization: "Bearer agent-credential",
+          body: expect.objectContaining({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              name: "intero.validate_connection",
+              arguments: {},
+            },
+          }),
+        },
+      ]);
       expect(checkpoints).toHaveLength(1);
       expect(checkpoints[0]).toMatchObject({
         schemaVersion: 2,

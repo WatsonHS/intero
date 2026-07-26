@@ -13,6 +13,7 @@ import {
   setNotificationPreferences,
   updateActionInbox,
 } from "../api.js";
+import { usePilotOptional } from "../pilot/context.js";
 
 const KINDS: Array<{
   id: ActionInboxItem["kind"];
@@ -32,10 +33,12 @@ export function AttentionView({
   onOpenAction: (sourceRef: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const pilot = usePilotOptional();
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
     refetchInterval: 5_000,
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
   const update = useMutation({
     mutationFn: (input: {
@@ -115,6 +118,11 @@ export function AttentionView({
       <section className="mt-6 grid gap-2.5">
         {inbox.isLoading ? (
           <EmptyState title="正在同步 Inbox…" />
+        ) : inbox.isError ? (
+          <EmptyState
+            title="收件箱读取失败"
+            detail="请重新登录，或稍后重试。"
+          />
         ) : inbox.data?.items.length ? (
           inbox.data.items.map((item) => (
             <article

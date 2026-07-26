@@ -114,6 +114,7 @@ const DEMO_USERS = [
     principalId: DEMO_IDS.principals.alex,
     displayName: "Alex Rivera",
     avatarTone: "accent",
+    preferredLanguage: "zh-CN",
     email: `alex${DEMO_EMAIL_SUFFIX}`,
   },
   {
@@ -122,6 +123,7 @@ const DEMO_USERS = [
     principalId: DEMO_IDS.principals.priya,
     displayName: "Priya Shah",
     avatarTone: "green",
+    preferredLanguage: "zh-CN",
     email: `priya${DEMO_EMAIL_SUFFIX}`,
   },
   {
@@ -130,6 +132,7 @@ const DEMO_USERS = [
     principalId: DEMO_IDS.principals.morgan,
     displayName: "Morgan Lee",
     avatarTone: "amber",
+    preferredLanguage: "zh-CN",
     email: `morgan${DEMO_EMAIL_SUFFIX}`,
   },
   {
@@ -138,6 +141,7 @@ const DEMO_USERS = [
     principalId: DEMO_IDS.principals.jordan,
     displayName: "Jordan Kim",
     avatarTone: "cool",
+    preferredLanguage: "zh-CN",
     email: `jordan${DEMO_EMAIL_SUFFIX}`,
   },
 ] as const;
@@ -453,9 +457,15 @@ async function bootstrapDemoIdentities(pool: Pool): Promise<void> {
     const passwordHash = await hashPassword(DEMO_PASSWORD);
     for (const user of DEMO_USERS) {
       await client.query(
-        `INSERT INTO principals (id,display_name,avatar_tone,kind)
-         VALUES ($1,$2,$3,'human')`,
-        [user.principalId, user.displayName, user.avatarTone],
+        `INSERT INTO principals
+          (id,display_name,avatar_tone,preferred_language,kind)
+         VALUES ($1,$2,$3,$4,'human')`,
+        [
+          user.principalId,
+          user.displayName,
+          user.avatarTone,
+          user.preferredLanguage,
+        ],
       );
       await client.query(
         `INSERT INTO "user"

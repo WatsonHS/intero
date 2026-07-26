@@ -35,6 +35,11 @@ import type {
   WorkRelation,
 } from "@intero/domain";
 
+import {
+  handleAuthenticationFailure,
+  PILOT_IDENTITY_STORAGE_KEY,
+} from "./pilot/auth-state.js";
+
 const API_URL = import.meta.env.VITE_INTERO_API_URL ?? "http://localhost:4310";
 
 export interface TeamPulsePayload {
@@ -653,9 +658,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     credentials: "include",
     headers: developmentIdentityHeaders(),
   });
-  if (!response.ok) {
-    throw new Error(`Intero API returned ${response.status}.`);
-  }
+  ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -669,9 +672,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    throw new Error(`Intero API returned ${response.status}.`);
-  }
+  ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -685,9 +686,7 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    throw new Error(`Intero API returned ${response.status}.`);
-  }
+  ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -701,9 +700,7 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    throw new Error(`Intero API returned ${response.status}.`);
-  }
+  ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -713,13 +710,17 @@ async function deleteJson(path: string): Promise<void> {
     credentials: "include",
     headers: developmentIdentityHeaders(),
   });
-  if (!response.ok) {
-    throw new Error(`Intero API returned ${response.status}.`);
-  }
+  ensureResponseOk(response);
+}
+
+function ensureResponseOk(response: Response): void {
+  if (response.ok) return;
+  handleAuthenticationFailure(response.status);
+  throw new Error(`Intero API returned ${response.status}.`);
 }
 
 function developmentIdentityHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};
-  const principalId = window.localStorage.getItem("intero.pilot.identity.v1");
+  const principalId = window.localStorage.getItem(PILOT_IDENTITY_STORAGE_KEY);
   return principalId ? { "x-intero-dev-principal-id": principalId } : {};
 }
