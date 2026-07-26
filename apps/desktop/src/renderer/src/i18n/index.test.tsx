@@ -28,6 +28,6 @@ describe("desktop localization", () => {
 
     expect(output).toContain('data-locale="zh-CN"');
     expect(output).toContain("大家正在干什么");
-    expect(output).toContain("界面语言");
+    expect(output).toContain("界面与协作语言");
   });
 });
