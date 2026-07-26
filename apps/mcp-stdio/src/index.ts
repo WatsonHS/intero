@@ -232,8 +232,7 @@ async function runCloudMcpServer(
   server.registerTool(
     "project.update_epic",
     {
-      description:
-        "Update roadmap-only Epic content inside the bound Project.",
+      description: "Update roadmap-only Epic content inside the bound Project.",
       inputSchema: {
         epicId: z.string().uuid(),
         title: z.string().min(1).max(240).optional(),
@@ -266,21 +265,20 @@ async function runCloudMcpServer(
       inputSchema: {
         title: z.string().min(1).max(240),
         description: z.string().max(8_000).optional(),
-        stage: z
-          .enum(["planned", "in_development", "released"])
-          .optional(),
+        stage: z.enum(["planned", "in_development", "released"]).optional(),
         epicId: z.string().uuid().optional(),
-        ownerId: z.string().uuid().optional(),
         piId: z.string().uuid().optional(),
         sprintId: z.string().uuid().optional(),
+        clientMutationId: mutationId,
       },
     },
-    async (body) =>
+    async ({ clientMutationId, ...body }) =>
       result(
         await client.projectRequest({
           path: "/features",
           method: "POST",
           body,
+          clientMutationId,
         }),
       ),
   );
@@ -293,21 +291,20 @@ async function runCloudMcpServer(
         featureId: z.string().uuid(),
         title: z.string().min(1).max(240).optional(),
         description: z.string().max(8_000).optional(),
-        stage: z
-          .enum(["planned", "in_development", "released"])
-          .optional(),
+        stage: z.enum(["planned", "in_development", "released"]).optional(),
         epicId: z.string().uuid().nullable().optional(),
-        ownerId: z.string().uuid().nullable().optional(),
         piId: z.string().uuid().nullable().optional(),
         sprintId: z.string().uuid().nullable().optional(),
+        clientMutationId: mutationId,
       },
     },
-    async ({ featureId, ...body }) =>
+    async ({ featureId, clientMutationId, ...body }) =>
       result(
         await client.projectRequest({
           path: `/features/${featureId}`,
           method: "PATCH",
           body,
+          clientMutationId,
         }),
       ),
   );
@@ -322,8 +319,6 @@ async function runCloudMcpServer(
         status: z
           .enum(["todo", "in_progress", "ready_for_test", "done"])
           .optional(),
-        priority: z.enum(["P0", "P1", "P2", "P3"]).optional(),
-        ownerId: z.string().uuid().optional(),
         featureId: z.string().uuid().optional(),
         specId: z.string().uuid().optional(),
         points: z.number().nonnegative().optional(),
@@ -355,8 +350,6 @@ async function runCloudMcpServer(
         status: z
           .enum(["todo", "in_progress", "ready_for_test", "done"])
           .optional(),
-        priority: z.enum(["P0", "P1", "P2", "P3"]).optional(),
-        ownerId: z.string().uuid().nullable().optional(),
         featureId: z.string().uuid().nullable().optional(),
         specId: z.string().uuid().nullable().optional(),
         points: z.number().nonnegative().nullable().optional(),
@@ -372,6 +365,34 @@ async function runCloudMcpServer(
           path: `/items/${workItemId}`,
           method: "PATCH",
           body,
+          clientMutationId,
+        }),
+      ),
+  );
+  server.registerTool(
+    "project.add_work_relation",
+    {
+      description:
+        "Attach an explicit Project-scoped work relation. The Agent cannot use this to change owner, priority, access, or external systems.",
+      inputSchema: {
+        sourceWorkItemId: z.string().uuid(),
+        targetWorkItemId: z.string().uuid(),
+        kind: z.enum([
+          "blocks",
+          "blocked_by",
+          "related",
+          "duplicate",
+          "duplicated_by",
+        ]),
+        clientMutationId: mutationId,
+      },
+    },
+    async ({ sourceWorkItemId, targetWorkItemId, kind, clientMutationId }) =>
+      result(
+        await client.projectRequest({
+          path: `/items/${sourceWorkItemId}/relations`,
+          method: "POST",
+          body: { targetId: targetWorkItemId, kind },
           clientMutationId,
         }),
       ),
@@ -489,14 +510,16 @@ async function runCloudMcpServer(
       inputSchema: {
         specId: z.string().uuid(),
         reviewerIds: z.array(z.string().uuid()).max(20).optional(),
+        clientMutationId: mutationId,
       },
     },
-    async ({ specId, reviewerIds }) =>
+    async ({ specId, reviewerIds, clientMutationId }) =>
       result(
         await client.projectRequest({
           path: `/specs/${specId}/request-review`,
           method: "POST",
           body: { reviewerIds: reviewerIds ?? [] },
+          clientMutationId,
         }),
       ),
   );
@@ -557,9 +580,7 @@ async function runCloudMcpServer(
       inputSchema: {},
     },
     async () =>
-      result(
-        await client.projectRequest({ path: "/specs/review-context" }),
-      ),
+      result(await client.projectRequest({ path: "/specs/review-context" })),
   );
   server.registerTool(
     "spec.confirm",
