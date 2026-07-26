@@ -2,7 +2,7 @@
 
 Intero is an AI-native coordination layer for engineering teams. Coding Agents
 report semantic checkpoints to a privacy-preserving local runtime; Intero turns
-those checkpoints into visible Work State, bounded Representative coordination,
+those checkpoints into visible Work State, bounded Stand-in coordination,
 durable project conversations, and versioned Spec Review.
 
 The MVP is implemented as a TypeScript modular monolith plus a Rust privacy
@@ -11,11 +11,11 @@ are outside the event contract.
 
 ## What is in the MVP
 
-- Electron desktop surfaces for Team Pulse, Representative and Coordination
+- Electron desktop surfaces for Team Pulse, Stand-in and Coordination
   Threads, Project Room, Spec Review, Action Inbox, and privacy settings.
 - `interod`, a Rust daemon with authenticated local IPC, SQLCipher storage,
   OS-keyring support, Workspace authorization, structured memory, and OpenMLS.
-- A local Representative sidecar with deterministic Work State reduction,
+- A local Stand-in sidecar with deterministic Work State reduction,
   projection control, run budgets, durable request results, and offline replay.
 - Managed Codex, Claude Code, and OpenCode adapters plus a stateless MCP bridge.
 - Fastify API and Graphile Worker backed by PostgreSQL/RLS, SpiceDB,
@@ -29,6 +29,15 @@ The detailed contracts and boundaries live in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Delivery status and the external
 pilot boundary are recorded in
 [`docs/plans/2026-07-24-intero-mvp-implementation-plan.md`](docs/plans/2026-07-24-intero-mvp-implementation-plan.md).
+
+The cloud-first two-day pilot has a smaller runtime boundary and uses the
+existing desktop renderer as its browser client. See
+[`docs/PILOT_RUNBOOK.md`](docs/PILOT_RUNBOOK.md) for the exact local start,
+Agent connection, two-client smoke, and validation limits.
+
+Production-operability configuration, ordered migrations, health/metrics,
+object-storage policy, backup/restore, and exact deployment boundaries are in
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 ## Prerequisites
 
@@ -120,13 +129,13 @@ tests.
 - Only explicitly enrolled Workspace roots may emit work signals.
 - Hook adapters subscribe only to content-free session lifecycle events and
   reject unknown or content-bearing event shapes.
-- Administrator, lifecycle-hook, MCP, and Representative-sidecar IPC clients
+- Administrator, lifecycle-hook, MCP, and Stand-in-sidecar IPC clients
   use separate local capabilities with explicit method allowlists.
 - Managed integration state stores Intero-owned values and hashes only. Existing
   Agent configs, which may contain credentials, are never copied into Intero.
 - Model egress is disabled by default and deterministic Work State remains
   available without a model or network. The setting is persisted by `interod`
-  and applied to the running Local Representative.
+  and applied to the running Local Stand-in.
 - Local private state is encrypted with SQLCipher; production uses the OS
   credential store for its key.
 - Public fallback responses disclose freshness and never silently impersonate

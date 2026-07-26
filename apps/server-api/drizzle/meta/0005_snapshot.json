@@ -1635,8 +1635,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.public_representative_runs": {
-      "name": "public_representative_runs",
+    "public.public_stand_in_runs": {
+      "name": "public_stand_in_runs",
       "schema": "",
       "columns": {
         "operation_id": {
@@ -1703,8 +1703,8 @@
         }
       },
       "indexes": {
-        "public_representative_runs_status_idx": {
-          "name": "public_representative_runs_status_idx",
+        "public_stand_in_runs_status_idx": {
+          "name": "public_stand_in_runs_status_idx",
           "columns": [
             {
               "expression": "status",
@@ -1726,27 +1726,27 @@
         }
       },
       "foreignKeys": {
-        "public_representative_runs_organization_id_organizations_id_fk": {
-          "name": "public_representative_runs_organization_id_organizations_id_fk",
-          "tableFrom": "public_representative_runs",
+        "public_stand_in_runs_organization_id_organizations_id_fk": {
+          "name": "public_stand_in_runs_organization_id_organizations_id_fk",
+          "tableFrom": "public_stand_in_runs",
           "tableTo": "organizations",
           "columnsFrom": ["organization_id"],
           "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "public_representative_runs_thread_id_threads_id_fk": {
-          "name": "public_representative_runs_thread_id_threads_id_fk",
-          "tableFrom": "public_representative_runs",
+        "public_stand_in_runs_thread_id_threads_id_fk": {
+          "name": "public_stand_in_runs_thread_id_threads_id_fk",
+          "tableFrom": "public_stand_in_runs",
           "tableTo": "threads",
           "columnsFrom": ["thread_id"],
           "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "public_representative_runs_workstream_id_workstreams_id_fk": {
-          "name": "public_representative_runs_workstream_id_workstreams_id_fk",
-          "tableFrom": "public_representative_runs",
+        "public_stand_in_runs_workstream_id_workstreams_id_fk": {
+          "name": "public_stand_in_runs_workstream_id_workstreams_id_fk",
+          "tableFrom": "public_stand_in_runs",
           "tableTo": "workstreams",
           "columnsFrom": ["workstream_id"],
           "columnsTo": ["id"],
@@ -2179,8 +2179,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "representative": {
-          "name": "representative",
+        "stand_in": {
+          "name": "stand_in",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

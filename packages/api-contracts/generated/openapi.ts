@@ -174,14 +174,14 @@ export interface components {
         id: string;
         displayName: string;
         /** @enum {string} */
-        kind: "human" | "representative" | "service";
+        kind: "human" | "stand_in" | "service";
       };
-      representativePrincipal: {
+      standInPrincipal: {
         /** Format: uuid */
         id: string;
         displayName: string;
         /** @enum {string} */
-        kind: "human" | "representative" | "service";
+        kind: "human" | "stand_in" | "service";
       };
     };
     CoordinateRequest: {
@@ -306,7 +306,7 @@ export interface components {
         | "direct_observation"
         | "coding_agent_report"
         | "project_system"
-        | "representative_inference";
+        | "stand_in_inference";
       sourceRef: string;
       /** Format: date-time */
       observedAt: string;
@@ -316,7 +316,7 @@ export interface components {
       /** @enum {string} */
       privacy:
         | "P0_LOCAL_ONLY"
-        | "P1_REPRESENTATIVE_PRIVATE"
+        | "P1_STAND_IN_PRIVATE"
         | "P2_COORDINATION"
         | "P3_PROJECT"
         | "P4_ORGANIZATION";
@@ -433,7 +433,7 @@ export interface components {
         /** @enum {string} */
         privacy:
           | "P0_LOCAL_ONLY"
-          | "P1_REPRESENTATIVE_PRIVATE"
+          | "P1_STAND_IN_PRIVATE"
           | "P2_COORDINATION"
           | "P3_PROJECT"
           | "P4_ORGANIZATION";
@@ -538,7 +538,7 @@ export interface components {
         id: string;
         displayName: string;
         /** @enum {string} */
-        kind: "human" | "representative" | "service";
+        kind: "human" | "stand_in" | "service";
       }[];
     };
     KanbanCardResponse: {
@@ -609,7 +609,7 @@ export interface components {
           reviewerId: string;
           /** @enum {string} */
           kind:
-            | "representative_impact_analysis"
+            | "stand_in_impact_analysis"
             | "human_acknowledgement"
             | "human_approval"
             | "human_conditional_approval"
@@ -626,7 +626,7 @@ export interface components {
           id: string;
           displayName: string;
           /** @enum {string} */
-          kind: "human" | "representative" | "service";
+          kind: "human" | "stand_in" | "service";
         }[];
       }[];
     };
@@ -679,7 +679,7 @@ export interface components {
         id: string;
         displayName: string;
         /** @enum {string} */
-        kind: "human" | "representative" | "service";
+        kind: "human" | "stand_in" | "service";
       }[];
       staleAfterSeconds: number;
     };
@@ -691,7 +691,7 @@ export interface components {
         kind:
           | "human_direct"
           | "human_group"
-          | "representative"
+          | "stand_in"
           | "room"
           | "coordination"
           | "spec_review"
@@ -699,7 +699,7 @@ export interface components {
           | "task";
         title: string;
         participantIds: string[];
-        representativeIds: string[];
+        standInIds: string[];
         /** @enum {string} */
         accessMode: "human_only_e2ee" | "agent_readable";
         accessChangedAtSequence?: number;
@@ -731,7 +731,7 @@ export interface components {
         id: string;
         displayName: string;
         /** @enum {string} */
-        kind: "human" | "representative" | "service";
+        kind: "human" | "stand_in" | "service";
       }[];
       actions: {
         envelope: {

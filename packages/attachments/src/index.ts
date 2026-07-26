@@ -335,3 +335,5 @@ function attachmentFromRow(row: Record<string, unknown>): Attachment {
     expiresAt: expiresAt.toISOString(),
   };
 }
+
+export * from "./object-store.js";

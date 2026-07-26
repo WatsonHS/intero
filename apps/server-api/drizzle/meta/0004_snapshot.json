@@ -2027,8 +2027,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "representative": {
-          "name": "representative",
+        "stand_in": {
+          "name": "stand_in",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

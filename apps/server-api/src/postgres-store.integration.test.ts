@@ -83,15 +83,7 @@ databaseSuite("PostgreSQL platform store", () => {
     await admin.query("DELETE FROM organizations WHERE id = $1", [
       organizationId,
     ]);
-    await admin.query(
-      `DELETE FROM principals p
-       WHERE p.id = $1
-          OR (p.display_name LIKE 'Principal %'
-              AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.principal_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM workstreams w WHERE w.owner_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = p.id))`,
-      [ownerId],
-    );
+    await admin.query("DELETE FROM principals WHERE id = $1", [ownerId]);
     await admin.end();
   });
 
@@ -185,7 +177,7 @@ databaseSuite("PostgreSQL platform store", () => {
         kind: "coordination",
         title: "Schema coordination",
         participantIds: [ownerId],
-        representativeIds: [ownerId],
+        standInIds: [ownerId],
         accessMode: "agent_readable",
         priorHistoryGranted: false,
         createdAt: "2026-07-24T10:02:00.000Z",
@@ -254,7 +246,7 @@ databaseSuite("PostgreSQL platform store", () => {
     expect(await secondStore.listPrincipals([ownerId])).toEqual([
       expect.objectContaining({
         id: ownerId,
-        kind: "representative",
+        kind: "stand_in",
       }),
     ]);
     await secondStore.close();

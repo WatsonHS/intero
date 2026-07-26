@@ -2,21 +2,21 @@ import { uuidv7 } from "@intero/domain";
 import { Pool, type PoolClient } from "pg";
 
 import type {
-  PublicRepresentativeRepository,
-  PublicRepresentativeRun,
+  PublicStandInRepository,
+  PublicStandInRun,
 } from "./runtime.js";
 
-export class PostgresPublicRepresentativeRepository implements PublicRepresentativeRepository {
+export class PostgresPublicStandInRepository implements PublicStandInRepository {
   constructor(
     private readonly pool: Pool,
     private readonly organizationId: string,
-    private readonly representativeId: string,
+    private readonly standInId: string,
   ) {}
 
   async hasCompleted(operationId: string): Promise<boolean> {
     return this.read(async (client) => {
       const result = await client.query<{ status: string }>(
-        "SELECT status FROM public_representative_runs WHERE operation_id = $1",
+        "SELECT status FROM public_stand_in_runs WHERE operation_id = $1",
         [operationId],
       );
       return result.rows[0]?.status === "completed";
@@ -26,7 +26,7 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
   async markCompleted(operationId: string): Promise<void> {
     await this.write(async (client) => {
       await client.query(
-        `UPDATE public_representative_runs
+        `UPDATE public_stand_in_runs
          SET status = 'completed', completed_at = now(), updated_at = now()
          WHERE operation_id = $1`,
         [operationId],
@@ -56,7 +56,7 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
   }): Promise<void> {
     await this.write(async (client) => {
       const claimed = await client.query(
-        `INSERT INTO public_representative_runs
+        `INSERT INTO public_stand_in_runs
           (operation_id, organization_id, thread_id, status, freshness_at)
          VALUES ($1, $2, $3, 'processing', $4)
          ON CONFLICT (operation_id) DO NOTHING
@@ -72,9 +72,9 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
 
       await client.query(
         `INSERT INTO principals (id, display_name, kind)
-         VALUES ($1, 'Public Representative', 'representative')
+         VALUES ($1, 'Public Stand-in', 'stand_in')
          ON CONFLICT (id) DO NOTHING`,
-        [this.representativeId],
+        [this.standInId],
       );
       const thread = await client.query<{ sequence: number }>(
         `UPDATE threads SET sequence = sequence + 1, updated_at = now()
@@ -83,7 +83,7 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
         [input.threadId],
       );
       const sequence = thread.rows[0]?.sequence;
-      if (!sequence) throw new Error("Representative Thread was not found.");
+      if (!sequence) throw new Error("Stand-in Thread was not found.");
       await client.query(
         `INSERT INTO messages
           (id, organization_id, thread_id, sender_id, operation_id, sequence,
@@ -94,7 +94,7 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
           uuidv7(),
           this.organizationId,
           input.threadId,
-          this.representativeId,
+          this.standInId,
           input.operationId,
           sequence,
           input.body,
@@ -103,10 +103,10 @@ export class PostgresPublicRepresentativeRepository implements PublicRepresentat
     });
   }
 
-  async registerRun(job: PublicRepresentativeRun): Promise<void> {
+  async registerRun(job: PublicStandInRun): Promise<void> {
     await this.write(async (client) => {
       await client.query(
-        `INSERT INTO public_representative_runs
+        `INSERT INTO public_stand_in_runs
           (operation_id, organization_id, thread_id, workstream_id, status)
          VALUES ($1, $2, $3, $4, 'queued')
          ON CONFLICT (operation_id) DO NOTHING`,

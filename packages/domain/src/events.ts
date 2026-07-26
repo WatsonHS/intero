@@ -4,7 +4,7 @@ import { EventId, OperationId, WorkspaceId, WorkstreamId } from "./ids.js";
 
 export const PrivacyLevel = z.enum([
   "P0_LOCAL_ONLY",
-  "P1_REPRESENTATIVE_PRIVATE",
+  "P1_STAND_IN_PRIVATE",
   "P2_COORDINATION",
   "P3_PROJECT",
   "P4_ORGANIZATION",

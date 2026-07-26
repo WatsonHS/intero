@@ -1,9 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -25,7 +27,7 @@ export const principals = pgTable("principals", {
   id: uuid("id").primaryKey(),
   displayName: text("display_name").notNull(),
   kind: text("kind", {
-    enum: ["human", "representative", "service"],
+    enum: ["human", "stand_in", "service"],
   }).notNull(),
   ...timestamps,
 });
@@ -33,6 +35,14 @@ export const principals = pgTable("principals", {
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey(),
   name: text("name").notNull(),
+  ...timestamps,
+});
+
+export const pilotState = pgTable("pilot_state", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id),
+  state: jsonb("state").notNull(),
   ...timestamps,
 });
 
@@ -77,6 +87,7 @@ export const projects = pgTable(
     projectManagementEnabled: boolean("project_management_enabled")
       .notNull()
       .default(true),
+    timezone: text("timezone").notNull().default("UTC"),
     ...timestamps,
   },
   (table) => [index("projects_org_idx").on(table.organizationId)],
@@ -244,7 +255,7 @@ export const threadParticipants = pgTable(
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id),
-    representative: boolean("representative").notNull().default(false),
+    standIn: boolean("stand_in").notNull().default(false),
     ...timestamps,
   },
   (table) => [primaryKey({ columns: [table.threadId, table.principalId] })],
@@ -313,6 +324,53 @@ export const attachments = pgTable(
     index("attachments_orphan_idx")
       .on(table.expiresAt)
       .where(sql`${table.state} = 'pending_upload'`),
+  ],
+);
+
+export const objectStoreObjects = pgTable(
+  "object_store_objects",
+  {
+    objectId: uuid("object_id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    purpose: text("purpose", {
+      enum: ["artifact", "authorized_raw"],
+    }).notNull(),
+    objectKey: text("object_key").notNull().unique(),
+    contentType: text("content_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    checksumSha256: text("checksum_sha256").notNull(),
+    encrypted: boolean("encrypted").notNull(),
+    encryptionMode: text("encryption_mode").notNull(),
+    state: text("state", {
+      enum: [
+        "pending_upload",
+        "uploaded",
+        "available",
+        "quarantined",
+        "failed",
+        "deleted",
+      ],
+    }).notNull(),
+    failureCode: text("failure_code"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
+    scannedAt: timestamp("scanned_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("object_store_objects_org_state_idx").on(
+      table.organizationId,
+      table.state,
+      table.updatedAt,
+    ),
+    index("object_store_objects_cleanup_idx")
+      .on(table.expiresAt)
+      .where(
+        sql`${table.state} IN ('pending_upload', 'quarantined', 'failed')`,
+      ),
   ],
 );
 
@@ -425,8 +483,8 @@ export const canonicalEvents = pgTable(
   ],
 );
 
-export const publicRepresentativeRuns = pgTable(
-  "public_representative_runs",
+export const publicStandInRuns = pgTable(
+  "public_stand_in_runs",
   {
     operationId: uuid("operation_id").primaryKey(),
     organizationId: uuid("organization_id")
@@ -437,13 +495,17 @@ export const publicRepresentativeRuns = pgTable(
       .references(() => threads.id),
     workstreamId: uuid("workstream_id").references(() => workstreams.id),
     status: text("status").notNull(),
+    reviewRequestedAt: timestamp("review_requested_at", {
+      withTimezone: true,
+    }),
+    confirmedRevisionId: uuid("confirmed_revision_id"),
     freshnessAt: timestamp("freshness_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     lastErrorCode: text("last_error_code"),
     ...timestamps,
   },
   (table) => [
-    index("public_representative_runs_status_idx").on(
+    index("public_stand_in_runs_status_idx").on(
       table.status,
       table.createdAt,
     ),
@@ -488,6 +550,7 @@ export const specRevisions = pgTable(
     createdBy: uuid("created_by")
       .notNull()
       .references(() => principals.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -495,6 +558,388 @@ export const specRevisions = pgTable(
       table.specId,
       table.revision,
     ),
+  ],
+);
+
+export const projectEpics = pgTable(
+  "project_epics",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    ...timestamps,
+  },
+  (table) => [index("project_epics_project_idx").on(table.projectId)],
+);
+
+export const projectProgramIncrements = pgTable(
+  "project_program_increments",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    number: integer("number").notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    timezone: text("timezone").notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("project_program_increments_number_idx").on(
+      table.projectId,
+      table.number,
+    ),
+  ],
+);
+
+export const projectSprints = pgTable(
+  "project_sprints",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    piId: uuid("pi_id")
+      .notNull()
+      .references(() => projectProgramIncrements.id),
+    number: integer("number").notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("project_sprints_number_idx").on(table.piId, table.number),
+  ],
+);
+
+export const projectFeatures = pgTable(
+  "project_features",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    epicId: uuid("epic_id").references(() => projectEpics.id),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    stage: text("stage", {
+      enum: ["planned", "in_development", "released"],
+    }).notNull(),
+    ownerId: uuid("owner_id").references(() => principals.id),
+    piId: uuid("pi_id").references(() => projectProgramIncrements.id),
+    sprintId: uuid("sprint_id").references(() => projectSprints.id),
+    ...timestamps,
+  },
+  (table) => [index("project_features_project_idx").on(table.projectId)],
+);
+
+export const projectWorkItems = pgTable(
+  "project_work_items",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    featureId: uuid("feature_id").references(() => projectFeatures.id),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status", {
+      enum: ["todo", "in_progress", "ready_for_test", "done"],
+    })
+      .notNull()
+      .default("todo"),
+    ownerId: uuid("owner_id").references(() => principals.id),
+    specId: uuid("spec_id").references(() => specs.id),
+    priority: text("priority", { enum: ["P0", "P1", "P2", "P3"] })
+      .notNull()
+      .default("P2"),
+    points: numeric("points"),
+    piId: uuid("pi_id").references(() => projectProgramIncrements.id),
+    sprintId: uuid("sprint_id").references(() => projectSprints.id),
+    sourceSprintId: uuid("source_sprint_id").references(
+      () => projectSprints.id,
+    ),
+    carryover: boolean("carryover").notNull().default(false),
+    completionEvidence: text("completion_evidence"),
+    completedBy: jsonb("completed_by"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    coordinationThreadIds: jsonb("coordination_thread_ids")
+      .notNull()
+      .default([]),
+    createdBy: jsonb("created_by").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("project_work_items_board_idx").on(
+      table.projectId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("project_work_items_owner_idx").on(
+      table.projectId,
+      table.ownerId,
+      table.status,
+    ),
+  ],
+);
+
+export const projectWorkRelations = pgTable(
+  "project_work_relations",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => projectWorkItems.id),
+    targetId: uuid("target_id")
+      .notNull()
+      .references(() => projectWorkItems.id),
+    kind: text("kind", {
+      enum: [
+        "blocks",
+        "blocked_by",
+        "related",
+        "duplicate",
+        "duplicated_by",
+      ],
+    }).notNull(),
+    createdBy: jsonb("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceId, table.targetId, table.kind] }),
+  ],
+);
+
+export const projectWorkCodeRefs = pgTable(
+  "project_work_code_refs",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    workItemId: uuid("work_item_id")
+      .notNull()
+      .references(() => projectWorkItems.id),
+    kind: text("kind", {
+      enum: ["pull_request", "commit", "branch"],
+    }).notNull(),
+    label: text("label").notNull(),
+    url: text("url"),
+    repository: text("repository"),
+    value: text("value").notNull(),
+    reportedBy: jsonb("reported_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
+export const projectWorkComments = pgTable(
+  "project_work_comments",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    workItemId: uuid("work_item_id")
+      .notNull()
+      .references(() => projectWorkItems.id),
+    parentId: uuid("parent_id"),
+    body: text("body").notNull(),
+    author: jsonb("author").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("project_work_comments_item_idx").on(
+      table.workItemId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const projectWorkHistory = pgTable(
+  "project_work_history",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workItemId: uuid("work_item_id")
+      .notNull()
+      .references(() => projectWorkItems.id),
+    idempotencyKey: text("idempotency_key"),
+    action: text("action").notNull(),
+    snapshot: jsonb("snapshot").notNull(),
+    actor: jsonb("actor").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revertedEntryId: uuid("reverted_entry_id"),
+  },
+  (table) => [
+    uniqueIndex("project_work_history_idempotency_idx").on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+  ],
+);
+
+export const projectSpecReviewPolicies = pgTable(
+  "project_spec_review_policies",
+  {
+    projectId: uuid("project_id")
+      .primaryKey()
+      .references(() => projects.id),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    requiredConfirmations: integer("required_confirmations")
+      .notNull()
+      .default(1),
+    otherMemberAgentsCount: boolean("other_member_agents_count")
+      .notNull()
+      .default(true),
+    authorSelfConfirmation: boolean("author_self_confirmation")
+      .notNull()
+      .default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
+export const projectSpecReviewerNominations = pgTable(
+  "project_spec_reviewer_nominations",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    specId: uuid("spec_id")
+      .notNull()
+      .references(() => specs.id),
+    revisionId: uuid("revision_id")
+      .notNull()
+      .references(() => specRevisions.id),
+    reviewerId: uuid("reviewer_id")
+      .notNull()
+      .references(() => principals.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.revisionId, table.reviewerId] }),
+  ],
+);
+
+export const projectSpecCommentThreads = pgTable(
+  "project_spec_comment_threads",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    specId: uuid("spec_id")
+      .notNull()
+      .references(() => specs.id),
+    revisionId: uuid("revision_id")
+      .notNull()
+      .references(() => specRevisions.id),
+    lineStart: integer("line_start").notNull(),
+    lineEnd: integer("line_end").notNull(),
+    selection: text("selection"),
+    status: text("status", { enum: ["open", "resolved"] })
+      .notNull()
+      .default("open"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("project_spec_threads_revision_idx").on(
+      table.revisionId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const projectSpecComments = pgTable("project_spec_comments", {
+  id: uuid("id").primaryKey(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  threadId: uuid("thread_id")
+    .notNull()
+    .references(() => projectSpecCommentThreads.id),
+  parentId: uuid("parent_id"),
+  authorId: uuid("author_id")
+    .notNull()
+    .references(() => principals.id),
+  authorKind: text("author_kind", { enum: ["human", "agent"] }).notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const projectSpecConfirmations = pgTable(
+  "project_spec_confirmations",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    specId: uuid("spec_id")
+      .notNull()
+      .references(() => specs.id),
+    revisionId: uuid("revision_id")
+      .notNull()
+      .references(() => specRevisions.id),
+    confirmerId: uuid("confirmer_id")
+      .notNull()
+      .references(() => principals.id),
+    confirmerKind: text("confirmer_kind", {
+      enum: ["human", "agent"],
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.revisionId, table.confirmerId] }),
   ],
 );
 
@@ -613,3 +1058,596 @@ export const idempotencyKeys = pgTable("idempotency_keys", {
     .notNull()
     .defaultNow(),
 });
+
+export const pilotDeploymentSettings = pgTable(
+  "pilot_deployment_settings",
+  {
+    organizationId: uuid("organization_id")
+      .primaryKey()
+      .references(() => organizations.id),
+    administratorId: uuid("administrator_id")
+      .notNull()
+      .references(() => principals.id),
+    deploymentBaseUrl: text("deployment_base_url").notNull(),
+    deploymentValidatedAt: timestamp("deployment_validated_at", {
+      withTimezone: true,
+    }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [index("pilot_deployment_admin_idx").on(table.administratorId)],
+);
+
+export const pilotTeams = pgTable(
+  "pilot_teams",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    name: text("name").notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("pilot_teams_org_name_idx").on(table.organizationId, table.name),
+  ],
+);
+
+export const pilotTeamMemberships = pgTable(
+  "pilot_team_memberships",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    role: text("role", { enum: ["member", "leader"] })
+      .notNull()
+      .default("member"),
+    joinedAt: timestamp("joined_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.teamId, table.principalId] }),
+    index("pilot_team_memberships_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+    ),
+  ],
+);
+
+export const pilotTeamInvitations = pgTable(
+  "pilot_team_invitations",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    displayName: text("display_name").notNull(),
+    email: text("email").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => principals.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedBy: uuid("accepted_by").references(() => principals.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_team_invitations_token_hash_idx").on(table.tokenHash),
+    index("pilot_team_invitations_team_status_idx").on(
+      table.organizationId,
+      table.teamId,
+      table.createdAt,
+    ),
+    index("pilot_team_invitations_email_idx").on(
+      table.organizationId,
+      table.email,
+    ),
+  ],
+);
+
+export const pilotTeamJoinLinks = pgTable(
+  "pilot_team_join_links",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    maxUses: integer("max_uses"),
+    useCount: integer("use_count").notNull().default(0),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_join_links_code_hash_idx").on(table.codeHash),
+    index("pilot_join_links_team_idx").on(table.teamId, table.createdAt),
+  ],
+);
+
+export const pilotProjectSettings = pgTable(
+  "pilot_project_settings",
+  {
+    projectId: uuid("project_id")
+      .primaryKey()
+      .references(() => projects.id),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    primaryTeamId: uuid("primary_team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    posture: text("posture", {
+      enum: ["collaborative", "paused", "private"],
+    }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("pilot_project_settings_org_owner_idx").on(
+      table.organizationId,
+      table.ownerId,
+    ),
+  ],
+);
+
+export const pilotProjectTeams = pgTable(
+  "pilot_project_teams",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.teamId] }),
+    index("pilot_project_teams_team_idx").on(table.teamId, table.projectId),
+  ],
+);
+
+export const pilotProviderConfigs = pgTable("pilot_provider_configs", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id),
+  endpoint: text("endpoint").notNull(),
+  defaultModel: text("default_model").notNull(),
+  encryptedApiKey: text("encrypted_api_key").notNull(),
+  ...timestamps,
+});
+
+export const pilotAgentTickets = pgTable(
+  "pilot_agent_tickets",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    client: text("client").notNull(),
+    ticketHash: text("ticket_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_agent_tickets_hash_idx").on(table.ticketHash),
+    index("pilot_agent_tickets_project_idx").on(
+      table.projectId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const pilotAgentBindings = pgTable(
+  "pilot_agent_bindings",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    credentialHash: text("credential_hash").notNull(),
+    disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_agent_bindings_credential_idx").on(table.credentialHash),
+    index("pilot_agent_bindings_project_idx").on(
+      table.projectId,
+      table.ownerId,
+    ),
+  ],
+);
+
+export const pilotDmThreads = pgTable(
+  "pilot_dm_threads",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => pilotTeams.id),
+    participantAId: uuid("participant_a_id")
+      .notNull()
+      .references(() => principals.id),
+    participantBId: uuid("participant_b_id")
+      .notNull()
+      .references(() => principals.id),
+    sequence: integer("sequence").notNull().default(0),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_dm_threads_participants_idx").on(
+      table.teamId,
+      table.participantAId,
+      table.participantBId,
+    ),
+    index("pilot_dm_threads_participant_a_idx").on(table.participantAId),
+    index("pilot_dm_threads_participant_b_idx").on(table.participantBId),
+  ],
+);
+
+export const pilotDmMessages = pgTable(
+  "pilot_dm_messages",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotDmThreads.id),
+    senderId: uuid("sender_id")
+      .notNull()
+      .references(() => principals.id),
+    sequence: integer("sequence").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("pilot_dm_messages_sequence_idx").on(
+      table.threadId,
+      table.sequence,
+    ),
+    index("pilot_dm_messages_org_created_idx").on(
+      table.organizationId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const pilotWorkStates = pgTable(
+  "pilot_work_states",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => pilotAgentBindings.id),
+    workstreamKey: text("workstream_key").notNull(),
+    standInJobId: uuid("stand_in_job_id"),
+    standInStatus: text("stand_in_status", {
+      enum: [
+        "pending",
+        "processing",
+        "retrying",
+        "published",
+        "private",
+        "failed",
+      ],
+    })
+      .notNull()
+      .default("pending"),
+    freshnessAt: timestamp("freshness_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_work_states_binding_workstream_idx").on(
+      table.bindingId,
+      table.workstreamKey,
+    ),
+    index("pilot_work_states_project_owner_idx").on(
+      table.projectId,
+      table.ownerId,
+      table.freshnessAt,
+    ),
+  ],
+);
+
+export const pilotStandInJobs = pgTable(
+  "pilot_stand_in_jobs",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => pilotAgentBindings.id),
+    jobKey: text("job_key").notNull(),
+    status: text("status", {
+      enum: [
+        "pending",
+        "processing",
+        "retrying",
+        "published",
+        "private",
+        "failed",
+      ],
+    })
+      .notNull()
+      .default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(8),
+    queuedAt: timestamp("queued_at", { withTimezone: true }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
+    workerId: text("worker_id"),
+    lastErrorCode: text("last_error_code"),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_stand_in_jobs_key_idx").on(
+      table.organizationId,
+      table.jobKey,
+    ),
+    index("pilot_stand_in_jobs_pending_idx").on(
+      table.organizationId,
+      table.status,
+      table.nextAttemptAt,
+      table.queuedAt,
+    ),
+    index("pilot_stand_in_jobs_project_idx").on(
+      table.projectId,
+      table.queuedAt,
+    ),
+  ],
+);
+
+export const pilotWorkerHeartbeats = pgTable(
+  "pilot_worker_heartbeats",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    workerId: text("worker_id").notNull(),
+    status: text("status", {
+      enum: ["starting", "ready", "stopping", "stopped"],
+    }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", {
+      withTimezone: true,
+    }).notNull(),
+    stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    metadata: jsonb("metadata").notNull().default({}),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.workerId] }),
+    index("pilot_worker_heartbeats_freshness_idx").on(
+      table.organizationId,
+      table.lastHeartbeatAt,
+    ),
+  ],
+);
+
+export const pilotPrivateClaims = pgTable(
+  "pilot_private_claims",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    clientEventId: text("client_event_id").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_private_claims_event_idx").on(
+      table.organizationId,
+      table.clientEventId,
+    ),
+    index("pilot_private_claims_work_state_idx").on(
+      table.workStateId,
+      table.observedAt,
+    ),
+  ],
+);
+
+export const pilotPulseEntries = pgTable(
+  "pilot_pulse_entries",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    freshnessAt: timestamp("freshness_at", { withTimezone: true }).notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull(),
+    withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_pulse_entries_work_state_idx").on(table.workStateId),
+    index("pilot_pulse_entries_project_freshness_idx").on(
+      table.projectId,
+      table.freshnessAt,
+    ),
+  ],
+);
+
+export const pilotCoordinationThreads = pgTable(
+  "pilot_coordination_threads",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    sourceBindingId: uuid("source_binding_id")
+      .notNull()
+      .references(() => pilotAgentBindings.id),
+    status: text("status", {
+      enum: ["open", "needs_confirmation", "resolved"],
+    }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index("pilot_coordination_project_updated_idx").on(
+      table.projectId,
+      table.updatedAt,
+    ),
+    index("pilot_coordination_work_state_idx").on(table.workStateId),
+  ],
+);
+
+export const pilotCoordinationParticipants = pgTable(
+  "pilot_coordination_participants",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotCoordinationThreads.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.principalId] }),
+    index("pilot_coordination_participants_principal_idx").on(
+      table.principalId,
+    ),
+  ],
+);
+
+export const pilotStandInExchanges = pgTable(
+  "pilot_stand_in_exchanges",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    index("pilot_stand_in_exchanges_project_principal_idx").on(
+      table.projectId,
+      table.principalId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const pilotCheckpointIdempotency = pgTable(
+  "pilot_checkpoint_idempotency",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    clientEventId: text("client_event_id").notNull(),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.clientEventId] }),
+    index("pilot_checkpoint_idempotency_expiry_idx").on(table.expiresAt),
+  ],
+);

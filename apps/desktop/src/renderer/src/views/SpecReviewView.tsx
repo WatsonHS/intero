@@ -24,6 +24,8 @@ import { SafeMarkdown } from "../components/SafeMarkdown.js";
 import { initials, tintFor } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import { usePilotOptional } from "../pilot/context.js";
+import { ProjectSpecReviewSurface } from "./spec/ProjectSpecReviewSurface.js";
 
 const EDITOR_THEME = EditorView.theme({
   "&": {
@@ -68,6 +70,25 @@ function truncate(text: string, max: number): string {
 }
 
 export function SpecReviewView() {
+  const pilot = usePilotOptional();
+  const projectId =
+    pilot?.selectedProjectId ?? pilot?.projects.data?.projects[0]?.id;
+  return projectId &&
+    pilot?.bootstrap.data?.adapters.projectWork === "postgres" ? (
+    <ProjectSpecReviewSurface
+      projectId={projectId}
+      projects={(pilot.projects.data?.projects ?? []).map((project) => ({
+        id: project.id,
+        name: project.name,
+      }))}
+      onProjectChange={pilot.setSelectedProjectId}
+    />
+  ) : (
+    <LegacySpecReviewView />
+  );
+}
+
+function LegacySpecReviewView() {
   const { formatTime, t } = useI18n();
   const queryClient = useQueryClient();
   const specs = useQuery({
@@ -164,8 +185,8 @@ export function SpecReviewView() {
       bootstrap.data.currentPrincipal.displayName,
     );
     principalNames.set(
-      bootstrap.data.representativePrincipal.id,
-      bootstrap.data.representativePrincipal.displayName,
+      bootstrap.data.standInPrincipal.id,
+      bootstrap.data.standInPrincipal.displayName,
     );
   }
   function nameOf(id: string): string {
@@ -177,10 +198,10 @@ export function SpecReviewView() {
   );
   const reviews = active?.reviews ?? [];
   const reviewerReviews = reviews.filter(
-    (review) => review.kind !== "representative_impact_analysis",
+    (review) => review.kind !== "stand_in_impact_analysis",
   );
   const impactReview = reviews.find(
-    (review) => review.kind === "representative_impact_analysis",
+    (review) => review.kind === "stand_in_impact_analysis",
   );
 
   // Preview always targets the clicked revision pill; editing always

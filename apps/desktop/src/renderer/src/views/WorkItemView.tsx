@@ -20,6 +20,8 @@ import { getActivity, getBootstrap, getKanban, updateKanbanCard } from "../api.j
 import { confidencePercent, PHASE_META, type Tone } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import { usePilotOptional } from "../pilot/context.js";
+import { WorkItemDetailSurface } from "./project/WorkItemDetailSurface.js";
 
 const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> = [
   { id: "backlog", label: "project.column.backlog", tone: "faint" },
@@ -68,6 +70,29 @@ function firstLinkedWorkstream(
 type TabId = "activity" | "claims" | "changes";
 
 export function WorkItemView({
+  cardId,
+  onBack,
+}: {
+  cardId: string;
+  onBack: () => void;
+}) {
+  const pilot = usePilotOptional();
+  const projectId =
+    pilot?.selectedProjectId ?? pilot?.projects.data?.projects[0]?.id;
+  return projectId &&
+    pilot?.bootstrap.data?.adapters.projectWork === "postgres" ? (
+    <WorkItemDetailSurface
+      projectId={projectId}
+      workItemId={cardId}
+      {...(pilot?.identityId ? { identityId: pilot.identityId } : {})}
+      onBack={onBack}
+    />
+  ) : (
+    <LegacyWorkItemView cardId={cardId} onBack={onBack} />
+  );
+}
+
+function LegacyWorkItemView({
   cardId,
   onBack,
 }: {

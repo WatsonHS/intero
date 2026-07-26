@@ -37,7 +37,7 @@ export interface PlatformStore {
   coordinate: StoreMethod<"coordinate">;
   createThread: StoreMethod<"createThread">;
   appendMessage: StoreMethod<"appendMessage">;
-  addRepresentativeToThread: StoreMethod<"addRepresentativeToThread">;
+  addStandInToThread: StoreMethod<"addStandInToThread">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;
   addReview: StoreMethod<"addReview">;
@@ -60,5 +60,5 @@ export interface PlatformStore {
 export interface PrincipalSummary {
   id: PrincipalId;
   displayName: string;
-  kind: "human" | "representative" | "service";
+  kind: "human" | "stand_in" | "service";
 }

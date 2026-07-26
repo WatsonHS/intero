@@ -9,14 +9,17 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker --filter=@intero/local-representative",
+    "dev": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker --filter=@intero/local-stand-in",
+    "dev:pilot": "turbo run dev:pilot --filter=@intero/desktop --filter=@intero/server-api",
     "generate": "turbo run generate",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm test:ts && cargo test --workspace",
     "test:ts": "vitest run",
     "test:watch": "vitest",
     "check": "pnpm lint && pnpm test && pnpm build",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "backup:postgres": "scripts/ops/backup-postgres.sh",
+    "restore:postgres": "scripts/ops/restore-postgres.sh"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

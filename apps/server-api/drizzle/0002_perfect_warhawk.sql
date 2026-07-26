@@ -44,7 +44,7 @@ CREATE TABLE "thread_participants" (
 	"organization_id" uuid NOT NULL,
 	"thread_id" uuid NOT NULL,
 	"principal_id" uuid NOT NULL,
-	"representative" boolean DEFAULT false NOT NULL,
+	"stand_in" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "thread_participants_thread_id_principal_id_pk" PRIMARY KEY("thread_id","principal_id")

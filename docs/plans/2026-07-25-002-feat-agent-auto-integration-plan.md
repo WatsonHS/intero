@@ -38,7 +38,7 @@ distribution.
 
 - Product requirements F1 and R2-R4 define the automatic observation,
   checkpoint, privacy, and Workspace boundaries.
-- The existing hook bridge, canonical-event reducer, Local Representative,
+- The existing hook bridge, canonical-event reducer, Local Stand-in,
   Workstream storage, public projection, and desktop Settings shell are
   reusable.
 - Current local versions are Codex `0.146.0-alpha.3.1`, Claude Code `2.1.214`,
@@ -96,11 +96,11 @@ distribution.
 - Authorize each JSON-RPC method against an explicit capability matrix:
   - hook ingress: resolve an enrolled context and submit a closed lifecycle
     event only;
-  - MCP: resolve its bound context and invoke Representative MCP operations
+  - MCP: resolve its bound context and invoke Stand-in MCP operations
     only;
-  - sidecar: dequeue/complete Representative work and persist reduced state;
+  - sidecar: dequeue/complete Stand-in work and persist reduced state;
   - administrator/Desktop: Workspace and settings management.
-- Replace prefix-based Representative dispatch for Agent callers with
+- Replace prefix-based Stand-in dispatch for Agent callers with
   method-specific parsing and a closed lifecycle-event schema.
 - Derive canonical Git common-directory identity during enrollment and context
   resolution. Match enrolled roots and legitimate linked worktrees only.
@@ -147,11 +147,11 @@ distribution.
 - Generate stable idempotency from source, vendor session ID, event name, and
   vendor event/call ID when available.
 - Start MCP with source and working-directory binding. Add
-  `representative.current_context`, remove Workspace/Workstream UUIDs from the
+  `stand_in.current_context`, remove Workspace/Workstream UUIDs from the
   public tool schemas, and resolve them internally.
 - Keep explicit MCP checkpoints as Claims. Add normalized forbidden-key and
   secret-pattern checks, tighter summary/evidence limits, and never publish raw
-  checkpoint content without the existing Representative projection policy.
+  checkpoint content without the existing Stand-in projection policy.
 
 ### Primary files
 
@@ -160,8 +160,8 @@ distribution.
 - `apps/mcp-stdio/src/tools.ts`
 - `packages/integrations/src/index.ts`
 - `packages/domain/src/events.ts`
-- `apps/local-representative/src/runtime.ts`
-- `packages/representative-core/src/public-projection.ts`
+- `apps/local-stand-in/src/runtime.ts`
+- `packages/stand-in-core/src/public-projection.ts`
 
 ### Acceptance
 

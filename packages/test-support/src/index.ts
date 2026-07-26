@@ -39,7 +39,7 @@ export function claimFixture(
     sourceRef: "checkpoint:test",
     observedAt: NOW,
     confidence: 0.8,
-    privacy: "P1_REPRESENTATIVE_PRIVATE",
+    privacy: "P1_STAND_IN_PRIVATE",
     evidenceRefs: [],
     ...overrides,
   };

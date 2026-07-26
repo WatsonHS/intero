@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CentrifugoRealtime,
   OutboxDispatcher,
   type OutboxPublication,
   type OutboxRepository,
@@ -50,7 +51,7 @@ describe("Outbox dispatcher", () => {
     await expect(dispatcher.dispatch()).resolves.toBe(1);
     expect(publications).toEqual([
       {
-        channel: "intero:organization-1",
+        channel: "intero:organization:organization-1",
         event: {
           operationId: "operation-1",
           topic: "workstream.changed",
@@ -60,6 +61,39 @@ describe("Outbox dispatcher", () => {
       },
     ]);
     expect(repository.completed).toEqual(["operation-1"]);
+  });
+
+  it("routes project-scoped events to the project channel", async () => {
+    const repository = new MemoryOutbox([
+      {
+        operationId: "operation-project",
+        topic: "pilot.stand_in.completed",
+        payload: {
+          projectId: "project-1",
+          workStateId: "work-state-1",
+        },
+        attempts: 1,
+      },
+    ]);
+    const publications: unknown[] = [];
+    const dispatcher = new OutboxDispatcher("organization-1", repository, {
+      async publish(channel, event) {
+        publications.push({ channel, event });
+      },
+    });
+
+    await expect(dispatcher.dispatch()).resolves.toBe(1);
+    expect(publications).toEqual([
+      {
+        channel: "intero:project:project-1",
+        event: {
+          operationId: "operation-project",
+          topic: "pilot.stand_in.completed",
+          projectId: "project-1",
+          workStateId: "work-state-1",
+        },
+      },
+    ]);
   });
 
   it("retains failed publications for retry", async () => {
@@ -81,5 +115,14 @@ describe("Outbox dispatcher", () => {
     expect(repository.failed).toEqual([
       { operationId: "operation-2", errorCode: "centrifugo_503" },
     ]);
+  });
+
+  it("reports an unavailable Centrifugo dependency without throwing", async () => {
+    await expect(
+      new CentrifugoRealtime("http://127.0.0.1:59998").checkReadiness(),
+    ).resolves.toEqual({
+      status: "unavailable",
+      detail: "centrifugo_unavailable",
+    });
   });
 });

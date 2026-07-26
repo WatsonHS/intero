@@ -32,6 +32,41 @@ export const OutboxEntry = z
   .strict();
 export type OutboxEntry = z.infer<typeof OutboxEntry>;
 
+export const DomainEventVisibility = z.enum([
+  "private",
+  "project",
+  "organization",
+]);
+export type DomainEventVisibility = z.infer<typeof DomainEventVisibility>;
+
+/**
+ * Adapter-neutral event carried by the server outbox.
+ *
+ * Only identifiers and allowlisted scalar metadata belong here. User content,
+ * prompts, files, diffs, logs, tool payloads, provider secrets, and private
+ * Claims are intentionally not representable in this envelope.
+ */
+export const DomainEventEnvelope = z
+  .object({
+    schemaVersion: z.literal(1),
+    operationId: OperationId,
+    organizationId: OrganizationId,
+    actorId: PrincipalId,
+    aggregateType: z.string().min(1).max(80),
+    aggregateId: z.uuid(),
+    eventType: z.string().min(1).max(120),
+    visibility: DomainEventVisibility,
+    projectId: z.uuid().optional(),
+    sequence: z.number().int().positive(),
+    occurredAt: z.iso.datetime(),
+    metadata: z.record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    ),
+  })
+  .strict();
+export type DomainEventEnvelope = z.infer<typeof DomainEventEnvelope>;
+
 export const ActionInboxItem = z
   .object({
     id: z.string().uuid(),

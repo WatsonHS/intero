@@ -1,5 +1,5 @@
 import {
-  AddRepresentativeRequest,
+  AddStandInRequest,
   AddReviewResponseRequest,
   ApplyPublicProjectionRequest,
   CreateAttachmentUploadRequest,
@@ -18,7 +18,11 @@ import {
   UpdateKanbanCardRequest,
 } from "@intero/api-contracts";
 import type { AttachmentService } from "@intero/attachments";
-import { createLogger, loggerOptions } from "@intero/config";
+import {
+  createLogger,
+  loggerOptions,
+  PrivacySafeMetrics,
+} from "@intero/config";
 import {
   ThreadKind,
   type KanbanCard,
@@ -32,26 +36,86 @@ import {
 } from "@intero/domain";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import type { Pool } from "pg";
 import { z, ZodError, type ZodType } from "zod";
 
-import { type InteroAuth, mountAuth } from "./auth.js";
+import {
+  createRequestAuth,
+  DatabasePrincipalDirectory,
+  InMemoryPrincipalDirectory,
+  type InteroAuth,
+  mountAuth,
+  type PrincipalDirectory,
+  type RequestAuth,
+} from "./auth.js";
+import {
+  InMemoryPilotStore,
+  type PilotStore,
+  PilotStoreError,
+} from "./pilot-store.js";
+import {
+  type CoordinationTransport,
+  DisabledObjectStoreAdapter,
+  InstrumentedModelGateway,
+  InlineJobRunner,
+  MembershipAuthorizationAdapter,
+  type ModelGateway,
+  type PilotStandInJob,
+  PollingRealtimeAdapter,
+  ProjectInternalCoordinationTransport,
+} from "./pilot-ports.js";
+import { registerPilotRoutes } from "./pilot-routes.js";
+import { registerProjectWorkRoutes } from "./project-work-routes.js";
+import type { PostgresProjectWorkStore } from "./project-work-store.js";
+import {
+  PilotCheckpointService,
+  PilotStandInJobHandler,
+} from "./pilot-service.js";
 import type { PlatformStore } from "./platform-store.js";
 import type { PrincipalSummary } from "./platform-store.js";
-import { FailClosedAuthorization, type AuthorizationPort } from "./ports.js";
+import {
+  FailClosedAuthorization,
+  type AuthorizationPort,
+  evaluateReadiness,
+  type JobRunnerPort,
+  type ObjectStorePort,
+  type ReadinessDependency,
+  type RealtimePort,
+} from "./ports.js";
+import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 import { InMemoryPlatformStore } from "./store.js";
 import type { KanbanCardUpdate } from "./store.js";
+import { VercelAiModelGateway } from "./vercel-model-gateway.js";
 
 export interface BuildAppOptions {
   store?: PlatformStore;
   logger?: boolean;
   auth?: InteroAuth;
+  authCorsOrigins?: string[];
+  authDatabase?: Pool;
+  allowDevelopmentIdentity?: boolean;
+  principalDirectory?: PrincipalDirectory;
+  requestAuth?: RequestAuth;
   authorization?: AuthorizationPort;
   attachments?: AttachmentService;
   organization?: { id: string; name: string };
   currentPrincipal?: PrincipalSummary;
-  representativePrincipal?: PrincipalSummary;
+  standInPrincipal?: PrincipalSummary;
   project?: Project;
   inboxPrincipalIds?: PrincipalId[];
+  pilotStore?: PilotStore;
+  projectWorkStore?: PostgresProjectWorkStore;
+  pilotIdentities?: PrincipalSummary[];
+  deploymentProbe?: (baseUrl: string) => Promise<boolean>;
+  providerEncryptionSecret?: string;
+  pilotAuthorization?: AuthorizationPort;
+  pilotRealtime?: RealtimePort;
+  pilotObjectStore?: ObjectStorePort;
+  pilotCoordination?: CoordinationTransport;
+  pilotModelGateway?: ModelGateway;
+  pilotJobs?: JobRunnerPort<PilotStandInJob>;
+  readinessDependencies?: ReadinessDependency[];
+  metrics?: PrivacySafeMetrics | false;
 }
 
 export async function buildApp(
@@ -63,6 +127,11 @@ export async function buildApp(
         ? false
         : loggerOptions(process.env.INTERO_LOG_LEVEL),
   });
+  const metrics =
+    options.metrics === false
+      ? undefined
+      : (options.metrics ?? new PrivacySafeMetrics());
+  const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
   const organization = options.organization ?? {
     id: "019b5ac0-7600-7000-8000-000000000001",
@@ -73,11 +142,34 @@ export async function buildApp(
     displayName: "Intero User",
     kind: "human" as const,
   };
-  const representativePrincipal = options.representativePrincipal ?? {
+  const standInPrincipal = options.standInPrincipal ?? {
     id: "019b5ac0-7600-7000-8000-000000000003" as PrincipalId,
-    displayName: "Intero Representative",
-    kind: "representative" as const,
+    displayName: "Intero Stand-in",
+    kind: "stand_in" as const,
   };
+  const pilotIdentities = options.pilotIdentities ?? [
+    currentPrincipal,
+    {
+      id: "019b5ac0-7600-7000-8000-000000000004" as PrincipalId,
+      displayName: "Morgan Chen",
+      kind: "human" as const,
+    },
+  ];
+  const principalDirectory =
+    options.principalDirectory ??
+    (options.authDatabase
+      ? new DatabasePrincipalDirectory(options.authDatabase)
+      : new InMemoryPrincipalDirectory(pilotIdentities));
+  const requestAuth =
+    options.requestAuth ??
+    createRequestAuth({
+      ...(options.auth ? { auth: options.auth } : {}),
+      ...(options.authDatabase ? { database: options.authDatabase } : {}),
+      allowDevelopmentIdentity:
+        options.allowDevelopmentIdentity ?? process.env.NODE_ENV === "test",
+      developmentIdentities: pilotIdentities,
+      directory: principalDirectory,
+    });
   const project = options.project ?? {
     id: "019b5ac0-7600-7000-8000-000000000011" as ProjectId,
     name: "Intero",
@@ -85,31 +177,101 @@ export async function buildApp(
   };
   const inboxPrincipalIds = options.inboxPrincipalIds ?? [
     currentPrincipal.id,
-    representativePrincipal.id,
+    standInPrincipal.id,
   ];
   await store.upsertPrincipal(currentPrincipal);
-  await store.upsertPrincipal(representativePrincipal);
+  await store.upsertPrincipal(standInPrincipal);
+  for (const identity of pilotIdentities) {
+    await store.upsertPrincipal(identity);
+  }
   await store.ensureProject(project);
   const authorization = options.authorization ?? new FailClosedAuthorization();
+  const pilotStore = options.pilotStore ?? new InMemoryPilotStore();
+  const providerSecretCipher = new AesGcmProviderSecretCipher(
+    options.providerEncryptionSecret ??
+      process.env.INTERO_PROVIDER_ENCRYPTION_KEY ??
+      "intero-development-provider-key",
+  );
+  const pilotAuthorization =
+    options.pilotAuthorization ??
+    new MembershipAuthorizationAdapter(pilotStore);
+  const pilotRealtime = options.pilotRealtime ?? new PollingRealtimeAdapter();
+  const pilotObjectStore =
+    options.pilotObjectStore ?? new DisabledObjectStoreAdapter();
+  const pilotCoordination =
+    options.pilotCoordination ??
+    new ProjectInternalCoordinationTransport(pilotStore);
+  const rawPilotModelGateway =
+    options.pilotModelGateway ??
+    new VercelAiModelGateway(
+      () => pilotStore.getProviderConfiguration(),
+      providerSecretCipher,
+    );
+  const pilotModelGateway =
+    metrics && !(rawPilotModelGateway instanceof InstrumentedModelGateway)
+      ? new InstrumentedModelGateway(rawPilotModelGateway, metrics)
+      : rawPilotModelGateway;
+  const standInJobHandler = new PilotStandInJobHandler(
+    pilotStore,
+    pilotAuthorization,
+    pilotModelGateway,
+    pilotCoordination,
+    pilotRealtime,
+  );
+  const pilotJobs =
+    options.pilotJobs ??
+    new InlineJobRunner((job) => standInJobHandler.handle(job));
+  const pilotCheckpointService = new PilotCheckpointService(
+    pilotStore,
+    pilotJobs,
+  );
   let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
   await app.register(cors, {
-    origin: [/^http:\/\/localhost:\d+$/],
+    origin: [/^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
-  if (options.auth) mountAuth(app, options.auth);
+  if (metrics) {
+    app.addHook("onRequest", async (request) => {
+      requestStartedAt.set(request, performance.now());
+    });
+    app.addHook("onResponse", async (request, reply) => {
+      metrics.observeRequest({
+        method: request.method,
+        route: request.routeOptions.url ?? "unknown",
+        statusCode: reply.statusCode,
+        durationMs:
+          performance.now() -
+          (requestStartedAt.get(request) ?? performance.now()),
+      });
+    });
+    app.get("/metrics", async (_request, reply) =>
+      reply
+        .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
+        .send(metrics.renderPrometheus()),
+    );
+  }
+  if (options.auth) mountAuth(app, options.auth, options.authCorsOrigins);
 
   app.setErrorHandler((error, request, reply) => {
     const normalized =
       error instanceof Error ? error : new Error("Unexpected server error");
     const statusCode =
-      normalized instanceof ZodError
-        ? 400
-        : normalized.message.includes("not found")
-          ? 404
-          : 400;
+      normalized instanceof PilotStoreError
+        ? normalized.statusCode
+        : normalized instanceof ZodError
+          ? 400
+          : normalized.message.includes("not found")
+            ? 404
+            : 400;
     reply.status(statusCode).send({
-      code: normalized instanceof ZodError ? "INVALID_REQUEST" : "DOMAIN_ERROR",
+      code:
+        normalized instanceof PilotStoreError
+          ? normalized.code
+          : normalized instanceof ZodError
+            ? "INVALID_REQUEST"
+            : "DOMAIN_ERROR",
       message: normalized.message,
       requestId: request.id,
     });
@@ -121,11 +283,67 @@ export async function buildApp(
     version: "0.1.0",
   }));
 
-  app.get("/v1/bootstrap", async () => ({
+  app.get("/ready", async (_request, reply) => {
+    const readiness = await evaluateReadiness(
+      options.readinessDependencies ?? [
+        {
+          name: "pilot_store",
+          critical: true,
+          check: async () => ({ status: "ready" }),
+        },
+      ],
+    );
+    return reply
+      .status(readiness.status === "unavailable" ? 503 : 200)
+      .send(readiness);
+  });
+
+  app.get("/v1/bootstrap", async (request) => ({
     organization,
-    currentPrincipal,
-    representativePrincipal,
+    currentPrincipal:
+      (await requestAuth.resolve(request, false)) ?? currentPrincipal,
+    standInPrincipal,
   }));
+
+  await registerPilotRoutes(app, {
+    store: pilotStore,
+    organizationId: organization.id as Parameters<
+      typeof registerPilotRoutes
+    >[1]["organizationId"],
+    requestAuth,
+    principalDirectory,
+    standIn: standInPrincipal,
+    providerSecretCipher,
+    checkpointService: pilotCheckpointService,
+    coordination: pilotCoordination,
+    modelGateway: pilotModelGateway,
+    adapters: {
+      realtime:
+        pilotRealtime instanceof PollingRealtimeAdapter
+          ? pilotRealtime.mode
+          : "polling",
+      objectStorage:
+        pilotObjectStore instanceof DisabledObjectStoreAdapter
+          ? pilotObjectStore.mode
+          : "disabled",
+      jobs: pilotJobs instanceof InlineJobRunner ? pilotJobs.mode : "inline",
+      coordination:
+        pilotCoordination instanceof ProjectInternalCoordinationTransport
+          ? pilotCoordination.protocol
+          : "project-internal-v1",
+      projectWork: options.projectWorkStore ? "postgres" : "unavailable",
+    },
+    ...(options.deploymentProbe
+      ? { deploymentProbe: options.deploymentProbe }
+      : {}),
+  });
+  if (options.projectWorkStore) {
+    await registerProjectWorkRoutes(app, {
+      store: options.projectWorkStore,
+      pilotStore,
+      requestAuth,
+    });
+  }
 
   app.post("/v1/authorization/check", async (request) => {
     const input = parse(
@@ -356,15 +574,15 @@ export async function buildApp(
   );
 
   app.post<{ Params: { threadId: string } }>(
-    "/v1/threads/:threadId/representatives",
+    "/v1/threads/:threadId/stand-ins",
     async (request, reply) => {
-      const input = parse(AddRepresentativeRequest, request.body);
+      const input = parse(AddStandInRequest, request.body);
       return reply
         .status(201)
         .send(
-          await store.addRepresentativeToThread(
+          await store.addStandInToThread(
             request.params.threadId as ThreadId,
-            input.representativeId as PrincipalId,
+            input.standInId as PrincipalId,
             input.actorId as PrincipalId,
           ),
         );
@@ -454,7 +672,7 @@ export async function buildApp(
       freshnessAt: latest ?? null,
       stale: latest ? Date.now() - Date.parse(latest) > 300_000 : true,
       disclosure: localRuntimeOnline
-        ? "Local Representative is connected."
+        ? "Local Stand-in is connected."
         : latest
           ? "Answering from the latest synchronized public Work State."
           : "No synchronized Work State is available.",

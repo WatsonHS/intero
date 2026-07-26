@@ -17,9 +17,12 @@ up:
   #!/usr/bin/env bash
   set -euo pipefail
   docker compose up -d --wait
-  DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero corepack pnpm --filter @intero/server-api migrate
-  INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development corepack pnpm --filter @intero/server-api migrate:spicedb
-  INTERO_WORKER_DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero corepack pnpm --filter @intero/server-worker migrate
+  DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero \
+  INTERO_WORKER_DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero \
+  INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 \
+  INTERO_SPICEDB_TOKEN=intero-development \
+  INTERO_SPICEDB_INSECURE=true \
+  corepack pnpm --filter @intero/server-worker migrate:all
   intero_data_dir="${TMPDIR:-/tmp}/intero-dev-${UID:-user}"
   mkdir -p "${intero_data_dir}"
   INTERO_DATA_DIR="${intero_data_dir}" cargo run -p interod &
@@ -31,11 +34,13 @@ up:
   done
   [[ -f "${intero_data_dir}/connection.json" ]]
   INTERO_DATABASE_URL=postgres://intero_app:intero_app@127.0.0.1:5432/intero \
+  INTERO_PILOT_PERSISTENCE=postgres \
+  INTERO_PROVIDER_ENCRYPTION_KEY=intero-development-provider-encryption-key \
   INTERO_WORKER_DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero \
   INTERO_ORGANIZATION_ID=019b5ac0-7600-7000-8000-000000000001 \
   INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 \
   INTERO_SPICEDB_TOKEN=intero-development \
-  INTERO_PUBLIC_REPRESENTATIVE_ID=019b5ac0-7600-7000-8000-000000000060 \
+  INTERO_PUBLIC_STAND_IN_ID=019b5ac0-7600-7000-8000-000000000060 \
   INTERO_CENTRIFUGO_API_URL=http://127.0.0.1:8000 \
   INTERO_S3_SERVER_ENCRYPTION=false \
   INTERO_PRINCIPAL_ID=019b5ac0-7600-7000-8000-000000000002 \

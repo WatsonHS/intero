@@ -4,16 +4,29 @@ import type {
   ActivityEvent,
   ConversationThread,
   DecisionRecord,
+  Epic,
+  Feature,
   KanbanCard,
   KanbanCardId,
   KanbanColumn,
   Project,
+  ProgramIncrement,
   PublicWorkProjection,
   ReviewResponseKind,
   Spec,
+  SpecComment,
+  SpecCommentThread,
+  SpecConfirmation,
+  SpecReviewPolicy,
   SpecRevision,
   SpecReviewResponse,
   ThreadMessage,
+  Sprint,
+  WorkCodeReference,
+  WorkComment,
+  WorkHistoryEntry,
+  WorkItem,
+  WorkRelation,
 } from "@intero/domain";
 
 const API_URL = import.meta.env.VITE_INTERO_API_URL ?? "http://localhost:4310";
@@ -28,13 +41,13 @@ export interface TeamPulsePayload {
 export interface PrincipalSummary {
   id: string;
   displayName: string;
-  kind: "human" | "representative" | "service";
+  kind: "human" | "stand_in" | "service";
 }
 
 export interface BootstrapPayload {
   organization: { id: string; name: string };
   currentPrincipal: PrincipalSummary;
-  representativePrincipal: PrincipalSummary;
+  standInPrincipal: PrincipalSummary;
 }
 
 export interface ThreadPayload {
@@ -57,6 +70,239 @@ export interface KanbanPayload {
   cards: KanbanCard[];
   workstreams: PublicWorkProjection[];
   principals: PrincipalSummary[];
+}
+
+export interface ProjectWorkPayload {
+  project: { id: string; name: string; timezone: string };
+  epics: Epic[];
+  features: Feature[];
+  workItems: WorkItem[];
+  relations: WorkRelation[];
+  codeReferences: WorkCodeReference[];
+  comments: WorkComment[];
+  history: WorkHistoryEntry[];
+  programIncrements: Array<ProgramIncrement & { status: string }>;
+  sprints: Array<Sprint & { status: string }>;
+}
+
+export interface ProjectSpecPayload {
+  spec: Spec;
+  revisions: SpecRevision[];
+  commentThreads: Array<SpecCommentThread & { comments: SpecComment[] }>;
+  confirmations: SpecConfirmation[];
+  nominatedReviewerIds: string[];
+  policy: SpecReviewPolicy;
+}
+
+export async function getProjectWork(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectWorkPayload> {
+  return getJson(`/v1/project-work/${projectId}`, signal);
+}
+
+export async function createWorkItem(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<WorkItem> {
+  return postJson(`/v1/project-work/${projectId}/items`, input);
+}
+
+export async function createEpic(
+  projectId: string,
+  input: { title: string; description?: string },
+): Promise<Epic> {
+  return postJson(`/v1/project-work/${projectId}/epics`, input);
+}
+
+export async function createFeature(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<Feature> {
+  return postJson(`/v1/project-work/${projectId}/features`, input);
+}
+
+export async function updateFeature(
+  projectId: string,
+  featureId: string,
+  input: Record<string, unknown>,
+): Promise<Feature> {
+  return patchJson(
+    `/v1/project-work/${projectId}/features/${featureId}`,
+    input,
+  );
+}
+
+export async function updateWorkItem(
+  projectId: string,
+  workItemId: string,
+  input: Record<string, unknown>,
+): Promise<WorkItem> {
+  return patchJson(
+    `/v1/project-work/${projectId}/items/${workItemId}`,
+    input,
+  );
+}
+
+export async function addWorkComment(
+  projectId: string,
+  workItemId: string,
+  input: { body: string; parentId?: string },
+): Promise<WorkComment> {
+  return postJson(
+    `/v1/project-work/${projectId}/items/${workItemId}/comments`,
+    input,
+  );
+}
+
+export async function addWorkCodeReference(
+  projectId: string,
+  workItemId: string,
+  input: Record<string, unknown>,
+): Promise<WorkCodeReference> {
+  return postJson(
+    `/v1/project-work/${projectId}/items/${workItemId}/code-references`,
+    input,
+  );
+}
+
+export async function addWorkRelation(
+  projectId: string,
+  workItemId: string,
+  input: { targetId: string; kind: WorkRelation["kind"] },
+): Promise<WorkRelation> {
+  return postJson(
+    `/v1/project-work/${projectId}/items/${workItemId}/relations`,
+    input,
+  );
+}
+
+export async function removeWorkCodeReference(
+  projectId: string,
+  referenceId: string,
+): Promise<void> {
+  return deleteJson(
+    `/v1/project-work/${projectId}/code-references/${referenceId}`,
+  );
+}
+
+export async function createProgramIncrement(
+  projectId: string,
+  input: {
+    startDate: string;
+    sprintCount: number;
+    sprintDurationWeeks: number;
+    timezone: string;
+  },
+): Promise<{ pi: ProgramIncrement; sprints: Sprint[] }> {
+  return postJson(
+    `/v1/project-work/${projectId}/program-increments`,
+    input,
+  );
+}
+
+export async function closeSprint(
+  projectId: string,
+  sprintId: string,
+): Promise<{ closed: true }> {
+  return postJson(
+    `/v1/project-work/${projectId}/sprints/${sprintId}/close`,
+    {},
+  );
+}
+
+export async function closeProgramIncrement(
+  projectId: string,
+  piId: string,
+): Promise<{ closed: true }> {
+  return postJson(
+    `/v1/project-work/${projectId}/program-increments/${piId}/close`,
+    {},
+  );
+}
+
+export async function updateProjectSpecReviewPolicy(
+  projectId: string,
+  input: {
+    requiredConfirmations: number;
+    otherMemberAgentsCount: boolean;
+    authorSelfConfirmation: boolean;
+  },
+): Promise<SpecReviewPolicy> {
+  return patchJson(
+    `/v1/project-work/${projectId}/spec-review-policy`,
+    input,
+  );
+}
+
+export async function getProjectSpecs(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<{ items: ProjectSpecPayload[] }> {
+  return getJson(
+    `/v1/spec-reviews?projectId=${encodeURIComponent(projectId)}`,
+    signal,
+  );
+}
+
+export async function createProjectSpecVersion(
+  projectId: string,
+  input: {
+    specId?: string;
+    title: string;
+    markdown: string;
+    changeSummary?: string;
+    affectedScopes?: string[];
+  },
+): Promise<ProjectSpecPayload> {
+  const path = input.specId
+    ? `/v1/project-work/${projectId}/specs/${input.specId}/versions`
+    : `/v1/project-work/${projectId}/specs`;
+  const { specId: _specId, ...body } = input;
+  return postJson(path, body);
+}
+
+export async function requestProjectSpecReview(
+  projectId: string,
+  specId: string,
+  reviewerIds: string[],
+): Promise<ProjectSpecPayload> {
+  return postJson(
+    `/v1/project-work/${projectId}/specs/${specId}/request-review`,
+    { reviewerIds },
+  );
+}
+
+export async function addProjectSpecComment(
+  projectId: string,
+  specId: string,
+  input: Record<string, unknown>,
+): Promise<ProjectSpecPayload> {
+  return postJson(
+    `/v1/project-work/${projectId}/specs/${specId}/comments`,
+    input,
+  );
+}
+
+export async function setProjectSpecCommentStatus(
+  projectId: string,
+  threadId: string,
+  status: "open" | "resolved",
+): Promise<ProjectSpecPayload> {
+  return patchJson(
+    `/v1/project-work/${projectId}/spec-comment-threads/${threadId}`,
+    { status },
+  );
+}
+
+export async function confirmProjectSpec(
+  projectId: string,
+  specId: string,
+): Promise<ProjectSpecPayload> {
+  return postJson(
+    `/v1/project-work/${projectId}/specs/${specId}/confirm`,
+    {},
+  );
 }
 
 export async function getBootstrap(
@@ -159,7 +405,7 @@ export async function createConversationThread(input: {
   kind: ConversationThread["kind"];
   title: string;
   participantIds: string[];
-  representativeIds: string[];
+  standInIds: string[];
 }): Promise<ConversationThread> {
   return postJson("/v1/threads", {
     id: crypto.randomUUID(),
@@ -299,7 +545,7 @@ export async function manageCodingAgentIntegration(input: {
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(
     `${API_URL}${path}`,
-    signal ? { signal } : undefined,
+    { ...(signal ? { signal } : {}), credentials: "include" },
   );
   if (!response.ok) {
     throw new Error(`Intero API returned ${response.status}.`);
@@ -310,6 +556,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
+    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -322,6 +569,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 async function patchJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "PATCH",
+    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -329,4 +577,14 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
     throw new Error(`Intero API returned ${response.status}.`);
   }
   return (await response.json()) as T;
+}
+
+async function deleteJson(path: string): Promise<void> {
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`Intero API returned ${response.status}.`);
+  }
 }

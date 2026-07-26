@@ -8,6 +8,7 @@
     "package": "pnpm --filter @intero/mcp-stdio build && pnpm build && electron-builder --dir",
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
+    "dev:pilot": "vite --config vite.web.config.ts --host 127.0.0.1",
     "test": "vitest run"
   },
   "build": {

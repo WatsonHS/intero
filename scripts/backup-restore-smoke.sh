@@ -24,8 +24,18 @@ table_count="$(
     --command="SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';"
 )"
 
-if [[ "${table_count}" -lt 20 ]]; then
+if [[ "${table_count}" -lt 48 ]]; then
   echo "Restored database has too few public tables: ${table_count}" >&2
+  exit 1
+fi
+
+object_table="$(
+  docker compose exec -T postgres \
+    psql --tuples-only --no-align --username=intero --dbname="${restore_database}" \
+    --command="SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'object_store_objects';"
+)"
+if [[ "${object_table}" != "1" ]]; then
+  echo "Restored database is missing object_store_objects." >&2
   exit 1
 fi
 

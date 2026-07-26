@@ -14,7 +14,6 @@ export async function migrateDatabase(databaseUrl: string): Promise<void> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required.");
-  await migrateDatabase(databaseUrl);
+  await migrateDatabase(loadMigratorServiceConfig().databaseUrl);
 }
+import { loadMigratorServiceConfig } from "@intero/config";

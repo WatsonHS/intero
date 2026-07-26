@@ -42,11 +42,19 @@ services:
     environment:
       MINIO_ROOT_USER: intero
       MINIO_ROOT_PASSWORD: intero-development
+      # Development-only static KMS key. Production must use MinIO KMS/KES.
+      MINIO_KMS_SECRET_KEY: intero-default:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      MINIO_KMS_AUTO_ENCRYPTION: "off"
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - intero-minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
 volumes:
   intero-postgres:

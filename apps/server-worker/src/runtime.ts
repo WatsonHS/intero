@@ -4,9 +4,9 @@ import {
   type RunBudget,
   type RunUsage,
   zeroRunUsage,
-} from "@intero/representative-core";
+} from "@intero/stand-in-core";
 
-export interface PublicRepresentativeRun {
+export interface PublicStandInRun {
   operationId: string;
   threadId: string;
   workstreamId?: string;
@@ -16,7 +16,7 @@ export interface PublicRepresentativeRun {
   usage?: RunUsage;
 }
 
-export interface PublicRepresentativeRepository {
+export interface PublicStandInRepository {
   hasCompleted(operationId: string): Promise<boolean>;
   markCompleted(operationId: string): Promise<void>;
   loadFreshness(workstreamId?: string): Promise<string | undefined>;
@@ -28,13 +28,13 @@ export interface PublicRepresentativeRepository {
   }): Promise<void>;
 }
 
-export class PublicRepresentativeWorker {
+export class PublicStandInWorker {
   readonly #serial = new KeyedSerialExecutor();
   readonly #budgets = new RunBudgetLedger();
 
-  constructor(private readonly repository: PublicRepresentativeRepository) {}
+  constructor(private readonly repository: PublicStandInRepository) {}
 
-  async run(job: PublicRepresentativeRun): Promise<void> {
+  async run(job: PublicStandInRun): Promise<void> {
     await this.#serial.run(`thread:${job.threadId}`, async () => {
       if (await this.repository.hasCompleted(job.operationId)) return;
       this.#budgets.consume(

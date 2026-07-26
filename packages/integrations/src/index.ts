@@ -157,7 +157,7 @@ function normalize(kind: IntegrationKind, input: AdapterInput) {
     receivedAt: new Date().toISOString(),
     workspaceId: input.workspaceId,
     workstreamId: input.workstreamId,
-    privacy: "P1_REPRESENTATIVE_PRIVATE",
+    privacy: "P1_STAND_IN_PRIVATE",
     payload: safeMetadata.parse(
       input.metadata ?? {},
     ) satisfies SafeEventPayload,

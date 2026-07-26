@@ -18,6 +18,9 @@ import {
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import { pilotPulseEntryToProjection } from "../pilot/adapters.js";
+import { getPilotOverview } from "../pilot/api.js";
+import { usePilotOptional } from "../pilot/context.js";
 
 const TONE_CLASSES: Record<Tone, { text: string; bg: string; dot: string }> = {
   green: { text: "text-green", bg: "bg-green-soft", dot: "bg-green" },
@@ -46,6 +49,11 @@ export function PersonView({
   onOpenChat: () => void;
 }) {
   const { t, formatRelative, formatTime } = useI18n();
+  const pilot = usePilotOptional();
+  const pilotProject =
+    pilot?.projects.data?.projects.find(
+      (project) => project.id === pilot.selectedProjectId,
+    ) ?? pilot?.projects.data?.projects[0];
 
   const pulse = useQuery({
     queryKey: ["team-pulse"],
@@ -64,25 +72,47 @@ export function PersonView({
     queryKey: ["activity"],
     queryFn: ({ signal }) => getActivity(0, 500, signal),
   });
+  const pilotOverview = useQuery({
+    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
+    queryFn: ({ signal }) =>
+      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
+    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
+    refetchInterval: 1_500,
+  });
 
-  const workstreams = (pulse.data?.projections ?? []).filter(
-    (item) => item.ownerId === ownerId,
+  const projections = [
+    ...(pulse.data?.projections ?? []),
+    ...(pilotOverview.data?.pulse ?? []).map(pilotPulseEntryToProjection),
+  ];
+  const workstreams = [
+    ...new Map(
+      projections
+        .filter((item) => item.ownerId === ownerId)
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const pilotPrincipal = pilotOverview.data?.principals.find(
+    (principal) => principal.id === ownerId,
   );
   const principalName =
+    pilotPrincipal?.displayName ??
     pulse.data?.principals.find((principal) => principal.id === ownerId)
-      ?.displayName ?? ownerId.slice(0, 8);
+      ?.displayName ??
+    ownerId.slice(0, 8);
+  const pulseReady = pulse.isSuccess || pilotOverview.isSuccess;
+  const pulsePending = pulse.isPending && pilotOverview.isPending;
   const offline = runtime.data?.fallback === "public";
   const offlineSyncTime = runtime.data?.freshnessAt
     ? formatRelative(runtime.data.freshnessAt)
     : t("general.none");
 
-  if (!pulse.isSuccess || workstreams.length === 0) {
+  if (!pulseReady || workstreams.length === 0) {
     return (
       <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
         <div className="grid h-full place-items-center overflow-auto pt-[26px] px-[32px] pb-[60px]">
           <div className="grid justify-items-center gap-3 text-center">
             <p className="text-[13px] text-ink-muted">
-              {pulse.isPending ? t("general.loading") : t("person.notFound")}
+              {pulsePending ? t("general.loading") : t("person.notFound")}
             </p>
             <button
               type="button"
@@ -103,10 +133,10 @@ export function PersonView({
   const subs = workstreams.filter((item) => item.id !== main.id);
   const mainTone = TONE_CLASSES[PHASE_META[main.phase].tone];
   const mainStale = isStale(main.freshnessAt, pulse.data?.staleAfterSeconds);
-  const repDotClass = offline || mainStale ? "bg-amber" : "bg-green";
-  const repText = offline
-    ? t("person.repPublic", { time: offlineSyncTime })
-    : t("person.repLocal", { time: formatRelative(main.freshnessAt) });
+  const standInDotClass = offline || mainStale ? "bg-amber" : "bg-green";
+  const standInText = offline
+    ? t("person.standInPublic", { time: offlineSyncTime })
+    : t("person.standInLocal", { time: formatRelative(main.freshnessAt) });
   const summaryText =
     main.blockers[0] ?? main.dependencies[0] ?? main.decisions[0];
   const noteText = main.decisions[0] ?? main.blockers[0];
@@ -167,10 +197,8 @@ export function PersonView({
                 {t("pulse.card.role")}
               </span>
               <span className="inline-flex items-center gap-1.5 text-[11.5px] text-ink-muted">
-                <span
-                  className={cn("h-1.5 w-1.5 rounded-full", repDotClass)}
-                />
-                {repText}
+                <span className={cn("h-1.5 w-1.5 rounded-full", standInDotClass)} />
+                {standInText}
               </span>
             </span>
           </span>
@@ -187,7 +215,7 @@ export function PersonView({
               onClick={onOpenChat}
               className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent"
             >
-              {t("person.atRep")}
+              {t("person.atStandIn")}
             </button>
           </span>
         </div>
@@ -200,9 +228,7 @@ export function PersonView({
         ) : null}
 
         <div className="mt-[30px] flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">
-            {t("person.main")}
-          </strong>
+          <strong className="text-[14px] font-[620]">{t("person.main")}</strong>
           <span className="font-mono text-[10.5px] text-faint">
             {main.id.slice(0, 8)}
           </span>
@@ -243,9 +269,7 @@ export function PersonView({
         </div>
 
         <div className="mt-[30px] flex items-center gap-2.5">
-          <strong className="text-[14px] font-[620]">
-            {t("person.subs")}
-          </strong>
+          <strong className="text-[14px] font-[620]">{t("person.subs")}</strong>
           <span className="font-mono text-[10.5px] text-faint">
             {subs.length}
           </span>
@@ -401,7 +425,8 @@ export function PersonView({
                         "linear-gradient(90deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(90deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(180deg, var(--intero-line2) 0 7px, transparent 7px 14px), linear-gradient(180deg, var(--intero-line2) 0 7px, transparent 7px 14px)",
                       backgroundSize: "14px 1px, 14px 1px, 1px 14px, 1px 14px",
                       backgroundPosition: "0 0, 0 100%, 0 0, 100% 0",
-                      backgroundRepeat: "repeat-x, repeat-x, repeat-y, repeat-y",
+                      backgroundRepeat:
+                        "repeat-x, repeat-x, repeat-y, repeat-y",
                     }}
                   />
                   <span className="text-[12px] font-[600]">

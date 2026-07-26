@@ -90,27 +90,27 @@ export function createToolHandlers(
     },
     lookupTeamContext: (input) =>
       bound(bounded(input), false).then((params) =>
-        invokeAndAwait(daemon, "representative.lookup_team_context", params),
+        invokeAndAwait(daemon, "stand_in.lookup_team_context", params),
       ),
     requestCoordination: (input) =>
       bound(bounded(input)).then((params) =>
-        invokeAndAwait(daemon, "representative.request_coordination", params),
+        invokeAndAwait(daemon, "stand_in.request_coordination", params),
       ),
     requestSpecReview: (input) =>
       bound(bounded(input, SPEC_REVIEW_MAX_BYTES)).then((params) =>
-        invokeAndAwait(daemon, "representative.request_spec_review", params),
+        invokeAndAwait(daemon, "stand_in.request_spec_review", params),
       ),
     lookupDecision: (input) =>
       bound(bounded(input), false).then((params) =>
-        invokeAndAwait(daemon, "representative.lookup_decision", params),
+        invokeAndAwait(daemon, "stand_in.lookup_decision", params),
       ),
     checkScope: (input) =>
       bound(bounded(input)).then((params) =>
-        invokeAndAwait(daemon, "representative.check_scope", params),
+        invokeAndAwait(daemon, "stand_in.check_scope", params),
       ),
     reportCheckpoint: (input) =>
       bound(bounded(input)).then((params) =>
-        invokeAndAwait(daemon, "representative.report_checkpoint", params),
+        invokeAndAwait(daemon, "stand_in.report_checkpoint", params),
       ),
   };
 }
@@ -125,7 +125,7 @@ async function invokeAndAwait(
   const deadline =
     Date.now() + Number(process.env.INTERO_MCP_RESULT_TIMEOUT_MS ?? 20_000);
   while (Date.now() < deadline) {
-    const state = await daemon.call("representative.request_result", {
+    const state = await daemon.call("stand_in.request_result", {
       requestId: accepted.requestId,
       ...(typeof params.workspaceId === "string"
         ? { workspaceId: params.workspaceId }
@@ -141,7 +141,7 @@ async function invokeAndAwait(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(
-    `Representative request ${accepted.requestId} did not complete within the MCP timeout.`,
+    `Stand-in request ${accepted.requestId} did not complete within the MCP timeout.`,
   );
 }
 

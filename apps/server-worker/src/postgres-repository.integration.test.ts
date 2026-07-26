@@ -2,22 +2,22 @@ import { uuidv7 } from "@intero/domain";
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { PostgresPublicRepresentativeRepository } from "./postgres-repository";
-import { PublicRepresentativeWorker } from "./runtime";
+import { PostgresPublicStandInRepository } from "./postgres-repository";
+import { PublicStandInWorker } from "./runtime";
 
 const databaseUrl = process.env.DATABASE_URL;
 const databaseAppUrl = process.env.DATABASE_APP_URL;
 const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 
-databaseSuite("public Representative PostgreSQL repository", () => {
+databaseSuite("public Stand-in PostgreSQL repository", () => {
   const organizationId = uuidv7();
   const threadId = uuidv7();
   const workstreamId = uuidv7();
   const ownerId = uuidv7();
-  const representativeId = uuidv7();
+  const standInId = uuidv7();
   const operationId = uuidv7();
   const admin = new Client({ connectionString: databaseUrl });
-  let repository: PostgresPublicRepresentativeRepository;
+  let repository: PostgresPublicStandInRepository;
 
   beforeAll(async () => {
     await admin.connect();
@@ -30,8 +30,8 @@ databaseSuite("public Representative PostgreSQL repository", () => {
     );
     await admin.query(
       `INSERT INTO principals (id, display_name, kind)
-       VALUES ($1, 'Owner', 'human'), ($2, 'Public Representative', 'representative')`,
-      [ownerId, representativeId],
+       VALUES ($1, 'Owner', 'human'), ($2, 'Public Stand-in', 'stand_in')`,
+      [ownerId, standInId],
     );
     await admin.query(
       "INSERT INTO organizations (id, name) VALUES ($1, 'Worker fixture')",
@@ -53,20 +53,20 @@ databaseSuite("public Representative PostgreSQL repository", () => {
     await admin.query(
       `INSERT INTO threads
         (id, organization_id, kind, title, access_mode, prior_history_granted, sequence)
-       VALUES ($1, $2, 'representative', 'Public fallback', 'agent_readable', false, 0)`,
+       VALUES ($1, $2, 'stand_in', 'Public fallback', 'agent_readable', false, 0)`,
       [threadId, organizationId],
     );
-    repository = new PostgresPublicRepresentativeRepository(
+    repository = new PostgresPublicStandInRepository(
       new Pool({ connectionString: databaseAppUrl }),
       organizationId,
-      representativeId,
+      standInId,
     );
   });
 
   afterAll(async () => {
     await repository.close();
     await admin.query(
-      "DELETE FROM public_representative_runs WHERE organization_id = $1",
+      "DELETE FROM public_stand_in_runs WHERE organization_id = $1",
       [organizationId],
     );
     await admin.query("DELETE FROM messages WHERE organization_id = $1", [
@@ -86,14 +86,14 @@ databaseSuite("public Representative PostgreSQL repository", () => {
       organizationId,
     ]);
     await admin.query("DELETE FROM principals WHERE id = ANY($1::uuid[])", [
-      [ownerId, representativeId],
+      [ownerId, standInId],
     ]);
     await admin.end();
   });
 
   it("deduplicates concurrent delivery and records explicit fallback freshness", async () => {
-    const first = new PublicRepresentativeWorker(repository);
-    const second = new PublicRepresentativeWorker(repository);
+    const first = new PublicStandInWorker(repository);
+    const second = new PublicStandInWorker(repository);
     const job = {
       operationId,
       threadId,
@@ -105,7 +105,7 @@ databaseSuite("public Representative PostgreSQL repository", () => {
     const result = await admin.query<{ body: string; status: string }>(
       `SELECT m.body, r.status
        FROM messages m
-       JOIN public_representative_runs r ON r.operation_id = m.operation_id
+       JOIN public_stand_in_runs r ON r.operation_id = m.operation_id
        WHERE m.organization_id = $1 AND m.operation_id = $2`,
       [organizationId, operationId],
     );

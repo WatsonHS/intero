@@ -12,7 +12,7 @@ export default defineConfig({
       "@intero/domain": `${root}packages/domain/src/index.ts`,
       "@intero/integrations": `${root}packages/integrations/src/index.ts`,
       "@intero/project-management": `${root}packages/project-management/src/index.ts`,
-      "@intero/representative-core": `${root}packages/representative-core/src/index.ts`,
+      "@intero/stand-in-core": `${root}packages/stand-in-core/src/index.ts`,
       "@intero/test-support": `${root}packages/test-support/src/index.ts`,
       "@intero/ui": `${root}packages/ui/src/index.ts`,
     },

@@ -35,7 +35,7 @@ describe("ReloadingDaemonClient", () => {
     const daemon = new ReloadingDaemonClient(async () => clients[loads++]!);
 
     await expect(
-      daemon.call("representative.report_checkpoint", {}),
+      daemon.call("stand_in.report_checkpoint", {}),
     ).resolves.toEqual({ accepted: true });
     expect(loads).toBe(2);
     expect(expired.calls).toBe(1);
@@ -69,7 +69,7 @@ describe("ReloadingDaemonClient", () => {
     const daemon = new ReloadingDaemonClient(async () => clients[loads++]!);
 
     await expect(
-      daemon.call("representative.report_checkpoint", {}),
+      daemon.call("stand_in.report_checkpoint", {}),
     ).rejects.toThrow("Local authentication failed");
     expect(loads).toBe(2);
     expect(first.calls).toBe(1);

@@ -27,13 +27,13 @@ import {
   uuidv7,
 } from "@intero/domain";
 import {
-  addRepresentative,
+  addStandIn,
   authorizeEnvelope,
   buildPublicProjection,
   createSpecRevision,
   invalidateAffectedReviews,
   resolveWorkstream,
-} from "@intero/representative-core";
+} from "@intero/stand-in-core";
 
 import type { PrincipalSummary } from "./platform-store.js";
 
@@ -206,7 +206,7 @@ export class InMemoryPlatformStore {
   }
 
   putGrant(grant: CapabilityGrant): CapabilityGrant {
-    this.ensurePrincipal(grant.principalId, "representative");
+    this.ensurePrincipal(grant.principalId, "stand_in");
     this.grants.set(grant.id, grant);
     return grant;
   }
@@ -227,7 +227,7 @@ export class InMemoryPlatformStore {
       this.createInboxItem(
         envelope.actorId,
         "scope_expansion",
-        "Representative action needs authorization",
+        "Stand-in action needs authorization",
         decision.reason,
         `coordination:${envelope.operationId}`,
       );
@@ -237,7 +237,7 @@ export class InMemoryPlatformStore {
       this.createInboxItem(
         envelope.actorId,
         "consequential_commitment",
-        "Representative action needs confirmation",
+        "Stand-in action needs confirmation",
         envelope.humanMessage,
         `coordination:${envelope.operationId}`,
       );
@@ -282,8 +282,8 @@ export class InMemoryPlatformStore {
     for (const participantId of thread.participantIds) {
       this.ensurePrincipal(
         participantId,
-        thread.representativeIds.includes(participantId)
-          ? "representative"
+        thread.standInIds.includes(participantId)
+          ? "stand_in"
           : "human",
       );
     }
@@ -316,16 +316,16 @@ export class InMemoryPlatformStore {
     return message;
   }
 
-  addRepresentativeToThread(
+  addStandInToThread(
     threadId: ThreadId,
-    representativeId: PrincipalId,
+    standInId: PrincipalId,
     actorId: PrincipalId,
   ): { thread: ConversationThread; event: ThreadMessage } {
     const current = this.threads.get(threadId);
     if (!current) throw new Error("Thread was not found.");
-    this.ensurePrincipal(representativeId, "representative");
+    this.ensurePrincipal(standInId, "stand_in");
     this.ensurePrincipal(actorId, "human");
-    const transition = addRepresentative(current, representativeId, actorId);
+    const transition = addStandIn(current, standInId, actorId);
     this.threads.set(threadId, transition.thread);
     this.messages.set(threadId, [
       ...(this.messages.get(threadId) ?? []),
@@ -402,8 +402,8 @@ export class InMemoryPlatformStore {
     }
     this.ensurePrincipal(
       review.reviewerId,
-      review.kind === "representative_impact_analysis"
-        ? "representative"
+      review.kind === "stand_in_impact_analysis"
+        ? "stand_in"
         : "human",
     );
     this.reviews.set(specId, [...(this.reviews.get(specId) ?? []), review]);
@@ -549,7 +549,7 @@ export class InMemoryPlatformStore {
   ): void {
     const existing = this.principals.get(id);
     if (existing) {
-      if (kind === "representative" && existing.kind !== "representative") {
+      if (kind === "stand_in" && existing.kind !== "stand_in") {
         this.principals.set(id, { ...existing, kind });
       }
       return;
@@ -557,8 +557,8 @@ export class InMemoryPlatformStore {
     this.principals.set(id, {
       id,
       displayName:
-        kind === "representative"
-          ? "Intero Representative"
+        kind === "stand_in"
+          ? "Intero Stand-in"
           : `Principal ${id.slice(0, 8)}`,
       kind,
     });
@@ -828,15 +828,15 @@ export function seedDemoStore(store: InMemoryPlatformStore): void {
   });
 
   const humanId = "019b5ac0-7600-7000-8000-000000000021" as PrincipalId;
-  const representativeId =
+  const standInId =
     "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
   const threadId = "019b5ac0-7600-7000-8000-000000000060" as ThreadId;
   store.createThread({
     id: threadId,
-    kind: "representative",
-    title: "Your Representative",
-    participantIds: [humanId, representativeId],
-    representativeIds: [representativeId],
+    kind: "stand_in",
+    title: "Your Stand-in",
+    participantIds: [humanId, standInId],
+    standInIds: [standInId],
     accessMode: "agent_readable",
     priorHistoryGranted: false,
     sequence: 0,
@@ -844,7 +844,7 @@ export function seedDemoStore(store: InMemoryPlatformStore): void {
   });
   store.appendMessage(threadId, {
     id: "019b5ac0-7600-7000-8000-000000000061" as ThreadMessage["id"],
-    senderId: representativeId,
+    senderId: standInId,
     body: "Three current workstreams are synchronized. One needs attention: cursor recovery remains blocked on a missing sequence.",
     createdAt: new Date(Date.now() - 210_000).toISOString(),
   });
@@ -853,8 +853,8 @@ export function seedDemoStore(store: InMemoryPlatformStore): void {
     id: roomId,
     kind: "room",
     title: "Intero MVP · Project Room",
-    participantIds: [humanId, representativeId],
-    representativeIds: [representativeId],
+    participantIds: [humanId, standInId],
+    standInIds: [standInId],
     accessMode: "agent_readable",
     priorHistoryGranted: false,
     sequence: 0,

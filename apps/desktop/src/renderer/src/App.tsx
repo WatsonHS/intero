@@ -19,6 +19,11 @@ import { useTheme } from "./design/theme.js";
 import { initials } from "./design/utils.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
+import { usePilotOptional } from "./pilot/context.js";
+import {
+  AcceptInvitationView,
+  SignInView,
+} from "./views/AccessView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
 import { CoordinationView } from "./views/CoordinationView.js";
 import { PersonView } from "./views/PersonView.js";
@@ -39,6 +44,8 @@ type View =
   | "item"
   | "settings"
   | "setup";
+
+type SetupMode = "canonical" | "pilot-test";
 
 const NAV: Array<{
   id: Extract<
@@ -84,10 +91,19 @@ function navButtonClass(open: boolean, active: boolean): string {
 export function App() {
   const { t } = useI18n();
   const { mode, setMode } = useTheme();
+  const pilot = usePilotOptional();
   const [view, setView] = useState<View>("pulse");
+  const [setupMode, setSetupMode] = useState<SetupMode>("canonical");
   const [navOpen, setNavOpen] = useState(false);
   const [personId, setPersonId] = useState<string>();
   const [itemId, setItemId] = useState<string>();
+  const [invitationToken, setInvitationToken] = useState<string | undefined>(
+    () =>
+      typeof window === "undefined"
+        ? undefined
+        : (new URL(window.location.href).searchParams.get("token") ??
+          undefined),
+  );
 
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -99,14 +115,52 @@ export function App() {
     refetchInterval: 30_000,
   });
 
-  const identity = bootstrap.data?.currentPrincipal;
-  const organization = bootstrap.data?.organization;
+  const pilotIdentity =
+    pilot?.bootstrap.data?.currentPrincipal ??
+    pilot?.bootstrap.data?.identities.find(
+      (item) => item.id === pilot.identityId,
+    );
+  const identity = pilotIdentity ?? bootstrap.data?.currentPrincipal;
+  const organization =
+    pilot?.bootstrap.data?.organization ?? bootstrap.data?.organization;
   const isSetup = view === "setup";
   const isMacDesktop =
     typeof window !== "undefined" &&
     window.interoDesktop?.platform === "darwin";
   const activeNav =
     view === "person" ? "pulse" : view === "item" ? "project" : view;
+
+  function openSetup(mode: SetupMode) {
+    setSetupMode(mode);
+    setView("setup");
+  }
+
+  function leaveInvitation(nextView: "pulse" | "settings", projectId?: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("token");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    setInvitationToken(undefined);
+    if (projectId) pilot?.setSelectedProjectId(projectId);
+    setView(nextView);
+  }
+
+  if (pilot?.enabled && invitationToken) {
+    return (
+      <AcceptInvitationView
+        token={invitationToken}
+        onEnterPulse={(projectId) => leaveInvitation("pulse", projectId)}
+        onConnectAgent={(projectId) => leaveInvitation("settings", projectId)}
+      />
+    );
+  }
+
+  if (
+    pilot?.enabled &&
+    pilot.bootstrap.data?.authMode === "session" &&
+    !pilot.bootstrap.data.currentPrincipal
+  ) {
+    return <SignInView />;
+  }
 
   return (
     <div
@@ -122,14 +176,12 @@ export function App() {
     >
       <div className="col-span-full flex items-center gap-3.5 border-b border-line bg-panel px-3.5 [-webkit-app-region:drag]">
         {isMacDesktop ? (
-          <span className="w-[54px]" aria-hidden="true" />
-        ) : (
-          <span className="flex items-center gap-2" aria-hidden="true">
-            <span className="h-3 w-3 rounded-full bg-[#e0685f]" />
-            <span className="h-3 w-3 rounded-full bg-[#dcae4a]" />
-            <span className="h-3 w-3 rounded-full bg-[#62b95a]" />
-          </span>
-        )}
+          <span
+            className="w-[54px]"
+            data-testid="macos-titlebar-controls-spacer"
+            aria-hidden="true"
+          />
+        ) : null}
         <span className="ml-2 flex items-center gap-[9px] text-[11.5px]">
           <span className="font-[620] text-ink-muted">Intero</span>
           <span className="text-faint" aria-hidden="true">
@@ -279,7 +331,7 @@ export function App() {
             onOpenAction={(sourceRef) =>
               setView(sourceRef.startsWith("spec:") ? "spec" : "coord")
             }
-            onOpenSetup={() => setView("setup")}
+            onOpenSetup={() => openSetup("canonical")}
           />
         ) : null}
         {view === "person" && personId ? (
@@ -304,10 +356,17 @@ export function App() {
           <WorkItemView cardId={itemId} onBack={() => setView("project")} />
         ) : null}
         {view === "settings" ? (
-          <SettingsView onOpenSetup={() => setView("setup")} />
+          <SettingsView
+            onOpenSetup={() => openSetup("canonical")}
+            {...(pilot?.enabled
+              ? pilot.bootstrap.data?.authMode === "development_identity"
+                ? { onOpenTestSetup: () => openSetup("pilot-test") }
+                : {}
+              : {})}
+          />
         ) : null}
         {view === "setup" ? (
-          <SetupView onDone={() => setView("pulse")} />
+          <SetupView mode={setupMode} onDone={() => setView("pulse")} />
         ) : null}
       </main>
     </div>

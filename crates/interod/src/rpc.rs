@@ -89,13 +89,13 @@ fn role_allows(role: RpcRole, method: &str) -> bool {
             method,
             "system.health"
                 | "integration.current_context"
-                | "representative.lookup_team_context"
-                | "representative.request_coordination"
-                | "representative.request_spec_review"
-                | "representative.lookup_decision"
-                | "representative.check_scope"
-                | "representative.report_checkpoint"
-                | "representative.request_result"
+                | "stand_in.lookup_team_context"
+                | "stand_in.request_coordination"
+                | "stand_in.request_spec_review"
+                | "stand_in.lookup_decision"
+                | "stand_in.check_scope"
+                | "stand_in.report_checkpoint"
+                | "stand_in.request_result"
         ),
         RpcRole::Sidecar => matches!(
             method,
@@ -103,9 +103,9 @@ fn role_allows(role: RpcRole, method: &str) -> bool {
                 | "settings.get"
                 | "state.list_events"
                 | "state.persist_event"
-                | "representative.next_request"
-                | "representative.ack_request"
-                | "representative.complete_request"
+                | "stand_in.next_request"
+                | "stand_in.ack_request"
+                | "stand_in.complete_request"
         ),
     }
 }
@@ -573,9 +573,9 @@ impl RpcService {
             "mls.decrypt" => self.mls_decrypt(request),
             "memory.put" => self.put_memory(request),
             "memory.search" => self.search_memory(request),
-            "representative.next_request" => {
+            "stand_in.next_request" => {
                 if let Some(store) = &self.durable_store {
-                    match store.next_representative_request() {
+                    match store.next_stand_in_request() {
                         Ok(next) => success(request.id, next.unwrap_or(Value::Null)),
                         Err(reason) => error(request.id, -32050, &reason.to_string()),
                     }
@@ -584,15 +584,15 @@ impl RpcService {
                         Ok(mut queue) => {
                             success(request.id, queue.pop_front().unwrap_or(Value::Null))
                         }
-                        Err(_) => error(request.id, -32050, "Representative queue is unavailable"),
+                        Err(_) => error(request.id, -32050, "Stand-in queue is unavailable"),
                     }
                 }
             }
-            "representative.ack_request" => {
+            "stand_in.ack_request" => {
                 let request_id = request.params.get("requestId").and_then(Value::as_str);
                 match (&self.durable_store, request_id) {
                     (Some(store), Some(request_id)) => {
-                        match store.acknowledge_representative_request(request_id) {
+                        match store.acknowledge_stand_in_request(request_id) {
                             Ok(acknowledged) => {
                                 success(request.id, json!({ "acknowledged": acknowledged }))
                             }
@@ -603,14 +603,14 @@ impl RpcService {
                     (_, None) => error(request.id, -32602, "requestId is required"),
                 }
             }
-            "representative.complete_request" => {
+            "stand_in.complete_request" => {
                 let request_id = request.params.get("requestId").and_then(Value::as_str);
                 let result = request.params.get("result");
                 match (&self.durable_store, request_id, result) {
                     (Some(store), Some(request_id), Some(result))
                         if !contains_forbidden_field(result) =>
                     {
-                        match store.complete_representative_request(request_id, result) {
+                        match store.complete_stand_in_request(request_id, result) {
                             Ok(completed) => success(request.id, json!({ "completed": completed })),
                             Err(reason) => error(request.id, -32050, &reason.to_string()),
                         }
@@ -624,7 +624,7 @@ impl RpcService {
                     _ => error(request.id, -32602, "requestId and result are required"),
                 }
             }
-            "representative.request_result" => {
+            "stand_in.request_result" => {
                 let request_id = request.params.get("requestId").and_then(Value::as_str);
                 match (&self.durable_store, request_id) {
                     (Some(store), Some(request_id)) => {
@@ -641,11 +641,11 @@ impl RpcService {
                             None
                         };
                         match store
-                            .representative_request_result_for_workspace(request_id, workspace_id)
+                            .stand_in_request_result_for_workspace(request_id, workspace_id)
                         {
                             Ok(Some(result)) => success(request.id, result),
                             Ok(None) => {
-                                error(request.id, -32013, "Representative request was not found")
+                                error(request.id, -32013, "Stand-in request was not found")
                             }
                             Err(reason) => error(request.id, -32050, &reason.to_string()),
                         }
@@ -654,9 +654,9 @@ impl RpcService {
                     (_, None) => error(request.id, -32602, "requestId is required"),
                 }
             }
-            "representative.ingest_adapter_event" => {
+            "stand_in.ingest_adapter_event" => {
                 if valid_adapter_event_request(&request.params) {
-                    self.queue_representative_request(request)
+                    self.queue_stand_in_request(request)
                 } else {
                     error(
                         request.id,
@@ -665,14 +665,14 @@ impl RpcService {
                     )
                 }
             }
-            method if method.starts_with("representative.") => {
-                self.queue_representative_request(request)
+            method if method.starts_with("stand_in.") => {
+                self.queue_stand_in_request(request)
             }
             _ => error(request.id, -32601, "Method not found"),
         }
     }
 
-    fn queue_representative_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
+    fn queue_stand_in_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         let workspace_id = parse_workspace_id(&request.params);
         let Some(workspace_id) = workspace_id else {
             return error(request.id, -32602, "A valid workspaceId is required");
@@ -713,12 +713,12 @@ impl RpcService {
         });
         let persisted = if let Some(store) = &self.durable_store {
             store
-                .enqueue_representative_request(&queued)
+                .enqueue_stand_in_request(&queued)
                 .map_err(|reason| reason.to_string())
         } else {
             self.pending_requests
                 .lock()
-                .map_err(|_| "Representative queue is unavailable".to_owned())
+                .map_err(|_| "Stand-in queue is unavailable".to_owned())
                 .map(|mut queue| {
                     queue.push_back(queued.clone());
                     true
@@ -1287,12 +1287,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_representative_requests_outside_enrolled_workspaces() {
+    fn rejects_stand_in_requests_outside_enrolled_workspaces() {
         let service = RpcService::new("token".into(), WorkspaceRegistry::default());
         let response = service.handle(JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: serde_json::json!(1),
-            method: "representative.report_checkpoint".into(),
+            method: "stand_in.report_checkpoint".into(),
             params: serde_json::json!({
                 "workspaceId": Uuid::now_v7(),
                 "summary": "Should not persist"
@@ -1316,7 +1316,7 @@ mod tests {
         let accepted = service.handle(JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: serde_json::json!(1),
-            method: "representative.report_checkpoint".into(),
+            method: "stand_in.report_checkpoint".into(),
             params: serde_json::json!({
                 "workspaceId": workspace.id,
                 "workstreamId": Uuid::now_v7(),
@@ -1330,13 +1330,13 @@ mod tests {
         let next = service.handle(JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: serde_json::json!(2),
-            method: "representative.next_request".into(),
+            method: "stand_in.next_request".into(),
             params: serde_json::json!({}),
             auth_token: "token".into(),
         });
         assert_eq!(
             next.result.expect("queued request")["method"],
-            "representative.report_checkpoint"
+            "stand_in.report_checkpoint"
         );
         let workspaces = rpc(&service, "workspace.list", serde_json::json!({}));
         assert_eq!(workspaces["workspaces"][0]["id"], workspace.id.to_string());

@@ -11,8 +11,8 @@
       "@intero/project-management": [
         "packages/project-management/src/index.ts"
       ],
-      "@intero/representative-core": [
-        "packages/representative-core/src/index.ts"
+      "@intero/stand-in-core": [
+        "packages/stand-in-core/src/index.ts"
       ],
       "@intero/test-support": ["packages/test-support/src/index.ts"],
       "@intero/ui": ["packages/ui/src/index.ts"],

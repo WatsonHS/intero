@@ -57,18 +57,18 @@ so the final review can challenge them._
   synthesizing owners, statuses, or progress.
 - R7. Freshness, confidence, blockers, dependencies, decisions, and
   coordination metadata must come from persisted evidence and typed state.
-- R8. Team Pulse remains the default entry; Representative, Room,
+- R8. Team Pulse remains the default entry; Stand-in, Room,
   Coordination, and Spec surfaces render durable objects with truthful empty
   states.
-- R9. Representative runtime and freshness indicators must reflect heartbeat
+- R9. Stand-in runtime and freshness indicators must reflect heartbeat
   and local daemon state rather than request loading state.
 - R10. Coordination UI must show only stored structured-action facts and must
   not invent resolved or authority-checked labels.
 - R12. Public fallback disclosure and model-egress policy must remain separate;
-  changing the local policy must affect the running Local Representative.
+  changing the local policy must affect the running Local Stand-in.
 - R15. Spec authoring must restore existing Specs and revisions, persist an
   actual local draft, publish the next durable revision, and render recorded
-  review responses without treating Representative analysis as approval.
+  review responses without treating Stand-in analysis as approval.
 - R16. Team Pulse and Action Inbox must use live counts, identities, dates, and
   navigation targets, with localized empty, loading, error, and stale states.
 - The visible desktop product chrome must be localized in `zh-CN` and `en-US`,
@@ -78,11 +78,11 @@ so the final review can challenge them._
   normal development startup must expose empty or real pipeline state.
 
 **Origin actors:** A1 (Engineer), A3 (Local Privacy Runtime), A4 (Local
-Representative), A5 (Public Representative), A6 (Teammate or Representative),
+Stand-in), A5 (Public Stand-in), A6 (Teammate or Stand-in),
 A7 (Reviewer)
 
 **Origin flows:** F1 (authorized observation and publication), F2 (coding-time
-coordination), F3 (one Representative with two runtimes), F4 (Spec review), F5
+coordination), F3 (one Stand-in with two runtimes), F4 (Spec review), F5
 (conflicting evidence)
 
 **Origin acceptance examples:** AE1, AE2, AE4, AE5, AE6, AE7, AE9, AE10, AE12,
@@ -122,7 +122,7 @@ AE13
   affected people.
 - A system that starts Coding Agent subagents or enforces how technical
   execution proceeds.
-- A Representative that impersonates a person or makes deadlines,
+- A Stand-in that impersonates a person or makes deadlines,
   architectural approvals, or unrelated commitments without authority.
 - A monolithic replacement for every engineering tool.
 
@@ -159,7 +159,7 @@ AE13
 
 - Team Pulse and Action Inbox are the attention center; local/public,
   freshness, privacy, and authority must be explicit rather than implied.
-- Representative analysis may assist a Spec review but never counts as human
+- Stand-in analysis may assist a Spec review but never counts as human
   approval.
 
 ### External References
@@ -224,7 +224,7 @@ flowchart TB
     Store["In-memory or PostgreSQL store"]
     Daemon["interod authenticated IPC"]
     LocalDB["Encrypted local state"]
-    Sidecar["Local Representative"]
+    Sidecar["Local Stand-in"]
 
     Renderer --> PublicClient
     PublicClient --> API
@@ -342,12 +342,12 @@ locally scoped.
 - Modify: `crates/interod/src/storage.rs`
 - Modify: `crates/interod/src/workspace.rs`
 - Modify: `crates/interod/src/rpc.rs`
-- Modify: `apps/local-representative/src/runtime.ts`
-- Modify: `apps/local-representative/src/sidecar.ts`
+- Modify: `apps/local-stand-in/src/runtime.ts`
+- Modify: `apps/local-stand-in/src/sidecar.ts`
 - Test: `crates/interod/src/storage.rs`
 - Test: `crates/interod/src/rpc.rs`
-- Test: `apps/local-representative/src/runtime.test.ts`
-- Test: `apps/local-representative/src/sidecar.test.ts`
+- Test: `apps/local-stand-in/src/runtime.test.ts`
+- Test: `apps/local-stand-in/src/sidecar.test.ts`
 
 **Approach:**
 
@@ -355,7 +355,7 @@ locally scoped.
 - Add bounded RPC reads for daemon health, Workspace registry entries, and
   current policy, plus a single validated model-policy write.
 - Keep local absolute roots inside the daemon/desktop boundary.
-- Refresh the running Local Representative's policy from daemon state so the UI
+- Refresh the running Local Stand-in's policy from daemon state so the UI
   controls actual runtime behavior.
 
 **Execution note:** Implement storage and RPC validation tests before exposing
@@ -365,7 +365,7 @@ the desktop bridge.
 
 - Authenticated dispatch in `crates/interod/src/rpc.rs`
 - Additive local schema initialization in `crates/interod/src/storage.rs`
-- Heartbeat loop in `apps/local-representative/src/sidecar.ts`
+- Heartbeat loop in `apps/local-stand-in/src/sidecar.ts`
 
 **Test scenarios:**
 
@@ -483,7 +483,7 @@ selection and locale-aware time formatting.
 - U5. **Render live identity, attention, runtime, and conversations**
 
 **Goal:** Remove hardcoded people, dates, quotes, coordination status, and
-runtime state from Team Pulse, navigation, Representative, Room, Coordination,
+runtime state from Team Pulse, navigation, Stand-in, Room, Coordination,
 and Settings.
 
 **Requirements:** R6, R7, R8, R9, R10, R12, R16; F2, F3, F5; AE4, AE5, AE6,
@@ -496,7 +496,7 @@ AE7, AE9, AE10, AE13
 - Modify: `apps/desktop/src/renderer/src/App.tsx`
 - Modify: `apps/desktop/src/renderer/src/api.ts`
 - Modify: `apps/desktop/src/renderer/src/views/TeamPulseView.tsx`
-- Modify: `apps/desktop/src/renderer/src/views/RepresentativeView.tsx`
+- Modify: `apps/desktop/src/renderer/src/views/Stand-inView.tsx`
 - Modify: `apps/desktop/src/renderer/src/views/ProjectRoomView.tsx`
 - Modify: `apps/desktop/src/renderer/src/views/SettingsView.tsx`
 - Modify: `apps/desktop/src/renderer/src/styles.css`
@@ -510,7 +510,7 @@ AE7, AE9, AE10, AE13
   initials across navigation, Workstreams, and messages.
 - Replace the fixed date with locale formatting and calculate stale labels from
   server timestamps.
-- Derive the Representative peek from the latest durable Representative
+- Derive the Stand-in peek from the latest durable Stand-in
   message, or show a truthful empty state.
 - Remove the inactive attachment control.
 - Render coordination action, sequence, scope, and policy only when they exist
@@ -581,7 +581,7 @@ durable Spec data and a recoverable local draft.
 - Publish new Specs and next revisions using the current configured human
   principal; invalidate/retain reviews through existing domain rules.
 - Render actual review responses by revision and visually distinguish
-  Representative analysis from human acknowledgement/approval.
+  Stand-in analysis from human acknowledgement/approval.
 
 **Execution note:** Start with reload/remount draft recovery and next-revision
 tests, then implement UI behavior.
@@ -589,7 +589,7 @@ tests, then implement UI behavior.
 **Patterns to follow:**
 
 - Version and invalidation logic in
-  `packages/representative-core/src/spec-review.ts`
+  `packages/stand-in-core/src/spec-review.ts`
 - Safe Markdown boundary in
   `apps/desktop/src/renderer/src/components/SafeMarkdown.tsx`
 
@@ -608,7 +608,7 @@ tests, then implement UI behavior.
   state.
 - Covers AE12: only reviews valid for the current revision render as current;
   invalidated reviews remain visibly historical.
-- Authority path: Representative impact analysis never renders as human
+- Authority path: Stand-in impact analysis never renders as human
   approval.
 
 **Verification:**
@@ -644,7 +644,7 @@ Chinese-first instance populated only through real product entry points.
   daemon, and submit a real semantic checkpoint through the supported
   integration path.
 - Validate Chinese default, English switch, empty/error states, live Workstream,
-  Representative freshness, Settings data, Spec draft/publish/reload, and
+  Stand-in freshness, Settings data, Spec draft/publish/reload, and
   Action Inbox navigation in the running application.
 
 **Test scenarios:**
@@ -676,7 +676,7 @@ Chinese-first instance populated only through real product entry points.
 flowchart TB
     Hook["Coding Agent hook/MCP"]
     Daemon["Local daemon"]
-    Sidecar["Local Representative"]
+    Sidecar["Local Stand-in"]
     API["Public API"]
     Database["PostgreSQL"]
     Desktop["Electron + localized renderer"]
@@ -708,7 +708,7 @@ flowchart TB
   privacy and freshness handoff.
 - **Unchanged invariants:** Local paths do not enter public state; raw Agent
   sessions are not collected; capability policy remains code-enforced; human
-  approval remains distinct from Representative analysis; Intero does not
+  approval remains distinct from Stand-in analysis; Intero does not
   control Coding Agent execution.
 
 ---

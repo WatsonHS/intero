@@ -22,10 +22,26 @@ import {
 } from "../api.js";
 import { confidencePercent, initials } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
+import { usePilotOptional } from "../pilot/context.js";
+import { PilotTestSetupFlow } from "./pilot/PilotSetupView.js";
 
 const SETUP_STEP_IDS = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"] as const;
 
-export function SetupView({ onDone }: { onDone: () => void }) {
+export function SetupView({
+  mode = "canonical",
+  onDone,
+}: {
+  mode?: "canonical" | "pilot-test";
+  onDone: () => void;
+}) {
+  const pilot = usePilotOptional();
+  if (mode === "pilot-test" && pilot?.enabled) {
+    return <PilotTestSetupFlow onDone={onDone} />;
+  }
+  return <DesktopSetupView onDone={onDone} />;
+}
+
+function DesktopSetupView({ onDone }: { onDone: () => void }) {
   const { locale, t } = useI18n();
   const [step, setStep] = useState(1);
   const queryClient = useQueryClient();
@@ -466,12 +482,12 @@ export function SetupView({ onDone }: { onDone: () => void }) {
                     </span>
                     <span className="grid">
                       <strong className="text-[13px] font-[620]">
-                        {t("setup.s7.repName", {
+                        {t("setup.s7.standInName", {
                           name: currentPrincipal?.displayName ?? "—",
                         })}
                       </strong>
                       <small className="mt-1 text-[11px] text-ink-muted">
-                        {t("setup.s7.repSub")}
+                        {t("setup.s7.standInSub")}
                       </small>
                     </span>
                   </div>

@@ -1,58 +1,197 @@
-import { makeWorkerUtils, run, type TaskList } from "graphile-worker";
+import { loadWorkerServiceConfig, PrivacySafeMetrics } from "@intero/config";
+import { OrganizationId } from "@intero/domain";
+import { createServer } from "node:http";
+import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
+import {
+  makeWorkerUtils,
+  run,
+  type JobHelpers,
+  type TaskList,
+} from "graphile-worker";
 import { Pool } from "pg";
 
+import { NormalizedPostgresPilotStore } from "../../server-api/src/normalized-postgres-pilot-store.js";
+import {
+  InstrumentedModelGateway,
+  MembershipAuthorizationAdapter,
+  PollingRealtimeAdapter,
+  ProjectInternalCoordinationTransport,
+} from "../../server-api/src/pilot-ports.js";
+import { PilotStandInJobHandler } from "../../server-api/src/pilot-service.js";
+import { AesGcmProviderSecretCipher } from "../../server-api/src/provider-secrets.js";
+import { SpiceDbAuthorization } from "../../server-api/src/spicedb-authorization.js";
+import { SpiceDbPilotAuthorization } from "../../server-api/src/spicedb-pilot-authorization.js";
+import { VercelAiModelGateway } from "../../server-api/src/vercel-model-gateway.js";
 import {
   CentrifugoRealtime,
   OutboxDispatcher,
   PostgresOutboxRepository,
 } from "./outbox.js";
-import { PostgresPublicRepresentativeRepository } from "./postgres-repository.js";
 import {
-  PublicRepresentativeWorker,
-  type PublicRepresentativeRun,
+  GraphileJobRunner,
+  PILOT_DISPATCH_TASK,
+  PILOT_RECONCILE_TASK,
+  PILOT_STAND_IN_TASK,
+  PilotJobOutboxDispatcher,
+  type PilotJobReference,
+  PostgresPilotJobRepository,
+} from "./pilot-jobs.js";
+import { PostgresPublicStandInRepository } from "./postgres-repository.js";
+import {
+  PublicStandInWorker,
+  type PublicStandInRun,
 } from "./runtime.js";
 
-const connectionString = process.env.INTERO_DATABASE_URL;
+const serviceConfig = loadWorkerServiceConfig();
+const pilotAdapterConfig = serviceConfig.pilot;
+const connectionString = pilotAdapterConfig.databaseUrl;
 if (!connectionString) {
   throw new Error("INTERO_DATABASE_URL is required for server-worker.");
 }
-const queueConnectionString = process.env.INTERO_WORKER_DATABASE_URL;
-if (!queueConnectionString) {
+const queueConnectionString = serviceConfig.workerDatabaseUrl;
+const organizationId = OrganizationId.parse(serviceConfig.organizationId);
+const providerEncryptionSecret = pilotAdapterConfig.providerEncryptionKey;
+if (!providerEncryptionSecret) {
   throw new Error(
-    "INTERO_WORKER_DATABASE_URL is required for the Graphile Worker queue.",
+    "INTERO_PROVIDER_ENCRYPTION_KEY is required for Stand-in jobs.",
   );
 }
-const organizationId = process.env.INTERO_ORGANIZATION_ID;
-const representativeId = process.env.INTERO_PUBLIC_REPRESENTATIVE_ID;
-if (!organizationId || !representativeId) {
-  throw new Error(
-    "INTERO_ORGANIZATION_ID and INTERO_PUBLIC_REPRESENTATIVE_ID are required.",
-  );
-}
-const repository = new PostgresPublicRepresentativeRepository(
-  new Pool({ connectionString }),
-  organizationId,
-  representativeId,
-);
-const representative = new PublicRepresentativeWorker(repository);
-const outboxRepository = new PostgresOutboxRepository(
+
+const workerId = `${hostname()}-${process.pid}-${randomUUID()}`;
+const startedAt = new Date().toISOString();
+const pilotStore = new NormalizedPostgresPilotStore(
   new Pool({ connectionString }),
   organizationId,
 );
-const outbox = new OutboxDispatcher(
-  organizationId,
-  outboxRepository,
-  new CentrifugoRealtime(
-    process.env.INTERO_CENTRIFUGO_API_URL ?? "http://127.0.0.1:8000",
-    process.env.INTERO_CENTRIFUGO_API_KEY,
+const spiceDbEndpoint = pilotAdapterConfig.spiceDbEndpoint;
+const spiceDbToken = pilotAdapterConfig.spiceDbToken;
+const spiceDb =
+  pilotAdapterConfig.authorization === "spicedb" &&
+  spiceDbEndpoint &&
+  spiceDbToken
+    ? new SpiceDbAuthorization({
+        endpoint: spiceDbEndpoint,
+        token: spiceDbToken,
+        insecureLocalhost: serviceConfig.spiceDbInsecure,
+      })
+    : undefined;
+const authorization = spiceDb
+  ? new SpiceDbPilotAuthorization(pilotStore, spiceDb)
+  : new MembershipAuthorizationAdapter(pilotStore);
+const coordination = new ProjectInternalCoordinationTransport(pilotStore);
+const metrics = new PrivacySafeMetrics();
+const model = new InstrumentedModelGateway(
+  new VercelAiModelGateway(
+    () => pilotStore.getProviderConfiguration(),
+    new AesGcmProviderSecretCipher(providerEncryptionSecret),
   ),
+  metrics,
 );
+const standInHandler = new PilotStandInJobHandler(
+  pilotStore,
+  authorization,
+  model,
+  coordination,
+  new PollingRealtimeAdapter(),
+);
+const pilotJobRepository = new PostgresPilotJobRepository(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const workerUtils = await makeWorkerUtils({
+  connectionString: queueConnectionString,
+});
+const graphileJobs = new GraphileJobRunner(workerUtils, organizationId);
+const pilotOutbox = new PilotJobOutboxDispatcher(
+  pilotJobRepository,
+  graphileJobs,
+);
+
 const tasks: TaskList = {
-  public_representative_run: async (payload) => {
-    await representative.run(payload as PublicRepresentativeRun);
+  [PILOT_STAND_IN_TASK]: async (
+    payload: unknown,
+    helpers: JobHelpers,
+  ) => {
+    const reference = payload as PilotJobReference;
+    try {
+      await standInHandler.handleJobKey(reference.jobKey, {
+        workerId,
+        attempt: helpers.job.attempts,
+        maxAttempts: helpers.job.max_attempts,
+      });
+      metrics.observeWorkerJob("success", helpers.job.attempts - 1);
+    } catch (error) {
+      metrics.observeWorkerJob(
+        helpers.job.attempts >= helpers.job.max_attempts ? "failure" : "retry",
+        helpers.job.attempts - 1,
+      );
+      throw error;
+    }
   },
-  dispatch_outbox: async (_payload, helpers) => {
-    await outbox.dispatch();
+  [PILOT_DISPATCH_TASK]: async (_payload, helpers) => {
+    await pilotOutbox.dispatch();
+    await helpers.addJob(
+      PILOT_DISPATCH_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 1_000),
+        maxAttempts: 25,
+        jobKey: "intero-pilot-stand-in-dispatch-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+  [PILOT_RECONCILE_TASK]: async (_payload, helpers) => {
+    const olderThan = new Date(Date.now() - 60_000).toISOString();
+    await pilotJobRepository.reconcilePending(olderThan);
+    await pilotOutbox.dispatch();
+    await helpers.addJob(
+      PILOT_RECONCILE_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 15_000),
+        maxAttempts: 25,
+        jobKey: "intero-pilot-stand-in-reconcile-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+};
+
+const standInId = process.env.INTERO_PUBLIC_STAND_IN_ID;
+let publicRepository: PostgresPublicStandInRepository | undefined;
+if (standInId) {
+  publicRepository = new PostgresPublicStandInRepository(
+    new Pool({ connectionString }),
+    organizationId,
+    standInId,
+  );
+  const publicStandIn = new PublicStandInWorker(publicRepository);
+  tasks.public_stand_in_run = async (payload) => {
+    await publicStandIn.run(payload as PublicStandInRun);
+  };
+}
+
+const centrifugoApiUrl = pilotAdapterConfig.centrifugoApiUrl;
+let realtimeOutboxRepository: PostgresOutboxRepository | undefined;
+let centrifugoRealtime: CentrifugoRealtime | undefined;
+if (centrifugoApiUrl) {
+  realtimeOutboxRepository = new PostgresOutboxRepository(
+    new Pool({ connectionString }),
+    organizationId,
+  );
+  centrifugoRealtime = new CentrifugoRealtime(
+    centrifugoApiUrl,
+    pilotAdapterConfig.centrifugoApiKey,
+  );
+  const realtimeOutbox = new OutboxDispatcher(
+    organizationId,
+    realtimeOutboxRepository,
+    centrifugoRealtime,
+  );
+  tasks.dispatch_outbox = async (_payload, helpers) => {
+    await realtimeOutbox.dispatch();
     await helpers.addJob(
       "dispatch_outbox",
       {},
@@ -63,28 +202,196 @@ const tasks: TaskList = {
         jobKeyMode: "replace",
       },
     );
-  },
-};
+  };
+}
 
-const workerUtils = await makeWorkerUtils({
-  connectionString: queueConnectionString,
+await pilotJobRepository.heartbeat({
+  workerId,
+  status: "starting",
+  startedAt,
+  now: startedAt,
+  metadata: { runtime: "graphile-worker", concurrency: workerConcurrency() },
 });
-await workerUtils.addJob(
-  "dispatch_outbox",
-  {},
-  {
-    maxAttempts: 25,
-    jobKey: "intero-outbox-dispatch-loop",
-    jobKeyMode: "replace",
-  },
-);
-await workerUtils.release();
+await Promise.all([
+  workerUtils.addJob(
+    PILOT_DISPATCH_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-pilot-stand-in-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  workerUtils.addJob(
+    PILOT_RECONCILE_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-pilot-stand-in-reconcile-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  ...(centrifugoApiUrl
+    ? [
+        workerUtils.addJob(
+          "dispatch_outbox",
+          {},
+          {
+            maxAttempts: 25,
+            jobKey: "intero-outbox-dispatch-loop",
+            jobKeyMode: "replace",
+          },
+        ),
+      ]
+    : []),
+]);
+await pilotJobRepository.heartbeat({
+  workerId,
+  status: "ready",
+  startedAt,
+  now: new Date().toISOString(),
+  metadata: { runtime: "graphile-worker", concurrency: workerConcurrency() },
+});
 
-await run(
-  {
-    connectionString: queueConnectionString,
-    concurrency: Number(process.env.INTERO_WORKER_CONCURRENCY ?? 8),
-    noHandleSignals: false,
-  },
-  tasks,
-);
+let workerStatus: "starting" | "ready" | "stopping" = "ready";
+let realtimeHealthy = true;
+await updateOperationalHealth();
+const metricsServer = createServer((request, response) => {
+  if (request.url === "/health") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ status: "ok", service: "intero-worker" }));
+    return;
+  }
+  if (request.url === "/ready") {
+    const status =
+      workerStatus === "ready"
+        ? realtimeHealthy
+          ? "ready"
+          : "degraded"
+        : "unavailable";
+    response.writeHead(workerStatus === "ready" ? 200 : 503, {
+      "content-type": "application/json",
+    });
+    response.end(
+      JSON.stringify({
+        status,
+        dependencies: {
+          worker: workerStatus,
+          realtime: realtimeHealthy ? "ready" : "unavailable",
+        },
+      }),
+    );
+    return;
+  }
+  if (request.url === "/metrics") {
+    response.writeHead(200, {
+      "content-type": "text/plain; version=0.0.4; charset=utf-8",
+    });
+    response.end(metrics.renderPrometheus());
+    return;
+  }
+  response.writeHead(404).end();
+});
+await new Promise<void>((resolve, reject) => {
+  metricsServer.once("error", reject);
+  metricsServer.listen(
+    serviceConfig.metricsPort,
+    serviceConfig.metricsHost,
+    resolve,
+  );
+});
+
+const heartbeatTimer = setInterval(() => {
+  void updateOperationalHealth().catch(() => undefined);
+}, 5_000);
+heartbeatTimer.unref();
+
+let resolveStopRequested: ((signal: "SIGINT" | "SIGTERM") => void) | undefined;
+const stopRequested = new Promise<"SIGINT" | "SIGTERM">((resolve) => {
+  resolveStopRequested = resolve;
+});
+const handleSigint = () => resolveStopRequested?.("SIGINT");
+const handleSigterm = () => resolveStopRequested?.("SIGTERM");
+process.once("SIGINT", handleSigint);
+process.once("SIGTERM", handleSigterm);
+
+try {
+  const runner = await run(
+    {
+      connectionString: queueConnectionString,
+      concurrency: workerConcurrency(),
+      noHandleSignals: true,
+    },
+    tasks,
+  );
+  const outcome = await Promise.race([
+    runner.promise.then(() => ({ type: "completed" as const })),
+    stopRequested.then((signal) => ({ type: "signal" as const, signal })),
+  ]);
+  if (outcome.type === "signal") {
+    await runner.stop(outcome.signal);
+  }
+  await runner.promise;
+} finally {
+  process.off("SIGINT", handleSigint);
+  process.off("SIGTERM", handleSigterm);
+  clearInterval(heartbeatTimer);
+  workerStatus = "stopping";
+  await pilotJobRepository
+    .heartbeat({
+      workerId,
+      status: "stopping",
+      startedAt,
+      now: new Date().toISOString(),
+    })
+    .catch(() => undefined);
+  await workerUtils.release();
+  await new Promise<void>((resolve, reject) =>
+    metricsServer.close((error) => (error ? reject(error) : resolve())),
+  );
+  await publicRepository?.close();
+  await realtimeOutboxRepository?.close();
+  spiceDb?.close();
+  await pilotStore.close();
+  await pilotJobRepository
+    .heartbeat({
+      workerId,
+      status: "stopped",
+      startedAt,
+      now: new Date().toISOString(),
+    })
+    .catch(() => undefined);
+  await pilotJobRepository.close();
+}
+
+function workerConcurrency(): number {
+  return serviceConfig.concurrency;
+}
+
+async function updateOperationalHealth(): Promise<void> {
+  const operational = await pilotJobRepository.getOperationalMetrics();
+  metrics.setQueueDepth("stand_in", operational.standInQueueDepth);
+  metrics.setQueueDepth("realtime_outbox", operational.realtimeOutboxDepth);
+  const realtimeReadiness = centrifugoRealtime
+    ? await centrifugoRealtime.checkReadiness()
+    : { status: "ready" as const };
+  realtimeHealthy = realtimeReadiness.status === "ready";
+  metrics.setRealtimeHealth(
+    centrifugoRealtime ? "centrifugo" : "polling",
+    realtimeHealthy,
+  );
+  await pilotJobRepository.heartbeat({
+    workerId,
+    status: "ready",
+    startedAt,
+    now: new Date().toISOString(),
+    metadata: {
+      runtime: "graphile-worker",
+      concurrency: workerConcurrency(),
+      standInQueueDepth: operational.standInQueueDepth,
+      realtimeOutboxDepth: operational.realtimeOutboxDepth,
+      terminalFailures: operational.terminalFailures,
+      realtimeHealthy,
+    },
+  });
+}

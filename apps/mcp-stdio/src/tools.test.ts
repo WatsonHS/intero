@@ -27,7 +27,7 @@ describe("MCP tool handlers", () => {
     });
     expect(daemon.calls).toEqual([
       {
-        method: "representative.report_checkpoint",
+        method: "stand_in.report_checkpoint",
         params: {
           workspaceId: "019b5ac0-7600-7000-8000-000000000001",
           workstreamId: "019b5ac0-7600-7000-8000-000000000002",
@@ -70,12 +70,12 @@ describe("MCP tool handlers", () => {
     ).toThrow("forbidden raw-content");
   });
 
-  it("waits for the Local Representative's structured result", async () => {
+  it("waits for the Local Stand-in's structured result", async () => {
     class CompletingDaemon implements DaemonClient {
       calls = 0;
 
       async call(method: string): Promise<unknown> {
-        if (method === "representative.lookup_decision") {
+        if (method === "stand_in.lookup_decision") {
           return { accepted: true, queued: true, requestId: "request-1" };
         }
         this.calls += 1;
@@ -139,7 +139,7 @@ describe("MCP tool handlers", () => {
         },
       },
       {
-        method: "representative.report_checkpoint",
+        method: "stand_in.report_checkpoint",
         params: {
           workspaceId: "019b5ac0-7600-7000-8000-000000000001",
           workstreamId: "019b5ac0-7600-7000-8000-000000000002",

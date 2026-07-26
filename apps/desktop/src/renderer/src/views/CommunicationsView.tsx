@@ -8,10 +8,17 @@ import {
   LockSimpleIcon,
   MagnifyingGlassIcon,
   PlusIcon,
+  RobotIcon,
+  UserPlusIcon,
 } from "@phosphor-icons/react";
-import type { ConversationThread, ThreadMessage } from "@intero/domain";
+import type {
+  ConversationThread,
+  PilotStandInAnswerDetail,
+  PrincipalId,
+  ThreadMessage,
+} from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import {
   createConversationThread,
@@ -26,12 +33,25 @@ import {
 import { initials, tintFor } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import {
+  pilotDmToThreadPayload,
+  pilotStandInToThreadPayload,
+} from "../pilot/adapters.js";
+import {
+  addPilotStandIn,
+  askPilotStandIn,
+  createPilotDm,
+  getPilotDms,
+  getPilotStandIn,
+  sendPilotDm,
+} from "../pilot/api.js";
+import { usePilotOptional } from "../pilot/context.js";
 
 const THREAD_GROUPS: Array<{
   kind: ConversationThread["kind"];
   label: TranslationKey;
 }> = [
-  { kind: "representative", label: "chat.group.rep" },
+  { kind: "stand_in", label: "chat.group.standIn" },
   { kind: "human_group", label: "chat.group.temp" },
   { kind: "room", label: "chat.group.rooms" },
   { kind: "human_direct", label: "chat.group.direct" },
@@ -41,14 +61,16 @@ const RELEVANT_KINDS = new Set(THREAD_GROUPS.map((group) => group.kind));
 export function CommunicationsView() {
   const { formatRelative, formatTime, t } = useI18n();
   const queryClient = useQueryClient();
+  const pilot = usePilotOptional();
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newThreadTitle, setNewThreadTitle] = useState("");
-  const [newThreadKind, setNewThreadKind] = useState<"human_group" | "room">(
-    "human_group",
-  );
+  const [newThreadKind, setNewThreadKind] = useState<
+    "human_group" | "room" | "human_direct"
+  >("human_group");
+  const [pilotPeerId, setPilotPeerId] = useState<PrincipalId>();
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
@@ -71,12 +93,62 @@ export function CommunicationsView() {
     queryFn: ({ signal }) => getOfflineStatus(signal),
     refetchInterval: 5_000,
   });
+  const pilotDms = useQuery({
+    queryKey: ["pilot", "dms", pilot?.identityId],
+    queryFn: ({ signal }) => getPilotDms(pilot!.identityId!, signal),
+    enabled: Boolean(pilot?.enabled && pilot.identityId),
+    refetchInterval: 1_500,
+  });
+  const pilotProject = pilot?.projects.data?.projects.find(
+    (project) => project.id === pilot.selectedProjectId,
+  );
+  const pilotPrincipal = pilot?.bootstrap.data?.identities.find(
+    (principal) => principal.id === pilot.identityId,
+  );
+  const pilotStandIn = useQuery({
+    queryKey: [
+      "pilot",
+      "stand_in",
+      pilot?.identityId,
+      pilot?.selectedProjectId,
+    ],
+    queryFn: ({ signal }) =>
+      getPilotStandIn(
+        pilot!.identityId!,
+        pilot!.selectedProjectId!,
+        signal,
+      ),
+    enabled: Boolean(
+      pilot?.enabled && pilot.identityId && pilot.selectedProjectId,
+    ),
+    refetchInterval: 1_500,
+  });
   const offlinePublic = offline.data?.fallback === "public";
   const offlineTime = offline.data?.freshnessAt
     ? formatRelative(offline.data.freshnessAt)
     : t("general.unavailable");
 
-  const allItems = threads.data?.items ?? [];
+  const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
+    pilotDmToThreadPayload(
+      item,
+      pilotDms.data?.principals ?? [],
+      pilot?.identityId,
+    ),
+  );
+  const pilotStandInItem =
+    pilotProject && pilotPrincipal && pilot?.bootstrap.data?.standIn
+      ? pilotStandInToThreadPayload(
+          pilotProject,
+          pilotStandIn.data?.exchanges ?? [],
+          pilotPrincipal,
+          pilot.bootstrap.data.standIn,
+        )
+      : undefined;
+  const allItems = [
+    ...(pilotStandInItem ? [pilotStandInItem] : []),
+    ...(threads.data?.items ?? []),
+    ...pilotItems,
+  ];
   const items = allItems.filter((item) => RELEVANT_KINDS.has(item.thread.kind));
   const query = search.trim().toLocaleLowerCase();
   const visibleItems = query
@@ -90,33 +162,93 @@ export function CommunicationsView() {
     : items;
   const current =
     items.find((item) => item.thread.id === selectedThreadId) ?? items[0];
+  const currentPilotItem = pilotDms.data?.items.find(
+    (item) => item.thread.id === current?.thread.id,
+  );
+  const currentIsPilot = currentPilotItem !== undefined;
+  const currentIsPilotStandIn =
+    pilotStandInItem?.thread.id === current?.thread.id;
   const principals = collectPrincipals(allItems, pulse.data?.principals ?? [], [
     bootstrap.data?.currentPrincipal,
-    bootstrap.data?.representativePrincipal,
+    bootstrap.data?.standInPrincipal,
+    ...(pilotDms.data?.principals ?? []),
   ]);
   const principalNames = buildPrincipalNames(principals);
-  const currentSenderId = current
-    ? current.thread.participantIds.some(
-        (id) => id === bootstrap.data?.currentPrincipal.id,
-      )
-      ? bootstrap.data?.currentPrincipal.id
-      : current.thread.participantIds.find(
-          (id) => !current.thread.representativeIds.includes(id),
+  const pilotPeers = [
+    ...new Map(
+      (pilot?.teams.data?.teams ?? [])
+        .flatMap((team) => team.members)
+        .filter(
+          (member) =>
+            member.kind === "human" && member.id !== pilot?.identityId,
         )
-    : undefined;
+        .map((member) => [member.id, member]),
+    ).values(),
+  ];
+  const currentSenderId = !current
+    ? undefined
+    : currentIsPilot || currentIsPilotStandIn
+      ? pilot?.identityId
+      : current.thread.participantIds.some(
+            (id) => id === bootstrap.data?.currentPrincipal.id,
+          )
+        ? bootstrap.data?.currentPrincipal.id
+        : current.thread.participantIds.find(
+            (id) => !current.thread.standInIds.includes(id),
+          );
 
   const send = useMutation({
-    mutationFn: sendThreadMessage,
+    mutationFn: async (input: {
+      threadId: string;
+      senderId: string;
+      body: string;
+      mode: "canonical" | "pilot-dm" | "pilot-stand-in";
+    }) => {
+      if (input.mode === "pilot-dm") {
+        await sendPilotDm(
+          input.senderId as PrincipalId,
+          input.threadId,
+          input.body,
+        );
+        return;
+      }
+      if (input.mode === "pilot-stand-in") {
+        await askPilotStandIn(
+          input.senderId as PrincipalId,
+          pilot!.selectedProjectId!,
+          input.body,
+        );
+        return;
+      }
+      await sendThreadMessage(input);
+    },
     onSuccess: async () => {
       setDraft("");
-      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+        queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["pilot", "stand_in"],
+        }),
+      ]);
     },
   });
   const create = useMutation({
     mutationFn: async () => {
+      if (newThreadKind === "human_direct") {
+        const teamId = pilot?.teams.data?.teams[0]?.id;
+        if (!pilot?.identityId || !teamId || !pilotPeerId) {
+          throw new Error("Choose a team member.");
+        }
+        const result = await createPilotDm(pilot.identityId, {
+          teamId,
+          peerId: pilotPeerId,
+        });
+        return { threadId: result.thread.id };
+      }
       const identity = bootstrap.data;
       if (!identity) throw new Error("Identity is unavailable.");
-      return createConversationThread({
+      const thread = await createConversationThread({
         kind: newThreadKind,
         title:
           newThreadTitle.trim() ||
@@ -125,30 +257,42 @@ export function CommunicationsView() {
             : t("chat.defaultGroupTitle")),
         participantIds: [
           identity.currentPrincipal.id,
-          identity.representativePrincipal.id,
+          identity.standInPrincipal.id,
         ],
-        representativeIds: [identity.representativePrincipal.id],
+        standInIds: [identity.standInPrincipal.id],
       });
+      return { threadId: thread.id };
     },
-    onSuccess: async (thread) => {
+    onSuccess: async ({ threadId }) => {
       setNewThreadTitle("");
+      setPilotPeerId(undefined);
       setShowCreate(false);
-      setSelectedThreadId(thread.id);
-      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+      setSelectedThreadId(threadId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+        queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
+      ]);
     },
   });
-  const createRepresentative = useMutation({
+  const addStandIn = useMutation({
+    mutationFn: (threadId: string) =>
+      addPilotStandIn(pilot!.identityId!, threadId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] });
+    },
+  });
+  const createStandIn = useMutation({
     mutationFn: async () => {
       const identity = bootstrap.data;
       if (!identity) throw new Error("Identity is unavailable.");
       return createConversationThread({
-        kind: "representative",
-        title: t("chat.group.rep"),
+        kind: "stand_in",
+        title: t("chat.group.standIn"),
         participantIds: [
           identity.currentPrincipal.id,
-          identity.representativePrincipal.id,
+          identity.standInPrincipal.id,
         ],
-        representativeIds: [identity.representativePrincipal.id],
+        standInIds: [identity.standInPrincipal.id],
       });
     },
     onSuccess: async (thread) => {
@@ -171,6 +315,11 @@ export function CommunicationsView() {
       threadId: current.thread.id,
       senderId: currentSenderId,
       body: draft.trim(),
+      mode: currentIsPilot
+        ? "pilot-dm"
+        : currentIsPilotStandIn
+          ? "pilot-stand-in"
+          : "canonical",
     });
   }
 
@@ -237,15 +386,20 @@ export function CommunicationsView() {
       );
     }
 
-    const isRepresentative = thread.representativeIds.includes(
+    const isStandIn = thread.standInIds.includes(
       message.senderId,
     );
     const senderName =
       principalNames.get(message.senderId) ?? message.senderId.slice(0, 8);
 
-    if (isRepresentative) {
+    if (isStandIn) {
       const ownerName = ownerNameFor(thread, principalNames);
       const isOpen = expanded.has(message.id);
+      const groundedExchange = currentIsPilotStandIn
+        ? pilotStandIn.data?.exchanges.find(
+            (exchange) => exchange.answerMessageId === message.id,
+          )
+        : undefined;
       return (
         <div className="grid grid-cols-[30px_minmax(0,1fr)] gap-3">
           <span
@@ -280,6 +434,12 @@ export function CommunicationsView() {
                 ? message.body
                 : t("chat.encryptedMessage")}
             </p>
+            {groundedExchange?.structuredAnswer ? (
+              <StandInAnswerContent
+                answer={groundedExchange.structuredAnswer}
+                testId={`pilot-stand-in-answer-${message.id}`}
+              />
+            ) : null}
             <button
               type="button"
               className="mt-[13px] flex w-full items-center gap-2 border-0 border-t border-line bg-transparent pt-[11px] text-[10.5px] text-green cursor-pointer"
@@ -297,18 +457,45 @@ export function CommunicationsView() {
               </span>
             </button>
             {isOpen ? (
-              <p className="mt-[11px] rounded-[10px] bg-raise p-[12px_14px] font-mono text-[11.5px] leading-[1.7] text-ink-muted">
-                seq {message.sequence} · {thread.accessMode}
-              </p>
+              <div className="mt-[11px] grid gap-2 rounded-[10px] bg-raise p-[12px_14px]">
+                {groundedExchange?.sources.map((source) => (
+                  <div
+                    key={source.workStateId}
+                    data-testid={`pilot-stand-in-source-${source.workStateId}`}
+                    className="grid gap-1 text-[10.5px] leading-[1.55] text-ink-muted"
+                  >
+                    <strong className="font-[620] text-ink">
+                      来源 · {source.title}
+                    </strong>
+                    <span>
+                      {source.provenance.client} /{" "}
+                      {source.provenance.connectionName} · 新鲜度{" "}
+                      {formatRelative(source.freshnessAt)}
+                    </span>
+                    <span className="font-mono text-[9.5px] text-faint">
+                      Work State {source.workStateId.slice(0, 8)} ·{" "}
+                      {source.eventType}
+                    </span>
+                  </div>
+                ))}
+                <p className="font-mono text-[10px] leading-[1.6] text-faint">
+                  seq {message.sequence} · {thread.accessMode}
+                </p>
+              </div>
             ) : null}
           </div>
         </div>
       );
     }
 
-    const isOwn = message.senderId === bootstrap.data?.currentPrincipal.id;
+    const isOwn = message.senderId === currentSenderId;
     return (
-      <div className="grid grid-cols-[30px_minmax(0,1fr)] gap-3">
+      <div
+        className="grid grid-cols-[30px_minmax(0,1fr)] gap-3"
+        data-testid={
+          currentIsPilot ? `pilot-dm-message-${message.sequence}` : undefined
+        }
+      >
         <span
           className="grid h-[30px] w-[30px] place-items-center rounded-full text-[9.5px] font-[650] text-on-tint"
           style={{ background: tintFor(message.senderId) }}
@@ -405,23 +592,63 @@ export function CommunicationsView() {
               >
                 {t("chat.room")}
               </button>
+              {pilot?.enabled && pilot.identityId ? (
+                <button
+                  type="button"
+                  data-testid="pilot-new-direct-message"
+                  className={
+                    newThreadKind === "human_direct"
+                      ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] font-[600] text-accent-strong cursor-pointer"
+                      : "rounded-pill bg-raise px-[9px] py-[3px] text-[10px] font-[600] text-ink-muted cursor-pointer"
+                  }
+                  onClick={() => setNewThreadKind("human_direct")}
+                >
+                  1:1 私聊
+                </button>
+              ) : null}
             </div>
-            <input
-              value={newThreadTitle}
-              onChange={(event) => setNewThreadTitle(event.target.value)}
-              placeholder={t("chat.threadTitle")}
-              aria-label={t("chat.threadTitle")}
-              className="h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none placeholder:text-faint"
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !create.isPending) {
-                  event.preventDefault();
-                  create.mutate();
+            {newThreadKind === "human_direct" ? (
+              <select
+                value={pilotPeerId ?? ""}
+                data-testid="pilot-dm-peer"
+                onChange={(event) =>
+                  setPilotPeerId(event.target.value as PrincipalId)
                 }
-              }}
-            />
+                className="h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none"
+              >
+                <option value="">选择团队成员</option>
+                {pilotPeers.map((peer) => (
+                  <option value={peer.id} key={peer.id}>
+                    {peer.displayName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={newThreadTitle}
+                onChange={(event) => setNewThreadTitle(event.target.value)}
+                placeholder={t("chat.threadTitle")}
+                aria-label={t("chat.threadTitle")}
+                className="h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none placeholder:text-faint"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !create.isPending) {
+                    event.preventDefault();
+                    create.mutate();
+                  }
+                }}
+              />
+            )}
             <button
               type="button"
-              disabled={!bootstrap.data || create.isPending}
+              data-testid={
+                newThreadKind === "human_direct" ? "pilot-create-dm" : undefined
+              }
+              disabled={
+                create.isPending ||
+                (newThreadKind === "human_direct"
+                  ? !pilotPeerId
+                  : !bootstrap.data)
+              }
               onClick={() => create.mutate()}
               className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
             >
@@ -430,10 +657,12 @@ export function CommunicationsView() {
               ) : (
                 <PlusIcon size={14} />
               )}
-              {t("chat.create")}
+              {newThreadKind === "human_direct" ? "开始私聊" : t("chat.create")}
             </button>
             {create.isError ? (
-              <p className="text-[11px] text-danger">{t("chat.createFailed")}</p>
+              <p className="text-[11px] text-danger">
+                {t("chat.createFailed")}
+              </p>
             ) : null}
           </div>
         ) : null}
@@ -500,16 +729,50 @@ export function CommunicationsView() {
                 {current.thread.title}
               </strong>
               <small className="mt-[3px] truncate text-[11px] text-ink-muted">
-                {t("chat.subPeopleReps", {
-                  people: current.thread.participantIds.length,
-                  reps: current.thread.representativeIds.length,
-                })}
+                {currentIsPilotStandIn
+                  ? "基于项目内已发布的结构化 Work State 回答"
+                  : currentIsPilot
+                    ? "同团队 · 仅参与者可见 · 持久化 1:1"
+                    : t("chat.subPeopleStandIns", {
+                        people: current.thread.participantIds.length,
+                        standIns: current.thread.standInIds.length,
+                      })}
               </small>
             </span>
+            {currentIsPilot &&
+            currentPilotItem &&
+            !currentPilotItem.thread.standInId ? (
+              <button
+                type="button"
+                data-testid="pilot-add-stand-in"
+                disabled={addStandIn.isPending}
+                onClick={() =>
+                  addStandIn.mutate(currentPilotItem.thread.id)
+                }
+                className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
+              >
+                {addStandIn.isPending ? (
+                  <CircleNotchIcon size={14} className="animate-spin" />
+                ) : (
+                  <UserPlusIcon size={14} />
+                )}
+                邀请替身
+              </button>
+            ) : currentIsPilot && currentPilotItem?.thread.standInId ? (
+              <span className="ml-auto inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong">
+                <RobotIcon size={13} />
+                替身已加入
+              </span>
+            ) : null}
           </header>
 
           <div className="overflow-auto p-[22px_26px_30px]">
             <div className="mx-auto flex max-w-[800px] flex-col gap-4">
+              {currentIsPilot && currentPilotItem?.thread.standInId ? (
+                <p className="rounded-inset bg-raise p-[12px_16px] text-center text-[11.5px] leading-[1.7] text-ink-muted">
+                  替身只会看到加入后的消息，不会读取此前的私聊历史。
+                </p>
+              ) : null}
               {offlinePublic ? (
                 <div className="flex items-center gap-[11px] rounded-[13px] border border-amber-soft bg-amber-soft p-[13px_16px]">
                   <CloudArrowDownIcon size={17} className="text-amber" />
@@ -547,12 +810,12 @@ export function CommunicationsView() {
             <div className="mx-auto max-w-[800px]">
               <div className="rounded-card border border-line2 bg-panel2 p-[11px_13px]">
                 <div className="mb-[9px] flex items-center gap-[7px]">
-                  {current.thread.representativeIds.map((repId, index) => {
-                    const name = principalNames.get(repId) ?? repId.slice(0, 8);
+                  {current.thread.standInIds.map((standInId, index) => {
+                    const name = principalNames.get(standInId) ?? standInId.slice(0, 8);
                     return (
                       <button
                         type="button"
-                        key={repId}
+                        key={standInId}
                         className={
                           index === 0
                             ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] text-accent-strong cursor-pointer"
@@ -568,11 +831,15 @@ export function CommunicationsView() {
                   })}
                   <span className="ml-auto inline-flex items-center gap-[5px] text-[10px] text-faint">
                     <LockSimpleIcon size={12} />
-                    {current.thread.accessMode === "human_only_e2ee"
-                      ? t("chat.e2ee")
-                      : offlinePublic
-                        ? t("chat.hintOffline")
-                        : t("chat.hint")}
+                    {currentIsPilot
+                      ? "仅两位参与者可见 · 暂不支持附件"
+                      : currentIsPilotStandIn
+                        ? "只使用可引用的结构化 Work State"
+                        : current.thread.accessMode === "human_only_e2ee"
+                          ? t("chat.e2ee")
+                          : offlinePublic
+                            ? t("chat.hintOffline")
+                            : t("chat.hint")}
                   </span>
                 </div>
                 <div className="grid grid-cols-[1fr_34px] items-end gap-[9px]">
@@ -612,9 +879,13 @@ export function CommunicationsView() {
                   </button>
                 </div>
               </div>
-              {send.isError ? (
+              {send.isError || addStandIn.isError ? (
                 <p className="mt-2 text-[11px] text-danger">
-                  {t("chat.sendFailed")}
+                  {send.error instanceof Error
+                    ? send.error.message
+                    : addStandIn.error instanceof Error
+                      ? addStandIn.error.message
+                      : t("chat.sendFailed")}
                 </p>
               ) : null}
             </div>
@@ -634,11 +905,11 @@ export function CommunicationsView() {
             </p>
             <button
               type="button"
-              disabled={!bootstrap.data || createRepresentative.isPending}
-              onClick={() => createRepresentative.mutate()}
+              disabled={!bootstrap.data || createStandIn.isPending}
+              onClick={() => createStandIn.mutate()}
               className="mt-1 inline-flex h-[34px] cursor-pointer items-center justify-center gap-1.5 rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
             >
-              {createRepresentative.isPending ? (
+              {createStandIn.isPending ? (
                 <CircleNotchIcon size={14} className="animate-spin" />
               ) : null}
               {t("chat.empty.start")}
@@ -646,6 +917,52 @@ export function CommunicationsView() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function AnswerLine({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[58px_minmax(0,1fr)] gap-2.5 text-[11.5px] leading-[1.6]">
+      <strong className="font-[620] text-faint">{label}</strong>
+      <span className="text-ink-muted [text-wrap:pretty]">{children}</span>
+    </div>
+  );
+}
+
+export function StandInAnswerContent({
+  answer,
+  testId,
+}: {
+  answer: PilotStandInAnswerDetail;
+  testId?: string;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      className="mt-3 grid gap-2.5 rounded-[10px] bg-raise p-[11px_13px]"
+    >
+      <AnswerLine label="当前状态">{answer.currentStatus}</AnswerLine>
+      <AnswerLine label="已完成">
+        {answer.completedOutcome || "尚无已完成结果"}
+      </AnswerLine>
+      <AnswerLine label="结果依据">
+        {answer.evidence.length > 0
+          ? answer.evidence.join("；")
+          : "当前 Work State 未提供单独依据"}
+      </AnswerLine>
+      <AnswerLine label="下一步">
+        {answer.nextStep || "尚未明确下一步"}
+      </AnswerLine>
+      <AnswerLine label="需要协作">
+        {answer.neededCollaboration || "暂不需要他人协助"}
+      </AnswerLine>
     </div>
   );
 }
@@ -704,7 +1021,7 @@ function ThreadGlyph({
   thread: ConversationThread;
   principalNames: Map<string, string>;
 }) {
-  if (thread.kind === "representative") {
+  if (thread.kind === "stand_in") {
     return (
       <span className="grid h-[30px] w-[30px] place-items-center rounded-[9px] bg-accent-strong text-[10px] font-[650] text-on-accent">
         IR
@@ -726,7 +1043,7 @@ function ThreadGlyph({
     );
   }
   const humanId = thread.participantIds.find(
-    (id) => !thread.representativeIds.includes(id),
+    (id) => !thread.standInIds.includes(id),
   );
   const name = humanId ? principalNames.get(humanId) : undefined;
   return (
@@ -748,7 +1065,7 @@ function ownerNameFor(
   principalNames: Map<string, string>,
 ): string {
   const humanId = thread.participantIds.find(
-    (id) => !thread.representativeIds.includes(id),
+    (id) => !thread.standInIds.includes(id),
   );
   if (!humanId) return "—";
   return principalNames.get(humanId) ?? humanId.slice(0, 8);

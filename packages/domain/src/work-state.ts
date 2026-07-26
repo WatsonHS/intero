@@ -16,7 +16,7 @@ export const ClaimSourceType = z.enum([
   "direct_observation",
   "coding_agent_report",
   "project_system",
-  "representative_inference",
+  "stand_in_inference",
 ]);
 export type ClaimSourceType = z.infer<typeof ClaimSourceType>;
 

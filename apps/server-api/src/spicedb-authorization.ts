@@ -86,12 +86,44 @@ export class SpiceDbAuthorization implements AuthorizationPort {
     return response.writtenAt?.token;
   }
 
+  async checkReadiness(): Promise<{
+    status: "ready" | "unavailable";
+    detail?: string;
+  }> {
+    try {
+      const response = await unary<v1.ReadSchemaResponse>((callback) =>
+        this.#client.readSchema(
+          v1.ReadSchemaRequest.create(),
+          { deadline: Date.now() + this.#timeoutMs },
+          callback,
+        ),
+      );
+      if (!response.schemaText.includes("definition project")) {
+        return {
+          status: "unavailable",
+          detail: "spicedb_schema_missing",
+        };
+      }
+      return { status: "ready" };
+    } catch {
+      return {
+        status: "unavailable",
+        detail: "spicedb_unavailable",
+      };
+    }
+  }
+
   async touchRelationship(input: {
     resourceType: string;
     resourceId: string;
     relation: string;
-    principalId: string;
+    principalId?: string;
+    subjectType?: string;
+    subjectId?: string;
+    subjectRelation?: string;
   }): Promise<string | undefined> {
+    const subjectId = input.subjectId ?? input.principalId;
+    if (!subjectId) throw new Error("A relationship subject is required.");
     const response = await unary<v1.WriteRelationshipsResponse>((callback) =>
       this.#client.writeRelationships(
         v1.WriteRelationshipsRequest.create({
@@ -106,9 +138,12 @@ export class SpiceDbAuthorization implements AuthorizationPort {
                 relation: input.relation,
                 subject: v1.SubjectReference.create({
                   object: v1.ObjectReference.create({
-                    objectType: "principal",
-                    objectId: input.principalId,
+                    objectType: input.subjectType ?? "principal",
+                    objectId: subjectId,
                   }),
+                  ...(input.subjectRelation
+                    ? { optionalRelation: input.subjectRelation }
+                    : {}),
                 }),
               }),
             }),

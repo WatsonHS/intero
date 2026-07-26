@@ -4,6 +4,7 @@ export * from "./coordination.js";
 export * from "./events.js";
 export * from "./ids.js";
 export * from "./platform.js";
+export * from "./pilot.js";
 export * from "./project-management.js";
 export * from "./specs.js";
 export * from "./work-state.js";

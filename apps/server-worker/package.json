@@ -7,14 +7,19 @@
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx src/migrate.ts",
+    "migrate:all": "tsx src/migrate-all.ts",
     "test:database": "vitest run --root ../.. apps/server-worker/src/postgres-repository.integration.test.ts",
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.14",
+    "@authzed/authzed-node": "^1.6.1",
     "@intero/config": "workspace:*",
     "@intero/domain": "workspace:*",
-    "@intero/representative-core": "workspace:*",
+    "@intero/stand-in-core": "workspace:*",
+    "ai": "^7.0.37",
     "graphile-worker": "^0.17.3",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "pino": "^9.14.0"
   }
 }

@@ -34,7 +34,9 @@ export class PostgresOutboxRepository implements OutboxRepository {
         `WITH candidates AS (
            SELECT operation_id
            FROM outbox
-           WHERE completed_at IS NULL AND available_at <= now()
+           WHERE completed_at IS NULL
+             AND available_at <= now()
+             AND topic <> 'pilot.stand_in.enqueue'
            ORDER BY available_at, operation_id
            FOR UPDATE SKIP LOCKED
            LIMIT $1
@@ -138,6 +140,25 @@ export class CentrifugoRealtime implements RealtimePublisher {
       );
     }
   }
+
+  async checkReadiness(): Promise<{
+    status: "ready" | "unavailable";
+    detail?: string;
+  }> {
+    try {
+      const response = await fetch(`${this.apiUrl.replace(/\/$/, "")}/health`, {
+        signal: AbortSignal.timeout(2_000),
+      });
+      return response.ok
+        ? { status: "ready" }
+        : { status: "unavailable", detail: "centrifugo_unhealthy" };
+    } catch {
+      return {
+        status: "unavailable",
+        detail: "centrifugo_unavailable",
+      };
+    }
+  }
 }
 
 export class OutboxDispatcher {
@@ -152,11 +173,20 @@ export class OutboxDispatcher {
     let firstError: Error | undefined;
     for (const publication of publications) {
       try {
-        await this.realtime.publish(`intero:${this.organizationId}`, {
-          operationId: publication.operationId,
-          topic: publication.topic,
-          ...publication.payload,
-        });
+        const projectId =
+          typeof publication.payload.projectId === "string"
+            ? publication.payload.projectId
+            : undefined;
+        await this.realtime.publish(
+          projectId
+            ? `intero:project:${projectId}`
+            : `intero:organization:${this.organizationId}`,
+          {
+            operationId: publication.operationId,
+            topic: publication.topic,
+            ...publication.payload,
+          },
+        );
         await this.repository.markCompleted(publication.operationId);
       } catch (error) {
         const normalized =

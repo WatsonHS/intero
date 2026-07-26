@@ -13,7 +13,7 @@ does not define these product-domain semantics.
 
 ## Decision
 
-Intero uses a versioned internal Coordination Protocol. Every Representative
+Intero uses a versioned internal Coordination Protocol. Every Stand-in
 exchange contains:
 
 - a human-readable message;
@@ -26,7 +26,7 @@ future mapping to A2A Agent Cards, Messages, Tasks, Artifacts, contexts, and
 extensions.
 
 After the internal product stabilizes, an A2A Gateway may expose the Public
-Representative. External Agents map to Intero principals and remain subject
+Stand-in. External Agents map to Intero principals and remain subject
 to Capability Policy, SpiceDB, and public projection. Agent discovery never
 grants authorization.
 

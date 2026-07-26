@@ -7,10 +7,24 @@ definition organization {
   permission manage = admin
 }
 
-definition project {
+definition team {
   relation organization: organization
   relation member: principal
+  relation leader: principal
   relation manager: principal
+  permission participate = member + leader
+  permission manage_members = leader + manager + organization->manage
+  permission view = member + leader + organization->manage
+}
+
+definition project {
+  relation organization: organization
+  relation participating_team: team
+  relation member: principal
+  relation manager: principal
+  relation owner: principal
+  permission participate = owner + member + participating_team->participate
+  permission manage_collaboration = owner + manager
   permission view = member + manager + organization->view
   permission manage = manager + organization->manage
 }
@@ -18,9 +32,9 @@ definition project {
 definition thread {
   relation project: project
   relation participant: principal
-  relation representative: principal
-  permission view = participant + representative + project->manage
-  permission post = participant + representative
+  relation stand_in: principal
+  permission view = participant + stand_in + project->manage
+  permission post = participant + stand_in
   permission manage_access = participant
 }
 

@@ -64,7 +64,7 @@ export const TeamPulseResponse = z.object({
     z.object({
       id: z.string().uuid(),
       displayName: z.string().min(1).max(200),
-      kind: z.enum(["human", "representative", "service"]),
+      kind: z.enum(["human", "stand_in", "service"]),
     }),
   ),
   staleAfterSeconds: z.number().int().positive(),
@@ -73,7 +73,7 @@ export const TeamPulseResponse = z.object({
 export const PrincipalSummary = z.object({
   id: z.string().uuid(),
   displayName: z.string().min(1).max(200),
-  kind: z.enum(["human", "representative", "service"]),
+  kind: z.enum(["human", "stand_in", "service"]),
 });
 
 export const BootstrapResponse = z.object({
@@ -82,7 +82,7 @@ export const BootstrapResponse = z.object({
     name: z.string().min(1).max(200),
   }),
   currentPrincipal: PrincipalSummary,
-  representativePrincipal: PrincipalSummary,
+  standInPrincipal: PrincipalSummary,
 });
 
 export const CreateKanbanCardRequest = KanbanCard.omit({
@@ -123,8 +123,8 @@ export const SendThreadMessageRequest = z
     createdAt: z.iso.datetime(),
   })
   .strict();
-export const AddRepresentativeRequest = z.object({
-  representativeId: z.string().uuid(),
+export const AddStandInRequest = z.object({
+  standInId: z.string().uuid(),
   actorId: z.string().uuid(),
 });
 export const ThreadResponse = z.object({
@@ -180,11 +180,11 @@ export const CursorPage = <T extends z.ZodType>(item: T) =>
     hasMore: z.boolean(),
   });
 
-export const RepresentativeToolName = z.enum([
-  "representative.lookup_team_context",
-  "representative.request_coordination",
-  "representative.request_spec_review",
-  "representative.lookup_decision",
-  "representative.check_scope",
-  "representative.report_checkpoint",
+export const StandInToolName = z.enum([
+  "stand_in.lookup_team_context",
+  "stand_in.request_coordination",
+  "stand_in.request_spec_review",
+  "stand_in.lookup_decision",
+  "stand_in.check_scope",
+  "stand_in.report_checkpoint",
 ]);

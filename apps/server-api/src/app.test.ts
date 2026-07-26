@@ -31,6 +31,25 @@ describe("Intero API vertical slice", () => {
     expect(demoSeedingEnabled("true")).toBe(true);
   });
 
+  it("reports liveness and privacy-safe request metrics without enabling attachments", async () => {
+    await app.inject({ method: "GET", url: "/health" });
+    const metrics = await app.inject({ method: "GET", url: "/metrics" });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.body).toContain("intero_http_requests_total");
+    expect(metrics.body).not.toContain("prompt");
+    expect(metrics.body).not.toContain("principalId");
+
+    const attachmentRoute = await app.inject({
+      method: "POST",
+      url: "/v1/attachments/uploads",
+      payload: {},
+    });
+    expect(attachmentRoute.statusCode).toBe(503);
+    expect(attachmentRoute.json()).toMatchObject({
+      code: "ATTACHMENTS_UNAVAILABLE",
+    });
+  });
+
   it("reduces a Coding Agent checkpoint into Team Pulse without raw session data", async () => {
     const workstream = await createWorkstream(app);
     const event = {
@@ -100,7 +119,7 @@ describe("Intero API vertical slice", () => {
     ).toBe(true);
   });
 
-  it("reports the Local Representative online only after a fresh heartbeat", async () => {
+  it("reports the Local Stand-in online only after a fresh heartbeat", async () => {
     const before = await app.inject({
       method: "GET",
       url: "/v1/offline-status",
@@ -123,7 +142,7 @@ describe("Intero API vertical slice", () => {
     expect(after.json()).toMatchObject({
       localRuntime: "online",
       fallback: "local",
-      disclosure: "Local Representative is connected.",
+      disclosure: "Local Stand-in is connected.",
     });
   });
 
@@ -234,11 +253,46 @@ describe("Intero API vertical slice", () => {
         displayName: "Intero User",
         kind: "human",
       },
-      representativePrincipal: {
+      standInPrincipal: {
         id: "019b5ac0-7600-7000-8000-000000000003",
-        displayName: "Intero Representative",
-        kind: "representative",
+        displayName: "Intero Stand-in",
+        kind: "stand_in",
       },
+    });
+  });
+
+  it("separates liveness from critical dependency readiness", async () => {
+    await app.close();
+    app = await buildApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      readinessDependencies: [
+        {
+          name: "pilot_postgres",
+          critical: true,
+          check: async () => ({
+            status: "unavailable",
+            detail: "normalized_pilot_schema_missing",
+          }),
+        },
+      ],
+    });
+
+    const health = await app.inject({ method: "GET", url: "/health" });
+    expect(health.statusCode).toBe(200);
+
+    const readiness = await app.inject({ method: "GET", url: "/ready" });
+    expect(readiness.statusCode).toBe(503);
+    expect(readiness.json()).toEqual({
+      status: "unavailable",
+      dependencies: [
+        {
+          name: "pilot_postgres",
+          critical: true,
+          status: "unavailable",
+          detail: "normalized_pilot_schema_missing",
+        },
+      ],
     });
   });
 
@@ -254,7 +308,7 @@ describe("Intero API vertical slice", () => {
         kind: "coordination",
         title: "Ownership boundary",
         participantIds: [actorId],
-        representativeIds: [actorId],
+        standInIds: [actorId],
         accessMode: "agent_readable",
         priorHistoryGranted: false,
         createdAt: "2026-07-24T09:59:00.000Z",
@@ -344,7 +398,7 @@ describe("Intero API vertical slice", () => {
       kind: "human_group",
       title: "Shared API design",
       participantIds: [human],
-      representativeIds: [],
+      standInIds: [],
       accessMode: "human_only_e2ee",
       priorHistoryGranted: false,
       createdAt: "2026-07-24T10:00:00.000Z",
@@ -352,8 +406,8 @@ describe("Intero API vertical slice", () => {
     await app.inject({ method: "POST", url: "/v1/threads", payload: thread });
     const transition = await app.inject({
       method: "POST",
-      url: `/v1/threads/${thread.id}/representatives`,
-      payload: { actorId: human, representativeId: uuidv7() },
+      url: `/v1/threads/${thread.id}/stand-ins`,
+      payload: { actorId: human, standInId: uuidv7() },
     });
     expect(transition.json().thread).toMatchObject({
       accessMode: "agent_readable",
@@ -365,11 +419,11 @@ describe("Intero API vertical slice", () => {
 
   it("lists durable threads by kind with their ordered messages", async () => {
     const human = uuidv7() as PrincipalId;
-    const representative = uuidv7() as PrincipalId;
-    const representativeThread = uuidv7() as ConversationThread["id"];
+    const standIn = uuidv7() as PrincipalId;
+    const standInThread = uuidv7() as ConversationThread["id"];
     const roomThread = uuidv7() as ConversationThread["id"];
     for (const [id, kind] of [
-      [representativeThread, "representative"],
+      [standInThread, "stand_in"],
       [roomThread, "room"],
     ] as const) {
       await app.inject({
@@ -379,8 +433,8 @@ describe("Intero API vertical slice", () => {
           id,
           kind,
           title: `${kind} thread`,
-          participantIds: [human, representative],
-          representativeIds: [representative],
+          participantIds: [human, standIn],
+          standInIds: [standIn],
           accessMode: "agent_readable",
           priorHistoryGranted: false,
           createdAt: "2026-07-24T10:00:00.000Z",
@@ -389,26 +443,26 @@ describe("Intero API vertical slice", () => {
     }
     await app.inject({
       method: "POST",
-      url: `/v1/threads/${representativeThread}/messages`,
+      url: `/v1/threads/${standInThread}/messages`,
       payload: {
         id: uuidv7(),
-        senderId: representative,
-        body: "This is the current durable Representative state.",
+        senderId: standIn,
+        body: "This is the current durable Stand-in state.",
         createdAt: "2026-07-24T10:01:00.000Z",
       },
     });
 
     const response = await app.inject({
       method: "GET",
-      url: "/v1/threads?kind=representative",
+      url: "/v1/threads?kind=stand_in",
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().items).toHaveLength(1);
     expect(response.json().items[0]).toMatchObject({
-      thread: { id: representativeThread, kind: "representative" },
+      thread: { id: standInThread, kind: "stand_in" },
       messages: [
         {
-          body: "This is the current durable Representative state.",
+          body: "This is the current durable Stand-in state.",
           sequence: 1,
         },
       ],
@@ -417,8 +471,8 @@ describe("Intero API vertical slice", () => {
       expect.arrayContaining([
         expect.objectContaining({ id: human, kind: "human" }),
         expect.objectContaining({
-          id: representative,
-          kind: "representative",
+          id: standIn,
+          kind: "stand_in",
         }),
       ]),
     );
@@ -426,7 +480,7 @@ describe("Intero API vertical slice", () => {
 
   it("accepts only ciphertext before the access boundary and plaintext after it", async () => {
     const human = uuidv7() as PrincipalId;
-    const representative = uuidv7() as PrincipalId;
+    const standIn = uuidv7() as PrincipalId;
     const threadId = uuidv7() as ConversationThread["id"];
     await app.inject({
       method: "POST",
@@ -436,7 +490,7 @@ describe("Intero API vertical slice", () => {
         kind: "human_direct",
         title: "Private design discussion",
         participantIds: [human],
-        representativeIds: [],
+        standInIds: [],
         accessMode: "human_only_e2ee",
         priorHistoryGranted: false,
         createdAt: "2026-07-24T10:00:00.000Z",
@@ -471,8 +525,8 @@ describe("Intero API vertical slice", () => {
     });
     await app.inject({
       method: "POST",
-      url: `/v1/threads/${threadId}/representatives`,
-      payload: { actorId: human, representativeId: representative },
+      url: `/v1/threads/${threadId}/stand-ins`,
+      payload: { actorId: human, standInId: standIn },
     });
     const readable = await app.inject({
       method: "POST",

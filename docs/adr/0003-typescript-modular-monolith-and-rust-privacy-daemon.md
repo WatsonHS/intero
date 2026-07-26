@@ -17,9 +17,9 @@ Tauri.
 - Electron, React, and TypeScript implement the desktop product.
 - A Rust `interod` process owns local privacy, SQLCipher, credentials,
   Workspace access, and synchronization queues.
-- A TypeScript Local Representative sidecar owns local Agent reasoning.
+- A TypeScript Local Stand-in sidecar owns local Agent reasoning.
 - Node.js 24, TypeScript, and Fastify implement a modular-monolith API.
-- A separate Graphile Worker process runs background and Public Representative
+- A separate Graphile Worker process runs background and Public Stand-in
   jobs from the same codebase.
 - PostgreSQL and Drizzle store shared domain data.
 - SpiceDB provides shared ReBAC; PostgreSQL RLS enforces tenant boundaries.
@@ -30,7 +30,7 @@ Tauri.
 
 Positive:
 
-- Product and Representative behavior share one TypeScript ecosystem.
+- Product and Stand-in behavior share one TypeScript ecosystem.
 - Rust is limited to the local boundary where its complexity earns value.
 - The modular monolith supports fast development without premature services.
 - Queue, realtime, authorization, and storage remain replaceable behind ports.
@@ -44,7 +44,7 @@ Negative:
 ## Rejected alternatives
 
 - Tauri desktop.
-- All product and Representative logic in Rust.
+- All product and Stand-in logic in Rust.
 - Electron Main as the privacy kernel or Agent runtime.
 - Go or Rust microservices from the first release.
 - Redis and BullMQ as mandatory MVP infrastructure.

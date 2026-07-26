@@ -1,19 +1,35 @@
 import {
   ArrowUpRightIcon,
   CloudArrowDownIcon,
+  CloudCheckIcon,
   PlantIcon,
+  ShieldCheckIcon,
   TimerIcon,
+  UserCircleMinusIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
-import type { PublicWorkProjection, WorkstreamPhase } from "@intero/domain";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import type {
+  PilotCollaborationPosture,
+  PilotProject,
+  PilotPulseEntry,
+  PilotWorkNarrative,
+  PublicWorkProjection,
+  Feature,
+  WorkHistoryEntry,
+  WorkItem,
+  WorkstreamPhase,
+} from "@intero/domain";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
 
 import {
   getActionInbox,
   getOfflineStatus,
+  getProjectSpecs,
+  getProjectWork,
   getTeamPulse,
   getThreads,
+  type ProjectWorkPayload,
 } from "../api.js";
 import { Reveal } from "../design/reveal.js";
 import {
@@ -28,6 +44,13 @@ import {
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import { pilotPulseEntryToProjection } from "../pilot/adapters.js";
+import {
+  getPilotOverview,
+  updatePilotPosture,
+  withdrawPilotPulse,
+} from "../pilot/api.js";
+import { usePilotOptional } from "../pilot/context.js";
 
 const TONE_CLASSES: Record<Tone, { text: string; bg: string; dot: string }> = {
   green: { text: "text-green", bg: "bg-green-soft", dot: "bg-green" },
@@ -55,8 +78,32 @@ export function TeamPulseView({
   onOpenAction: (sourceRef: string) => void;
   onOpenSetup: () => void;
 }) {
+  return (
+    <CanonicalTeamPulseView
+      onOpenPerson={onOpenPerson}
+      onOpenAction={onOpenAction}
+      onOpenSetup={onOpenSetup}
+    />
+  );
+}
+
+function CanonicalTeamPulseView({
+  onOpenPerson,
+  onOpenAction,
+  onOpenSetup,
+}: {
+  onOpenPerson: (ownerId: string) => void;
+  onOpenAction: (sourceRef: string) => void;
+  onOpenSetup: () => void;
+}) {
   const { t, formatDate, formatRelative, formatTime } = useI18n();
+  const queryClient = useQueryClient();
+  const pilot = usePilotOptional();
   const [openOwners, setOpenOwners] = useState<Set<string>>(new Set());
+  const pilotProject =
+    pilot?.projects.data?.projects.find(
+      (project) => project.id === pilot.selectedProjectId,
+    ) ?? pilot?.projects.data?.projects[0];
 
   const pulse = useQuery({
     queryKey: ["team-pulse"],
@@ -71,12 +118,64 @@ export function TeamPulseView({
     queryKey: ["offline-status"],
     queryFn: ({ signal }) => getOfflineStatus(signal),
   });
-  const representativeThreads = useQuery({
-    queryKey: ["threads", "representative"],
-    queryFn: ({ signal }) => getThreads("representative", signal),
+  const standInThreads = useQuery({
+    queryKey: ["threads", "stand_in"],
+    queryFn: ({ signal }) => getThreads("stand_in", signal),
+  });
+  const pilotOverview = useQuery({
+    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
+    queryFn: ({ signal }) =>
+      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
+    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
+    refetchInterval: 1_500,
+  });
+  const projectWork = useQuery({
+    queryKey: ["project-work", pilotProject?.id],
+    queryFn: ({ signal }) => getProjectWork(pilotProject!.id, signal),
+    enabled: Boolean(
+      pilotProject &&
+        pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+    ),
+    refetchInterval: 4_000,
+  });
+  const projectSpecs = useQuery({
+    queryKey: ["project-specs", pilotProject?.id],
+    queryFn: ({ signal }) => getProjectSpecs(pilotProject!.id, signal),
+    enabled: Boolean(
+      pilotProject &&
+        pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+    ),
+    refetchInterval: 4_000,
+  });
+  const invalidatePilot = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["pilot", "overview"] }),
+      queryClient.invalidateQueries({ queryKey: ["pilot", "projects"] }),
+    ]);
+  };
+  const posture = useMutation({
+    mutationFn: (next: PilotCollaborationPosture) =>
+      updatePilotPosture(pilot!.identityId!, pilotProject!.id, next),
+    onSuccess: invalidatePilot,
+  });
+  const withdraw = useMutation({
+    mutationFn: (workStateId: string) =>
+      withdrawPilotPulse(pilot!.identityId!, pilotProject!.id, workStateId),
+    onSuccess: invalidatePilot,
   });
 
-  const projections = pulse.data?.projections ?? [];
+  const pilotEntries = pilotOverview.data?.pulse ?? [];
+  const pilotEntryByProjectionId = new Map(
+    pilotEntries.map((entry) => [entry.workStateId, entry]),
+  );
+  const projectPulse = projectWork.data
+    ? projectWorkToPulse(projectWork.data)
+    : { projections: [], contexts: new Map<string, ProjectPulseContext>() };
+  const projections = mergeProjections(
+    pulse.data?.projections ?? [],
+    pilotEntries.map(pilotPulseEntryToProjection),
+    projectPulse.projections,
+  );
   const staleAfterSeconds = pulse.data?.staleAfterSeconds;
   const principalNames = new Map(
     pulse.data?.principals.map((principal) => [
@@ -84,6 +183,9 @@ export function TeamPulseView({
       principal.displayName,
     ]) ?? [],
   );
+  for (const principal of pilotOverview.data?.principals ?? []) {
+    principalNames.set(principal.id, principal.displayName);
+  }
   const people = groupByOwner(projections);
   const staleProjections = projections.filter((item) =>
     isStale(item.freshnessAt, staleAfterSeconds),
@@ -94,10 +196,16 @@ export function TeamPulseView({
     ? formatRelative(runtime.data.freshnessAt)
     : t("general.none");
 
-  const isLoadingState = pulse.isPending;
-  const isEmptyState = pulse.isSuccess && projections.length === 0;
-  const isErrorState = pulse.isError;
-  const showCards = pulse.isSuccess && projections.length > 0;
+  const pilotActive = Boolean(
+    pilot?.enabled && pilot.identityId && pilotProject,
+  );
+  const pulseReady =
+    pulse.isSuccess || (pilotActive && pilotOverview.isSuccess);
+  const isLoadingState =
+    pulse.isPending && (!pilotActive || pilotOverview.isPending);
+  const isEmptyState = pulseReady && projections.length === 0;
+  const isErrorState = pulse.isError && (!pilotActive || pilotOverview.isError);
+  const showCards = pulseReady && projections.length > 0;
 
   let runtimeBg = "bg-raise";
   let runtimeDotClass = "bg-faint";
@@ -147,8 +255,8 @@ export function TeamPulseView({
       : { tone: "green" as Tone, text: t("pulse.fresh.live") };
   const freshPillClasses = TONE_CLASSES[freshPill.tone];
 
-  const representativeThread = representativeThreads.data?.items[0];
-  const repEntries = (representativeThread?.messages ?? [])
+  const standInThread = standInThreads.data?.items[0];
+  const standInEntries = (standInThread?.messages ?? [])
     .filter((message) => message.serverReadable)
     .slice(-3)
     .reverse();
@@ -191,10 +299,7 @@ export function TeamPulseView({
             />
             <span className="grid">
               <strong
-                className={cn(
-                  "text-[11.5px] font-[620]",
-                  runtimeInkClass,
-                )}
+                className={cn("text-[11.5px] font-[620]", runtimeInkClass)}
               >
                 {runtimeTitle}
               </strong>
@@ -265,6 +370,16 @@ export function TeamPulseView({
               </span>
             </div>
             <div className="border-l border-line px-7">
+              <span className="inline-block animate-count-up font-mono text-[24px] tracking-[-0.04em]">
+                {projectSpecs.data?.items.filter(
+                  (item) => item.spec.status === "in_review",
+                ).length ?? 0}
+              </span>
+              <span className="ml-2 text-[12px] text-ink-muted">
+                Specs in review
+              </span>
+            </div>
+            <div className="border-l border-line px-7">
               <span
                 key={inbox.data?.items.length ?? 0}
                 className="inline-block animate-count-up font-mono text-[24px] tracking-[-0.04em] text-danger"
@@ -282,10 +397,7 @@ export function TeamPulseView({
               )}
             >
               <span
-                className={cn(
-                  "h-1.5 w-1.5 rounded-full",
-                  freshPillClasses.dot,
-                )}
+                className={cn("h-1.5 w-1.5 rounded-full", freshPillClasses.dot)}
               />
               <span className={cn("text-[11px]", freshPillClasses.text)}>
                 {freshPill.text}
@@ -375,7 +487,7 @@ export function TeamPulseView({
         {showCards ? (
           <div className="mt-[22px] grid grid-cols-[repeat(auto-fill,minmax(310px,1fr))] items-start gap-3">
             {people.map(({ ownerId, workstreams }, index) => (
-              <PersonCard
+              <PeerPersonCard
                 key={ownerId}
                 ownerId={ownerId}
                 name={principalNames.get(ownerId) ?? ownerId.slice(0, 8)}
@@ -387,6 +499,13 @@ export function TeamPulseView({
                 open={openOwners.has(ownerId)}
                 onToggle={() => toggleOwner(ownerId)}
                 onOpen={() => onOpenPerson(ownerId)}
+                pilotEntryByProjectionId={pilotEntryByProjectionId}
+                pilotIdentityId={pilot?.identityId}
+                withdrawingWorkStateId={
+                  withdraw.isPending ? withdraw.variables : undefined
+                }
+                onWithdraw={(workStateId) => withdraw.mutate(workStateId)}
+                projectContextByProjectionId={projectPulse.contexts}
               />
             ))}
           </div>
@@ -410,9 +529,7 @@ export function TeamPulseView({
         </p>
         <div className="mt-[18px] flex flex-col gap-2.5">
           {inbox.isPending ? (
-            <p className="text-[12px] text-ink-muted">
-              {t("general.loading")}
-            </p>
+            <p className="text-[12px] text-ink-muted">{t("general.loading")}</p>
           ) : null}
           {inbox.isError ? (
             <div className="rounded-card border border-danger-soft bg-danger-soft p-3 text-[12px] text-ink-muted">
@@ -452,6 +569,20 @@ export function TeamPulseView({
           ) : null}
         </div>
 
+        {pilotActive && pilotProject ? (
+          <PilotProjectContextCard
+            project={pilotProject}
+            teamName={
+              pilot?.teams.data?.teams.find(
+                (team) => team.id === pilotProject.primaryTeamId,
+              )?.name
+            }
+            identityId={pilot?.identityId ?? pilotProject.ownerId}
+            pending={posture.isPending}
+            onPostureChange={(next) => posture.mutate(next)}
+          />
+        ) : null}
+
         <div className="relative mt-[26px] overflow-hidden rounded-card border border-accent-soft bg-accent-soft p-[18px]">
           <span className="pointer-events-none absolute -top-[75%] -left-[5%] h-[210%] w-[110%] animate-drift-y">
             <span className="block h-full w-full animate-drift">
@@ -463,16 +594,16 @@ export function TeamPulseView({
               IR
             </span>
             <strong className="text-[11.5px] font-[620]">
-              {t("pulse.rep.title")}
+              {t("pulse.standIn.title")}
             </strong>
           </div>
           <div className="relative mt-3.5 flex flex-col gap-3">
-            {repEntries.length === 0 ? (
+            {standInEntries.length === 0 ? (
               <p className="text-[11.5px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-                {t("pulse.rep.empty")}
+                {t("pulse.standIn.empty")}
               </p>
             ) : (
-              repEntries.map((message) => (
+              standInEntries.map((message) => (
                 <div
                   key={message.id}
                   className="grid grid-cols-[6px_1fr] gap-2.5"
@@ -502,6 +633,10 @@ function PersonCard({
   open,
   onToggle,
   onOpen,
+  pilotEntryByProjectionId,
+  pilotIdentityId,
+  withdrawingWorkStateId,
+  onWithdraw,
 }: {
   ownerId: string;
   name: string;
@@ -513,6 +648,10 @@ function PersonCard({
   open: boolean;
   onToggle: () => void;
   onOpen: () => void;
+  pilotEntryByProjectionId: Map<string, PilotPulseEntry>;
+  pilotIdentityId: string | undefined;
+  withdrawingWorkStateId: string | undefined;
+  onWithdraw: (workStateId: string) => void;
 }) {
   const { t, formatRelative } = useI18n();
   const main = chooseMainWorkstream(workstreams);
@@ -527,6 +666,9 @@ function PersonCard({
     ? t("pulse.card.syncedAt", { time: offlineSyncTime })
     : formatRelative(main.freshnessAt);
   const delay = Math.min(index * 45, 320);
+  const pilotEntry = pilotEntryByProjectionId.get(main.id);
+  const pilotNarrative = pilotEntry?.narrative;
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   return (
     <div
@@ -563,61 +705,122 @@ function PersonCard({
         <ArrowUpRightIcon size={13} className="text-faint" />
       </button>
 
-      <p className="mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-        {meaningfulDetail(main, t("pulse.card.noChange"))}
-      </p>
-
-      <button
-        type="button"
-        onClick={onOpen}
-        className="mt-3.5 block w-full rounded-inset border border-transparent bg-raise p-3.5 text-left text-ink hover:border-line2"
-      >
-        <PhaseChip phase={main.phase} size="sm" />
-        <h3 className="mt-2.5 text-[14px] font-[570] leading-[1.4] tracking-[-0.015em] [text-wrap:pretty]">
-          {main.title}
-        </h3>
-        <div className="mt-3 flex items-center gap-3.5">
-          <span className="inline-flex items-center gap-[7px]">
-            <span className="relative h-1 w-[44px] overflow-hidden rounded-[2px] bg-line2">
-              <span
-                className={cn(
-                  "absolute inset-y-0 left-0 origin-left animate-bar-grow transition-[width] duration-[620ms] ease-decelerate",
-                  mainTone.dot,
-                )}
-                style={{ width: `${confidencePercent(main.confidence)}%` }}
-              />
-            </span>
-            <span className="font-mono text-[10px] text-ink-muted">
-              {confidencePercent(main.confidence)}
-            </span>
-          </span>
-          <span className="text-[10.5px] text-faint">
-            {t("pulse.card.changes", { count: main.changedFields.length })}
-          </span>
-          {offline ? (
-            <span className="ml-auto font-mono text-[9px] text-faint">
-              {t("pulse.card.source")}
-            </span>
+      {pilotEntry && pilotNarrative ? (
+        <div
+          className="mt-[13px] grid gap-3 rounded-inset border border-transparent bg-raise p-3.5 text-left text-ink"
+          data-testid={`pilot-pulse-entry-${pilotEntry.workStateId}`}
+        >
+          <div className="flex items-center gap-2">
+            <PhaseChip phase={main.phase} size="sm" />
+            <h3 className="text-[14px] font-[570] leading-[1.4] tracking-[-0.015em] [text-wrap:pretty]">
+              {main.title}
+            </h3>
+          </div>
+          <PilotWorkNarrativeContent narrative={pilotNarrative} />
+          <button
+            type="button"
+            aria-expanded={detailsOpen}
+            onClick={() => setDetailsOpen((current) => !current)}
+            className="mt-0.5 flex items-center gap-1.5 border-0 border-t border-line bg-transparent pt-2.5 text-left font-mono text-[9.5px] text-faint hover:text-ink-muted"
+          >
+            <CloudCheckIcon size={12} className="text-green" />
+            来源与新鲜度 · {formatRelative(pilotEntry.freshnessAt)}
+            <span className="ml-auto">{detailsOpen ? "收起" : "查看"}</span>
+          </button>
+          {detailsOpen ? (
+            <div
+              data-testid={`pilot-pulse-provenance-${pilotEntry.workStateId}`}
+              className="grid gap-2 rounded-[9px] border border-line bg-panel px-2.5 py-2 font-mono text-[9.5px] text-faint"
+            >
+              <span>
+                {pilotEntry.provenance.client} ·{" "}
+                {pilotEntry.provenance.connectionName} · {pilotEntry.eventType}
+              </span>
+              <span>
+                发生于 {formatRelative(pilotEntry.provenance.occurredAt)} ·
+                接收于 {formatRelative(pilotEntry.provenance.receivedAt)}
+              </span>
+              {pilotEntry.ownerId === pilotIdentityId ? (
+                <button
+                  type="button"
+                  data-testid={`pilot-withdraw-${pilotEntry.workStateId}`}
+                  disabled={withdrawingWorkStateId === pilotEntry.workStateId}
+                  onClick={() => onWithdraw(pilotEntry.workStateId)}
+                  className="inline-flex w-fit items-center gap-1 border-0 bg-transparent p-0 text-[9.5px] text-ink-muted hover:text-danger"
+                >
+                  <UserCircleMinusIcon size={12} />
+                  {withdrawingWorkStateId === pilotEntry.workStateId
+                    ? "撤回中…"
+                    : "撤回团队摘要"}
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
-      </button>
+      ) : (
+        <>
+          <p className="mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
+            {meaningfulDetail(main, t("pulse.card.noChange"))}
+          </p>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="mt-3.5 block w-full rounded-inset border border-transparent bg-raise p-3.5 text-left text-ink hover:border-line2"
+          >
+            <PhaseChip phase={main.phase} size="sm" />
+            <h3 className="mt-2.5 text-[14px] font-[570] leading-[1.4] tracking-[-0.015em] [text-wrap:pretty]">
+              {main.title}
+            </h3>
+            <div className="mt-3 flex items-center gap-3.5">
+              <span className="inline-flex items-center gap-[7px]">
+                <span className="relative h-1 w-[44px] overflow-hidden rounded-[2px] bg-line2">
+                  <span
+                    className={cn(
+                      "absolute inset-y-0 left-0 origin-left animate-bar-grow transition-[width] duration-[620ms] ease-decelerate",
+                      mainTone.dot,
+                    )}
+                    style={{ width: `${confidencePercent(main.confidence)}%` }}
+                  />
+                </span>
+                <span className="font-mono text-[10px] text-ink-muted">
+                  {confidencePercent(main.confidence)}
+                </span>
+              </span>
+              <span className="text-[10.5px] text-faint">
+                {t("pulse.card.changes", {
+                  count: main.changedFields.length,
+                })}
+              </span>
+              {offline ? (
+                <span className="ml-auto font-mono text-[9px] text-faint">
+                  {t("pulse.card.source")}
+                </span>
+              ) : null}
+            </div>
+          </button>
+        </>
+      )}
 
-      <button
-        type="button"
-        onClick={onToggle}
-        className="mt-3 flex w-full items-center gap-[9px] border-0 bg-transparent p-0 text-left text-[11px] text-ink-muted hover:text-accent-strong"
-      >
-        <span>
-          {open
-            ? t("pulse.card.subsOpen")
-            : t("pulse.card.subsClosed", {
-                active: activeSubs,
-                total: subs.length,
-              })}
-        </span>
-        <span className="h-px flex-1 bg-line" />
-        <span>{open ? t("pulse.card.collapse") : t("pulse.card.expand")}</span>
-      </button>
+      {subs.length > 0 ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="mt-3 flex w-full items-center gap-[9px] border-0 bg-transparent p-0 text-left text-[11px] text-ink-muted hover:text-accent-strong"
+        >
+          <span>
+            {open
+              ? t("pulse.card.subsOpen")
+              : t("pulse.card.subsClosed", {
+                  active: activeSubs,
+                  total: subs.length,
+                })}
+          </span>
+          <span className="h-px flex-1 bg-line" />
+          <span>
+            {open ? t("pulse.card.collapse") : t("pulse.card.expand")}
+          </span>
+        </button>
+      ) : null}
       {open ? (
         <div className="mt-2.5 flex flex-col gap-0.5">
           {subs.map((sub) => {
@@ -647,6 +850,479 @@ function PersonCard({
       ) : null}
     </div>
   );
+}
+
+function PeerPersonCard({
+  ownerId,
+  name,
+  workstreams,
+  index,
+  staleAfterSeconds,
+  offline,
+  offlineSyncTime,
+  open,
+  onToggle,
+  onOpen,
+  pilotEntryByProjectionId,
+  pilotIdentityId,
+  withdrawingWorkStateId,
+  onWithdraw,
+  projectContextByProjectionId,
+}: {
+  ownerId: string;
+  name: string;
+  workstreams: PublicWorkProjection[];
+  index: number;
+  staleAfterSeconds: number | undefined;
+  offline: boolean;
+  offlineSyncTime: string;
+  open: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  pilotEntryByProjectionId: Map<string, PilotPulseEntry>;
+  pilotIdentityId: string | undefined;
+  withdrawingWorkStateId: string | undefined;
+  onWithdraw: (workStateId: string) => void;
+  projectContextByProjectionId: Map<string, ProjectPulseContext>;
+}) {
+  const { t, formatRelative } = useI18n();
+  const active = workstreams.filter(
+    (item) => item.phase !== "completed" && item.phase !== "paused",
+  );
+  const blocked = workstreams.filter((item) => item.phase === "blocked");
+  const freshest = workstreams.reduce((latest, item) =>
+    Date.parse(item.freshnessAt) > Date.parse(latest.freshnessAt)
+      ? item
+      : latest,
+  );
+  const stale = isStale(freshest.freshnessAt, staleAfterSeconds);
+  const visible = open ? workstreams : workstreams.slice(0, 3);
+  const summary =
+    blocked.length > 0
+      ? `正在推进 ${active.map((item) => item.title).slice(0, 2).join("、")}；其中 ${blocked.length} 项受阻。`
+      : active.length > 0
+        ? `正在推进 ${active.map((item) => item.title).slice(0, 2).join("、")}。`
+        : `最近完成或暂停了 ${workstreams.map((item) => item.title).slice(0, 2).join("、")}。`;
+  return (
+    <section
+      className="relative overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
+      style={{ animationDelay: `${Math.min(index * 45, 320)}ms` }}
+    >
+      <Reveal />
+      <button
+        type="button"
+        onClick={onOpen}
+        className="relative grid w-full grid-cols-[34px_minmax(0,1fr)_22px] items-center gap-[11px] border-0 bg-transparent p-0 text-left"
+      >
+        <span
+          className="grid h-[34px] w-[34px] place-items-center rounded-full text-[10.5px] font-bold text-on-tint"
+          style={{ background: tintFor(ownerId) }}
+        >
+          {initials(name)}
+        </span>
+        <span className="grid min-w-0">
+          <span className="flex items-center gap-2">
+            <strong className="text-[13.5px] font-[620]">{name}</strong>
+            <span className="font-mono text-[9.5px] text-faint">
+              {offline
+                ? t("pulse.card.syncedAt", { time: offlineSyncTime })
+                : formatRelative(freshest.freshnessAt)}
+            </span>
+          </span>
+          <small className="mt-1 text-[10px] text-faint">
+            {active.length} active · {blocked.length} blocked
+            {stale ? " · stale" : ""}
+          </small>
+        </span>
+        <ArrowUpRightIcon size={13} className="text-faint" />
+      </button>
+      <p
+        className="relative mt-3 text-[11.5px] leading-[1.65] text-ink-muted"
+        data-testid={`stand-in-person-summary-${ownerId}`}
+      >
+        {summary}
+      </p>
+      <div className="relative mt-3 grid gap-2.5">
+        {visible.map((workstream) => {
+          const pilotEntry = pilotEntryByProjectionId.get(workstream.id);
+          const projectContext = projectContextByProjectionId.get(
+            workstream.id,
+          );
+          return (
+            <article
+              key={workstream.id}
+              className="rounded-inset border border-line bg-raise p-3.5"
+              data-testid={`peer-work-card-${workstream.id}`}
+            >
+              <div className="flex items-start gap-2">
+                <PhaseChip phase={workstream.phase} size="sm" />
+                <h3 className="text-[13px] font-[570] leading-[1.45]">
+                  {workstream.title}
+                </h3>
+              </div>
+              {projectContext ? (
+                <ProjectWorkPulseContent
+                  context={projectContext}
+                  formatRelative={formatRelative}
+                />
+              ) : pilotEntry?.narrative ? (
+                <div className="mt-3">
+                  <PilotWorkNarrativeContent narrative={pilotEntry.narrative} />
+                </div>
+              ) : (
+                <p className="mt-2 text-[11px] leading-[1.6] text-ink-muted">
+                  {meaningfulDetail(workstream, t("pulse.card.noChange"))}
+                </p>
+              )}
+              {pilotEntry && pilotEntry.ownerId === pilotIdentityId ? (
+                <button
+                  type="button"
+                  disabled={withdrawingWorkStateId === pilotEntry.workStateId}
+                  onClick={() => onWithdraw(pilotEntry.workStateId)}
+                  className="mt-2 border-0 bg-transparent p-0 font-mono text-[9px] text-faint hover:text-danger"
+                >
+                  撤回团队摘要
+                </button>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+      {workstreams.length > 3 ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="relative mt-3 w-full border-0 border-t border-line bg-transparent pt-3 text-left text-[10.5px] text-faint"
+        >
+          {open ? "收起" : `${workstreams.length - 3} more`}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function NarrativeLine({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[58px_minmax(0,1fr)] gap-2.5">
+      <span className="pt-[1px] text-[10px] font-[620] text-faint">
+        {label}
+      </span>
+      <p className="text-[11.5px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
+        {children}
+      </p>
+    </div>
+  );
+}
+
+export function PilotWorkNarrativeContent({
+  narrative,
+}: {
+  narrative: PilotWorkNarrative;
+}) {
+  return (
+    <>
+      <NarrativeLine label="正在做">{narrative.currentFocus}</NarrativeLine>
+      <NarrativeLine label="刚完成">
+        {narrative.completedOutcome || "尚未报告完成结果"}
+      </NarrativeLine>
+      <NarrativeLine label="结果依据">
+        {narrative.evidence.length > 0
+          ? narrative.evidence.join("；")
+          : "尚未报告单独的验证或产物"}
+      </NarrativeLine>
+      <NarrativeLine label="下一步">
+        {narrative.nextStep || "尚未报告下一步"}
+      </NarrativeLine>
+      <NarrativeLine label="需要协作">
+        {narrative.collaboration.needed
+          ? [
+              narrative.collaboration.request,
+              narrative.collaboration.requestedFrom
+                ? `负责人：${narrative.collaboration.requestedFrom}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "暂不需要他人协助"}
+      </NarrativeLine>
+    </>
+  );
+}
+
+type ProjectPulseContext = {
+  kind: "work_item" | "feature";
+  description: string;
+  statusLabel: string;
+  completedOutcome?: string;
+  evidence?: string;
+  blockers: string[];
+  nextStep: string;
+  source: string;
+  updatedAt: string;
+};
+
+function ProjectWorkPulseContent({
+  context,
+  formatRelative,
+}: {
+  context: ProjectPulseContext;
+  formatRelative: (value: string) => string;
+}) {
+  return (
+    <div className="mt-3">
+      <NarrativeLine label="正在做">
+        {context.description || context.statusLabel}
+      </NarrativeLine>
+      <NarrativeLine label="刚完成">
+        {context.completedOutcome ?? "尚未完成"}
+      </NarrativeLine>
+      <NarrativeLine label="结果依据">
+        {context.evidence ?? "尚未附加完成依据"}
+      </NarrativeLine>
+      <NarrativeLine label="下一步">{context.nextStep}</NarrativeLine>
+      <NarrativeLine label="需要协作">
+        {context.blockers.length > 0
+          ? context.blockers.join("；")
+          : "暂不需要他人协助"}
+      </NarrativeLine>
+      <details className="mt-2">
+        <summary className="cursor-pointer font-mono text-[9px] text-faint">
+          来源与新鲜度
+        </summary>
+        <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-faint">
+          {context.source} · {formatRelative(context.updatedAt)}
+        </p>
+      </details>
+    </div>
+  );
+}
+
+function projectWorkToPulse(data: ProjectWorkPayload): {
+  projections: PublicWorkProjection[];
+  contexts: Map<string, ProjectPulseContext>;
+} {
+  const contexts = new Map<string, ProjectPulseContext>();
+  const workItemTitles = new Map(
+    data.workItems.map((item) => [item.id, item.title]),
+  );
+  const projections: PublicWorkProjection[] = [];
+  for (const item of data.workItems) {
+    if (!item.ownerId) continue;
+    const blockers = blockersFor(item, data, workItemTitles);
+    const latestHistory = data.history
+      .filter((entry) => entry.workItemId === item.id)
+      .at(-1);
+    projections.push({
+      id: item.id as unknown as PublicWorkProjection["id"],
+      projectId: item.projectId,
+      ownerId: item.ownerId,
+      title: item.title,
+      phase:
+        blockers.length > 0 ? "blocked" : phaseForWorkItem(item.status),
+      blockers,
+      dependencies: [],
+      decisions: [],
+      artifactIds: [],
+      freshnessAt: item.updatedAt,
+      confidence: 1,
+      contradictionClaimIds: [],
+      version: data.history.filter((entry) => entry.workItemId === item.id)
+        .length,
+      changedFields: ["phase"],
+      projectedAt: item.updatedAt,
+    });
+    contexts.set(item.id, {
+      kind: "work_item",
+      description: item.description,
+      statusLabel: workItemStatusLabel(item.status),
+      ...(item.status === "done"
+        ? { completedOutcome: item.title }
+        : {}),
+      ...(item.completionEvidence
+        ? { evidence: item.completionEvidence }
+        : {}),
+      blockers,
+      nextStep: workItemNextStep(item.status),
+      source: historySource(latestHistory),
+      updatedAt: item.updatedAt,
+    });
+  }
+  const parentFeatureIds = new Set(
+    data.workItems.flatMap((item) =>
+      item.featureId ? [item.featureId] : [],
+    ),
+  );
+  for (const feature of data.features) {
+    if (!feature.ownerId || parentFeatureIds.has(feature.id)) continue;
+    projections.push({
+      id: feature.id as unknown as PublicWorkProjection["id"],
+      projectId: feature.projectId,
+      ownerId: feature.ownerId,
+      title: feature.title,
+      phase: phaseForFeature(feature.stage),
+      blockers: [],
+      dependencies: [],
+      decisions: [],
+      artifactIds: [],
+      freshnessAt: feature.updatedAt,
+      confidence: 1,
+      contradictionClaimIds: [],
+      version: 1,
+      changedFields: ["phase"],
+      projectedAt: feature.updatedAt,
+    });
+    contexts.set(feature.id, {
+      kind: "feature",
+      description: feature.description,
+      statusLabel: feature.stage.replaceAll("_", " "),
+      ...(feature.stage === "released"
+        ? { completedOutcome: feature.title }
+        : {}),
+      blockers: [],
+      nextStep:
+        feature.stage === "planned"
+          ? "开始开发"
+          : feature.stage === "in_development"
+            ? "完成并发布"
+            : "观察发布结果",
+      source: "Project Feature",
+      updatedAt: feature.updatedAt,
+    });
+  }
+  return { projections, contexts };
+}
+
+function blockersFor(
+  item: WorkItem,
+  data: ProjectWorkPayload,
+  titles: Map<string, string>,
+): string[] {
+  return data.relations.flatMap((relation) => {
+    if (relation.sourceId === item.id && relation.kind === "blocked_by") {
+      return [`受 ${titles.get(relation.targetId) ?? "另一 Work Item"} 阻塞`];
+    }
+    if (relation.targetId === item.id && relation.kind === "blocks") {
+      return [`受 ${titles.get(relation.sourceId) ?? "另一 Work Item"} 阻塞`];
+    }
+    return [];
+  });
+}
+
+function phaseForWorkItem(status: WorkItem["status"]): WorkstreamPhase {
+  if (status === "done") return "completed";
+  if (status === "ready_for_test") return "validating";
+  if (status === "in_progress") return "implementing";
+  return "planning";
+}
+
+function phaseForFeature(stage: Feature["stage"]): WorkstreamPhase {
+  if (stage === "released") return "completed";
+  if (stage === "in_development") return "implementing";
+  return "planning";
+}
+
+function workItemStatusLabel(status: WorkItem["status"]): string {
+  if (status === "ready_for_test") return "等待测试";
+  if (status === "in_progress") return "开发中";
+  if (status === "done") return "已完成";
+  return "待开始";
+}
+
+function workItemNextStep(status: WorkItem["status"]): string {
+  if (status === "ready_for_test") return "由项目参与者完成验收";
+  if (status === "in_progress") return "继续开发并提交验证依据";
+  if (status === "done") return "观察结果或领取下一项工作";
+  return "开始工作";
+}
+
+function historySource(history: WorkHistoryEntry | undefined): string {
+  if (!history) return "Project Work";
+  return history.actor.kind === "agent"
+    ? "Connected Coding Agent"
+    : "Intero member";
+}
+
+function PilotProjectContextCard({
+  project,
+  teamName,
+  identityId,
+  pending,
+  onPostureChange,
+}: {
+  project: PilotProject;
+  teamName: string | undefined;
+  identityId: string;
+  pending: boolean;
+  onPostureChange: (posture: PilotCollaborationPosture) => void;
+}) {
+  return (
+    <div
+      className="mt-[22px] rounded-card border border-line bg-panel2 p-[16px]"
+      data-testid="pilot-project-context"
+    >
+      <div className="flex items-center gap-2">
+        <ShieldCheckIcon size={15} className="text-green" />
+        <strong className="text-[11.5px] font-[620]">项目共享范围</strong>
+      </div>
+      <p className="mt-2 text-[11.5px] text-ink">
+        {project.name}
+        {teamName ? ` · ${teamName}` : ""}
+      </p>
+      <p className="mt-1 text-[10.5px] leading-[1.55] text-faint">
+        仅发布结构化工作摘要；原始 prompt、文件、diff 与终端输出保持私有。
+      </p>
+      {project.ownerId === identityId ? (
+        <div className="mt-3 grid grid-cols-3 gap-1.5">
+          {(["collaborative", "paused", "private"] as const).map((posture) => (
+            <button
+              type="button"
+              key={posture}
+              data-testid={`pilot-posture-${posture}`}
+              disabled={pending}
+              onClick={() => onPostureChange(posture)}
+              className={
+                project.posture === posture
+                  ? "h-8 rounded-quiet bg-accent-soft px-2 text-[10px] font-[620] text-accent-strong"
+                  : "h-8 rounded-quiet bg-raise px-2 text-[10px] text-ink-muted"
+              }
+            >
+              {posture === "collaborative"
+                ? "团队协作"
+                : posture === "paused"
+                  ? "已暂停"
+                  : "仅自己"}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <span className="mt-3 inline-flex rounded-pill bg-raise px-2.5 py-1 text-[10px] text-faint">
+          {project.posture === "collaborative"
+            ? "团队协作"
+            : project.posture === "paused"
+              ? "已暂停"
+              : "仅创建者"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function mergeProjections(
+  ...sources: PublicWorkProjection[][]
+): PublicWorkProjection[] {
+  return [
+    ...new Map(
+      sources
+        .flat()
+        .map((projection) => [projection.id, projection]),
+    ).values(),
+  ];
 }
 
 function PhaseChip({

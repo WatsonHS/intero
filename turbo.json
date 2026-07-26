@@ -20,8 +20,8 @@
         "INTERO_DATA_DIR",
         "INTERO_GITHUB_CLIENT_ID",
         "INTERO_GITHUB_CLIENT_SECRET",
-        "INTERO_LOCAL_REPRESENTATIVE_ID",
-        "INTERO_LOCAL_REPRESENTATIVE_NAME",
+        "INTERO_LOCAL_STAND_IN_ID",
+        "INTERO_LOCAL_STAND_IN_NAME",
         "INTERO_LOCAL_REP_MODE",
         "INTERO_LOCAL_TOKEN",
         "INTERO_LOG_LEVEL",
@@ -30,9 +30,10 @@
         "INTERO_ORGANIZATION_ID",
         "INTERO_ORGANIZATION_NAME",
         "INTERO_PASSKEY_RP_ID",
+        "INTERO_PILOT_PERSISTENCE",
         "INTERO_PRINCIPAL_ID",
         "INTERO_PRINCIPAL_NAME",
-        "INTERO_PUBLIC_REPRESENTATIVE_ID",
+        "INTERO_PUBLIC_STAND_IN_ID",
         "INTERO_PUBLIC_URL",
         "INTERO_S3_ACCESS_KEY_ID",
         "INTERO_S3_BUCKET",
@@ -47,6 +48,20 @@
         "INTERO_SPICEDB_TOKEN",
         "INTERO_WORKER_CONCURRENCY",
         "INTERO_WORKER_DATABASE_URL",
+        "VITE_INTERO_API_URL"
+      ]
+    },
+    "dev:pilot": {
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": [
+        "INTERO_API_HOST",
+        "INTERO_API_PORT",
+        "INTERO_DATABASE_URL",
+        "INTERO_ORGANIZATION_ID",
+        "INTERO_ORGANIZATION_NAME",
+        "INTERO_PILOT_PERSISTENCE",
+        "INTERO_PROVIDER_ENCRYPTION_KEY",
         "VITE_INTERO_API_URL"
       ]
     },

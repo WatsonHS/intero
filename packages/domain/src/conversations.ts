@@ -5,7 +5,7 @@ import { MessageId, OperationId, PrincipalId, ThreadId } from "./ids.js";
 export const ThreadKind = z.enum([
   "human_direct",
   "human_group",
-  "representative",
+  "stand_in",
   "room",
   "coordination",
   "spec_review",
@@ -23,7 +23,7 @@ export const ConversationThread = z
     kind: ThreadKind,
     title: z.string().min(1).max(200),
     participantIds: z.array(PrincipalId).min(1),
-    representativeIds: z.array(PrincipalId),
+    standInIds: z.array(PrincipalId),
     accessMode: ThreadAccessMode,
     accessChangedAtSequence: z.number().int().positive().optional(),
     priorHistoryGranted: z.boolean(),

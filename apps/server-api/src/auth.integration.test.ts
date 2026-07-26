@@ -1,7 +1,12 @@
+import Fastify from "fastify";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createInteroAuth, resolvePrincipalForAuthUser } from "./auth.js";
+import {
+  createInteroAuth,
+  mountAuth,
+  resolvePrincipalForAuthUser,
+} from "./auth.js";
 import { migrateDatabase } from "./database/migrate.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -13,6 +18,7 @@ databaseSuite("Better Auth database integration", () => {
   const sent: Array<{ email: string; url: string }> = [];
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const email = `auth-${suffix}@intero.test`;
+  const mountedEmail = `mounted-auth-${suffix}@intero.test`;
   const authUserId = `auth-user-${suffix}`;
   const clientId = `intero-desktop:${suffix}`;
   let principalId: string | undefined;
@@ -22,9 +28,10 @@ databaseSuite("Better Auth database integration", () => {
   });
 
   afterAll(async () => {
-    await pool.query('DELETE FROM "verification" WHERE "value" LIKE $1', [
-      `%${email}%`,
-    ]);
+    await pool.query(
+      'DELETE FROM "verification" WHERE "value" LIKE $1 OR "value" LIKE $2',
+      [`%${email}%`, `%${mountedEmail}%`],
+    );
     await pool.query('DELETE FROM "deviceCode" WHERE "clientId" = $1', [
       clientId,
     ]);
@@ -97,5 +104,40 @@ databaseSuite("Better Auth database integration", () => {
       [authUserId],
     );
     expect(links.rows[0]?.count).toBe("1");
+  });
+
+  it("mounts Better Auth through Fastify with parsed JSON and credentialed CORS", async () => {
+    const mounted = createInteroAuth(
+      {
+        publicUrl: "http://localhost:4310",
+        secret: "intero-auth-integration-secret-at-least-32-bytes",
+        rpId: "localhost",
+        database: pool,
+      },
+      {
+        async send(input) {
+          sent.push({ email: input.email, url: input.url });
+        },
+      },
+    );
+    const app = Fastify();
+    mountAuth(app, mounted, ["http://127.0.0.1:5174"]);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/magic-link",
+      headers: {
+        origin: "http://127.0.0.1:5174",
+        "content-type": "application/json",
+      },
+      payload: { email: mountedEmail },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe(
+      "http://127.0.0.1:5174",
+    );
+    expect(response.headers["access-control-allow-credentials"]).toBe("true");
+    expect(sent.at(-1)?.email).toBe(mountedEmail);
   });
 });

@@ -10,12 +10,12 @@ Intero separates technical execution from team coordination.
 
 - Coding Agents execute work and decide when a technical branch needs team
   context.
-- A Local Representative independently maintains private Work State.
-- A Public Representative communicates and coordinates from synchronized state.
+- A Local Stand-in independently maintains private Work State.
+- A Public Stand-in communicates and coordinates from synchronized state.
 - A Rust privacy daemon owns local trust, storage, credentials, and privileged
   workspace access.
 - The server owns shared state, messaging, authorization, realtime delivery,
-  review, audit, and always-available Representative jobs.
+  review, audit, and always-available Stand-in jobs.
 
 The system is deliberately not an event-sourced Agent transcript platform.
 Normal domain tables hold current state, while immutable Activity Events record
@@ -35,14 +35,14 @@ flowchart LR
         Electron["Electron<br/>React UI"]
         Bridge["intero mcp-stdio<br/>stateless bridge"]
         Daemon["interod<br/>Rust privacy kernel"]
-        LocalRep["Local Representative<br/>TypeScript"]
+        LocalRep["Local Stand-in<br/>TypeScript"]
         LocalDB["SQLCipher"]
     end
 
     subgraph Server["Intero server"]
         API["Fastify API<br/>modular monolith"]
         Worker["Graphile Worker"]
-        PublicRep["Public Representative Jobs"]
+        PublicRep["Public Stand-in Jobs"]
         Realtime["Centrifugo"]
         PG["PostgreSQL"]
         Spice["SpiceDB"]
@@ -87,11 +87,11 @@ Two processes share this plane:
 
 1. `interod` is the Rust privacy kernel and the only process allowed to own
    the encrypted local database or access OS credentials.
-2. The Local Representative is a TypeScript/Node sidecar supervised by
+2. The Local Stand-in is a TypeScript/Node sidecar supervised by
    `interod`. It runs the Agent loop but must call privacy-kernel ports for
    workspace, storage, credential, and synchronization access.
 
-Electron Main is not a Representative runtime and does not own private data.
+Electron Main is not a Stand-in runtime and does not own private data.
 
 ### 3.2 Public plane
 
@@ -100,16 +100,16 @@ The public plane is authoritative for:
 - Organizations, projects, principals, and shared authorization.
 - Public Work Projections.
 - Chat, Coordination Threads, Spec Reviews, Decisions, and Action Inbox items.
-- Public Representative jobs and public memory.
+- Public Stand-in jobs and public memory.
 - Realtime fanout, object metadata, audit, and search.
 
-Public Representative work runs as short-lived jobs. Its logical identity and
+Public Stand-in work runs as short-lived jobs. Its logical identity and
 memory are durable in PostgreSQL; no per-user server process needs to stay
 resident.
 
 ### 3.3 Projection boundary
 
-Private Work State never synchronizes wholesale. The Local Representative
+Private Work State never synchronizes wholesale. The Local Stand-in
 creates a projection diff, and `interod` verifies:
 
 ```text
@@ -147,7 +147,7 @@ The app package contains compatible versions of:
 
 - Electron application.
 - `interod`.
-- Local Representative sidecar.
+- Local Stand-in sidecar.
 - MCP stdio bridge.
 - supported Coding Agent integration assets.
 
@@ -155,7 +155,7 @@ They update atomically as one desktop release.
 
 ### 4.2 Local IPC
 
-Electron, the Local Representative, and the MCP bridge communicate with
+Electron, the Local Stand-in, and the MCP bridge communicate with
 `interod` through JSON-RPC 2.0 using length-prefixed framing:
 
 - Unix Domain Socket on macOS and Linux.
@@ -163,7 +163,7 @@ Electron, the Local Representative, and the MCP bridge communicate with
 
 The protocol is identical across operating systems; only the transport adapter
 differs. Administrator/Desktop, lifecycle-hook ingress, MCP, and Local
-Representative sidecar each receive a separate daemon-managed capability and
+Stand-in sidecar each receive a separate daemon-managed capability and
 an explicit method allowlist. The descriptors are OS-user-readable local files;
 this separates Intero components and prevents accidental authority reuse, but
 does not claim to sandbox an already-compromised same-UID process.
@@ -180,7 +180,7 @@ does not claim to sandbox an already-compromised same-UID process.
 
 ### 4.4 Workspace tools
 
-The Local Representative receives bounded tools:
+The Local Stand-in receives bounded tools:
 
 ```text
 workspace.list_files
@@ -203,7 +203,7 @@ All tools:
 - produce local audit entries;
 - pass results through model-egress policy before model use.
 
-No arbitrary shell or file-write tool is available to the Representative.
+No arbitrary shell or file-write tool is available to the Stand-in.
 
 ## 5. Coding Agent integrations
 
@@ -212,13 +212,13 @@ No arbitrary shell or file-write tool is available to the Representative.
 All Coding Agent adapters expose the same tools:
 
 ```text
-representative.lookup_team_context
-representative.current_context
-representative.request_coordination
-representative.request_spec_review
-representative.lookup_decision
-representative.check_scope
-representative.report_checkpoint
+stand_in.lookup_team_context
+stand_in.current_context
+stand_in.request_coordination
+stand_in.request_spec_review
+stand_in.lookup_decision
+stand_in.check_scope
+stand_in.report_checkpoint
 ```
 
 `intero mcp-stdio` is a stateless transport bridge, not an Agent. A Coding
@@ -243,7 +243,7 @@ Agents are instructed to call it only at semantic milestones:
 - a meaningful artifact or validation state is produced;
 - work pauses or completes.
 
-The Local Representative stores the report as a `coding_agent_report` Claim and
+The Local Stand-in stores the report as a `coding_agent_report` Claim and
 reconciles it with lifecycle, Git, validation, and human corrections.
 
 ### 5.3 Adapter-specific observation
@@ -297,11 +297,11 @@ not depend on a system Node.js installation. Renderer requests first trigger a
 native main-process confirmation showing exact target paths; only acceptance
 creates a sender-bound, short-lived, one-use mutation token.
 
-## 6. Representative runtime
+## 6. Stand-in runtime
 
 ### 6.1 Shared core
 
-Local and Public Representatives share `representative-core`, a pure TypeScript
+Local and Public Stand-ins share `stand-in-core`, a pure TypeScript
 package containing:
 
 - event-driven Agent loop;
@@ -318,7 +318,7 @@ credential store. Each runtime injects different ports and tools.
 
 ### 6.2 Event-driven execution
 
-Representative execution is event driven.
+Stand-in execution is event driven.
 
 - Direct messages, blockers, coordination requests, scope changes, and review
   requests wake a run immediately.
@@ -338,7 +338,7 @@ budgets, and idempotent output commands.
 Every run builds a bounded Context Package:
 
 1. product, organization, and user policy;
-2. Representative identity and runtime capabilities;
+2. Stand-in identity and runtime capabilities;
 3. triggering event;
 4. recent messages from the relevant Thread;
 5. resolved Work State and unresolved Claims;
@@ -357,7 +357,7 @@ Prompt compilation order:
 ```text
 Product Policy
 → Organization Policy
-→ Representative Identity
+→ Stand-in Identity
 → User Preferences
 → Runtime Capabilities
 → Current Context
@@ -367,7 +367,7 @@ Product safety rules cannot be overridden. Organization policy can narrow
 behavior. Users can configure tone, language, summary detail, notification
 preference, normal Workstream scope, and escalation preference.
 
-Every Representative message and action records the prompt, policy, and tool
+Every Stand-in message and action records the prompt, policy, and tool
 schema versions used for the run.
 
 ## 7. Work State, Claims, and memory
@@ -384,7 +384,7 @@ A Claim is an assertion with:
 - supporting evidence reference.
 
 Source types include human statement, direct observation, Coding Agent report,
-project-system state, and Representative inference.
+project-system state, and Stand-in inference.
 
 Resolution is not last-write-wins. Human corrections and direct observations
 normally outrank inference, but conflicting Claims remain visible when the
@@ -405,7 +405,7 @@ Blocker
 Dependency
 Ownership
 Coordination Thread
-Person and Representative
+Person and Stand-in
 ```
 
 Typed relations express `depends_on`, `blocks`, `owned_by`, `affects`,
@@ -420,7 +420,7 @@ A dedicated graph database is not required for MVP.
 Local private search:
 
 - structured lookup;
-- SQLite FTS5 over Representative memory;
+- SQLite FTS5 over Stand-in memory;
 - exact Git, path, and symbol lookup;
 - on-demand read-only workspace search.
 
@@ -439,17 +439,17 @@ authorization source of truth.
 ### 8.1 Conversation types
 
 - Human-only direct and group Threads.
-- Representative Thread for a person and their Representative.
+- Stand-in Thread for a person and their Stand-in.
 - Project Rooms.
 - Coordination Threads.
 - Spec Review Threads.
 - Decision and Task-linked Threads.
 
-Representative Threads are server-readable and multi-device synchronized.
+Stand-in Threads are server-readable and multi-device synchronized.
 They are not automatically team-visible.
 
 Human-only Threads use OpenMLS. Each device is an MLS member. Explicitly adding
-a Representative ends the Human-only mode for that same logical Thread:
+a Stand-in ends the Human-only mode for that same logical Thread:
 
 - subsequent messages are Agent-readable and server-readable;
 - a visible system event records the access transition;
@@ -462,17 +462,17 @@ silent or retroactive downgrade.
 
 ### 8.2 Runtime routing
 
-The user sees one Representative identity.
+The user sees one Stand-in identity.
 
-- private-work questions route to the Local Representative;
-- team-public questions route to the Public Representative;
+- private-work questions route to the Local Stand-in;
+- team-public questions route to the Public Stand-in;
 - mixed questions are composed locally;
 - when local is offline, Public answers from public state, shows freshness, and
   queues private-context work.
 
 ### 8.3 Coordination actions
 
-Every Representative coordination contains:
+Every Stand-in coordination contains:
 
 1. a human-readable message;
 2. a typed Action Envelope;
@@ -499,7 +499,7 @@ become domain identity.
 ### 9.2 Authorization layers
 
 - Local Rust policy controls device observation and egress.
-- TypeScript Capability Policy controls Representative business authority.
+- TypeScript Capability Policy controls Stand-in business authority.
 - PostgreSQL RLS enforces organization and tenant boundaries.
 - SpiceDB enforces shared ReBAC over projects, Rooms, Threads, Specs, and
   Artifacts.
@@ -547,7 +547,7 @@ coordination
 specs
 decisions
 artifacts
-representatives
+stand-ins
 search
 notifications
 audit
@@ -566,7 +566,7 @@ Every handler is idempotent and keyed by a stable domain operation ID.
 Graphile-specific identifiers do not leak beyond a Queue port, allowing later
 migration to BullMQ, NATS, or Temporal if the workload requires it.
 
-### 10.3 Public Representative concurrency
+### 10.3 Public Stand-in concurrency
 
 - One Conversation Thread is processed in sequence.
 - One Workstream's state changes are processed in sequence.
@@ -665,7 +665,7 @@ A later A2A 1.0 Gateway maps:
 | Artifact    | Artifact reference                           |
 | Extension   | Intero Action Envelope                       |
 
-External Agents can reach only the Public Representative. They map to Intero
+External Agents can reach only the Public Stand-in. They map to Intero
 principals and remain subject to Capability Policy, SpiceDB, and privacy
 projection. Agent discovery never implies authorization.
 
@@ -674,13 +674,13 @@ projection. Agent discovery never implies authorization.
 ```text
 apps/
   desktop/
-  local-representative/
+  local-stand-in/
   server-api/
   server-worker/
 
 packages/
   api-contracts/
-  representative-core/
+  stand-in-core/
   domain/
   project-management/
   ui/
@@ -717,7 +717,7 @@ development commands.
 ## 17. Decision records
 
 - [ADR-0001: Separate local private and public planes](adr/0001-separate-local-private-and-public-planes.md)
-- [ADR-0002: Shared Representative core with event-driven runtimes](adr/0002-shared-representative-core-and-event-driven-runtimes.md)
+- [ADR-0002: Shared Stand-in core with event-driven runtimes](adr/0002-shared-stand-in-core-and-event-driven-runtimes.md)
 - [ADR-0003: TypeScript modular monolith with a Rust privacy daemon](adr/0003-typescript-modular-monolith-and-rust-privacy-daemon.md)
 - [ADR-0004: Conversation privacy and Agent-readable boundaries](adr/0004-conversation-privacy-boundaries.md)
 - [ADR-0005: Internal coordination protocol before A2A](adr/0005-internal-coordination-protocol-before-a2a.md)

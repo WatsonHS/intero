@@ -49,7 +49,7 @@ export const enUS: Record<TranslationKey, string> = {
 
   "pulse.title": "What everyone is doing",
   "pulse.lede":
-    "Maintained by each person's Representative — nobody updates this by hand. This page is read-only.",
+    "Maintained by each person's Stand-in — nobody updates this by hand. This page is read-only.",
   "pulse.runtime.local": "Local runtime",
   "pulse.runtime.public": "Public fallback",
   "pulse.runtime.connecting": "Connecting…",
@@ -60,11 +60,11 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.runtime.errorDetail": "local runtime still recording",
   "pulse.banner.offlineTitle": "Your machine is offline",
   "pulse.banner.offlineBody":
-    "The state below comes from the Public Representative's synchronized data. It never pretends to be the local runtime; requests that need current private context are queued.",
+    "The state below comes from the Public Stand-in's synchronized data. It never pretends to be the local runtime; requests that need current private context are queued.",
   "pulse.banner.offlineMeta": "last synced {time}",
   "pulse.banner.staleTitle": "{count} Work States have gone stale",
   "pulse.banner.staleBody":
-    "No new observations for over {minutes} minutes. When the Representative answers questions about these workstreams it will disclose their freshness.",
+    "No new observations for over {minutes} minutes. When the Stand-in answers questions about these workstreams it will disclose their freshness.",
   "pulse.banner.staleMeta": "threshold {minutes} min",
   "pulse.countPeople": "people in motion",
   "pulse.countTasks": "tasks in progress",
@@ -80,7 +80,7 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.error.title": "Can't read Team Pulse",
   "pulse.error.body":
     "The public plane is temporarily unreachable. Your private Work State is unaffected; gaps are repaired by cursor once it recovers.",
-  "pulse.card.role": "maintained by their Representative",
+  "pulse.card.role": "maintained by their Stand-in",
   "pulse.card.changes": "{count} changes",
   "pulse.card.subsClosed": "{active} in progress · {total} side tasks",
   "pulse.card.subsOpen": "Side tasks",
@@ -91,30 +91,30 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.card.noChange": "No organizational change since the last checkpoint.",
   "pulse.inbox.title": "Needs you",
   "pulse.inbox.lede":
-    "Negotiation starts automatically between Representatives; only what needs a human lands here.",
+    "Negotiation starts automatically between Stand-ins; only what needs a human lands here.",
   "pulse.inbox.empty": "No pending decisions, reviews, or scope expansions.",
-  "pulse.rep.title": "Your Representative just did",
-  "pulse.rep.empty": "No Representative activity to show yet.",
+  "pulse.standIn.title": "Your Stand-in just did",
+  "pulse.standIn.empty": "No Stand-in activity to show yet.",
 
   "person.back": "Team Pulse",
   "person.dm": "Direct message",
-  "person.atRep": "@ their Rep",
-  "person.repLocal": "Local Representative · {time}",
-  "person.repPublic": "Public Representative · last synced {time}",
-  "person.says": "Their Representative says ·",
+  "person.atStandIn": "@ their Stand-in",
+  "person.standInLocal": "Local Stand-in · {time}",
+  "person.standInPublic": "Public Stand-in · last synced {time}",
+  "person.says": "Their Stand-in says ·",
   "person.main": "Main task",
   "person.subs": "Side tasks",
   "person.checkpoints": "Recent checkpoints",
   "person.checkpointsLede":
-    "These are what their Representative published to the public plane — not raw agent sessions.",
+    "These are what their Stand-in published to the public plane — not raw agent sessions.",
   "person.checkpointsEmpty": "No checkpoints published to the public plane yet.",
   "person.confidence": "{value} confidence",
   "person.changes": "{count} meaningful changes",
   "person.confHow": "Where confidence comes from",
   "person.confNote":
-    "Confidence {value}, maintained by their Representative from observed signals.",
+    "Confidence {value}, maintained by their Stand-in from observed signals.",
   "person.confContradictions":
-    "{count} unresolved contradiction references exist; the Representative won't pick a side.",
+    "{count} unresolved contradiction references exist; the Stand-in won't pick a side.",
   "person.waitingOn": "Waiting on",
   "person.blockers": "Current blockers",
   "person.groups": "Discussion groups they're in",
@@ -124,18 +124,18 @@ export const enUS: Record<TranslationKey, string> = {
   "person.notFound": "No public Work State found for this person.",
 
   "chat.title": "Messages",
-  "chat.group.rep": "Your Representative",
+  "chat.group.standIn": "Your Stand-in",
   "chat.group.temp": "Temporary groups",
   "chat.group.rooms": "Group chats",
   "chat.group.direct": "Direct messages",
-  "chat.subPeopleReps": "{people} people · {reps} Reps",
+  "chat.subPeopleStandIns": "{people} people · {standIns} Stand-ins",
   "chat.local": "local runtime",
   "chat.public": "public runtime · {time}",
-  "chat.hint": "Humans and Representatives share one thread",
+  "chat.hint": "Humans and Stand-ins share one thread",
   "chat.hintOffline": "Local offline · private-context questions are queued",
   "chat.offlineBanner":
-    "Your machine is offline. The Public Representative answers from synchronized state below, last synced {time}; questions that need current private context are queued until local recovers.",
-  "chat.placeholder": "Say something, or @ someone's Representative…",
+    "Your machine is offline. The Public Stand-in answers from synchronized state below, last synced {time}; questions that need current private context are queued until local recovers.",
+  "chat.placeholder": "Say something, or @ someone's Stand-in…",
   "chat.agentOf": "agent · {name}",
   "chat.expandBasis": "Show basis",
   "chat.collapseBasis": "Hide basis",
@@ -145,9 +145,9 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.encryptedMessage": "End-to-end encrypted human message",
   "chat.needsHuman": "Needs a human decision",
   "chat.resolved": "Resolved",
-  "chat.empty.title": "Meet your Representative first",
+  "chat.empty.title": "Meet your Stand-in first",
   "chat.empty.body":
-    "Your Representative, direct messages, temporary groups, and group chats all live here.",
+    "Your Stand-in, direct messages, temporary groups, and group chats all live here.",
   "chat.empty.start": "Start the thread",
   "chat.loading": "Loading conversations…",
   "chat.unavailable": "Messages are unavailable.",
@@ -169,19 +169,19 @@ export const enUS: Record<TranslationKey, string> = {
 
   "coord.eyebrow": "COORDINATION BRANCH",
   "coord.lede":
-    "Exchanges between Representatives are visible, attributable, and policy-bound. They can settle the division of work, but decisions return to humans.",
+    "Exchanges between Stand-ins are visible, attributable, and policy-bound. They can settle the division of work, but decisions return to humans.",
   "coord.meta": "policy {policy} · seq {sequence}",
-  "coord.decisionNote": "Representatives cannot make this decision for you.",
+  "coord.decisionNote": "Stand-ins cannot make this decision for you.",
   "coord.needsHuman": "Needs a human",
   "coord.resolved": "Resolved",
   "coord.empty.title": "No coordination branches yet",
   "coord.empty.body":
-    "When a Representative hits a scope boundary it forks a coordination branch automatically, and it shows up here.",
+    "When a Stand-in hits a scope boundary it forks a coordination branch automatically, and it shows up here.",
   "coord.scopeTitle": "SCOPE BOUNDARIES",
   "coord.owns": "{name} owns",
   "coord.contested": "CONTESTED",
   "coord.contestedBody":
-    "These scopes appear in requests from multiple Representatives; semantic changes need a human decision.",
+    "These scopes appear in requests from multiple Stand-ins; semantic changes need a human decision.",
   "coord.grants": "Granted authority",
   "coord.grantsNote":
     "No commitment authority; scheduling and ownership conclusions return to humans",
@@ -207,17 +207,17 @@ export const enUS: Record<TranslationKey, string> = {
   "spec.status.superseded": "Superseded",
   "spec.reviewers": "Affected reviewers",
   "spec.noReviews": "No review records for this revision yet.",
-  "spec.impact": "Representative impact analysis",
+  "spec.impact": "Stand-in impact analysis",
   "spec.notApproval": "This is not a human approval",
   "spec.decisionRecord": "Decision Record",
   "spec.decisionPending":
-    "A human conclusion becomes a Decision Record bound to a specific revision. Representative analysis does not count as approval.",
+    "A human conclusion becomes a Decision Record bound to a specific revision. Stand-in analysis does not count as approval.",
   "spec.approve": "Approve revision {revision} and write a Decision Record",
   "spec.requestChanges": "Request changes",
   "spec.decisionDone": "Decision Record written",
   "spec.decisionDoneMeta": "bound to revision {revision} · by {name}",
   "spec.decisionFailed": "Writing the decision failed; try again.",
-  "review.representative_impact_analysis": "Impact analysis",
+  "review.stand_in_impact_analysis": "Impact analysis",
   "review.human_acknowledgement": "Acknowledged",
   "review.human_approval": "Approved",
   "review.human_conditional_approval": "Conditionally approved",
@@ -253,7 +253,7 @@ export const enUS: Record<TranslationKey, string> = {
   "project.board": "Board",
   "project.list": "List",
   "project.callout":
-    "Status, confidence, and freshness are maintained by each Representative; scheduling and ownership are yours to edit",
+    "Status, confidence, and freshness are maintained by each Stand-in; scheduling and ownership are yours to edit",
   "project.column.backlog": "To plan",
   "project.column.planned": "Planned",
   "project.column.in_progress": "In progress",
@@ -267,7 +267,7 @@ export const enUS: Record<TranslationKey, string> = {
   "project.col.confidence": "Confidence",
   "project.col.updated": "Updated",
   "project.openItem": "Open full detail",
-  "project.maintained": "Status maintained by their Representative · {time}",
+  "project.maintained": "Status maintained by their Stand-in · {time}",
   "project.newCard": "New card",
   "project.untitled": "Untitled card",
   "project.cardTitlePlaceholder": "Card title",
@@ -298,7 +298,7 @@ export const enUS: Record<TranslationKey, string> = {
   "item.changes.field": "Field",
   "item.changes.by": "By",
   "item.changes.time": "Time",
-  "item.changes.projected": "projected by the Representative",
+  "item.changes.projected": "projected by the Stand-in",
   "item.changesEmpty": "The latest projection changed no fields.",
   "item.editable": "Scheduling & ownership · editable",
   "item.readonlySection": "From Work State · read-only",
@@ -310,7 +310,7 @@ export const enUS: Record<TranslationKey, string> = {
   "item.freshness": "Freshness",
   "item.linked": "Linked workstreams",
   "item.linkHint":
-    "Linking only adds context; board status never overrides the phase, confidence, or freshness the Representative maintains.",
+    "Linking only adds context; board status never overrides the phase, confidence, or freshness the Stand-in maintains.",
   "item.noWorkstreams": "No public workstreams available to link.",
   "item.none": "Not linked",
   "item.activityEmpty": "No activity events for this card yet.",
@@ -344,7 +344,7 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.localRuntime": "Local runtime",
   "settings.egress": "Model egress",
   "settings.egressDetail":
-    "With it off the Representative still works — it just skips natural-language summaries.",
+    "With it off the Stand-in still works — it just skips natural-language summaries.",
   "settings.egress.managed": "Managed API",
   "settings.egress.managedDetail": "Sends only policy-filtered context",
   "settings.egress.user": "Your provider",
@@ -358,7 +358,7 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.storageReady": "Ready",
   "settings.adapters": "Coding agent adapters",
   "settings.adaptersDetail":
-    "Codex / Claude Code / OpenCode. Missing hooks degrade to other observations without breaking the Representative.",
+    "Codex / Claude Code / OpenCode. Missing hooks degrade to other observations without breaking the Stand-in.",
   "settings.adaptersConnected": "{count} connected",
   "settings.freshnessThreshold": "Freshness threshold",
   "settings.freshnessDetail":
@@ -420,7 +420,7 @@ export const enUS: Record<TranslationKey, string> = {
   "setup.s2.eyebrow": "STEP 2 · TEAM",
   "setup.s2.title": "Whose Team Pulse should you appear in",
   "setup.s2.body":
-    "The team defines the public plane's boundary: only people in the same team — and their Representatives — can see the Work State you project.",
+    "The team defines the public plane's boundary: only people in the same team — and their Stand-ins — can see the Work State you project.",
   "setup.s2.selected": "Selected",
   "setup.s3.label": "Enroll local directories",
   "setup.s3.sub": "only checked ones emit signals",
@@ -437,7 +437,7 @@ export const enUS: Record<TranslationKey, string> = {
   "setup.s4.eyebrow": "STEP 4 · CONNECT",
   "setup.s4.title": "Teach your agent to speak up",
   "setup.s4.body":
-    "This installs user-level hooks and an MCP bridge: the agent can report semantic checkpoints, and call your Representative to negotiate when it hits a boundary.",
+    "This installs user-level hooks and an MCP bridge: the agent can report semantic checkpoints, and call your Stand-in to negotiate when it hits a boundary.",
   "setup.s4.will1":
     "Installs hooks and the MCP bridge (user-level, not in the repo)",
   "setup.s4.will2":
@@ -464,21 +464,21 @@ export const enUS: Record<TranslationKey, string> = {
   "setup.s6.firstReceived": "First Work State received",
   "setup.s6.firstNote":
     "The first one usually has low confidence — it's a single observation. It grows on its own with more signals; no confirmation needed.",
-  "setup.s7.label": "Meet your Representative",
+  "setup.s7.label": "Meet your Stand-in",
   "setup.s7.sub": "what it does, and doesn't",
   "setup.s7.eyebrow": "STEP 7 · HANDOFF",
   "setup.s7.title": "It speaks for you, but never decides for you",
   "setup.s7.body":
-    "This boundary is the product's root: a Representative can settle divisions of work, answer status, and start negotiations — but every consequential commitment returns to you.",
-  "setup.s7.repName": "{name}'s Representative",
-  "setup.s7.repSub":
+    "This boundary is the product's root: a Stand-in can settle divisions of work, answer status, and start negotiations — but every consequential commitment returns to you.",
+  "setup.s7.standInName": "{name}'s Stand-in",
+  "setup.s7.standInSub":
     "One identity, two runtimes: the local one sees private context, the public one covers while you're offline.",
   "setup.s7.quote":
     '"I maintain your Work State, answer questions about your progress, and negotiate with the right person when your coding agent hits a boundary. I never make commitments, change schedules, or approve architecture for you."',
   "setup.s7.will": "It will",
   "setup.s7.wont": "It won't",
   "setup.s7.will1": "Maintain and project your Work State",
-  "setup.s7.will2": "Answer questions from others (and their Reps)",
+  "setup.s7.will2": "Answer questions from others (and their Stand-ins)",
   "setup.s7.will3": "Fork discussion groups to ask about scope boundaries",
   "setup.s7.will4": "Send what needs you into the Action Inbox",
   "setup.s7.wont1": "Make commitments or change schedules for you",

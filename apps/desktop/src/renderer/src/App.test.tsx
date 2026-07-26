@@ -25,7 +25,12 @@ describe("desktop application shell", () => {
     expect(output).toContain("通讯");
     expect(output).toContain("项目");
     expect(output).toContain("Spec Review");
+    expect(output).toContain("设置");
     expect(output).not.toContain("Huang Sheng");
     expect(output).not.toContain("Friday, 24 July");
+    expect(output).not.toContain("Development identity");
+    expect(output).not.toContain("Intero Cloud Pilot");
+    expect(output).not.toContain("macos-titlebar-controls-spacer");
+    expect(output).not.toContain("bg-[#e0685f]");
   });
 });

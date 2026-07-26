@@ -28,13 +28,13 @@ import {
   uuidv7,
 } from "@intero/domain";
 import {
-  addRepresentative,
+  addStandIn,
   authorizeEnvelope,
   buildPublicProjection,
   createSpecRevision,
   invalidateAffectedReviews,
   resolveWorkstream,
-} from "@intero/representative-core";
+} from "@intero/stand-in-core";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
@@ -366,7 +366,7 @@ export class PostgresPlatformStore implements PlatformStore {
 
   async putGrant(grant: CapabilityGrant): Promise<CapabilityGrant> {
     return this.write(async (client) => {
-      await this.ensurePrincipal(client, grant.principalId, "representative");
+      await this.ensurePrincipal(client, grant.principalId, "stand_in");
       await client.query(
         `INSERT INTO capability_grants
           (id, organization_id, principal_id, "grant", policy_version, expires_at, revoked_at)
@@ -420,7 +420,7 @@ export class PostgresPlatformStore implements PlatformStore {
           client,
           envelope.actorId,
           "scope_expansion",
-          "Representative action needs authorization",
+          "Stand-in action needs authorization",
           decision.reason,
           `coordination:${envelope.operationId}`,
         );
@@ -431,7 +431,7 @@ export class PostgresPlatformStore implements PlatformStore {
           client,
           envelope.actorId,
           "consequential_commitment",
-          "Representative action needs confirmation",
+          "Stand-in action needs confirmation",
           envelope.humanMessage,
           `coordination:${envelope.operationId}`,
         );
@@ -497,13 +497,13 @@ export class PostgresPlatformStore implements PlatformStore {
     return this.write(async (client) => {
       for (const principalId of new Set([
         ...thread.participantIds,
-        ...thread.representativeIds,
+        ...thread.standInIds,
       ])) {
         await this.ensurePrincipal(
           client,
           principalId,
-          thread.representativeIds.includes(principalId)
-            ? "representative"
+          thread.standInIds.includes(principalId)
+            ? "stand_in"
             : "human",
         );
       }
@@ -527,20 +527,20 @@ export class PostgresPlatformStore implements PlatformStore {
       );
       for (const principalId of new Set([
         ...thread.participantIds,
-        ...thread.representativeIds,
+        ...thread.standInIds,
       ])) {
         await client.query(
           `INSERT INTO thread_participants
-            (organization_id, thread_id, principal_id, representative)
+            (organization_id, thread_id, principal_id, stand_in)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (thread_id, principal_id) DO UPDATE SET
-             representative = EXCLUDED.representative,
+             stand_in = EXCLUDED.stand_in,
              updated_at = now()`,
           [
             this.organizationId,
             thread.id,
             principalId,
-            thread.representativeIds.includes(principalId),
+            thread.standInIds.includes(principalId),
           ],
         );
       }
@@ -574,19 +574,19 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
-  async addRepresentativeToThread(
+  async addStandInToThread(
     threadId: ThreadId,
-    representativeId: PrincipalId,
+    standInId: PrincipalId,
     actorId: PrincipalId,
   ): Promise<{ thread: ConversationThread; event: ThreadMessage }> {
     return this.write(async (client) => {
       const current = await this.getThreadInTransaction(client, threadId);
       if (!current) throw new Error("Thread was not found.");
-      await this.ensurePrincipal(client, representativeId, "representative");
+      await this.ensurePrincipal(client, standInId, "stand_in");
       await this.ensurePrincipal(client, actorId);
-      const transition = addRepresentative(
+      const transition = addStandIn(
         current.thread,
-        representativeId,
+        standInId,
         actorId,
       );
       await client.query(
@@ -607,11 +607,11 @@ export class PostgresPlatformStore implements PlatformStore {
       );
       await client.query(
         `INSERT INTO thread_participants
-          (organization_id, thread_id, principal_id, representative)
+          (organization_id, thread_id, principal_id, stand_in)
          VALUES ($1, $2, $3, true)
          ON CONFLICT (thread_id, principal_id)
-         DO UPDATE SET representative = true, updated_at = now()`,
-        [this.organizationId, threadId, representativeId],
+         DO UPDATE SET stand_in = true, updated_at = now()`,
+        [this.organizationId, threadId, standInId],
       );
       await this.insertMessage(client, transition.event);
       return transition;
@@ -718,8 +718,8 @@ export class PostgresPlatformStore implements PlatformStore {
       await this.ensurePrincipal(
         client,
         review.reviewerId,
-        review.kind === "representative_impact_analysis"
-          ? "representative"
+        review.kind === "stand_in_impact_analysis"
+          ? "stand_in"
           : "human",
       );
       await client.query(
@@ -1106,9 +1106,9 @@ export class PostgresPlatformStore implements PlatformStore {
     if (!row) return undefined;
     const participants = await client.query<{
       principal_id: PrincipalId;
-      representative: boolean;
+      stand_in: boolean;
     }>(
-      "SELECT principal_id, representative FROM thread_participants WHERE thread_id = $1",
+      "SELECT principal_id, stand_in FROM thread_participants WHERE thread_id = $1",
       [threadId],
     );
     const messages = await client.query(
@@ -1121,8 +1121,8 @@ export class PostgresPlatformStore implements PlatformStore {
         kind: row.kind,
         title: row.title,
         participantIds: participants.rows.map((item) => item.principal_id),
-        representativeIds: participants.rows
-          .filter((item) => item.representative)
+        standInIds: participants.rows
+          .filter((item) => item.stand_in)
           .map((item) => item.principal_id),
         accessMode: row.access_mode,
         ...(row.access_changed_at_sequence
@@ -1259,14 +1259,14 @@ export class PostgresPlatformStore implements PlatformStore {
        VALUES ($1, $2, $3)
        ON CONFLICT (id) DO UPDATE SET
          kind = CASE
-           WHEN EXCLUDED.kind = 'representative' THEN 'representative'
+           WHEN EXCLUDED.kind = 'stand_in' THEN 'stand_in'
            ELSE principals.kind
          END,
          updated_at = now()`,
       [
         id,
-        kind === "representative"
-          ? "Intero Representative"
+        kind === "stand_in"
+          ? "Intero Stand-in"
           : `Principal ${id.slice(0, 8)}`,
         kind,
       ],

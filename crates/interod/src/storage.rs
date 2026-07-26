@@ -121,7 +121,7 @@ impl EncryptedStore {
               revoked INTEGER NOT NULL DEFAULT 0,
               committed INTEGER NOT NULL DEFAULT 1
             );
-            CREATE TABLE IF NOT EXISTS representative_requests (
+            CREATE TABLE IF NOT EXISTS stand_in_requests (
               request_id TEXT PRIMARY KEY,
               method TEXT NOT NULL,
               params TEXT NOT NULL,
@@ -130,8 +130,8 @@ impl EncryptedStore {
               completed_at INTEGER,
               result_json TEXT
             );
-            CREATE INDEX IF NOT EXISTS representative_requests_pending_idx
-              ON representative_requests(consumed_at, queued_at);
+            CREATE INDEX IF NOT EXISTS stand_in_requests_pending_idx
+              ON stand_in_requests(consumed_at, queued_at);
             CREATE TABLE IF NOT EXISTS integration_sessions (
               session_key TEXT PRIMARY KEY,
               workspace_id TEXT NOT NULL,
@@ -160,18 +160,18 @@ impl EncryptedStore {
             );
             ",
         )?;
-        let representative_request_columns = {
-            let mut statement = connection.prepare("PRAGMA table_info(representative_requests)")?;
+        let stand_in_request_columns = {
+            let mut statement = connection.prepare("PRAGMA table_info(stand_in_requests)")?;
             statement
                 .query_map([], |row| row.get::<_, String>(1))?
                 .collect::<Result<Vec<_>, _>>()?
         };
-        if !representative_request_columns
+        if !stand_in_request_columns
             .iter()
             .any(|column| column == "completed_at")
         {
             connection.execute(
-                "ALTER TABLE representative_requests ADD COLUMN completed_at INTEGER",
+                "ALTER TABLE stand_in_requests ADD COLUMN completed_at INTEGER",
                 [],
             )?;
         }
@@ -232,12 +232,12 @@ impl EncryptedStore {
                 [],
             )?;
         }
-        if !representative_request_columns
+        if !stand_in_request_columns
             .iter()
             .any(|column| column == "result_json")
         {
             connection.execute(
-                "ALTER TABLE representative_requests ADD COLUMN result_json TEXT",
+                "ALTER TABLE stand_in_requests ADD COLUMN result_json TEXT",
                 [],
             )?;
         }
@@ -431,7 +431,7 @@ impl EncryptedStore {
         Ok(mode.to_owned())
     }
 
-    pub fn enqueue_representative_request(&self, request: &Value) -> Result<bool, StorageError> {
+    pub fn enqueue_stand_in_request(&self, request: &Value) -> Result<bool, StorageError> {
         let request_id = request
             .get("requestId")
             .and_then(Value::as_str)
@@ -449,7 +449,7 @@ impl EncryptedStore {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let inserted = connection.execute(
-            "INSERT OR IGNORE INTO representative_requests
+            "INSERT OR IGNORE INTO stand_in_requests
              (request_id, method, params, queued_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -462,7 +462,7 @@ impl EncryptedStore {
         Ok(inserted == 1)
     }
 
-    pub fn next_representative_request(&self) -> Result<Option<Value>, StorageError> {
+    pub fn next_stand_in_request(&self) -> Result<Option<Value>, StorageError> {
         let mut connection = self
             .connection
             .lock()
@@ -471,7 +471,7 @@ impl EncryptedStore {
         let next = {
             let mut statement = transaction.prepare(
                 "SELECT request_id, method, params, queued_at
-                 FROM representative_requests
+                 FROM stand_in_requests
                  WHERE completed_at IS NULL
                    AND (
                      consumed_at IS NULL
@@ -495,7 +495,7 @@ impl EncryptedStore {
             return Ok(None);
         };
         transaction.execute(
-            "UPDATE representative_requests
+            "UPDATE stand_in_requests
              SET consumed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
              WHERE request_id = ?1 AND completed_at IS NULL",
             [&request_id],
@@ -509,7 +509,7 @@ impl EncryptedStore {
         })))
     }
 
-    pub fn acknowledge_representative_request(
+    pub fn acknowledge_stand_in_request(
         &self,
         request_id: &str,
     ) -> Result<bool, StorageError> {
@@ -518,7 +518,7 @@ impl EncryptedStore {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let updated = connection.execute(
-            "UPDATE representative_requests
+            "UPDATE stand_in_requests
              SET completed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
              WHERE request_id = ?1 AND completed_at IS NULL",
             [request_id],
@@ -526,7 +526,7 @@ impl EncryptedStore {
         Ok(updated == 1)
     }
 
-    pub fn complete_representative_request(
+    pub fn complete_stand_in_request(
         &self,
         request_id: &str,
         result: &Value,
@@ -536,7 +536,7 @@ impl EncryptedStore {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let updated = connection.execute(
-            "UPDATE representative_requests
+            "UPDATE stand_in_requests
              SET result_json = ?2,
                  completed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
              WHERE request_id = ?1 AND completed_at IS NULL",
@@ -545,14 +545,14 @@ impl EncryptedStore {
         Ok(updated == 1)
     }
 
-    pub fn representative_request_result(
+    pub fn stand_in_request_result(
         &self,
         request_id: &str,
     ) -> Result<Option<Value>, StorageError> {
-        self.representative_request_result_for_workspace(request_id, None)
+        self.stand_in_request_result_for_workspace(request_id, None)
     }
 
-    pub fn representative_request_result_for_workspace(
+    pub fn stand_in_request_result_for_workspace(
         &self,
         request_id: &str,
         workspace_id: Option<Uuid>,
@@ -564,7 +564,7 @@ impl EncryptedStore {
         let row = connection
             .query_row(
                 "SELECT params, consumed_at, completed_at, result_json
-                 FROM representative_requests
+                 FROM stand_in_requests
                  WHERE request_id = ?1",
                 [request_id],
                 |row| {
@@ -860,9 +860,9 @@ impl EncryptedStore {
             Value::String(workstream_id.to_string()),
         );
         let inserted = transaction.execute(
-            "INSERT OR IGNORE INTO representative_requests
+            "INSERT OR IGNORE INTO stand_in_requests
              (request_id, method, params, queued_at)
-             VALUES (?1, 'representative.ingest_adapter_event', ?2, ?3)",
+             VALUES (?1, 'stand_in.ingest_adapter_event', ?2, ?3)",
             params![
                 request_id,
                 serde_json::to_string(&request_params)?,
@@ -1058,9 +1058,9 @@ mod tests {
                 .expect("persist workspace");
             assert!(
                 store
-                    .enqueue_representative_request(&serde_json::json!({
+                    .enqueue_stand_in_request(&serde_json::json!({
                         "requestId": operation_id,
-                        "method": "representative.report_checkpoint",
+                        "method": "stand_in.report_checkpoint",
                         "params": { "workspaceId": workspace.id },
                         "queuedAt": 1,
                     }))
@@ -1073,26 +1073,26 @@ mod tests {
         assert_eq!(workspaces.len(), 1);
         assert_eq!(workspaces[0].id, workspace.id);
         let pending = reopened
-            .next_representative_request()
+            .next_stand_in_request()
             .expect("read request")
             .expect("pending request");
         assert_eq!(pending["requestId"], operation_id.to_string());
         assert!(
             reopened
-                .next_representative_request()
+                .next_stand_in_request()
                 .expect("queue remains readable")
                 .is_none()
         );
         assert!(
             reopened
-                .complete_representative_request(
+                .complete_stand_in_request(
                     &operation_id.to_string(),
                     &serde_json::json!({ "accepted": true }),
                 )
                 .expect("complete request")
         );
         let result = reopened
-            .representative_request_result(&operation_id.to_string())
+            .stand_in_request_result(&operation_id.to_string())
             .expect("request result")
             .expect("stored request");
         assert_eq!(result["status"], "completed");

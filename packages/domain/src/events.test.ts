@@ -17,7 +17,7 @@ describe("CanonicalWorkEvent", () => {
       occurredAt: "2026-07-24T10:00:00.000Z",
       receivedAt: "2026-07-24T10:00:01.000Z",
       workspaceId: uuidv7(),
-      privacy: "P1_REPRESENTATIVE_PRIVATE",
+      privacy: "P1_STAND_IN_PRIVATE",
       payload: {
         checkpointKind: "decision",
         summary: "Keep authorization behind a port.",
@@ -47,7 +47,7 @@ describe("CanonicalWorkEvent", () => {
         occurredAt: "2026-07-24T10:00:00.000Z",
         receivedAt: "2026-07-24T10:00:01.000Z",
         workspaceId: uuidv7(),
-        privacy: "P1_REPRESENTATIVE_PRIVATE",
+        privacy: "P1_STAND_IN_PRIVATE",
         payload: { prompt: "private" },
         idempotencyKey: "codex:checkpoint:02",
       }),

@@ -78,6 +78,48 @@
       "when": 1784955380546,
       "tag": "0010_unknown_vance_astro",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784980276702,
+      "tag": "0011_pilot_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785001397825,
+      "tag": "0012_normalized_pilot_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785003389070,
+      "tag": "0013_rainy_gunslinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785005592529,
+      "tag": "0014_famous_shard",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1785010043916,
+      "tag": "0015_last_leader",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785072000000,
+      "tag": "0016_phase5_project_work",
+      "breakpoints": true
     }
   ]
 }

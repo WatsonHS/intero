@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PublicRepresentativeWorker,
-  type PublicRepresentativeRepository,
+  PublicStandInWorker,
+  type PublicStandInRepository,
 } from "./runtime.js";
 
-class MemoryRepository implements PublicRepresentativeRepository {
+class MemoryRepository implements PublicStandInRepository {
   readonly completed = new Set<string>();
   readonly messages: Array<{ operationId: string; body: string }> = [];
 
@@ -29,10 +29,10 @@ class MemoryRepository implements PublicRepresentativeRepository {
   }
 }
 
-describe("PublicRepresentativeWorker", () => {
+describe("PublicStandInWorker", () => {
   it("is idempotent and discloses synchronized-state freshness", async () => {
     const repository = new MemoryRepository();
-    const worker = new PublicRepresentativeWorker(repository);
+    const worker = new PublicStandInWorker(repository);
     const job = {
       operationId: "operation-1",
       threadId: "thread-1",
@@ -47,7 +47,7 @@ describe("PublicRepresentativeWorker", () => {
 
   it("rejects work before side effects when a per-user run budget is exceeded", async () => {
     const repository = new MemoryRepository();
-    const worker = new PublicRepresentativeWorker(repository);
+    const worker = new PublicStandInWorker(repository);
     await expect(
       worker.run({
         operationId: "operation-budget",

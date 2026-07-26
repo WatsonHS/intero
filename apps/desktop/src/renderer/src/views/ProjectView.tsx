@@ -19,6 +19,8 @@ import {
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
+import { usePilotOptional } from "../pilot/context.js";
+import { ProjectWorkSurface } from "./project/ProjectWorkSurface.js";
 
 const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> = [
   { id: "backlog", label: "project.column.backlog", tone: "faint" },
@@ -57,7 +59,36 @@ function firstLinkedWorkstream(
   return undefined;
 }
 
-export function ProjectView({
+export function ProjectView(props: {
+  onOpenItem: (cardId: string) => void;
+}) {
+  const pilot = usePilotOptional();
+  const projectId =
+    pilot?.selectedProjectId ?? pilot?.projects.data?.projects[0]?.id;
+  const project = pilot?.projects.data?.projects.find(
+    (candidate) => candidate.id === projectId,
+  );
+  const isOrganizationAdmin =
+    pilot?.bootstrap.data?.organizationRole === "admin";
+  const isPrimaryTeamLeader = pilot?.teams.data?.teams
+    .find((team) => team.id === project?.primaryTeamId)
+    ?.members.some(
+      (member) =>
+        member.id === pilot.identityId && member.teamRole === "leader",
+    );
+  return projectId &&
+    pilot?.bootstrap.data?.adapters.projectWork === "postgres" ? (
+    <ProjectWorkSurface
+      projectId={projectId}
+      canGovern={Boolean(isOrganizationAdmin || isPrimaryTeamLeader)}
+      onOpenItem={props.onOpenItem}
+    />
+  ) : (
+    <LegacyProjectView {...props} />
+  );
+}
+
+function LegacyProjectView({
   onOpenItem,
 }: {
   onOpenItem: (cardId: string) => void;
