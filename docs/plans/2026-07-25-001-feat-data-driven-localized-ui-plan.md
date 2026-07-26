@@ -94,9 +94,10 @@ The cloud-first product needs:
 
 ## Accepted post-Pilot UX sequence
 
-Phase 3 infrastructure, Phase 4 onboarding/admin and Settings, and Phase 5
-Project work/Spec Review are implemented. Phase 6 Action Inbox,
-notifications/search and Phase 7 deeper Agent automation remain future scope.
+Phases 1–6 are implemented, including onboarding/admin, Project work/Spec
+Review, Action Inbox, in-app notification preferences, and search. Phase 7
+bounded Stand-in and Agent automation is the active implementation target and
+is not yet complete. External notification channels remain future scope.
 
 ### Phase 4 onboarding
 
@@ -104,11 +105,16 @@ notifications/search and Phase 7 deeper Agent automation remain future scope.
 - Admin enters display name and exact email. Show
   pending/accepted/expired/revoked state with copy, regenerate ("resend"), and
   revoke actions.
-- V1 copy-link requires no SMTP; the admin shares through their own channel.
+- V1 one-time, email-bound account-activation link requires no SMTP; the admin
+  copies and shares it through their own channel.
 - Use a distinct compact **Accept Invitation** surface, not administrator/Test
   Setup: Organization/Team/name/email confirmation and Accept; matching-email
-  login/registration; then joined Team/access Projects with direct Project/Team
-  Pulse entry and skippable Connect Coding Agent.
+  first credential setup; then joined Team/access Projects with direct
+  Project/Team Pulse entry and skippable Connect Coding Agent.
+- Make Passkey the primary normal login and email plus password the fallback.
+  Never reuse activation links for login and remove product Magic Link.
+- Show password recovery as unavailable rather than implying implementation;
+  defer administrator/manual recovery-link or optional SMTP recovery.
 - Deny email mismatch. Do not disclose deployment endpoint, model keys,
   governance, invitations, or admin Settings. Seed the display name and allow
   later editing under Personal Settings.
@@ -129,11 +135,30 @@ notifications/search and Phase 7 deeper Agent automation remain future scope.
 - Manual creation/editing remains available, while Agent-created content is
   clearly attributed and exposes history/revert and disconnect/revoke status.
 
-### Phase 6-7 extension
+### Phase 6 implemented surfaces and Phase 7 extension
 
-Action Inbox, notifications, and search enter the established attention
-surfaces before deeper Agent automation. Every new ability preserves visibility,
-provenance, privacy, authority, and no-Desktop dependency.
+Phase 7 renders automatic coordination, confirmed-Spec execution derivation,
+cross-Project progress/risk/decision summaries, audit, failure, and revert in
+the established Project activity, Coordination, Action Inbox, in-app
+notification, search, and Stand-in surfaces. It does not add a separate
+automation dashboard.
+
+The Stand-in or an authorized Agent may directly create or update execution
+work only from a confirmed Spec. The UI must show source Project/Spec version,
+actor, provenance, immutable history, freshness, status, required human
+decision, and audited revert where applicable. Durable jobs and the
+transactional outbox carry the work. Retries and duplicate delivery cannot
+create duplicate visible Threads, mutations, or attention items. Terminal
+failure is visible on the source object and creates deduplicated Inbox and
+in-app attention only when a user must act. Existing notification preferences
+apply.
+
+No Phase 7 UI offers Agent controls for membership, access, Project visibility,
+priority, or ownership. Priority/ownership changes require an authorized human
+action. No surface implies raw-data disclosure, external provider/GitHub
+action, irreversible business decision, or final human commitment. External
+notification channels remain future, and every ability preserves the
+no-Desktop dependency.
 
 ## Scope Boundaries
 

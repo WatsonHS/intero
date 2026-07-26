@@ -166,8 +166,8 @@ becomes required MCP or Stand-in infrastructure.
   - **Actors:** A1, A3, A5
   - **Steps:** Admin enters display name and exact email, copies the generated
     expiring/revocable link, and shares it outside Intero. Recipient confirms
-    Organization/Team/name/email, explicitly accepts, and logs in/registers with
-    the matching email.
+    Organization/Team/name/email, explicitly accepts with the matching email,
+    and uses the one-time activation link to bootstrap first credential setup.
   - **Outcome:** Recipient joins the Team with the pre-set editable name, sees
     accessible Projects, and may enter Project/Team Pulse or skip optional Agent
     connection. Admin configuration is never disclosed.
@@ -255,12 +255,18 @@ becomes required MCP or Stand-in infrastructure.
     the first project, and enables invitations. A deployment operator, if
     present, owns only infrastructure outside product Setup.
   - In **Team Settings → Member Management**, the administrator creates one
-    expiring, revocable invitation for a recipient's display name and exact
-    email, then copies, regenerates, or revokes it.
-  - The recipient authenticates or registers with the matching email and accepts
-    through the short recipient-only surface, automatically inheriting the
-    approved Intero endpoint, Team, Web, credentials, and connection
-    instructions. V1 requires no SMTP.
+    one-time, expiring, revocable email-bound account-activation link for a
+    recipient's display name and exact email, then copies, regenerates, or
+    revokes it.
+  - The recipient accepts with the matching email through the short
+    recipient-only surface and bootstraps first credential setup, automatically
+    inheriting the approved Intero endpoint, Team, Web, credentials, and
+    connection instructions. The activation link is not normal login. V1
+    requires no SMTP.
+  - Passkey is primary normal login; email plus password is fallback. Product
+    Magic Link login is removed.
+  - Password recovery is not implemented. A future administrator/manual
+    recovery link or optional SMTP-backed path requires separate delivery.
   - Bulk email/CSV invitations, SCIM, and domain auto-join are outside Phase
     1–5.
   - Ordinary member Setup has no arbitrary server URL field. A developer
@@ -520,8 +526,8 @@ becomes required MCP or Stand-in infrastructure.
   - Progress uses phase, verified progress, remaining conditions, freshness,
     confidence, and evidence rather than invented percentages.
   - Ordinary authorized progress changes Team Pulse; explicit decisions or
-    actions enter Action Inbox; system notifications are reserved for imminent
-    blockage or risk.
+    actions enter Action Inbox; Phase 6 in-app notifications are reserved for
+    user-selected attention categories. External channels are future.
 - R17. Project management is a module rather than the platform foundation:
   - The Phase 3 infrastructure remains valid without the post-Pilot work module.
   - A Workstream may exist without a task, relate to several tasks, or represent
@@ -565,21 +571,29 @@ becomes required MCP or Stand-in infrastructure.
   - Phase 4 invite-only registration, onboarding/admin foundations, and
     Settings are implemented.
   - Phase 5 Project work management and Spec Review are implemented.
-  - Phase 6 Action Inbox/notifications/search and Phase 7 deeper bounded Agent
-    automation remain future product scope.
+  - Phase 6 Action Inbox, in-app notification preferences, and search are
+    implemented.
+  - Phase 7 bounded Stand-in and Agent automation is the active implementation
+    target and is not yet claimed implemented. External notification channels
+    remain future product scope.
   - The first release has no open signup. Each account has one active
     Organization and no Organization switcher.
   - Admin creates an invitation from **Team Settings → Member Management** by
     entering display name and exact email. Intero creates an expiring,
-    revocable, email-bound link.
+    revocable, one-time email-bound account-activation link.
   - Invitation state is `pending`, `accepted`, `expired`, or `revoked`. Admin
     can copy, regenerate ("resend"), or revoke it.
   - V1 requires no SMTP/email service. Admin copies and shares the link through
     their own channel; SMTP is optional later configuration.
   - Recipient uses a distinct short **Accept Invitation** surface: confirm
-    Organization/Team/name/email and Accept; authenticate/register with the
-    matching email; then see the joined Team and accessible Projects with
-    Project/Team Pulse entry and a skippable Connect Coding Agent entry.
+    Organization/Team/name/email and Accept; use the matching email to bootstrap
+    first credential setup; then see the joined Team and accessible Projects
+    with Project/Team Pulse entry and a skippable Connect Coding Agent entry.
+    The activation link is not normal login.
+  - Passkey is primary normal login; email plus password is fallback. Product
+    Magic Link login is absent.
+  - Password recovery is future work through an administrator/manual recovery
+    link or optional SMTP-backed path and is not claimed implemented.
   - Email mismatch is denied. Recipient never sees deployment endpoint, model
     keys, governance, invitation controls, or admin Settings. The pre-set name
     becomes the initial display name and is editable later in Personal Settings.
@@ -652,16 +666,45 @@ becomes required MCP or Stand-in infrastructure.
     facts/context/code in the right rail, and comment composition at the bottom.
   - Administration remains within Settings rather than creating a separate
     dashboard visual system.
+- R26. Phase 7 bounded automation:
+  - Deterministic policy-aware detectors consume authorized structured blocker,
+    dependency, stale or pending review, conflict, and coordination signals.
+  - A qualifying signal creates or reuses one Project-scoped Coordination
+    Thread containing safe context, affected participants, candidate next steps,
+    and any required human decision. Duplicate delivery cannot duplicate the
+    Thread or its attention item.
+  - A Stand-in or authorized Agent may derive and directly create or update
+    Features, Work Items, relations, comments, and Spec links from a confirmed
+    Spec version. An unconfirmed Spec cannot drive execution mutation.
+  - Derived mutations record confirmed source version, actor, time, provenance,
+    authorization/policy result, stable operation ID, immutable history, and
+    audited revert. New work is unassigned unless a human assigns it.
+  - Authorized cross-Project summaries may synthesize progress, risks, and
+    decisions from only Projects visible to the requesting scope. They preserve
+    source facts, model interpretation, and freshness and do not mutate source
+    Projects.
+  - Detection, mutation, summary generation, and notification use durable jobs
+    and a transactional outbox. Retriable failures resume idempotently;
+    terminal failures are visible in source activity, with a deduplicated Action
+    Inbox item and in-app notification only when human action is required.
+  - Results use existing Project activity, Coordination, Action Inbox, in-app
+    notification, search, and Stand-in surfaces. No automation dashboard is
+    introduced.
+  - Automation cannot change membership, access, Team associations, Project
+    visibility, priority, or ownership without authorized human action; invoke
+    external provider or GitHub actions; disclose raw content; or make an
+    irreversible business decision or final human commitment.
 
 ## Acceptance Examples
 
 - AE0. **Covers R2, R4.** Given self-hosted infrastructure exists, the team
   administrator enters and validates the Intero deployment base URL in `/setup`
   before creating or joining the Team and creating its first Project. An
-  exact-email-bound invitation then associates an Engineer with the approved
-  endpoint/Team without asking for a server URL; matching-email acceptance is
-  required, and the member explicitly binds a Workspace/Project. Copy,
-  regenerate, expiry, acceptance, and revoke take effect without SMTP.
+  one-time exact-email-bound activation invitation then associates an Engineer
+  with the approved endpoint/Team without asking for a server URL;
+  matching-email activation bootstraps first credential setup, and the member
+  explicitly binds a Workspace/Project. The link cannot perform normal login.
+  Copy, regenerate, expiry, acceptance, and revoke take effect without SMTP.
 - AE0.1. **Covers R2.** Without a valid provider, invited members can use basic
   human collaboration and chat, while Setup shows **Basic collaboration ready**
   and **Stand-in needs administrator model configuration**. Stand-in,
@@ -740,10 +783,14 @@ becomes required MCP or Stand-in infrastructure.
   one active Organization. An admin creates an exact-email invitation in Member
   Management, copies it without SMTP, sees lifecycle state, regenerates/revokes
   it, and a recipient with a mismatched email is denied. A matching recipient
-  sees only Accept Invitation context, joins with the pre-set editable name,
-  reaches accessible Projects, and may skip Connect Coding Agent. A Team may
-  have zero or multiple Leaders; an Organization admin can govern its Project,
-  and the last Organization admin cannot be removed or demoted.
+  sees only Accept Invitation context, uses the one-time link for first
+  credential setup, joins with the pre-set editable name, reaches accessible
+  Projects, and may skip Connect Coding Agent. Subsequent login uses Passkey or
+  fallback email/password, never the activation link or a product Magic Link.
+  Password recovery remains visibly unavailable rather than pretending to send
+  recovery mail. A Team may have zero or multiple Leaders; an Organization admin
+  can govern its Project, and the last Organization admin cannot be removed or
+  demoted.
 - AE17. **Covers R21-R21.1, R23.** A connected Agent creates a Feature without
   Work Items, then creates a Work Item with an unassigned human owner, explicit
   Spec and Commit references, and provenance. A human sees history, corrects the
@@ -767,6 +814,23 @@ becomes required MCP or Stand-in infrastructure.
   Commit, or branch reference and no branch-name inference occurs. Work Item
   detail renders it in the established right rail while activity/coordination
   remains centered and comments compose at the bottom.
+- AE22. **Covers R26.** An authorized blocker, dependency, stale pending review,
+  or explicit coordination signal creates or reuses one Project-scoped
+  Coordination Thread with a safe summary and candidate steps. Reprocessing the
+  same operation creates no duplicate Thread, Inbox item, or notification;
+  unauthorized and raw context is absent.
+- AE23. **Covers R15, R23, R26.** From a confirmed Spec, an authorized Stand-in
+  or Agent derives execution work and directly creates or updates it with source
+  version, provenance, immutable history, and audited revert. The same request
+  is idempotent. An unconfirmed Spec is rejected; ownership and priority remain
+  unchanged until an authorized human acts.
+- AE24. **Covers R16, R26.** An authorized user receives a cross-Project
+  progress/risk/decision summary covering only visible Projects, with source
+  facts, model interpretation, and freshness distinguished. A retry through the
+  durable job/outbox path is visible without duplication, and required human
+  action routes through existing Action Inbox/coordination surfaces. No new
+  dashboard, external provider/GitHub action, irreversible decision, or final
+  human commitment occurs.
 
 ## Success Criteria
 
@@ -812,12 +876,15 @@ becomes required MCP or Stand-in infrastructure.
 
 - Phase 4: invite-only registration, onboarding/admin foundations, and Settings.
 - Phase 5: Project work management, PI/Sprint, and Spec Review.
-- Phase 6: Action Inbox, notifications, and search.
-- Phase 7: deeper bounded Agent automation.
+- Phase 6: Action Inbox, in-app notification preferences, and search
+  (implemented).
+- Phase 7: bounded Stand-in and Agent automation (active implementation target;
+  not yet implemented).
 
-Phases 1–5 are implemented on `main` and have acceptance evidence. Phase 6
-Action Inbox/notifications/search and Phase 7 deeper bounded Agent automation
-must not be presented as implemented until their acceptance examples pass.
+Phases 1–6 are implemented on `main` and have acceptance evidence. Phase 7 is
+the active target defined by ADR-0008 and must not be presented as implemented
+until its acceptance examples pass. External notification channels remain
+future scope.
 
 ### Deferred for later
 
@@ -850,6 +917,10 @@ must not be presented as implemented until their acceptance examples pass.
 - Team-wide Boards and mandatory hierarchy.
 - SMTP invitation delivery and delivery-status tracking; SMTP is optional
   deployment configuration, not a V1 dependency.
+- Password recovery through administrator/manual recovery link or optional SMTP;
+  no recovery implementation is currently claimed.
+- External notification channels; Phase 6 notification scope is in-app
+  preferences only.
 - Full A2A Client/Server Gateway and external-agent federation.
 - Additional project-management providers and deep Jira or Linear parity.
 - Voice, video, screen sharing, and offline-first human chat.
@@ -902,9 +973,8 @@ must not be presented as implemented until their acceptance examples pass.
 - Review: Coding Agents request; Stand-ins prepare and organize; humans
   and authorized Agents may review under Project policy; confirmation remains
   version-specific.
-- Post-Pilot sequence: Phase 4 onboarding/admin, Phase 5 Project work and Spec
-  Review, Phase 6 Action Inbox/notifications/search, then Phase 7 deeper Agent
-  automation.
+- Post-Pilot sequence: Phases 4–6 are implemented; Phase 7 bounded Stand-in and
+  Agent automation is the active implementation target.
 - Agent content: connected Project Agents may create/update authorized work and
   Spec content with provenance/history/revert but never administer access.
 - Planning: optional Epic → Feature → Work Item, one Project Board, and
@@ -936,7 +1006,7 @@ must not be presented as implemented until their acceptance examples pass.
 ### Post-Pilot nonblocking decisions
 
 - Default invitation expiry duration.
-- Phase 6 notification channels, batching, and user preferences.
+- External notification channel selection and delivery semantics.
 - Search ranking and indexing cadence within existing retention policy.
 - Revert conflict presentation when newer mutations exist.
 - Whether ending a Sprint early should flag its parent PI for administrator

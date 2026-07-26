@@ -58,7 +58,7 @@ These ports are not decorative empty interfaces. Each implemented adapter has
 contract tests over domain-visible behavior, and a replacement must pass the
 same tests before adoption. Canonical Agent events, Work State, and domain
 policy import no adapter-specific types. MinIO-backed object storage remains
-disabled by product policy because Phase 1–5 adds no attachment/raw-capture
+disabled by product policy because Phases 1–6 add no attachment/raw-capture
 surface. Temporal and general A2A infrastructure remain out of scope.
 
 ## 2. System overview
@@ -122,16 +122,22 @@ Organization/team context and first Project.
 
 Normal onboarding uses **Team Settings → Member Management**. An Organization
 administrator enters one recipient's display name and exact email; Intero
-creates an expiring, revocable, email-bound invitation with `pending`,
-`accepted`, `expired`, or `revoked` lifecycle. V1 exposes copy, regenerate, and
-revoke without requiring SMTP. The recipient uses the short **Accept
-Invitation** surface and must authenticate or register with the matching email.
-The joined member inherits the administrator-approved Intero endpoint, team,
-Web experience, credentials, and Agent/MCP instructions without entering the
-URL. Explicit Workspace and Project binding remains separate. Reusable Pilot
-join links are historical and are not the current onboarding path. Bulk email
-or CSV invitations, SCIM provisioning, and domain-based automatic join remain
-outside Phase 1–5.
+creates a one-time, expiring, revocable, email-bound account-activation link with
+`pending`, `accepted`, `expired`, or `revoked` lifecycle. V1 exposes copy,
+regenerate, and revoke without requiring SMTP. The recipient uses the short
+**Accept Invitation** surface and the exact invited email to bootstrap first
+credential setup. The activation link is never a normal login credential.
+Passkey is the primary normal login; email plus password is the fallback.
+Product Magic Link login is absent. The joined member inherits the
+administrator-approved Intero endpoint, team, Web experience, credentials, and
+Agent/MCP instructions without entering the URL. Explicit Workspace and Project
+binding remains separate. Reusable Pilot join links are historical and are not
+the current onboarding path. Bulk email or CSV invitations, SCIM provisioning,
+and domain-based automatic join remain outside implemented Phases 1–6.
+
+Password recovery is not implemented. A future recovery capability requires
+either an administrator/manual recovery link or optional SMTP delivery; neither
+is part of normal login or the V1 activation dependency.
 
 Productized self-deployment is outside the pilot: no package, Docker/install
 wizard, infrastructure provisioning workflow, DNS/TLS guidance, tenant
@@ -284,10 +290,11 @@ no-training or no-cross-customer/Workspace-reuse boundary.
 
 ### 3.6 Post-Pilot project domain
 
-Phases 1–3 infrastructure, Phase 4 onboarding/admin foundations, and Phase 5
-Project work management/Spec Review are implemented on `main`. Phase 6 Action
-Inbox/notifications/search and Phase 7 deeper bounded Agent automation remain
-future scope.
+Phases 1–6 are implemented on `main`, including onboarding/admin, Project work
+management, Spec Review, Action Inbox, in-app notification preferences, and
+search. Phase 7 bounded Stand-in and Agent automation is the active
+implementation target, not a claim of current implementation. External
+notification channels remain future scope.
 
 Organization owns Projects. A Project has one primary Team and may associate
 additional Teams. Team roles are `member` and `leader`; Organization admins and
@@ -391,12 +398,17 @@ provide:
 
 - richer context collection with explicit user authorization;
 - device-local work summaries and drafts;
-- native notifications;
+- an optional local Git-awareness enhancement for user-selected repositories;
+- future native/external notifications after the in-app Phase 6 scope;
 - a native rendering of the same collaboration surfaces.
 
 Desktop absence, shutdown, or update failure must not interrupt the Web product,
 cloud Stand-in, collection, management, access, or direct cloud MCP path.
-The Desktop performs no silent background observation.
+The Git enhancement may inspect only schema-permitted branch, commit, and Git
+state signals for repositories the user explicitly selects, then send compact
+events to cloud ingress. It is not the historical local runtime and must not
+reintroduce a local Stand-in, Work State, IPC service, long-lived daemon, or
+local persistent-state database.
 
 ### 4.3 Client security
 
@@ -488,6 +500,11 @@ events are not canonical checkpoint semantics.
 Git and Coding Agent lifecycle hooks may send compact, content-safe events to a
 separate authenticated cloud event endpoint. This endpoint is not MCP and may
 not grant Stand-in coordination tools.
+
+The optional Desktop Git-awareness enhancement is one such client. When
+packaged, it is limited to explicitly selected repositories and schema-permitted
+branch, commit, and Git state signals; it never becomes a local Stand-in or a
+required relay for cloud MCP.
 
 The target event set may include session lifecycle, repository identity changes,
 Git state changes, validation state, and artifact metadata. Hook credentials use
@@ -637,6 +654,42 @@ Outcomes remain visible and auditable, and commitments require confirmation from
 the responsible participant. This internal behavior is distinct from the
 deferred general A2A Gateway/federation.
 
+### 6.6 Phase 7 bounded automation target
+
+Phase 7 extends the existing runtime without creating a second autonomy system:
+
+1. deterministic detectors evaluate authorized structured blocker, dependency,
+   stale or pending review, conflict, and coordination signals;
+2. an idempotent durable job creates or reuses one Project-scoped Coordination
+   Thread for the condition, containing only safe context, affected
+   participants, candidate next steps, and any required human decision;
+3. the Stand-in or an authorized Agent may derive Features, Work Items,
+   relations, comments, and Spec links from a confirmed Spec version and
+   directly create or update that execution work;
+4. summary jobs derive progress, risk, and decision summaries across only the
+   Projects visible to the requesting scope.
+
+Spec-derived mutations record the confirmed source version, actor, time,
+policy/authorization decision, stable operation ID, before/after state, and an
+immutable Activity Event. They are idempotent and revertible. An unconfirmed
+Spec cannot drive execution mutation. New work remains unassigned unless an
+authorized human assigns it, and automation cannot change existing priority or
+ownership without an authorized human action.
+
+Cross-Project summaries distinguish source facts from model interpretation,
+carry freshness, and never mutate source Projects. All Phase 7 work runs through
+the durable `JobRunnerPort` and transactional outbox. Retriable failures resume
+idempotently; terminal failure is visible in the source object's activity and,
+when a person must act, a deduplicated Action Inbox item and in-app notification.
+Revert is an audited compensating domain mutation, not history deletion.
+
+Results extend Project activity, Coordination Threads, Action Inbox, in-app
+notifications, search, and Stand-in conversations. There is no new automation
+dashboard. Phase 7 cannot change membership, access, Team associations, Project
+visibility, priority, or ownership; invoke external providers or GitHub
+actions; cross Project authorization boundaries; disclose raw content; or make
+an irreversible business decision or final human commitment.
+
 ## 7. Work State, Claims, and memory
 
 ### 7.1 Claims
@@ -754,7 +807,12 @@ Intero owns stable principals independent of authentication-provider
 identifiers. The Web application, optional Desktop App, MCP clients, and event
 senders use separate credential classes and least-privilege scopes.
 
-Web authentication may use magic links, passkeys, and optional provider linking.
+Passkey is the primary normal Web login. Email plus password is the fallback.
+The one-time invitation activation link only bootstraps first credential setup;
+it is not accepted for later login. Product Magic Link authentication is
+removed. Password recovery is not implemented and remains a future
+administrator/manual recovery-link or optional SMTP-backed flow.
+
 Exact MCP and Hook issuance/transport mechanics remain a follow-up security
 decision, but both use revocable personal/device identity and separate
 least-privilege scopes with no automatic credential recovery.
@@ -819,13 +877,19 @@ The target remains a TypeScript modular monolith unless a later ADR changes it:
 
 Initial modules include identity, organizations, authorization, projects,
 workstreams, claims, conversations, coordination, specs, decisions, artifacts,
-Stand-ins, search, notifications, privacy policy, publication, and audit.
+Stand-ins, search, in-app notification preferences, privacy policy, publication,
+and audit. External notification delivery remains a future adapter boundary.
 
 ### 10.2 Domain transactions and jobs
 
 A durable mutation transaction writes current domain state, an immutable
 Activity Event, and an outbox entry. Job handlers are idempotent and keyed by a
 stable domain operation ID.
+
+Phase 7 signal detection, coordination creation, confirmed-Spec derivation, and
+cross-Project summarization use these jobs and the same outbox. Detection and
+delivery retries cannot duplicate a Coordination Thread, mutation, Inbox item,
+or notification.
 
 Visibility or reuse transitions are domain mutations. They cannot be implemented
 as best-effort UI flags or implicit side effects of upload.
@@ -991,8 +1055,12 @@ implementation.
 - Contract tests for Web, product API, and cloud MCP.
 - Administrator `/setup` tests for Intero base-URL entry and connectivity
   validation, plus per-recipient invitation tests for exact-email binding,
-  expiry, copy/regenerate/revoke, endpoint inheritance, and subsequent explicit
-  Workspace/Project binding.
+  single-use activation, expiry, copy/regenerate/revoke, endpoint inheritance,
+  and subsequent explicit Workspace/Project binding.
+- Authentication tests proving activation only bootstraps first credentials,
+  cannot perform normal login, Passkey is primary, email/password fallback
+  works, product Magic Link is absent, and password recovery is not falsely
+  offered.
 - Provider configuration tests for server-only secret handling, connection
   test, rotation/replacement, disable, explicit no-provider/unavailable states,
   basic-collaboration readiness, and AI/Agent-binding gating.
@@ -1031,13 +1099,25 @@ implementation.
 - Two-user review tests proving nonexclusive review, targeted reviewer
   nomination, Team Pulse pending counts, and targeted Action Inbox behavior.
 - Explicit PR/Commit/branch association tests proving no branch-name inference.
+- Phase 7 tests proving authorized signal detection; idempotent Project-scoped
+  coordination; safe context; confirmed-Spec-only execution derivation;
+  provenance, immutable history, audited revert, and revocation behavior;
+  authorized cross-Project progress/risk/decision summaries with freshness; and
+  durable retry without duplicate Threads, mutations, Inbox items, or in-app
+  notifications.
+- Phase 7 authority tests proving no membership/access/visibility mutation, no
+  priority or ownership change without authorized human action, no raw-content
+  disclosure, no external provider/GitHub action, and no irreversible business
+  decision or final human commitment. Browser evidence must use the existing
+  Project activity, Coordination, Action Inbox, search, notification, and
+  Stand-in surfaces rather than a new dashboard.
 - Optional Desktop tests proving its absence does not break core product paths.
 - Service-unavailable, stale-state, non-blocking ingress, 10,000-event/50-MiB
   capacity, seven-day TTL, encryption boundary, secure discard, gap marker,
   stable-ID idempotency, FIFO three-retry flush, and realtime-gap tests.
 
 Historical tests through `interod`, the Local Stand-in, SQLCipher, and
-Electron remain evidence for that historical runtime only. Phase 1–5 acceptance
+Electron remain evidence for that historical runtime only. Phases 1–6 acceptance
 uses the cloud API/MCP and canonical renderer/browser path.
 
 ## 17. Decision records
@@ -1046,6 +1126,7 @@ uses the cloud API/MCP and canonical renderer/browser path.
 - [ADR-0005: Internal coordination protocol before A2A](adr/0005-internal-coordination-protocol-before-a2a.md)
 - [ADR-0006: Cloud-first, Web-first runtime with private-by-default cloud data](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md)
 - [ADR-0007: Post-Pilot product model and delivery sequence](adr/0007-post-pilot-product-model-and-delivery-sequence.md)
+- [ADR-0008: Phase 7 bounded Stand-in and Agent automation](adr/0008-phase-7-bounded-stand-in-and-agent-automation.md)
 
 ADR-0001, ADR-0002, and ADR-0003 are retained as superseded historical
 implementation decisions.

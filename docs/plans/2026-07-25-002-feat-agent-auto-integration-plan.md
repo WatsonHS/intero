@@ -45,9 +45,12 @@ enters and validates its base URL in Web
 enables per-recipient invitations. A separate AI Provider section collects the
 cloud model endpoint, server-only API key, and default model. In **Team Settings
 → Member Management**, the administrator enters a display name and exact email,
-then copies the expiring/revocable invitation. The matching-email recipient
-accepts and inherits the approved Intero endpoint/team and connection
-instructions; they do not type the server URL. SMTP is not required.
+then copies the one-time, expiring/revocable account-activation link. The
+matching-email recipient uses it for first credential setup and inherits the
+approved Intero endpoint/team and connection instructions; they do not type the
+server URL. The link is not normal login. Passkey is primary login, email plus
+password is fallback, Magic Link is absent, password recovery is future, and
+SMTP is not required.
 
 ## Historical evidence and migration boundary
 
@@ -137,18 +140,22 @@ publication.
 
 ## Accepted post-Pilot Agent sequence
 
-Phases 1–3 infrastructure, Phase 4 onboarding/admin, and Phase 5 Project work
-and Spec Review are implemented. Phase 6 Action Inbox/notifications/search and
-Phase 7 deeper bounded automation remain future scope.
+Phases 1–6 are implemented, including onboarding/admin, Project work/Spec
+Review, Action Inbox, in-app notification preferences, and search. Phase 7
+bounded Stand-in and Agent automation is the active implementation target and
+is not yet complete. External notification channels remain future scope.
 
 Phase 4 replaced the reusable Pilot join-link default with per-recipient
 invitations created in **Team Settings → Member Management**. Admin supplies
-display name and exact email; Intero creates an expiring/revocable email-bound
-link with `pending|accepted|expired|revoked` state and copy, regenerate
-("resend"), and revoke actions. SMTP is not required. The matching-email
-recipient accepts in a short non-admin flow and may skip Connect Coding Agent;
-the surface exposes no endpoint, model secret, governance, invitation, or admin
-configuration.
+display name and exact email; Intero creates a one-time,
+expiring/revocable email-bound account-activation link with
+`pending|accepted|expired|revoked` state and copy, regenerate ("resend"), and
+revoke actions. SMTP is not required. The matching-email recipient uses it only
+for first credential setup in a short non-admin flow and may skip Connect Coding
+Agent; the surface exposes no endpoint, model secret, governance, invitation, or
+admin configuration. Passkey is primary normal login, email plus password is
+fallback, product Magic Link is absent, and password recovery remains future
+administrator/manual-link or optional SMTP work.
 
 With Project access, MCP exposes explicit content contracts for authorized
 Project management and Specs:
@@ -166,9 +173,22 @@ assignees and cannot mutate Organization/Team membership, roles, Project-Team
 associations, or visibility. Disconnect/revoke stops future Project access
 without blocking local coding.
 
-Deeper Agent automation waits until Phase 6 targeted attention and search are
-proven on top of the implemented Phase 4–5 authorization, version-history, and
-review-policy foundations.
+Phase 7 now builds on those proven foundations. Authorized structured blocker,
+dependency, stale or pending review, conflict, and coordination signals may
+start an idempotent Project-scoped Coordination Thread with safe context and
+candidate steps. A Stand-in or authorized Agent may derive and directly
+create/update execution work only from a confirmed Spec, recording source
+version, actor, provenance, immutable history, and audited revert. Authorized
+cross-Project progress/risk/decision summaries include only visible Projects
+and preserve fact, interpretation, and freshness.
+
+All automation uses durable jobs and the transactional outbox. Results and
+required human decisions use existing Project activity, Coordination, Action
+Inbox, in-app notification, search, and Stand-in surfaces rather than a new
+dashboard. Agents cannot change membership/access/visibility, alter priority or
+ownership without authorized human action, invoke external provider/GitHub
+actions, disclose raw content, or make an irreversible business decision or
+final human commitment.
 
 ## Unit 1 — Authenticated cloud MCP and context binding
 
@@ -320,9 +340,12 @@ review-policy foundations.
 - Add a distinct AI Provider section containing the model provider endpoint,
   server-only API key, default model, connection test, rotation/replacement, and
   disable. Never label this endpoint as the Intero server or MCP endpoint.
-- Add per-recipient, exact-email-bound invitations with expiry, copy,
-  regenerate, revoke, and approved endpoint/team inheritance before the separate
-  Workspace/Project binding step. V1 requires no SMTP.
+- Add one-time per-recipient, exact-email-bound account-activation invitations
+  with expiry, copy, regenerate, revoke, and approved endpoint/team inheritance
+  before the separate Workspace/Project binding step. V1 requires no SMTP.
+- Use activation only for first credential setup. Normal login uses Passkey
+  primarily or email/password as fallback; Magic Link and password recovery are
+  absent.
 - Defer bulk email/CSV, SCIM, and domain auto-join.
 - Show separate status for MCP configuration, authentication, repository
   binding, Agent trust, tool handshake, and last content-safe checkpoint.
@@ -394,8 +417,10 @@ The accepted client contract is:
    join the team context plus first project.
 3. Create an exact-email-bound invitation for user B, copy the link, and verify
    pending/accepted/expired/revoked behavior, matching-email enforcement,
-   regenerate, and revoke. Accept it in a second browser context and inherit
-   Web, credentials, and connection instructions without member URL entry.
+   regenerate, revoke, and single-use activation. Accept it in a second browser
+   context, set up the first credential, inherit Web/connection instructions
+   without member URL entry, then prove the activation link cannot log in again
+   and normal login uses Passkey or email/password fallback.
 4. Associate the Project with Teams A and B, then verify members of either Team
    can open it without individual Project membership while Agent connection state
    remains Project-bound.

@@ -55,14 +55,20 @@ Intero is cloud-first and Web-first.
   errors are explicit and actionable without prescribing a wire protocol.
 - Normal onboarding uses per-recipient invitations in **Team Settings → Member
   Management**. An Organization administrator enters the recipient's display
-  name and exact email; Intero creates an expiring, revocable link with
-  `pending`, `accepted`, `expired`, or `revoked` lifecycle and copy,
-  regenerate, and revoke actions. V1 requires no SMTP.
+  name and exact email; Intero creates a one-time, expiring, revocable,
+  email-bound account-activation link with `pending`, `accepted`, `expired`, or
+  `revoked` lifecycle and copy, regenerate, and revoke actions. V1 requires no
+  SMTP.
 - The matching-email recipient accepts through the short **Accept Invitation**
-  surface. Membership associates their Web experience, credentials, and
-  Agent/MCP connection instructions with the administrator-approved Intero
-  deployment endpoint and team automatically, so members do not manually enter
-  a server URL. Reusable team-join links remain historical Pilot evidence only.
+  surface. The link only bootstraps first credential setup and is not valid for
+  normal login. Passkey is the primary normal login; email plus password is the
+  fallback. Product Magic Link login is removed. Membership associates the Web
+  experience, credentials, and Agent/MCP connection instructions with the
+  administrator-approved Intero deployment endpoint and team automatically, so
+  members do not manually enter a server URL. Reusable team-join links remain
+  historical Pilot evidence only.
+- Password recovery is not implemented. A future administrator/manual recovery
+  link or optional SMTP-backed recovery path requires a separate decision.
 - After identity and invite association, the user still explicitly selects the
   Workspace and project binding. Deployment-origin association must not infer a
   repository or project binding.
@@ -213,9 +219,13 @@ Intero is cloud-first and Web-first.
   and audit require.
 - The Web application is the primary product client. The Desktop App is
   optional. While open in the foreground, it may collect additional context and
-  produce better work summaries only after explicit opt-in. It performs no
-  silent background observation and is never required for collection, MCP,
-  management, access, or Stand-in runtime infrastructure.
+  produce better work summaries only after explicit opt-in. As a separately
+  authorized packaging enhancement, it may provide local Git awareness for
+  user-selected repositories and emit only compact permitted branch, commit,
+  and Git-state signals to cloud ingress. It is never required for collection,
+  MCP, management, access, or Stand-in runtime infrastructure, and does not
+  restore a local Stand-in, Work State, IPC service, long-lived daemon, or local
+  persistent-state database.
 - Git and Coding Agent lifecycle hooks may send compact, content-safe events to
   a separate authenticated cloud event endpoint. MCP failures return a visible,
   non-blocking failure. The MCP client, Hook client, or explicit CLI may write an
@@ -307,6 +317,8 @@ Negative:
   ingestion.
 - Invitation defaults beyond the implemented product contract, including the
   default expiry duration and optional future SMTP delivery/status semantics.
+- Password recovery through an administrator/manual recovery link or optional
+  SMTP delivery. No current recovery implementation is claimed.
 - Detailed provider secret-management mechanics and multi-provider routing are
   outside the pilot contract. The pilot supports one configured cloud AI
   provider endpoint, secret key, and default model with test, rotate/replace,

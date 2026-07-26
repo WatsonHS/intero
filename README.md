@@ -67,19 +67,39 @@ The authoritative contracts and boundaries live in
 [`ADR-0006`](docs/adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md).
 The accepted post-Pilot product model and delivery order live in
 [`ADR-0007`](docs/adr/0007-post-pilot-product-model-and-delivery-sequence.md).
+The bounded Phase 7 automation target lives in
+[`ADR-0008`](docs/adr/0008-phase-7-bounded-stand-in-and-agent-automation.md).
 The product requirements live in
 [`docs/brainstorms/2026-07-24-intero-product-requirements.md`](docs/brainstorms/2026-07-24-intero-product-requirements.md).
 
 ## Post-Pilot product sequence
 
-Phases 1–5 are implemented on `main`:
+Phases 1–6 are implemented on `main`:
 
 1. Phases 1–3: cloud collaboration core and production-operability foundation.
 2. Phase 4: invite-only registration, onboarding, administration, and Settings.
 3. Phase 5: Project work management, PI/Sprint planning, and Spec Review.
+4. Phase 6: Action Inbox, in-app notification preferences, and search.
 
-Phase 6 Action Inbox/notifications/search and Phase 7 deeper bounded Agent
-automation remain future product scope.
+Phase 7 is the active implementation target, not a claim of current
+implementation. It adds bounded automation that:
+
+- detects authorized blocker, dependency, stale or pending review, conflict, and
+  coordination signals;
+- creates or reuses a Project-scoped Coordination Thread with safe context and
+  candidate next steps;
+- lets the Stand-in or an authorized Agent derive and directly create or update
+  execution work from a confirmed Spec, with provenance, immutable history, and
+  revert;
+- generates authorized cross-Project progress, risk, and decision summaries.
+
+These jobs use the durable job runner and transactional outbox. Their results
+appear in existing Project activity, Coordination, Action Inbox, in-app
+notification, search, and Stand-in surfaces; Phase 7 adds no automation
+dashboard. Automation cannot change membership, access, Project visibility,
+priority, or ownership; invoke external providers or GitHub actions; disclose
+raw content; or make an irreversible business decision or final human
+commitment. External notification channels remain future scope.
 
 Project content is Agent-first. A connected Agent with Project access may create
 or update authorized Features, Work Items, and Specs through MCP, with actor,
@@ -90,18 +110,25 @@ access.
 
 Post-Pilot onboarding is invite-only through **Team Settings → Member
 Management**. An admin enters the recipient's display name and exact email;
-Intero creates an expiring/revocable email-bound link with
+Intero creates a one-time, expiring/revocable email-bound account-activation
+link with
 pending/accepted/expired/revoked lifecycle. V1 provides copy-link, regenerate,
 and revoke without requiring SMTP; the admin shares the link through their own
 channel.
 
 The recipient uses a short **Accept Invitation** flow, confirms the
-Organization/Team/name/email, and must log in or register with the invited
-email. After joining, they see accessible Projects and may enter a Project or
-Team Pulse, with an optional skippable **Connect Coding Agent** step. Deployment
-endpoint, model keys, governance, invitations, and admin Settings are not shown.
-The pre-set name becomes the initial display name and remains editable in
-Personal Settings.
+Organization/Team/name/email, accepts with the exact invited email, and uses the
+link only to bootstrap first credential setup. It is not a normal login link.
+Passkey is the primary normal login; email plus password is the fallback.
+After joining, the recipient sees accessible Projects and may enter a Project
+or Team Pulse, with an optional skippable **Connect Coding Agent** step.
+Deployment endpoint, model keys, governance, invitations, and admin Settings
+are not shown. The pre-set name becomes the initial display name and remains
+editable in Personal Settings.
+
+Password recovery is not implemented. A future release must provide either an
+administrator/manual recovery-link flow or an optional SMTP-backed recovery
+path without turning SMTP into a V1 activation dependency.
 
 Organization owns Projects; each Project has a primary Team and may include
 additional Teams. Team roles are `member` and `leader`; Organization admins and
@@ -173,10 +200,11 @@ Setup shows actionable validation errors without assuming a particular
 transport protocol.
 
 In **Team Settings → Member Management**, an Organization administrator creates
-one expiring, revocable invitation for a recipient's display name and exact
-email. V1 exposes copy, regenerate, and revoke without requiring SMTP. The
-recipient accepts through the short **Accept Invitation** surface and must
-authenticate or register with the matching email. Membership inherits the
+a one-time, expiring, revocable email-bound account-activation link for a
+recipient's display name and exact email. V1 exposes copy, regenerate, and
+revoke without requiring SMTP. The recipient accepts through the short **Accept
+Invitation** surface with the matching email and bootstraps first credential
+setup. The link cannot be reused for normal login. Membership inherits the
 administrator-approved Intero endpoint and team context; ordinary members do
 not type the server URL. Reusable Pilot join links are historical and are not
 the current onboarding path. Bulk email or CSV invitations, SCIM provisioning,
@@ -359,10 +387,13 @@ The Web application provides the complete collaboration experience: sign-in,
 Team Pulse, Stand-in conversations, Coordination, Action Inbox, Spec
 Review, Decisions, privacy controls, and integration management.
 
-While open in the foreground, an optional Desktop App may add explicitly
-authorized device-local context and richer work summaries. It performs no silent
-background observation. Browser, management, access, and Coding Agent paths
-remain complete when the Desktop App is absent or closed.
+An optional Desktop App may add explicitly authorized device-local context,
+richer work summaries, and a lightweight local Git-awareness enhancement. The
+Git enhancement observes only user-selected repositories and only the compact
+Git state, branch, and commit signals permitted by the event schema before
+sending them to Intero Cloud. It is an optional packaging enhancement, not a
+local product core: browser, management, access, and Coding Agent paths remain
+complete when the Desktop App is absent or closed.
 
 ## Repository and historical implementation
 
@@ -374,8 +405,10 @@ contract, integration, and browser tests.
 
 The repository still retains historical local-runtime artifacts including
 Electron packaging, `interod`, a Local Stand-in sidecar, SQLCipher, and local MCP
-bridging. They remain compatibility and historical implementation evidence, not
-requirements for the active cloud path.
+bridging. The historical local core is not a requirement for the active cloud
+path and must not be restored merely to provide Git awareness. The future
+optional Desktop Git enhancement is deliberately narrower: no local Stand-in,
+local Work State, IPC, long-lived daemon, or local persistent-state database.
 
 Current local development commands remain:
 

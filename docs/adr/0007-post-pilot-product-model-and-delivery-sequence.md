@@ -35,15 +35,25 @@ Post-Pilot work follows this functional sequence:
 2. **Phase 5 — project work and Spec Review:** Projects, optional
    Epic/Feature/Work Item hierarchy, one Project Board, PI/Sprint planning,
    Agent-first content mutation, and versioned Spec Review.
-3. **Phase 6 — attention and retrieval:** Action Inbox, notifications, and
-   search over authorized product data.
+3. **Phase 6 — attention and retrieval:** Action Inbox, in-app notification
+   preferences, and search over authorized product data.
 4. **Phase 7 — deeper Agent automation:** more capable bounded Agent workflows
    after the preceding authority, provenance, review, and attention surfaces are
    established.
 
-Phases 1–3 infrastructure, Phase 4 onboarding/administration, and Phase 5
-Project work/Spec Review are implemented on `main`. Phase 6 and Phase 7 remain
-future product scope.
+Phases 1–6 are implemented on `main`. Phase 7 is now the active bounded
+automation implementation target defined by ADR-0008; this status does not claim
+that Phase 7 is implemented. External notification channels remain future
+product scope.
+
+Phase 7 detects authorized coordination signals, creates Project-scoped
+Coordination Threads with safe context, derives revertible execution work from
+confirmed Specs, and generates authorized cross-Project progress/risk/decision
+summaries. It uses durable jobs/outbox and the existing Inbox, notification,
+search, coordination, activity, and Stand-in surfaces. It cannot administer
+membership/access/visibility, change priority or ownership without human
+authorization, act on external providers or GitHub, disclose raw data, or make
+irreversible decisions or final human commitments.
 
 ### Identity, membership, and governance
 
@@ -51,7 +61,7 @@ future product scope.
   release.
 - An admin creates an invitation from **Team Settings → Member Management** by
   entering the recipient's display name and exact email address. Intero creates
-  an expiring, revocable link bound to that email.
+  a one-time, expiring, revocable account-activation link bound to that email.
 - V1 does not require SMTP or an email service. The UI exposes copy-link; the
   admin shares it through their own channel. Invitation lifecycle is
   `pending`, `accepted`, `expired`, or `revoked` and supports copy, resend by
@@ -61,13 +71,18 @@ future product scope.
   administrator Setup or Test Setup:
   1. Confirm the Organization, Team, admin-specified display name, invited
      email, and explicit Accept action.
-  2. Log in or register with the matching invited email; mismatch is denied.
+  2. Use the matching invited email to accept and bootstrap first credential
+     setup; mismatch is denied. The activation link is not normal login.
   3. See the joined Team and accessible Projects, then enter a Project or Team
      Pulse, with a skippable **Connect Coding Agent** entry.
 - The recipient surface does not expose deployment endpoint, model-provider
   secrets, governance, invitation management, or administrator Settings. The
   pre-set name becomes the initial personal display name and is editable later
   in Personal Settings.
+- Passkey is the primary normal login. Email plus password is fallback. Product
+  Magic Link login is removed.
+- Password recovery is not implemented. A future release may add an
+  administrator/manual recovery link or optional SMTP-backed recovery.
 - An account has one active Organization. Multi-Organization switching and an
   Organization switcher remain later work.
 - Organization owns Projects. A Project has one primary Team and may associate
@@ -258,7 +273,7 @@ revocation controls appropriate to the user's authority.
 
 ## Deferred nonblocking decisions
 
-- Exact notification channels, batching, and user preferences for Phase 6.
+- External notification channels and delivery adapters.
 - Default invitation expiry duration.
 - Search ranking, indexing cadence, and retention-derived deletion behavior.
 - Revert conflict presentation when a newer mutation exists.
@@ -267,8 +282,9 @@ revocation controls appropriate to the user's authority.
 - Exact copy and placement for Team-level Spec Review filters within the
   existing visual system.
 - Optional SMTP delivery configuration and delivery-status semantics.
+- Password-recovery implementation and audit semantics.
 
-These decisions do not block the remaining Phase 6 → Phase 7 sequence.
+These decisions do not block the active Phase 7 target.
 
 ## Rejected alternatives
 

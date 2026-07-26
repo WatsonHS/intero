@@ -23,11 +23,12 @@ Electron application, `interod`, a Local Stand-in sidecar, SQLCipher, a
 local MCP bridge, and local/public synchronization. That implementation included
 valuable domain, authorization, conversation, Spec, and UI behavior.
 
-This evidence is historical. The Phase 1–5 implementation now separately proves
-direct cloud MCP, the canonical browser product, private-by-default cloud
-processing, independent publication policy, onboarding/admin, Project work, and
-Spec Review. The implemented milestones below replace the required daemon,
-Local Stand-in, and Electron runtime topology.
+This evidence is historical. The Phases 1–6 implementation now separately
+proves direct cloud MCP, the canonical browser product, private-by-default cloud
+processing, independent publication policy, onboarding/admin, Project work,
+Spec Review, Action Inbox, in-app notification preferences, and search. The
+implemented milestones below replace the required daemon, Local Stand-in, and
+Electron runtime topology.
 
 ## 1. MVP outcome
 
@@ -112,10 +113,14 @@ flowchart LR
 - Add a separate AI Provider section containing the cloud model endpoint,
   server-only secret key, default model, connection test, rotation/replacement,
   and disable.
-- Add per-recipient, exact-email-bound invitations in **Team Settings → Member
-  Management**, with expiry, copy, regenerate, revoke, and endpoint/team
-  inheritance without member URL entry.
+- Add one-time per-recipient, exact-email-bound account-activation invitations
+  in **Team Settings → Member Management**, with expiry, copy, regenerate,
+  revoke, and endpoint/team inheritance without member URL entry.
 - Require no SMTP in V1; defer bulk email/CSV, SCIM, and domain auto-join.
+- Use activation only for first credential setup. Use Passkey as primary normal
+  login and email plus password as fallback; remove product Magic Link.
+- Defer password recovery to a future administrator/manual recovery link or
+  optional SMTP-backed path.
 - Define stable principals independent of authentication providers.
 - Add least-privilege, revocable personal/device credentials with separate MCP
   and event-ingress scopes.
@@ -466,8 +471,8 @@ scopes, and explicit user-selected binding.
 
 ## 9.1 Accepted post-Pilot delivery sequence
 
-Phases 1–5 are implemented on `main`. The sections below record their delivered
-scope. Phase 6 and Phase 7 remain future work.
+Phases 1–6 are implemented on `main`. The sections below record their delivered
+scope. Phase 7 is the active implementation target and is not yet complete.
 
 ### Phase 4 — onboarding and administration
 
@@ -475,14 +480,18 @@ scope. Phase 6 and Phase 7 remain future work.
 - Deliver **Team Settings → Member Management** for Organization admins, Team
   `member|leader` roles, access revocation, and Project governance.
 - Create invitations from admin-entered display name and exact email. Store
-  expiring/revocable email-bound links with
+  one-time, expiring/revocable email-bound account-activation links with
   `pending|accepted|expired|revoked` lifecycle and copy, regenerate ("resend"),
   and revoke actions.
 - Require no SMTP in V1. Admin shares a copied link through their own channel;
   retain SMTP only as later optional deployment configuration.
 - Deliver a separate short Accept Invitation surface: context confirmation,
-  matching-email login/registration, then joined Team/accessible Projects with
-  Project or Team Pulse entry and a skippable Connect Coding Agent step.
+  matching-email first credential setup, then joined Team/accessible Projects
+  with Project or Team Pulse entry and a skippable Connect Coding Agent step.
+- Use Passkey as primary normal login and email plus password as fallback.
+  Activation links are not normal login, and product Magic Link is removed.
+- Do not claim password recovery. Defer it to an administrator/manual recovery
+  link or optional SMTP-backed path.
 - Do not expose deployment endpoint, model keys, governance, invitation
   controls, or admin Settings to the recipient. Seed the initial display name
   and allow later edits in Personal Settings.
@@ -511,20 +520,39 @@ scope. Phase 6 and Phase 7 remain future work.
   provenance/history/revert. Keep manual editing available. Agents are not
   assignees and cannot administer access.
 
-### Phase 6 — Action Inbox, notifications, and search
+### Phase 6 — Action Inbox, in-app notification preferences, and search
 
 - Route nominated Spec reviews and other targeted actions into Action Inbox.
 - Keep unassigned pending-review volume as a compact Team Pulse count.
-- Add authorized notifications and search only after the source objects,
-  visibility, and provenance contracts are stable.
+- Add in-app notification preferences and authorized search only after the
+  source objects, visibility, and provenance contracts are stable.
+- Keep email, push, native, webhook, and other external notification channels
+  outside Phase 6.
 
-### Phase 7 — deeper Agent automation
+### Phase 7 — bounded Stand-in and Agent automation
 
-- Extend bounded automation only after Agent content authorization,
-  disconnect/revocation, version history, review policy, notifications, and
-  search are proven.
-- Preserve the prohibition on membership/visibility administration,
-  unauthorized data use, hidden commitments, and uncontrolled external action.
+The executable plan is
+[`2026-07-26-001-phase-7-bounded-automation-plan.md`](2026-07-26-001-phase-7-bounded-automation-plan.md).
+
+- Detect authorized structured blocker, dependency, stale or pending review,
+  conflict, and coordination signals.
+- Create or reuse an idempotent Project-scoped Coordination Thread containing
+  safe context, candidate next steps, and explicit human-decision boundaries.
+- Let a Stand-in or authorized Agent derive and directly create/update
+  execution work only from a confirmed Spec, with source version, provenance,
+  immutable history, idempotency, and audited revert.
+- Generate authorized cross-Project progress, risk, and decision summaries that
+  distinguish facts, model interpretation, and freshness without mutating their
+  source Projects.
+- Run through durable jobs and the transactional outbox. Route human-required
+  failures or decisions through deduplicated Action Inbox items and in-app
+  notifications.
+- Extend existing activity, Coordination, Action Inbox, notification, search,
+  and Stand-in surfaces; do not add an automation dashboard.
+- Reject membership/access/visibility changes, priority/ownership changes
+  without authorized human action, external provider/GitHub actions,
+  raw-content disclosure, irreversible business decisions, and final human
+  commitments.
 
 ### Post-Pilot acceptance gates
 
@@ -532,6 +560,9 @@ scope. Phase 6 and Phase 7 remain future work.
 - Invitation tests cover exact-email denial, expiry/revocation, copy/regenerate,
   status transitions, no-SMTP operation, recipient-only disclosure, initial
   display name, and skippable Agent onboarding.
+- Authentication tests prove activation is single-use and cannot perform normal
+  login, Passkey is primary, email/password fallback works, Magic Link is
+  absent, and unimplemented password recovery is not falsely offered.
 - Agent-created work/Spec content is attributable, versioned, revertible, and
   stops on revocation.
 - Optional hierarchy, Board status, actor/time, and Sprint carryover behave as
@@ -542,32 +573,47 @@ scope. Phase 6 and Phase 7 remain future work.
 - Code associations require explicit reports and never infer from branch names.
 - Work Item detail uses the established center timeline, right facts/code rail,
   and bottom comment composer.
+- Phase 7 detects each authorized signal without admitting unauthorized/raw
+  context and does not duplicate Coordination Threads under retry.
+- Confirmed-Spec derivation is Project-authorized, idempotent, attributable,
+  history-preserving, revertible, and rejects unconfirmed Specs.
+- Cross-Project summaries contain only visible Projects and preserve
+  fact/interpretation/freshness boundaries.
+- Durable retry produces visible terminal failure and deduplicated Inbox/in-app
+  attention only when human action is required.
+- Authority tests prove that Phase 7 cannot administer access or visibility,
+  silently change priority/ownership, invoke external actions, or finalize
+  irreversible decisions or human commitments.
 
 ## 10. Cross-cutting test matrix
 
-| Area             | Unit                 | Integration             | End-to-end                         |
-| ---------------- | -------------------- | ----------------------- | ---------------------------------- |
-| Claim resolution | reducer fixtures     | relational persistence  | conflicting completion             |
-| Privacy axes     | policy combinations  | context assembly        | stored but not visible             |
-| Cloud MCP        | schema and auth      | real Agent handshake    | checkpoint to private Work State   |
-| Publication      | posture/grant tests  | audit/withdrawal        | bound project to Team Pulse        |
-| Team Pulse       | person-column view   | summary/count policy    | peer cards and visual N-more       |
-| Authorization    | object policy        | tenant boundaries       | cross-user denial                  |
-| Coordination     | command tests        | job idempotency         | Agent branch to visible result     |
-| Conversation     | access transition    | realtime repair         | Human-only to Agent-readable       |
-| Spec Review      | revision matching    | storage and review      | private draft to authorized review |
-| Availability     | outbox policy        | idempotent FIFO flush   | unavailable then resumed delivery  |
-| Data lifecycle   | retention clocks     | delete/withdraw         | 180d/30d/project-life behavior     |
-| Support access   | scope/expiry policy  | audit and revocation    | case open, inspect, close          |
-| Model data use   | context isolation    | provider boundary       | no training/cross-workspace reuse  |
-| Deployment setup | endpoint validation  | invite-origin binding   | member setup without URL entry     |
-| Two-user Web     | isolated sessions    | cross-client updates    | A/B visible privacy propagation    |
-| Post-Pilot roles | last-admin invariant | primary-Team governance | invite-only admin Settings         |
-| Project work     | state/relations      | history and carryover   | Backlog/current Sprint views       |
-| Agent content    | mutation policy      | provenance and revoke   | Agent create, human revert         |
-| PI/Sprint        | generated dates      | timezone transitions    | PI and Sprint planning             |
-| Spec versions    | review policy        | confirmed lookup        | version comments and nomination    |
-| Code references  | explicit association | adjustment/history      | no branch-name inference           |
+| Area             | Unit                  | Integration             | End-to-end                         |
+| ---------------- | --------------------- | ----------------------- | ---------------------------------- |
+| Claim resolution | reducer fixtures      | relational persistence  | conflicting completion             |
+| Privacy axes     | policy combinations   | context assembly        | stored but not visible             |
+| Cloud MCP        | schema and auth       | real Agent handshake    | checkpoint to private Work State   |
+| Publication      | posture/grant tests   | audit/withdrawal        | bound project to Team Pulse        |
+| Team Pulse       | person-column view    | summary/count policy    | peer cards and visual N-more       |
+| Authorization    | object policy         | tenant boundaries       | cross-user denial                  |
+| Coordination     | command tests         | job idempotency         | Agent branch to visible result     |
+| Conversation     | access transition     | realtime repair         | Human-only to Agent-readable       |
+| Spec Review      | revision matching     | storage and review      | private draft to authorized review |
+| Availability     | outbox policy         | idempotent FIFO flush   | unavailable then resumed delivery  |
+| Data lifecycle   | retention clocks      | delete/withdraw         | 180d/30d/project-life behavior     |
+| Support access   | scope/expiry policy   | audit and revocation    | case open, inspect, close          |
+| Model data use   | context isolation     | provider boundary       | no training/cross-workspace reuse  |
+| Deployment setup | endpoint validation   | invite-origin binding   | member setup without URL entry     |
+| Two-user Web     | isolated sessions     | cross-client updates    | A/B visible privacy propagation    |
+| Post-Pilot roles | last-admin invariant  | primary-Team governance | invite-only admin Settings         |
+| Project work     | state/relations       | history and carryover   | Backlog/current Sprint views       |
+| Agent content    | mutation policy       | provenance and revoke   | Agent create, human revert         |
+| PI/Sprint        | generated dates       | timezone transitions    | PI and Sprint planning             |
+| Spec versions    | review policy         | confirmed lookup        | version comments and nomination    |
+| Code references  | explicit association  | adjustment/history      | no branch-name inference           |
+| Phase 7 signals  | policy/dedupe         | durable coordination    | safe Thread in existing surfaces   |
+| Spec derivation  | confirmed-only policy | history/revert/outbox   | Agent derive and human revert      |
+| Cross-Project    | visibility/freshness  | authorized aggregation  | progress/risk/decision summary     |
+| Automation guard | authority matrix      | terminal failure/Inbox  | no external or final commitment    |
 
 ## 11. Migration and replacement boundaries
 
@@ -575,6 +621,11 @@ scope. Phase 6 and Phase 7 remain future work.
   logic where it matches the new requirements.
 - Do not treat `interod`, the Local Stand-in, local IPC, SQLCipher, or the
   Electron MCP launcher as target dependencies.
+- A future optional Desktop package may add explicitly authorized local Git
+  awareness for user-selected repositories. It emits only compact permitted
+  branch, commit, and Git-state events to cloud ingress and must not restore a
+  local Stand-in, Work State, IPC service, long-lived daemon, or local
+  persistent-state database.
 - Keep queue, realtime, search, authorization, object storage, model providers,
   and Coding Agent specifics behind ports.
 - Preserve historical local implementation tests as historical evidence.
