@@ -1,19 +1,19 @@
-# ADR-0002: Shared Stand-in core with event-driven runtimes
+# ADR-0002: Shared Representative core with event-driven runtimes
 
-Status: accepted
+Status: superseded by ADR-0006
 
 Date: 2026-07-24
 
 ## Context
 
-The Local and Public Stand-ins need consistent Work-State, Claim,
+The Local and Public Representatives need consistent Work-State, Claim,
 coordination, and policy behavior, but they have different tools and trust
-boundaries. Keeping a permanent server process for every Stand-in would
+boundaries. Keeping a permanent server process for every Representative would
 also create unnecessary idle cost.
 
 ## Decision
 
-Both runtimes share a pure TypeScript `stand-in-core` containing:
+Both runtimes share a pure TypeScript `representative-core` containing:
 
 - event-driven Agent loop;
 - Context Builder;
@@ -22,8 +22,8 @@ Both runtimes share a pure TypeScript `stand-in-core` containing:
 - prompt compiler;
 - policy contracts and runtime ports.
 
-The Local Stand-in is a supervised TypeScript sidecar. The Public
-Stand-in runs as idempotent Graphile Worker jobs. They inject distinct
+The Local Representative is a supervised TypeScript sidecar. The Public
+Representative runs as idempotent Graphile Worker jobs. They inject distinct
 storage, tool, authorization, and model ports.
 
 Deterministic reducers run before model interpretation. Ordinary events are
@@ -36,7 +36,7 @@ Workstream remains ordered.
 Positive:
 
 - Shared semantics reduce local/public behavior drift.
-- Public Stand-ins scale with activity rather than user count.
+- Public Representatives scale with activity rather than user count.
 - Model-disabled and offline operation can still reduce state.
 - Runtime capabilities remain testable through common contracts.
 
@@ -50,4 +50,4 @@ Negative:
 
 - Separate Local and Public Agent implementations.
 - One permanent server process or Actor for every user.
-- Public Stand-in calls the user's device for every interaction.
+- Public Representative calls the user's device for every interaction.

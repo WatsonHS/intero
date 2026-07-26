@@ -1,25 +1,65 @@
 # Intero Technical Architecture
 
-Status: implemented MVP baseline; external pilot validation pending
+Status: implemented through Phase 5 on `main`; production deployment validation
+remains environment-specific
 
-Date: 2026-07-24
+Date: 2026-07-25
 
 ## 1. Architectural intent
+
+Canonical product/domain terminology is **Stand-in** in English and **替身** in
+Chinese. Contract identifiers use `stand_in`; paths and slugs use `stand-in`.
+Literal older terminology is confined to explicitly superseded historical ADRs.
+The active application, domain, MCP, schema, tests, and configuration implement
+the renamed contract.
 
 Intero separates technical execution from team coordination.
 
 - Coding Agents execute work and decide when a technical branch needs team
   context.
-- A Local Stand-in independently maintains private Work State.
-- A Public Stand-in communicates and coordinates from synchronized state.
-- A Rust privacy daemon owns local trust, storage, credentials, and privileged
-  workspace access.
-- The server owns shared state, messaging, authorization, realtime delivery,
-  review, audit, and always-available Stand-in jobs.
+- One cloud-deployed Stand-in maintains Claims and Work State,
+  communicates, and coordinates within bounded authority.
+- The Web application is the primary human client.
+- The Desktop App is optional context-enhancement infrastructure, not a product
+  runtime dependency.
+- The cloud service owns durable private and shared state, messaging,
+  authorization, realtime delivery, review, audit, and Stand-in jobs.
 
-The system is deliberately not an event-sourced Agent transcript platform.
-Normal domain tables hold current state, while immutable Activity Events record
-what changed and why.
+Intero is not an event-sourced Agent transcript platform. Normal domain tables
+hold current state, while immutable Activity Events record meaningful changes
+and their provenance.
+
+The architecture follows
+[ADR-0006](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md).
+The earlier daemon, Local Stand-in, and Electron-required topology is
+historical and does not define the target product.
+
+### 1.1 Thin vertical slice with durable ports
+
+The pilot is intentionally thin, not throwaway. Canonical Agent event and Work
+State contracts are transport-independent behind explicit ports:
+
+| Stable port / contract  | Implemented adapter                                           | Current product boundary         |
+| ----------------------- | ------------------------------------------------------------- | -------------------------------- |
+| `ModelGateway`          | Vercel AI SDK calling the administrator-configured model      | Additional providers may adapt   |
+| `AuthorizationPort`     | SpiceDB-backed authorization plus tenant-safe membership data | Contract-tested and replaceable  |
+| `RealtimePort`          | Centrifugo fanout with polling/cursor repair                  | PostgreSQL remains authoritative |
+| `ObjectStorePort`       | MinIO/S3-compatible storage with DB-authoritative metadata    | Upload product surface disabled  |
+| `JobRunnerPort`         | Graphile Worker jobs plus transactional outbox and reconciler | Durable, idempotent processing   |
+| `CoordinationTransport` | Bounded Project-internal protocol                             | General A2A remains deferred     |
+
+The minimal model loop reads only policy-allowed structured Work State through
+`ModelGateway` and produces safe Stand-in summaries and bounded
+coordination suggestions. It cannot use raw content without explicit
+authorization, cross Organization/Workspace boundaries, auto-commit, perform
+external actions, or become a general autonomous Agent.
+
+These ports are not decorative empty interfaces. Each implemented adapter has
+contract tests over domain-visible behavior, and a replacement must pass the
+same tests before adoption. Canonical Agent events, Work State, and domain
+policy import no adapter-specific types. MinIO-backed object storage remains
+disabled by product policy because Phase 1–5 adds no attachment/raw-capture
+surface. Temporal and general A2A infrastructure remain out of scope.
 
 ## 2. System overview
 
@@ -29,185 +69,345 @@ flowchart LR
         Codex["Codex"]
         Claude["Claude Code"]
         OpenCode["OpenCode"]
+        Hooks["Optional Git and lifecycle hooks"]
     end
 
-    subgraph Desktop["User machine"]
-        Electron["Electron<br/>React UI"]
-        Bridge["intero mcp-stdio<br/>stateless bridge"]
-        Daemon["interod<br/>Rust privacy kernel"]
-        LocalRep["Local Stand-in<br/>TypeScript"]
-        LocalDB["SQLCipher"]
+    subgraph Clients["Human clients"]
+        Web["Web application"]
+        Desktop["Optional Desktop App"]
     end
 
-    subgraph Server["Intero server"]
-        API["Fastify API<br/>modular monolith"]
-        Worker["Graphile Worker"]
-        PublicRep["Public Stand-in Jobs"]
-        Realtime["Centrifugo"]
-        PG["PostgreSQL"]
-        Spice["SpiceDB"]
-        Objects["S3-compatible storage"]
+    subgraph Cloud["Selected Intero team deployment"]
+        MCP["Authenticated MCP endpoint"]
+        EventIngress["Authenticated event endpoint<br/>follow-up contract"]
+        API["Web and product API"]
+        Worker["Stand-in and domain jobs"]
+        Policy["Privacy, capability, and authorization policy"]
+        Data["Private and shared domain data"]
+        Realtime["Realtime delivery"]
+        Objects["Encrypted object storage"]
+        Organization["Organization tenant"]
+        Team["Teams and members"]
+        Project["Projects"]
     end
 
-    Codex --> Bridge
-    Claude --> Bridge
-    OpenCode --> Bridge
-    Bridge --> Daemon
-    Electron --> Daemon
-    Daemon <--> LocalRep
-    Daemon <--> LocalDB
-    LocalRep <--> API
-    Electron <--> API
-    API <--> PG
-    API <--> Spice
-    API <--> Objects
+    Codex <--> MCP
+    Claude <--> MCP
+    OpenCode <--> MCP
+    Hooks --> EventIngress
+    Web <--> API
+    Desktop <--> API
+    MCP --> Policy
+    EventIngress --> Policy
+    API --> Policy
+    Policy <--> Data
+    Policy --> Worker
+    Worker <--> Data
     API --> Realtime
-    API --> Worker
-    Worker --> PublicRep
-    PublicRep <--> PG
-    PublicRep <--> Spice
+    API <--> Objects
+    Organization --> Project
+    Team <-->|"many-to-many"| Project
+    Project --> Policy
 ```
 
-## 3. Trust planes
+Coding Agents connect directly to the selected Intero team deployment while it
+is online. No daemon, sidecar, desktop process, local socket, or Electron
+launcher sits on the MCP runtime path.
 
-### 3.1 Local private plane
+### 2.1 Deployment origin and bootstrap
 
-The local plane is authoritative for:
+Intero assumes an already-running deployment. A team administrator enters its
+base URL in Web `/setup`, validates connectivity, and only then creates the
+Organization/team context and first Project.
 
-- Workspace enrollment and path rules.
-- Private Claims and private Work State.
-- Hook and MCP ingress.
-- Credential access.
-- Read-only workspace operations.
-- Local model-egress policy.
-- Offline queues and synchronization cursors.
-- Human-only E2EE key material.
+Normal onboarding uses **Team Settings → Member Management**. An Organization
+administrator enters one recipient's display name and exact email; Intero
+creates an expiring, revocable, email-bound invitation with `pending`,
+`accepted`, `expired`, or `revoked` lifecycle. V1 exposes copy, regenerate, and
+revoke without requiring SMTP. The recipient uses the short **Accept
+Invitation** surface and must authenticate or register with the matching email.
+The joined member inherits the administrator-approved Intero endpoint, team,
+Web experience, credentials, and Agent/MCP instructions without entering the
+URL. Explicit Workspace and Project binding remains separate. Reusable Pilot
+join links are historical and are not the current onboarding path. Bulk email
+or CSV invitations, SCIM provisioning, and domain-based automatic join remain
+outside Phase 1–5.
 
-Two processes share this plane:
+Productized self-deployment is outside the pilot: no package, Docker/install
+wizard, infrastructure provisioning workflow, DNS/TLS guidance, tenant
+provisioning automation, or end-user self-hosting documentation is required.
+Connectivity failure, invalid endpoint, and unavailable deployment remain
+actionable Setup states; wire-level checks are not specified here.
 
-1. `interod` is the Rust privacy kernel and the only process allowed to own
-   the encrypted local database or access OS credentials.
-2. The Local Stand-in is a TypeScript/Node sidecar supervised by
-   `interod`. It runs the Agent loop but must call privacy-kernel ports for
-   workspace, storage, credential, and synchronization access.
+### 2.2 Cloud AI provider setup
 
-Electron Main is not a Stand-in runtime and does not own private data.
+Cloud AI provider configuration is distinct from Intero deployment endpoint
+setup and Agent registration. In one **AI Provider** section, a team
+administrator configures the provider endpoint, secret API key, and default
+model for the pilot. The provider endpoint is neither the administrator-entered
+Intero deployment base URL nor an Agent/MCP connection endpoint.
 
-### 3.2 Public plane
+The provider key is accepted and stored only on the server using encryption and
+secret handling. It is never returned through browser or member-facing APIs.
+Administrators can test the connection, rotate or replace the key, or disable
+the provider. Detailed secret-management mechanics and multi-provider routing
+remain outside the pilot contract.
 
-The public plane is authoritative for:
+When no provider is configured or the provider is unavailable, identity,
+team/project membership, invitations, and basic human collaboration and chat
+remain available. AI Stand-in execution, automated summaries, Agent Work
+State projection, automated Team Pulse, Agent binding, and other AI-derived
+coordination features remain disabled.
 
-- Organizations, projects, principals, and shared authorization.
-- Public Work Projections.
-- Chat, Coordination Threads, Spec Reviews, Decisions, and Action Inbox items.
-- Public Stand-in jobs and public memory.
-- Realtime fanout, object metadata, audit, and search.
+Setup exposes two distinct readiness states: `basic_collaboration_ready` and
+`stand_in_configuration_needed`. Missing, invalid, disabled, and
+unavailable provider states include actionable administrator guidance and never
+fail silently. Provider configuration gates AI activation, not the Workspace,
+membership, invitations, or basic human chat.
 
-Public Stand-in work runs as short-lived jobs. Its logical identity and
-memory are durable in PostgreSQL; no per-user server process needs to stay
-resident.
+## 3. Data and trust boundaries
 
-### 3.3 Projection boundary
+### 3.0 V1 Organization, Team, and Project model
 
-Private Work State never synchronizes wholesale. The Local Stand-in
-creates a projection diff, and `interod` verifies:
+Organization is the tenant boundary and owns Projects. First Setup creates one
+implicitly or with a simple name, but it is not a prominent daily UI or
+permission-management surface. Teams contain members. `Team ↔ Project` is
+many-to-many: a Project may designate one primary/display Team and zero or more
+additional participating Teams.
+
+V1 membership in any associated Team grants Project view and participation.
+Individual Project roles, ACLs, and restricted Project visibility are
+post-pilot. Deployment endpoint and AI-provider settings may belong to
+Organization; per-recipient email-bound invitations belong to Team.
+
+AgentConnection, Claim/WorkState, TeamPulseProjection, CollaborationPosture, and
+ProjectConversation carry Project identity independently of Team. A cross-Team
+Project aggregates context from participating Teams. DirectMessage instead
+relates two authenticated members of the same Team. These shared-scope rules do
+not authorize raw-content upload, Stand-in reuse, or publication beyond
+their independent policies.
+
+Multi-Organization switching, advanced Organization administration, billing,
+enterprise identity, and advanced cross-Team governance are outside the pilot.
+
+### 3.1 Independent policy axes
+
+Intero does not infer visibility from storage location. Each object or Claim has
+independent policy state for:
+
+1. ingestion and durable storage;
+2. model processing;
+3. Stand-in retrieval or reuse;
+4. disclosure to a person, Thread, team, project, or organization.
+
+These axes are enforcement and audit semantics, not four everyday user toggles.
+The normal UX is a project posture with silent defaults.
+
+An object may therefore be stored and processed in Intero cloud while remaining
+private to one user. Private cloud model processing is permitted for already
+uploaded material. Upload and processing never authorize Stand-in reuse
+or publication.
+
+Model processing is bounded to the user's authorized Workspace purpose. User
+data is never used to train public or general models and is never reused across
+customers or Workspaces. These controls are independent of publication
+visibility.
+
+### 3.2 User-private cloud scope
+
+Personal spaces and unbound work are **Private Work** by default. Newly ingested
+work data and sensitive content remain user-private.
+User-private scope may contain:
+
+- structured semantic Coding Agent checkpoints;
+- private Claims and resolved Work State;
+- private Stand-in conversations and memory;
+- explicitly uploaded artifacts or context;
+- private draft Specs and Decisions;
+- optional Desktop-enhanced summaries or context.
+
+Tenant isolation, object authorization, and policy evaluation apply to every
+read and model-context assembly operation. Organization membership alone does
+not grant access to user-private data.
+
+### 3.3 Shared scopes and publication
+
+Team, project, organization, and Thread scopes contain authorized shared
+information. Joining or explicitly binding a Workspace to a team project enables
+**Collaborate with Project** by default. That enrollment permits quiet
+publication of safe summaries, status, dependencies, blockers, and coordination
+signals to the bound team/project scope without per-event prompts.
+
+A publication or reuse transition requires:
 
 ```text
-Workspace eligibility
-∩ privacy level
-∩ model-egress policy
-∩ Capability Grant
+authenticated project enrollment, binding, or user posture change
+∩ user and organization authority
+∩ source-object visibility and reuse policy
 ∩ destination authorization
+∩ Capability Grant when a Stand-in acts
 ```
 
-Only phase, blocker, dependency, ownership, important decision, meaningful
-artifact, pause, and completion changes are public by default.
+The posture and each publication record their actor, source, destination, policy
+version, provenance, and time. Tightening policy stops future use and marks a published
+object withdrawn where possible; it cannot claim to erase copies already
+viewed or exported.
 
-## 4. Desktop and local runtime
+Collaboration publication is restricted to safe structured summaries, status,
+dependencies, blockers, and coordination signals. Raw prompts, files, diffs,
+terminal output, and tool input or output never become team-visible because
+collaboration is enabled. General rule-based automatic publication beyond the
+project-binding posture is deferred and must be attributable, auditable, and
+revocable if added later.
 
-### 4.1 Electron application
+### 3.4 Client-local data
 
-The desktop application uses:
+Clients may keep device-local preferences, caches, drafts, and the bounded
+delivery outbox. Such state is not authoritative Work State and does not create
+a required local runtime. A general non-uploaded/client-only work mode is
+outside the MVP and is not promised.
 
-- Electron.
-- React and TypeScript.
-- `electron-vite`.
-- `electron-builder` and `electron-updater`.
-- shadcn/ui generated components, Base UI primitives, and Tailwind CSS v4.
-- TanStack Router.
-- TanStack Query for server and daemon state.
-- Zustand only for transient UI state.
-- TanStack Form and Zod for forms.
-- CodeMirror 6 for Markdown Spec editing.
+### 3.5 Data lifecycle
 
-The renderer is sandboxed. It communicates through narrow preload APIs and does
-not receive OS credentials, database keys, or unrestricted filesystem handles.
+- Structured private Work State and Claims retain for 180 days.
+- Explicitly authorized raw uploaded content retains for 30 days by default.
+- Published project summaries retain for the life of the project and remain
+  withdrawable.
+- Users may delete their own private data at any time.
+- Withdrawal or revocation stops future authorized visibility and use but cannot
+  erase external copies already exported by authorized recipients.
 
-The app package contains compatible versions of:
+Backup-deletion timing, legal-hold behavior, regional storage, precise support
+role mapping and legal process, and subprocessor selection/contracts require
+pre-pilot implementation or governance decisions without weakening the
+no-training or no-cross-customer/Workspace-reuse boundary.
 
-- Electron application.
-- `interod`.
-- Local Stand-in sidecar.
-- MCP stdio bridge.
-- supported Coding Agent integration assets.
+### 3.6 Post-Pilot project domain
 
-They update atomically as one desktop release.
+Phases 1–3 infrastructure, Phase 4 onboarding/admin foundations, and Phase 5
+Project work management/Spec Review are implemented on `main`. Phase 6 Action
+Inbox/notifications/search and Phase 7 deeper bounded Agent automation remain
+future scope.
 
-### 4.2 Local IPC
+Organization owns Projects. A Project has one primary Team and may associate
+additional Teams. Team roles are `member` and `leader`; Organization admins and
+the primary Team's Leaders govern Project review policy and PI/Sprint settings.
+The last Organization admin cannot be removed or demoted without a replacement.
+Registration is invite-only, and an account has one active Organization.
 
-Electron, the Local Stand-in, and the MCP bridge communicate with
-`interod` through JSON-RPC 2.0 using length-prefixed framing:
+Post-Pilot invitations are created in **Team Settings → Member Management**
+from an admin-specified display name and exact email. The expiring/revocable
+link is bound to that email and has `pending`, `accepted`, `expired`, or
+`revoked` lifecycle. Copy-link is the V1 delivery mechanism; resend regenerates
+the link, and SMTP is not required.
 
-- Unix Domain Socket on macOS and Linux.
-- Windows Named Pipe on Windows.
+Acceptance is a recipient-only surface, not administrator Setup. It displays
+Organization, Team, pre-set name, invited email, and an explicit Accept action;
+authentication must use the matching email. Completion shows the joined Team
+and accessible Projects, direct Project/Team Pulse entry, and a skippable
+Connect Coding Agent entry. The surface cannot return deployment endpoints,
+model secrets, governance, invitation controls, or administrator Settings.
+Personal Settings may later edit the pre-set display name.
 
-The protocol is identical across operating systems; only the transport adapter
-differs. Administrator/Desktop, lifecycle-hook ingress, MCP, and Local
-Stand-in sidecar each receive a separate daemon-managed capability and
-an explicit method allowlist. The descriptors are OS-user-readable local files;
-this separates Intero components and prevents accidental authority reuse, but
-does not claim to sandbox an already-compromised same-UID process.
-
-### 4.3 Local encrypted storage
-
-`interod` owns a SQLCipher database through `rusqlite`.
-
-- A random 256-bit database key is stored in the OS credential store.
-- Database work runs on a dedicated blocking thread.
-- Other processes access state only through daemon methods.
-- Local migrations are versioned and applied before dependent processes start.
-- Private source-code content is not eagerly embedded for MVP.
-
-### 4.4 Workspace tools
-
-The Local Stand-in receives bounded tools:
+The optional work graph is:
 
 ```text
-workspace.list_files
-workspace.read_file
-workspace.search_text
-workspace.lookup_symbol
-git.status
-git.diff_summary
-git.log
-git.show_metadata
-workstate.query
-memory.search
+Epic 0..1 <- Feature 0..* <- Work Item 0..*
 ```
 
-All tools:
+Epic is roadmap-only. Feature may be directly human-owned and Agent-executed
+without Work Items and has stage `planned`, `in_development`, or `released`.
+Work Item has one human owner or is unassigned; Agents are provenance actors,
+not assignees.
 
-- operate only within registered Workspaces;
-- deny default sensitive paths such as secrets and credential files;
-- are read-only;
-- produce local audit entries;
-- pass results through model-egress policy before model use.
+Each Project has one Board with separate Backlog and current Sprint views.
+Backlog is scheduling state, not a Work Item status. Statuses are exactly
+`todo`, `in_progress`, `ready_for_test`, and `done`. Sprint-end carryover
+preserves `in_progress`, source Sprint, and a carryover marker instead of
+silently rescheduling. Work Items store priority `P0`–`P3`,
+optional numeric Points, optional Spec, typed relations, Coordination Threads,
+comments/replies, and explicit PR/Commit/branch associations.
 
-No arbitrary shell or file-write tool is available to the Stand-in.
+PI and Sprint are Project-level planning containers. PI creation takes start
+date, Sprint count, and Sprint duration in weeks; the domain generates `PI N`,
+`Sprint 1..N`, dates, and timezone-derived `planned`/`active`/`ended` status.
+Features and Work Items may be unplanned, PI-only, or Sprint-assigned; Sprint
+implies PI.
+
+Spec belongs to exactly one Project and has immutable versions. Review is
+explicitly requested, comments bind to one full-version snapshot, and
+confirmation is version-specific. `list_confirmed` and
+`get_confirmed(specId)` expose confirmed Specs to Agents without making an
+unconfirmed version current. Project review policy stores required
+confirmations, whether another member's Agent counts, and whether author-self
+confirmation is allowed.
+
+## 4. Web and optional Desktop clients
+
+### 4.1 Web application
+
+The Web application is the complete primary client for:
+
+- Team Pulse and Action Inbox;
+- Stand-in conversations;
+- Project Rooms and Coordination Threads;
+- Spec Review and Decisions;
+- Project Backlog, current Sprint Board, Epic/Feature overview, and Work Item
+  detail;
+- privacy, visibility, and integration settings;
+- provenance, freshness, and authority inspection.
+
+The existing Intero visual system remains canonical. Work Item detail places
+activity and coordination in the center timeline, facts/context/relations/code
+in the right rail, and comment composition at the bottom. Administration enters
+Settings rather than a separate dashboard visual system. Team-visible Specs
+appear in one Team-level Spec Review page with a Project filter; Project pages
+deep-link with that filter applied.
+
+Member Management and Accept Invitation reuse the same visual system but remain
+distinct authority surfaces. Recipient acceptance never routes through
+administrator/Test Setup.
+
+Team Pulse projects one column per person. A column header contains:
+
+- a Stand-in-generated natural-language summary derived from authorized active
+  work items, blockers, recent outcomes, and freshness;
+- concurrently active and blocked counts.
+
+The summary is plain non-interactive text with no citations, links,
+click-through, or state mutation. Peer active-work cards follow in a
+presentation order that conveys no rank. A derived **N more** control compacts
+rendering only. The Pulse contract has no primary/main/secondary/subordinate/
+focus field and does not map card order or compaction into task/Workstream
+hierarchy.
+
+The Web client uses authenticated product APIs and realtime delivery. It must
+not require the Desktop App to connect, interpret Work State, or coordinate.
+
+### 4.2 Optional Desktop App
+
+While open in the foreground and after explicit opt-in, the Desktop App may
+provide:
+
+- richer context collection with explicit user authorization;
+- device-local work summaries and drafts;
+- native notifications;
+- a native rendering of the same collaboration surfaces.
+
+Desktop absence, shutdown, or update failure must not interrupt the Web product,
+cloud Stand-in, collection, management, access, or direct cloud MCP path.
+The Desktop performs no silent background observation.
+
+### 4.3 Client security
+
+Web and Desktop renderers receive only authorized API view models. They never
+receive unrestricted service credentials, cross-tenant data, or generic policy
+bypass primitives. Client-local storage must be treated as convenience state,
+not as the only enforcement point for cloud privacy.
 
 ## 5. Coding Agent integrations
 
-### 5.1 Common MCP surface
+### 5.1 Common cloud MCP surface
 
 All Coding Agent adapters expose the same tools:
 
@@ -221,134 +421,185 @@ stand_in.check_scope
 stand_in.report_checkpoint
 ```
 
-`intero mcp-stdio` is a stateless transport bridge, not an Agent. A Coding
-Agent launches it as an ordinary stdio MCP subprocess; the bridge forwards to
-`interod` over the local IPC transport and exits with the Coding Agent
-session. The process source and working directory bind it to the unique active
-same-source session in the enrolled Workspace. OpenCode may
-resume one unique paused session; concurrent ambiguity fails closed instead of
-selecting by timestamp. If lifecycle delivery was unavailable, one stable
-MCP-process fallback Workstream keeps explicit tools usable. Public MCP tool
-schemas do not expose internal Workspace or Workstream UUIDs.
+Codex, Claude Code, and OpenCode connect directly to the authenticated HTTPS MCP
+endpoint inherited from the member's selected team deployment. From a bound
+project page, the user copies a one-time **Connect Agent** prompt tailored to the
+selected Agent and pastes it there. The Agent performs its own MCP configuration
+and project binding, then reports connection success to Intero.
+
+The prompt carries team-derived endpoint context and a short-lived, single-use,
+project-scoped connection ticket. The ticket bootstraps a least-privilege,
+revocable connection but is never surfaced as a user-managed API key. The
+project UI shows connection status and supports disconnect/reconnect; revocation
+invalidates Intero access without blocking local coding. Generic MCP clients are
+outside the pilot.
+
+The optional Desktop App may perform one-click MCP configuration for the same
+three clients using the same endpoint and ticket. It writes the relevant client
+configuration and reports success, failure, and disconnect status. This is an
+acceleration path only: Web prompts remain universal for the supported clients,
+and no Desktop process or daemon joins the runtime path.
+
+MCP and event-ingress permissions are separate scopes. Public MCP schemas do not
+expose internal Workspace or Workstream UUIDs. The service minimizes remote and
+repository metadata and does not require, collect, or expose absolute local
+paths by default.
 
 ### 5.2 Active checkpoint reporting
 
-`report_checkpoint` is an enhancement, not the only source of truth. Coding
-Agents are instructed to call it only at semantic milestones:
+`report_checkpoint` accepts exactly ten frozen pilot semantics:
 
-- intent or plan materially changes;
-- a decision or assumption becomes important;
-- a blocker or dependency appears;
-- scope expands or begins affecting another team;
-- a meaningful artifact or validation state is produced;
-- work pauses or completes.
+| Semantic                 | Meaning and primary effect                                      |
+| ------------------------ | --------------------------------------------------------------- |
+| `work_started`           | Bounded work began; activates Project Work State.               |
+| `work_progressed`        | Material progress, phase, scope, or plan changed.               |
+| `decision_recorded`      | Sourced technical decision or candidate recorded.               |
+| `dependency_declared`    | Another owner/output is required; may coordinate.               |
+| `blocker_raised`         | Progress is blocked; may coordinate and raise attention.        |
+| `review_requested`       | Bounded review is needed; may coordinate reviewers.             |
+| `work_completed`         | Agent claims completion; updates status and safe Team Pulse.    |
+| `coordination_requested` | Coordination/conflict resolution is needed; may open a Thread.  |
+| `artifact_produced`      | Safe artifact reference/summary; updates status and Team Pulse. |
+| `validation_completed`   | Bounded validation result; updates status and Team Pulse.       |
 
-The Local Stand-in stores the report as a `coding_agent_report` Claim and
-reconciles it with lifecycle, Git, validation, and human corrections.
+Every event contains a bounded safe summary plus stable client-generated
+event/idempotency ID, Project identity, authenticated Agent identity,
+source/provenance, occurred-at time, and schema version. Direct cloud MCP accepts
+narrative schema v2 only: `currentFocus`, `completedOutcome`, bounded
+`evidence`, `nextStep`, and explicit `collaboration` need/target. Summary-only
+v1 checkpoints are rejected. Plans and plan changes belong only in
+`work_progressed`.
 
-### 5.3 Adapter-specific observation
+The cloud Stand-in stores the report as a sourced
+`coding_agent_report` Claim, applies private-by-default visibility, and
+reconciles it with authorized lifecycle, Git, validation, project, and human
+evidence.
 
-The canonical model supports these Work Events:
+Default ingress accepts structured semantic checkpoints only. Prompts,
+responses, chain-of-thought, files, diffs, complete tool arguments or results,
+terminal output, and credentials require explicit per-project authorization
+before upload. Once uploaded, private cloud model processing is permitted;
+Stand-in reuse and publication remain separate controls.
+Raw prompts/files/diffs/terminal/tool logs and low-level file/resource touch
+events are not canonical checkpoint semantics.
 
-```text
-SessionStarted
-SessionPaused
-SessionStopped
-WorkspaceChanged
-ResourceTouched
-GitStateChanged
-PlanChanged
-ValidationChanged
-ArtifactDetected
-CoordinationRequested
-CheckpointReported
-```
+### 5.3 Optional content-safe event ingress
 
-Automatic Agent adapters intentionally emit only content-free session
-lifecycle events in the MVP. Material intent, validation, blocker, artifact,
-and completion signals come through explicit MCP checkpoints. Prompts,
-assistant responses, chain-of-thought, complete tool arguments/results,
-terminal output, file contents, and credentials are never work events.
+Git and Coding Agent lifecycle hooks may send compact, content-safe events to a
+separate authenticated cloud event endpoint. This endpoint is not MCP and may
+not grant Stand-in coordination tools.
 
-Initial adapters:
+The target event set may include session lifecycle, repository identity changes,
+Git state changes, validation state, and artifact metadata. Hook credentials use
+a separate least-privilege scope from MCP. Closed schemas, size limits,
+installation, and transport mechanics remain follow-up implementation details.
 
-- Codex: MCP, a managed block in user-level `AGENTS.md`, and `SessionStart` /
-  `SessionEnd` hooks. Codex's native trust approval is not bypassed.
-- Claude Code: MCP, a user-level rule, and `SessionStart` / `SessionEnd` hooks.
-- OpenCode: MCP, a user-level instruction file, and a managed global plugin
-  using `session.created`, `session.idle`, and `session.deleted`.
+MCP ingress failures return a visible, non-blocking failure. The MCP client, Hook
+client, or explicit CLI may place an already-permitted payload in a lightweight
+client-owned outbox. The per-user limit is 10,000 events or 50 MiB, whichever is
+reached first; maximum age is seven days. Only schema-permitted payloads are
+retained, and raw content requires the project's explicit raw-upload
+authorization.
 
-Integration installation preserves user configuration, updates only an
-Intero-managed node, block, or dedicated file, and is reversible. It records
-only the installed value and hashes; it never creates whole-file backups of
-global Agent configs. If a user changes an Intero-owned node, repair/uninstall
-stops with a conflict instead of overwriting that edit.
+Payloads are encrypted at rest using an OS-provided credential or key store.
+Keys and queued payloads never synchronize to Intero cloud. Missing/reset keys,
+revoked authorization, or now-disallowed payloads cause secure discard with no
+recovery or export promise. The client later emits only a non-sensitive
+delivery-gap or freshness marker where possible.
 
-The installer writes an `installing` journal before mutation, retains both the
-previous and intended managed values during upgrades, and can reclaim a dead
-process lock only after verifying the owning process identity. Legacy manifests
-that did not record an immutable installed executable fail closed and preserve
-the Agent files; an already-journaled legacy cleanup remains resumable. Custom
-`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `OPENCODE_CONFIG_DIR` roots are explicit
-allowed roots and remain subject to symlink-boundary checks.
+Each event has a stable client-generated ID and per-project ordering metadata;
+cloud ingestion is idempotent. The next MCP invocation, Hook invocation, or
+explicit CLI flush attempts FIFO delivery with at most three short in-process
+retries using bounded exponential backoff. Later invocations resume. There is no
+persistent retry daemon.
 
-The desktop package ships a bundled bridge and an executable launcher. It does
-not depend on a system Node.js installation. Renderer requests first trigger a
-native main-process confirmation showing exact target paths; only acceptance
-creates a sender-bound, short-lived, one-use mutation token.
+Capacity and TTL eviction removes oldest non-terminal events first, preserves
+`work_completed`, `blocker_raised`, and `decision_recorded` events where
+possible, and records a
+non-sensitive gap marker. Expired or revoked credentials stop delivery and
+require re-authentication; there is no automatic credential recovery. Delivery
+is best-effort and never blocks coding or Git commits. The outbox never runs
+continuously, observes system activity, or depends on Desktop.
+
+### 5.4 Phase 5 Agent content contracts
+
+With Phase 4 access foundations, a connected Agent with Project access uses
+MCP content contracts to create or update Features, Work Items, Spec versions,
+comments, review state, and explicit code associations. Manual editing remains
+available but is not the default content path.
+
+These mutations are separate from canonical semantic checkpoints. Every content
+mutation enforces Project authorization and records actor, time, provenance,
+immutable history, and revert information. Agents cannot change Organization or
+Team membership, roles, Project-Team associations, or visibility. Disconnect or
+revocation terminates future Project access without blocking local coding.
+
+Spec MCP includes `list_confirmed`, `get_confirmed(specId)`, and explicit
+`request_review`. An Agent may attach PR, Commit, or branch references only
+through an explicit report; no branch-name inference occurs. Initial code
+associations are stored references, not live provider synchronization.
+
+A later GitHub/GitHub Enterprise adapter may use an Organization-installed
+GitHub App, selected repositories, read-only permissions, and webhook sync. The
+port does not accept personal access tokens and exposes no merge or GitHub
+comment-write operation.
 
 ## 6. Stand-in runtime
 
-### 6.1 Shared core
+### 6.1 One cloud Stand-in
 
-Local and Public Stand-ins share `stand-in-core`, a pure TypeScript
-package containing:
+One logical Stand-in identity operates across private and shared scopes.
+The cloud runtime contains:
 
-- event-driven Agent loop;
+- an event-driven Agent loop;
 - Context Builder;
-- Claim Resolver;
-- Work-State reducers;
-- public-projection logic;
+- Claim Resolver and Work State reducers;
+- publication and reuse policy evaluation;
 - prompt compiler;
 - capability-policy types;
 - runtime ports and contract tests.
 
-The package cannot directly access a database, filesystem, network, or
-credential store. Each runtime injects different ports and tools.
+“Private” and “shared” describe authorization, permitted processing, reuse, and
+disclosure. They are not separate Local and Public Stand-in processes.
 
 ### 6.2 Event-driven execution
 
-Stand-in execution is event driven.
-
-- Direct messages, blockers, coordination requests, scope changes, and review
-  requests wake a run immediately.
-- Ordinary file, Git, plan, and validation events are grouped by Workstream
-  using a short debounce window.
+- Direct messages and `blocker_raised`, `coordination_requested`,
+  `work_progressed` scope changes, or `review_requested` checkpoints wake a run
+  immediately.
+- Ordinary authorized events are grouped by Workstream using a short debounce
+  window.
 - Deterministic reducers update state before any model call.
 - One Workstream processes state changes in order.
 - Different Workstreams may run concurrently.
-- Offline or model-disabled operation continues deterministic reduction and
-  queues semantic work for later.
+- A missing, invalid, disabled, or unavailable provider disables Stand-in
+  execution, Agent Work State projection, automated Team Pulse, Agent binding,
+  and other AI-derived coordination while basic human collaboration remains
+  available with explicit readiness status.
+- Cloud unavailability is disclosed as unavailable; the product does not imply
+  that a hidden local Stand-in continues working.
 
-The model loop uses Vercel AI SDK with explicit stop conditions, tool and token
-budgets, and idempotent output commands.
+Model execution uses explicit stop conditions, tool and token budgets, and
+idempotent output commands.
 
 ### 6.3 Context assembly
 
-Every run builds a bounded Context Package:
+Every run builds an authorized, bounded Context Package:
 
 1. product, organization, and user policy;
-2. Stand-in identity and runtime capabilities;
+2. Stand-in identity and Capability Grants;
 3. triggering event;
-4. recent messages from the relevant Thread;
-5. resolved Work State and unresolved Claims;
+4. permitted messages from the relevant Thread;
+5. permitted Work State and unresolved Claims;
 6. relevant Decisions and current Spec revision;
-7. related public Work Projections;
+7. authorized shared Work State;
 8. prior phase summary;
 9. permitted tools.
 
-Current structured state and confirmed Decisions outrank historical summaries.
-No hidden model session is treated as durable memory.
+Storage eligibility does not imply context eligibility. Every object must pass
+model-processing and Stand-in-reuse policy before entering a Context
+Package. Current confirmed Decisions and structured state outrank historical
+summaries.
 
 ### 6.4 Prompt and preference layers
 
@@ -359,40 +610,57 @@ Product Policy
 → Organization Policy
 → Stand-in Identity
 → User Preferences
-→ Runtime Capabilities
+→ Capability Grants
+→ Processing and Visibility Policy
 → Current Context
 ```
 
 Product safety rules cannot be overridden. Organization policy can narrow
-behavior. Users can configure tone, language, summary detail, notification
-preference, normal Workstream scope, and escalation preference.
+behavior. Users can configure tone, language, summary detail, notification,
+normal Workstream scope, escalation, processing, reuse, and publication
+preferences within their authority.
 
-Every Stand-in message and action records the prompt, policy, and tool
-schema versions used for the run.
+Every Stand-in message and action records the prompt, policy, model, and
+tool-schema versions used for the run.
+
+### 6.5 Automatic bounded coordination
+
+Explicit structured blocker, dependency, review, conflict, or coordination
+signals may automatically create a Project-scoped coordination Thread/request
+for relevant Stand-ins. It carries only safe structured summary/context
+and candidate next steps; the initiating Stand-in may collect responses
+and drive clarification within the Thread.
+
+Policy rejects cross-Project scope, raw disclosure, external actions, priority
+changes, irreversible commitments, and final human/business decision claims.
+Outcomes remain visible and auditable, and commitments require confirmation from
+the responsible participant. This internal behavior is distinct from the
+deferred general A2A Gateway/federation.
 
 ## 7. Work State, Claims, and memory
 
 ### 7.1 Claims
 
-A Claim is an assertion with:
+A Claim contains:
 
 - subject, predicate, and value;
 - source type and source reference;
 - observed time and optional validity;
-- confidence;
-- privacy level;
+- confidence and freshness;
+- storage, processing, reuse, and visibility policy;
 - supporting evidence reference.
 
-Source types include human statement, direct observation, Coding Agent report,
-project-system state, and Stand-in inference.
+Source types include human statement, authorized observation, Coding Agent
+report, project-system state, and Stand-in inference.
 
 Resolution is not last-write-wins. Human corrections and direct observations
 normally outrank inference, but conflicting Claims remain visible when the
-system cannot safely reconcile them.
+system cannot safely reconcile them. A private Claim may influence private Work
+State without becoming visible to teammates.
 
 ### 7.2 Durable memory
 
-The source of truth is a set of structured objects:
+Structured objects remain authoritative:
 
 ```text
 Workstream
@@ -412,63 +680,59 @@ Typed relations express `depends_on`, `blocks`, `owned_by`, `affects`,
 `implements`, `supersedes`, `decided_by`, `reviewed_by`, `produced_by`, and
 `related_to`.
 
-SQLite and PostgreSQL store these relations using ordinary relational tables.
-A dedicated graph database is not required for MVP.
+Every relation and derived object inherits or narrows the source visibility and
+reuse constraints. Derivation never silently widens disclosure.
 
 ### 7.3 Search
 
-Local private search:
+Private and shared search may use structured lookup, PostgreSQL full-text
+search, trigram search, and optional vector retrieval. Search candidates pass
+authorization, processing, and visibility checks before retrieval. Search
+indexes are replaceable and never become the authorization source of truth.
 
-- structured lookup;
-- SQLite FTS5 over Stand-in memory;
-- exact Git, path, and symbol lookup;
-- on-demand read-only workspace search.
-
-Public search:
-
-- PostgreSQL full-text search;
-- `pg_trgm`;
-- `pgvector` when organization model-egress policy permits Embeddings;
-- bounded SpiceDB bulk authorization over candidates.
-
-Search indexes are replaceable behind a Search port and never become the
-authorization source of truth.
+Embedding use, detailed provider secret management, and multi-provider routing
+remain follow-up implementation decisions. They may not weaken Workspace-scoped
+processing, accepted lifecycle defaults, no public/general-model training, or
+no cross-customer/Workspace reuse.
 
 ## 8. Communication model
 
 ### 8.1 Conversation types
 
-- Human-only direct and group Threads.
+- Basic persistent same-team 1:1 direct messages.
 - Stand-in Thread for a person and their Stand-in.
 - Project Rooms.
 - Coordination Threads.
 - Spec Review Threads.
-- Decision and Task-linked Threads.
+- Decision and task-linked Threads.
 
-Stand-in Threads are server-readable and multi-device synchronized.
-They are not automatically team-visible.
+Stand-in Threads are server-readable and multi-device synchronized. They
+are visible only to authorized participants and are not automatically
+team-visible.
 
-Human-only Threads use OpenMLS. Each device is an MLS member. Explicitly adding
-a Stand-in ends the Human-only mode for that same logical Thread:
+Direct messages are visible only to their two participants by default. The pilot
+does not promise group DMs, attachments, reactions, DM search, read receipts,
+rich Threads, federation, or end-to-end encryption. Explicitly adding a
+Stand-in changes that same logical conversation:
 
 - subsequent messages are Agent-readable and server-readable;
-- a visible system event records the access transition;
-- earlier MLS ciphertext is not disclosed by default;
+- a visible system event records the transition;
+- earlier history is not disclosed by default;
 - sharing relevant earlier context or full history is a separate explicit
   action.
 
-The Thread therefore has an auditable encryption-mode boundary rather than a
-silent or retroactive downgrade.
+Agent readability grants access to the Stand-in for the Thread purpose.
+It does not grant team, project, or organization publication.
 
-### 8.2 Runtime routing
+### 8.2 Availability and freshness
 
-The user sees one Stand-in identity.
+The user sees one cloud Stand-in identity. When Intero cloud is online,
+it answers from the private and shared context authorized for that request. When
+the service or a required dependency is unavailable, clients show an explicit
+unavailable or stale state. No desktop or daemon fallback is assumed.
 
-- private-work questions route to the Local Stand-in;
-- team-public questions route to the Public Stand-in;
-- mixed questions are composed locally;
-- when local is offline, Public answers from public state, shows freshness, and
-  queues private-context work.
+MCP failure and delayed delivery follow the bounded outbox contract in §5.3; no
+offline Stand-in or continuous local processing is implied.
 
 ### 8.3 Coordination actions
 
@@ -482,31 +746,47 @@ Every Stand-in coordination contains:
 Messages are rendered for humans. Action Envelopes update state reliably.
 Corrections and withdrawals are append-only events.
 
-## 9. Authorization and identity
+## 9. Authentication, authorization, and policy
 
 ### 9.1 Authentication
 
-Better Auth handles account authentication, linking, and sessions:
+Intero owns stable principals independent of authentication-provider
+identifiers. The Web application, optional Desktop App, MCP clients, and event
+senders use separate credential classes and least-privilege scopes.
 
-- email magic link bootstraps an account;
-- passkey is the primary returning credential;
-- GitHub is optional;
-- Electron uses the system browser and a device authorization flow.
+Web authentication may use magic links, passkeys, and optional provider linking.
+Exact MCP and Hook issuance/transport mechanics remain a follow-up security
+decision, but both use revocable personal/device identity and separate
+least-privilege scopes with no automatic credential recovery.
 
-Intero owns a stable `principal_id`; authentication-provider identifiers never
-become domain identity.
+The first post-Pilot release remains invite-only with one active Organization
+per account and no Organization switcher.
+
+An invitation authorizes only the exact normalized invited email and Team. A
+different authenticated email is denied. Expiry, acceptance, regeneration, and
+revocation are auditable state transitions. Link regeneration invalidates the
+prior pending link. SMTP may be added later as an optional delivery adapter; it
+is not an authentication or V1 deployment dependency.
 
 ### 9.2 Authorization layers
 
-- Local Rust policy controls device observation and egress.
-- TypeScript Capability Policy controls Stand-in business authority.
-- PostgreSQL RLS enforces organization and tenant boundaries.
-- SpiceDB enforces shared ReBAC over projects, Rooms, Threads, Specs, and
-  Artifacts.
+- Ingestion policy controls which data classes may enter Intero cloud.
+- Processing policy controls model-provider and deterministic processing.
+- Stand-in reuse policy controls which stored objects may enter context.
+- Capability Policy controls Stand-in business authority.
+- Tenant and resource authorization control private, Thread, team, project, and
+  organization reads and mutations.
+- Publication policy controls visibility transitions and destination scope.
 
-All shared authorization calls go through an Authorization port. Mutations use
-safe two-phase authorization changes, and reads may carry SpiceDB ZedTokens for
-consistency.
+All reads, model-context assembly, reuse, and mutations pass through explicit
+authorization ports. Cloud storage presence is never used as an access check.
+
+Team membership role is `member` or `leader`; zero or more Leaders may exist.
+Organization admins are the fallback Project governors. Organization admins
+and Leaders of the Project's primary Team may edit review and PI/Sprint policy.
+The last Organization admin is protected from removal or demotion. Agents never
+receive membership, role, Team-association, or visibility-administration
+authority.
 
 ### 9.3 Capability Grants
 
@@ -514,59 +794,43 @@ Capability Grants constrain:
 
 - principal and action;
 - organization, project, Workstream, and resource scope;
+- permitted source visibility;
 - human-confirmation requirement;
 - expiry;
 - policy version.
 
 The effective permission is the intersection of product, organization, user,
-Workstream, runtime, privacy, RLS, and SpiceDB policy.
+Workstream, runtime, privacy, tenant, resource, and publication policy.
 
-## 10. Server architecture
+## 10. Cloud server architecture
 
 ### 10.1 Application shape
 
-The server is a TypeScript modular monolith:
+The target remains a TypeScript modular monolith unless a later ADR changes it:
 
-- Node.js 24 LTS.
-- Fastify API process.
-- Graphile Worker process from the same codebase.
-- shared PostgreSQL database.
-- module boundaries enforced in code rather than network hops.
+- authenticated Web and product API;
+- authenticated MCP endpoint;
+- separately authenticated event ingress;
+- event-driven Stand-in and domain jobs;
+- shared relational database;
+- realtime delivery;
+- encrypted object storage;
+- module boundaries enforced in code rather than premature network services.
 
-Initial modules:
-
-```text
-identity
-organizations
-authorization
-projects
-workstreams
-claims
-conversations
-coordination
-specs
-decisions
-artifacts
-stand-ins
-search
-notifications
-audit
-```
+Initial modules include identity, organizations, authorization, projects,
+workstreams, claims, conversations, coordination, specs, decisions, artifacts,
+Stand-ins, search, notifications, privacy policy, publication, and audit.
 
 ### 10.2 Domain transactions and jobs
 
-A durable mutation transaction writes:
+A durable mutation transaction writes current domain state, an immutable
+Activity Event, and an outbox entry. Job handlers are idempotent and keyed by a
+stable domain operation ID.
 
-1. current domain state;
-2. an immutable Activity Event;
-3. an outbox entry.
+Visibility or reuse transitions are domain mutations. They cannot be implemented
+as best-effort UI flags or implicit side effects of upload.
 
-Graphile Worker consumes outbox-derived jobs with at-least-once semantics.
-Every handler is idempotent and keyed by a stable domain operation ID.
-Graphile-specific identifiers do not leak beyond a Queue port, allowing later
-migration to BullMQ, NATS, or Temporal if the workload requires it.
-
-### 10.3 Public Stand-in concurrency
+### 10.3 Stand-in concurrency
 
 - One Conversation Thread is processed in sequence.
 - One Workstream's state changes are processed in sequence.
@@ -578,118 +842,139 @@ migration to BullMQ, NATS, or Temporal if the workload requires it.
 
 ### 11.1 Realtime
 
-Centrifugo owns client connections, subscriptions, presence, and fanout.
-PostgreSQL remains authoritative.
+The realtime layer owns client connections, subscriptions, presence, and
+fanout. The relational store remains authoritative. Clients receive event IDs
+and sequence information and use cursor-based API reads to repair gaps.
 
-MVP uses Centrifugo's single-node in-memory engine. Clients receive event IDs
-and sequence information over realtime delivery and use cursor-based API reads
-to repair gaps.
+Subscription authorization follows object visibility. Realtime fanout cannot
+widen disclosure.
 
-### 11.2 Offline identifiers and ordering
+### 11.2 Identifiers and ordering
 
-- Clients generate UUIDv7 identifiers.
+- Clients may generate UUIDv7 identifiers.
 - The server assigns organization and Thread sequence values.
 - Optimistic mutations carry a base version.
 - Domain-specific conflict handling is used; there is no global CRDT.
 
 ### 11.3 Object storage
 
-S3-compatible storage holds attachments and large artifacts.
+Encrypted object storage holds attachments and large artifacts.
 
-- metadata and authorization live in PostgreSQL;
-- uploads use presigned URLs;
-- checksums and scanning gate publication;
-- Human-only attachments are client-side ciphertext;
-- Agent-readable attachments use server-side envelope encryption.
+- metadata, processing permission, reuse permission, and visibility live in the
+  authoritative domain store;
+- uploads may use presigned URLs;
+- checksums and scanning gate availability;
+- upload completion does not publish an object;
+- Pilot direct messages do not accept attachments;
+- Agent-readable objects remain participant-scoped unless separately published.
 
 ### 11.4 API contracts
 
-Zod 4 is the only handwritten HTTP contract.
+Web, product, MCP, and event-ingress contracts remain distinct. Generated
+contracts must not leak database types or cross-scope fields.
 
-- `fastify-type-provider-zod` binds schemas to routes.
-- `@fastify/swagger` produces OpenAPI 3.0.3.
-- generated OpenAPI is checked in and drift-checked in CI.
-- TypeScript clients are generated through `openapi-typescript`,
-  `openapi-fetch`, and `openapi-react-query`.
-- the Rust daemon client is generated with Progenitor and wrapped by a
-  handwritten `ServerApi` trait.
+The Team Pulse read model returns person columns with identity, plain
+`summaryText`, `activeCount`, `blockedCount`, peer active-work cards, and enough
+display metadata to derive **N more**. It contains no summary citations or
+targets, interactive summary action, rank, focus, primary/secondary,
+parent/child, or state-setting field. Display ordering is not persisted as work
+importance.
 
-Drizzle and database types never leak into API contracts.
+The event-ingress protocol is intentionally unspecified until its follow-up ADR
+settles authentication, repository binding, schemas, retry, and idempotency.
 
 ## 12. Database and migrations
 
-PostgreSQL access uses Drizzle with `node-postgres`.
+The relational database stores both user-private and shared domain data with
+explicit scope and policy metadata. Tenant and object authorization must fail
+closed. Production migrations are reviewed and support rolling deployment.
 
-- Drizzle defines schema and generates reviewed migrations.
-- Production never uses `drizzle-kit push`.
-- Raw parameterized SQL is allowed for complex search, RLS, and locking.
-- repositories keep storage types behind module boundaries.
-- migration compatibility supports rolling API and Worker deployment.
+Derived rows, search indexes, caches, job payloads, backups, and audit records
+must preserve or narrow source visibility and the 180-day, 30-day, project-life,
+withdrawal, and user-deletion semantics. Backup-deletion timing and legal holds
+require dedicated pre-pilot policy and verification.
 
-## 13. Observability and security
+## 13. Observability, security, and failure behavior
 
-### 13.1 Observability
-
-- OpenTelemetry-first traces and metrics.
-- Pino structured logs in TypeScript.
-- `tracing` in Rust.
-- OTLP Collector for vendor-neutral export.
-- optional Sentry for Electron crashes and unhandled exceptions.
+### 13.1 Observability and security
 
 Telemetry uses a strict allowlist and excludes messages, prompts, file contents,
-tool input/output, Spec bodies, access tokens, API keys, and private Claims.
-Local diagnostic bundles stay local until the user explicitly exports them.
+tool input/output, Spec bodies, credentials, and private Claims by default.
+Routine diagnostics are content-minimized and automatic.
+
+Opening or escalating a support case that requests developer intervention is
+contextual authorization for designated support/developer staff to inspect only
+the private data necessary for the stated issue. The access is ticket-scoped,
+affected-Workspace/project-scoped, time-limited, auditable, continuously visible
+to the user, and revoked when the case is closed or withdrawn. Team admins do
+not receive private user-data access merely by being admins. Exact staff role
+mapping and legal process remain governance details.
+
+Security verification covers:
+
+- MCP and event-sender authentication;
+- token expiry, rotation, and revocation;
+- tenant and object isolation;
+- private-to-shared visibility transitions;
+- project-posture publication authority, audit, opt-out, and withdrawal;
+- support-case scope, visibility, expiry, revocation, and audit;
+- prompt injection into Stand-in actions;
+- model-provider and subprocessor enforcement of Workspace-scoped processing,
+  no public/general-model training, and no cross-customer/Workspace reuse;
+- 180-day structured-private retention, 30-day raw retention, project-life
+  summary retention, withdrawal, and user-private deletion;
+- backup-deletion timing and legal-hold behavior before pilot.
 
 ### 13.2 Failure behavior
 
-- local event queues persist across process restarts;
-- model-disabled and offline modes continue deterministic work;
-- public jobs retry idempotently;
+- API and Stand-in jobs retry idempotently where safe.
 - stale state is visible rather than silently reused;
-- unavailable SpiceDB fails closed for protected mutations;
+- protected reads and mutations fail closed when authorization is unavailable;
 - realtime failure falls back to cursor polling;
-- object scanning failure keeps an upload unavailable.
+- scanning failure keeps an upload unavailable;
+- MCP unavailability is explicit and does not block Coding Agent work;
+- optional hook delivery retries in process for a bounded period, then fails open
+  without blocking Git or Coding Agent work;
+- permitted event payloads may enter the bounded encrypted outbox with stable IDs
+  and flush FIFO on a later client or CLI invocation;
+- capacity, TTL, unavailable keys, revoked authorization, and now-disallowed
+  payloads use the defined eviction/discard and gap-marker behavior;
+- outbox delivery is best-effort and does not imply offline Work State
+  processing.
 
 ## 14. A2A boundary
 
-MVP uses the internal Intero Coordination Protocol.
+The MVP uses the internal Intero Coordination Protocol. A later A2A Gateway may
+map Agent Cards, Messages, Tasks, contexts, Artifacts, and extensions to Intero
+objects.
 
-A later A2A 1.0 Gateway maps:
+External Agents map to Intero principals and remain subject to Capability,
+privacy, reuse, and publication policy. Agent discovery never implies
+authorization. Direct cloud MCP for supported Coding Agents is part of the
+product and is not the deferred A2A Gateway.
 
-| A2A         | Intero                                       |
-| ----------- | -------------------------------------------- |
-| Agent Card  | External Agent registration and capabilities |
-| Message     | Conversation message                         |
-| Task        | External coordination task                   |
-| `contextId` | Coordination Thread                          |
-| Artifact    | Artifact reference                           |
-| Extension   | Intero Action Envelope                       |
+Automatic bounded Stand-in coordination inside one Project is part of the
+internal protocol and does not expand this external A2A boundary.
 
-External Agents can reach only the Public Stand-in. They map to Intero
-principals and remain subject to Capability Policy, SpiceDB, and privacy
-projection. Agent discovery never implies authorization.
-
-## 15. Proposed repository layout
+## 15. Proposed target repository layout
 
 ```text
 apps/
-  desktop/
-  local-stand-in/
+  web/
+  optional-desktop/
   server-api/
   server-worker/
 
 packages/
   api-contracts/
+  mcp-contracts/
   stand-in-core/
   domain/
+  privacy-policy/
   project-management/
   ui/
   config/
   test-support/
-
-crates/
-  interod/
-  server-api-client/
 
 docs/
   adr/
@@ -697,27 +982,70 @@ docs/
   plans/
 ```
 
-The TypeScript workspace uses pnpm and Turborepo. Rust crates use a Cargo
-Workspace. A root Justfile exposes cross-language build, generation, test, and
-development commands.
+This is a target boundary, not a claim that the current repository has already
+removed its historical `interod`, local sidecar, or Electron-required
+implementation.
 
 ## 16. Verification strategy
 
-- Vitest for TypeScript unit and contract tests.
-- Playwright for Web and Electron end-to-end paths.
-- Rust `cargo test` locally and `cargo-nextest` in CI.
-- Testcontainers for PostgreSQL, SpiceDB, and Centrifugo integration tests.
-- generated-contract drift tests.
-- adapter conformance fixtures for Codex, Claude Code, and OpenCode.
-- privacy tests proving unregistered directories and excluded payload fields do
-  not cross the daemon boundary.
-- failure tests for local offline, model disabled, Worker retry, stale public
-  state, and realtime gap repair.
+- Contract tests for Web, product API, and cloud MCP.
+- Administrator `/setup` tests for Intero base-URL entry and connectivity
+  validation, plus per-recipient invitation tests for exact-email binding,
+  expiry, copy/regenerate/revoke, endpoint inheritance, and subsequent explicit
+  Workspace/Project binding.
+- Provider configuration tests for server-only secret handling, connection
+  test, rotation/replacement, disable, explicit no-provider/unavailable states,
+  basic-collaboration readiness, and AI/Agent-binding gating.
+- Two isolated browser/client contexts for distinct team users against the same
+  approved Intero deployment endpoint. Browser-visible evidence must prove
+  admin-created invitation, matching-email recipient acceptance, human
+  conversation/collaboration between A and B, safe shared Team Pulse visibility
+  with AI configured, and privacy/pause/withdrawal propagation to the other
+  client. API-only and single-client evidence do not pass.
+- Real Codex, Claude Code, and OpenCode Connect Agent prompts, MCP
+  authentication, project binding, success reporting, disconnect, reconnect,
+  and revocation.
+- Optional Desktop one-click configuration acceptance for all three clients,
+  using the same endpoint/ticket and proving Web setup and team operation remain
+  complete with Desktop absent.
+- Content-safe fixtures for any optional event adapters.
+- Tenant-isolation and object-visibility tests.
+- Tests proving upload, model processing, reuse, and publication are independent.
+- Private personal/unbound posture, team-project collaboration default,
+  opt-out/refinement, audit, withdrawal, and raw-content non-disclosure tests.
+- Claim resolution fixtures preserving provenance, freshness, and contradiction.
+- Stand-in Capability Grant and human-confirmation tests.
+- Browser end-to-end paths for Team Pulse, Action Inbox, conversations, and Spec
+  Review without a Desktop App.
+- Team Pulse tests proving one column per person, authorized summary inputs,
+  plain non-interactive header text, active/blocked counts, peer cards, visual
+  **N more** compaction, and absence of hierarchy/rank/focus semantics.
+- Post-Pilot contract and browser tests for invite-only registration; role and
+  last-admin invariants; exact-email matching;
+  pending/accepted/expired/revoked transitions; copy/regenerate/revoke;
+  recipient-only disclosure; Agent create/update/revoke/provenance/revert;
+  optional Epic/Feature/Work Item hierarchy; Board transitions and visible
+  Sprint carryover; PI generation/timezone status; immutable Spec versions,
+  version-bound comments, explicit review, confirmation policy, and confirmed
+  version lookup.
+- Two-user review tests proving nonexclusive review, targeted reviewer
+  nomination, Team Pulse pending counts, and targeted Action Inbox behavior.
+- Explicit PR/Commit/branch association tests proving no branch-name inference.
+- Optional Desktop tests proving its absence does not break core product paths.
+- Service-unavailable, stale-state, non-blocking ingress, 10,000-event/50-MiB
+  capacity, seven-day TTL, encryption boundary, secure discard, gap marker,
+  stable-ID idempotency, FIFO three-retry flush, and realtime-gap tests.
+
+Historical tests through `interod`, the Local Stand-in, SQLCipher, and
+Electron remain evidence for that historical runtime only. Phase 1–5 acceptance
+uses the cloud API/MCP and canonical renderer/browser path.
 
 ## 17. Decision records
 
-- [ADR-0001: Separate local private and public planes](adr/0001-separate-local-private-and-public-planes.md)
-- [ADR-0002: Shared Stand-in core with event-driven runtimes](adr/0002-shared-stand-in-core-and-event-driven-runtimes.md)
-- [ADR-0003: TypeScript modular monolith with a Rust privacy daemon](adr/0003-typescript-modular-monolith-and-rust-privacy-daemon.md)
 - [ADR-0004: Conversation privacy and Agent-readable boundaries](adr/0004-conversation-privacy-boundaries.md)
 - [ADR-0005: Internal coordination protocol before A2A](adr/0005-internal-coordination-protocol-before-a2a.md)
+- [ADR-0006: Cloud-first, Web-first runtime with private-by-default cloud data](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md)
+- [ADR-0007: Post-Pilot product model and delivery sequence](adr/0007-post-pilot-product-model-and-delivery-sequence.md)
+
+ADR-0001, ADR-0002, and ADR-0003 are retained as superseded historical
+implementation decisions.

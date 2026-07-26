@@ -25,10 +25,19 @@ The MVP does not implement an A2A Gateway. Internal objects preserve a clean
 future mapping to A2A Agent Cards, Messages, Tasks, Artifacts, contexts, and
 extensions.
 
-After the internal product stabilizes, an A2A Gateway may expose the Public
-Stand-in. External Agents map to Intero principals and remain subject
-to Capability Policy, SpiceDB, and public projection. Agent discovery never
-grants authorization.
+The internal protocol may automatically initiate Project-scoped Stand-in
+coordination from explicit structured blocker, dependency, review, conflict, or
+coordination signals. It may exchange safe summaries, candidate next steps, and
+clarifications, but cannot cross Project scope, disclose raw content, act
+externally, change priorities, make irreversible commitments, or finalize
+human/business decisions. Commitments require responsible-participant
+confirmation. This is not the deferred general A2A Gateway or federation.
+
+After the internal product stabilizes, an A2A Gateway may expose the cloud
+Stand-in to external Agents. External Agents map to Intero principals and
+remain subject to Capability, privacy, reuse, and publication policy. Agent
+discovery never grants authorization. This deferred A2A Gateway is distinct from
+the direct cloud MCP endpoint used by supported Coding Agents.
 
 ## Consequences
 

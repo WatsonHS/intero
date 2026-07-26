@@ -1,324 +1,494 @@
 ---
-title: "feat: Safe automatic Coding Agent integration"
+title: "feat: Safe cloud Coding Agent integration"
 type: feat
-status: active
+status: implemented-through-phase-5
 date: 2026-07-25
 origin: docs/brainstorms/2026-07-24-intero-product-requirements.md
 ---
 
-# Safe automatic Coding Agent integration
+# Safe cloud Coding Agent integration
+
+Canonical product/domain terminology is **Stand-in** in English and **替身** in
+Chinese. Documented MCP identifiers use `stand_in`; paths/slugs use `stand-in`.
+Active MCP, domain, schema, configuration, and UI identifiers use this canonical
+contract.
 
 ## Outcome
 
-Turn the existing adapter kernel into one runnable MVP path for Codex, Claude
-Code, and OpenCode:
+Provide one cloud-first, direct MCP path from Codex, Claude Code, and OpenCode to
+the member's selected Intero team deployment:
 
 ```mermaid
 flowchart LR
-    A["Enrolled repository or linked worktree"] --> B["Agent lifecycle hook"]
-    B --> C["Restricted local ingress"]
-    C --> D["Private Workstream"]
-    E["Agent MCP checkpoint"] --> F["Workspace-bound MCP capability"]
-    F --> D
-    D --> G["Meaningful public projection"]
-    G --> H["Team Pulse"]
+    Agent["Coding Agent"] --> Auth["Scoped cloud authentication"]
+    Auth --> MCP["Intero cloud MCP"]
+    MCP --> Private["User-private Claim and Work State"]
+    Private --> Policy["Bound-project collaboration posture"]
+    Policy --> Shared["Published Work State"]
+    Shared --> Pulse["Team Pulse"]
+
+    Hook["Optional Git/lifecycle hook"] -. "future content-safe contract" .-> Events["Separate cloud event endpoint"]
 ```
 
-The user can install, diagnose, repair, and uninstall the integrations from
-Settings. A Coding Agent session in an enrolled Workspace creates a private
-Workstream automatically, and the Agent can use MCP without knowing Intero
-UUIDs. A semantic checkpoint reaches Team Pulse. No prompt, response, complete
-tool input/output, terminal output, file content, or credential becomes a work
-event or installer backup.
+The Agent can call Intero without knowing internal UUIDs and without a daemon,
+Desktop App, local socket, or Electron launcher. A semantic checkpoint reaches
+user-private Work State. Personal/unbound work stays private; an explicitly
+bound team project quietly publishes only safe structured collaboration signals.
 
-This is a development MVP acceptance boundary, not a signed/notarized desktop
-distribution.
+The Web and CLI paths support install, diagnose, repair, and uninstall. The
+optional Desktop App is foreground-only context enhancement and is never a
+management or access dependency.
 
-## Inputs and current evidence
+For the pilot, an already-running Intero deployment exists. A team administrator
+enters and validates its base URL in Web
+`/setup`, then creates or joins the team context, creates the first project, and
+enables per-recipient invitations. A separate AI Provider section collects the
+cloud model endpoint, server-only API key, and default model. In **Team Settings
+→ Member Management**, the administrator enters a display name and exact email,
+then copies the expiring/revocable invitation. The matching-email recipient
+accepts and inherits the approved Intero endpoint/team and connection
+instructions; they do not type the server URL. SMTP is not required.
 
-- Product requirements F1 and R2-R4 define the automatic observation,
-  checkpoint, privacy, and Workspace boundaries.
-- The existing hook bridge, canonical-event reducer, Local Stand-in,
-  Workstream storage, public projection, and desktop Settings shell are
-  reusable.
-- Current local versions are Codex `0.146.0-alpha.3.1`, Claude Code `2.1.214`,
-  and OpenCode `1.17.4`.
-- Repository review found that the installer is test-only, MCP requires
-  undiscoverable UUIDs, linked worktrees do not resolve, Codex/Claude instruction
-  files are not auto-loaded, and the OpenCode plugin uses the wrong event shape.
-- Contract review confirmed that `Stop` is a turn boundary rather than a session
-  end, OpenCode `tool.execute.after` is a dedicated plugin hook, and Codex hook
-  trust remains a native user decision.
-- Security review identified three release blockers in the existing design:
-  raw content-bearing hook events, a shared daemon administrator token, and
-  whole-file backups of global Agent configuration.
+## Historical evidence and migration boundary
+
+The existing repository implemented a local adapter kernel, daemon descriptors,
+local MCP bridge, local Stand-in, reversible installer, and Desktop
+Settings. Its content-safe parsing, managed-config ownership, secret hygiene,
+UUID-free tool schemas, and real-Agent acceptance lessons remain useful.
+
+The local ingress, shared daemon token, connection descriptor, Electron-bundled
+launcher, and Desktop-required installation path are superseded by ADR-0006.
+Historical tests do not validate cloud authentication or private-to-shared
+publication.
 
 ## Assumptions
 
-- Automatic observation is intentionally limited to content-free session
-  lifecycle events in this MVP. Material intent, validation, blocker, and
-  completion updates come through explicit, Workspace-bound MCP checkpoints.
-- Codex user hooks require a one-time native trust approval. Intero reports
-  `pending_trust` and does not write Codex's private trust hash.
-- The managed installer edits only Intero-owned nodes or marked blocks and
-  removes only those nodes. It never copies an entire user configuration file
-  into `~/.intero`.
-- The daemon derives repository identity. A sibling directory is authorized
-  only when it is a linked worktree whose canonical Git common directory equals
-  that of an enrolled root. A same-remote ordinary clone is not authorized.
-- MCP context binds to the newest active same-source Agent session in the
-  current enrolled Workspace. Explicit internal UUIDs are not exposed to the
-  Agent. Concurrent same-source sessions in one Workspace must remain distinct
-  through their vendor session IDs.
-- The current local daemon connection descriptor is embedded in the managed
-  registration. Moving the Intero data directory requires a repair/reinstall.
+- Canonical Agent events, Work State, and domain policy are adapter-independent.
+- Implemented ports/adapters are Vercel AI SDK `ModelGateway`; SpiceDB-backed
+  `AuthorizationPort`; Centrifugo-backed `RealtimePort`; MinIO-backed
+  `ObjectStorePort` with uploads disabled by product policy; Graphile-backed
+  durable `JobRunnerPort` and transactional outbox; and Project-internal bounded
+  `CoordinationTransport`.
+- Ports remain replaceable and contract-tested. Additional providers, Temporal,
+  and general A2A gateway/federation remain deferred.
+- The model loop uses only allowed structured Work State for safe Stand-in
+  summaries and bounded coordination suggestions; it cannot use unauthorized
+  raw data, cross Organization/Workspace, auto-commit, or act as a general
+  autonomous Agent.
+- Direct authenticated cloud MCP is the only required integration.
+- Pilot onboarding supports tailored Codex, Claude Code, and OpenCode prompts
+  only; generic MCP clients are not promised.
+- Each member inherits one administrator-approved Intero deployment endpoint and
+  Team through a per-recipient exact-email invitation before explicitly binding
+  a Workspace/Project.
+- V1 membership in any Team associated with a Project grants access; Agent
+  connection and Work State remain bound to Project identity independently of
+  Team. Cross-Team Projects aggregate participating-Team context.
+- Each Team belongs to one implicitly/simple-named Organization created during
+  first Setup. Organization is the quiet tenant boundary; deployment/provider
+  settings may be Organization-scoped, while per-recipient invitations remain
+  Team-scoped.
+- Team and Project are many-to-many; a Project may have one primary/display Team
+  and additional participating Teams.
+- Same-Team 1:1 direct messages are participant-visible and independent of
+  Project binding. Group DMs, attachments, reactions, DM search, read receipts,
+  rich DM Threads, federation, and E2EE promises are outside the pilot.
+- Basic human collaboration remains available without a provider, but Agent
+  binding and all Stand-in/AI-derived Work State and coordination features
+  require a valid configured provider.
+- Automatic observation is optional; semantic checkpoints are sufficient for
+  the first cloud vertical slice.
+- Every checkpoint is stored as a private Claim. Publication follows the
+  personal/unbound Private Work or bound-team Collaborate with Project posture.
+- Internal Workspace and Workstream UUIDs remain absent from Agent tool schemas.
+- The service resolves bounded repository/project context and fails closed when
+  context is unauthorized or ambiguous.
+- The managed installer edits only Intero-owned nodes or marked blocks and never
+  copies a complete user config.
+- Codex native trust remains a user decision when a supported integration
+  surface requires it.
+- MVP uses least-privilege, revocable personal/device credentials with separate
+  MCP and event scopes and explicit user-selected Workspace/project binding.
+- Exact credential protocol mechanics and event wire schemas remain follow-up
+  implementation decisions.
+- Productized deployment packages, Docker/install wizards, infrastructure
+  workflows, DNS/TLS guidance, tenant provisioning automation, and end-user
+  self-hosting documentation are outside the pilot.
+- Detailed provider secret-management mechanics and multi-provider routing are
+  outside the pilot. The pilot has one administrator-configured endpoint,
+  server-only key, default model, connection test, rotation/replacement, and
+  disable.
 
 ## Non-goals
 
-- Raw transcript, prompt, response, tool payload, terminal log, or file-content
-  ingestion.
-- Inferring completion from `Stop`, `session.idle`, or a process exit.
-- Automatic authorization of ordinary clones, arbitrary parent directories,
-  symlink aliases, or repositories that only share a remote URL.
-- Signed desktop packaging, daemon auto-update, notarization, or production
-  process supervision.
-- Full retention/purge UX, Windows named-pipe hardening, or automatic semantic
-  interpretation of edits and test output.
+- A required daemon, Local Stand-in, Desktop App, or local MCP relay.
+- Default transcript, prompt, response, tool payload, terminal log, file-content,
+  or credential ingestion.
+- Treating cloud upload or model processing as team publication.
+- Inferring completion from process exit or idle lifecycle events.
+- Designing event wire schemas or OAuth mechanics beyond the accepted scoped
+  credential and outbox product contract.
+- Designing deployment packaging, infrastructure provisioning, DNS/TLS
+  guidance, or tenant automation.
+- An arbitrary server URL field in ordinary member Setup. Developer endpoint
+  overrides remain non-product configuration.
+- A signed Desktop distribution or production Desktop supervision.
+- Starting Coding Agent subagents or controlling technical execution.
 
-## Unit 1 — Capability-separated local ingress and Workspace identity
+## Accepted post-Pilot Agent sequence
 
-### Changes
+Phases 1–3 infrastructure, Phase 4 onboarding/admin, and Phase 5 Project work
+and Spec Review are implemented. Phase 6 Action Inbox/notifications/search and
+Phase 7 deeper bounded automation remain future scope.
 
-- Generate separate administrator, hook-ingress, MCP, and sidecar descriptors
-  with independent tokens and least-privilege method allowlists. Managed Agent
-  registrations receive only the hook or MCP descriptor path; no shared
-  descriptor contains all capabilities.
-- Authorize each JSON-RPC method against an explicit capability matrix:
-  - hook ingress: resolve an enrolled context and submit a closed lifecycle
-    event only;
-  - MCP: resolve its bound context and invoke Stand-in MCP operations
-    only;
-  - sidecar: dequeue/complete Stand-in work and persist reduced state;
-  - administrator/Desktop: Workspace and settings management.
-- Replace prefix-based Stand-in dispatch for Agent callers with
-  method-specific parsing and a closed lifecycle-event schema.
-- Derive canonical Git common-directory identity during enrollment and context
-  resolution. Match enrolled roots and legitimate linked worktrees only.
-- Add durable lookup for the latest active integration session by
-  Workspace/source.
+Phase 4 replaced the reusable Pilot join-link default with per-recipient
+invitations created in **Team Settings → Member Management**. Admin supplies
+display name and exact email; Intero creates an expiring/revocable email-bound
+link with `pending|accepted|expired|revoked` state and copy, regenerate
+("resend"), and revoke actions. SMTP is not required. The matching-email
+recipient accepts in a short non-admin flow and may skip Connect Coding Agent;
+the surface exposes no endpoint, model secret, governance, invitation, or admin
+configuration.
 
-### Primary files
+With Project access, MCP exposes explicit content contracts for authorized
+Project management and Specs:
 
-- `crates/interod/src/main.rs`
-- `crates/interod/src/rpc.rs`
-- `crates/interod/src/workspace.rs`
-- `crates/interod/src/storage.rs`
-- `packages/local-ipc/src/index.ts`
+- create/update Feature and Work Item content;
+- create immutable Spec versions, `request_review`, `list_confirmed`, and
+  `get_confirmed(specId)`;
+- add human/Agent comments and replies with provenance;
+- attach explicitly reported PR, Commit, or branch references without
+  branch-name inference.
 
-### Acceptance
+These operations remain separate from the ten canonical checkpoint semantics.
+Every mutation records actor/time/provenance/history/revert. Agents are never
+assignees and cannot mutate Organization/Team membership, roles, Project-Team
+associations, or visibility. Disconnect/revoke stops future Project access
+without blocking local coding.
 
-- Hook and MCP capabilities are denied for Workspace enrollment, file reads,
-  event listing, model settings, and sidecar dequeue.
-- Tests construct clients from only their issued descriptor. This separates
-  Intero components and limits accidental/cross-component authority; it does not
-  claim to sandbox an already-compromised same-UID process that can read the
-  user's home directory.
-- An enrolled root and a real sibling linked worktree resolve to one Workspace;
-  an ordinary clone and a forged `.git` pointer fail closed.
-- Unregistered directories create no session, queue item, event, or public
-  projection.
+Deeper Agent automation waits until Phase 6 targeted attention and search are
+proven on top of the implemented Phase 4–5 authorization, version-history, and
+review-policy foundations.
 
-## Unit 2 — Content-safe adapters and UUID-free MCP
+## Unit 1 — Authenticated cloud MCP and context binding
 
 ### Changes
 
-- Register lifecycle-only automatic events whose vendor payload contracts do
-  not contain prompt, response, or tool content:
-  - Codex: `SessionStart`, `SessionEnd`;
-  - Claude Code: `SessionStart`, `SessionEnd`;
-  - OpenCode: `session.created`, `session.idle`, and `session.deleted`, with
-    correct nested session identifiers.
-- Do not register `UserPromptSubmit`, `Stop`, `PreToolUse`, `PostToolUse`, or
-  content-bearing generic events in the automatic hook path.
-- Parse only bounded lifecycle fields from a maximum 64 KiB payload, discard
-  the source object immediately, produce no successful stdout, and fail open
-  without echoing errors or paths. Reject unknown lifecycle event names instead
-  of forwarding them.
-- Generate stable idempotency from source, vendor session ID, event name, and
-  vendor event/call ID when available.
-- Start MCP with source and working-directory binding. Add
-  `stand_in.current_context`, remove Workspace/Workstream UUIDs from the
-  public tool schemas, and resolve them internally.
-- Keep explicit MCP checkpoints as Claims. Add normalized forbidden-key and
-  secret-pattern checks, tighter summary/evidence limits, and never publish raw
-  checkpoint content without the existing Stand-in projection policy.
+- Expose the canonical Stand-in tools on an authenticated cloud MCP
+  endpoint at the selected team deployment origin.
+- Resolve the deployment origin for members from the authenticated one-time
+  invite association, not from a member-supplied URL. Keep explicit
+  Workspace/project binding separate.
+- Create a least-privilege, revocable personal/device MCP credential scope
+  distinct from Web sessions and event senders.
+- Resolve authenticated principal and explicit user-selected Workspace/project
+  binding server-side while minimizing repository/remote metadata and collecting
+  no absolute path by default.
+- Reject expired, revoked, cross-user, cross-tenant, unauthorized, or ambiguous
+  context.
+- Record content-safe audit data for authentication, tool name, policy version,
+  result class, and timing without logging private tool payloads.
+- Do not require or accept a local daemon connection descriptor.
 
-### Primary files
+### Follow-up implementation detail
 
-- `apps/mcp-stdio/src/index.ts`
-- `apps/mcp-stdio/src/hook.ts`
-- `apps/mcp-stdio/src/tools.ts`
-- `packages/integrations/src/index.ts`
-- `packages/domain/src/events.ts`
-- `apps/local-stand-in/src/runtime.ts`
-- `packages/stand-in-core/src/public-projection.ts`
+- Choose issuance and transport mechanics without weakening revocation,
+  personal/device scope, separate MCP/event authority, or the rule that expired
+  and revoked credentials require re-authentication with no automatic recovery.
 
 ### Acceptance
 
-- Vendor fixtures containing canaries in forbidden fields produce zero canary
-  matches in events, queues, logs, diagnostics, and integration state.
-- The Agent can call `current_context` and `report_checkpoint` without internal
-  UUIDs.
-- Session start creates a visible active Workstream; idle does not claim
-  completion; an explicit completion checkpoint does.
-- Duplicate lifecycle delivery does not duplicate a Workstream or projection.
+- Each supported Agent completes MCP initialization and tool listing against
+  cloud Intero.
+- `current_context` and `report_checkpoint` work without internal UUIDs.
+- A token for one user, organization, or scope cannot reach another.
+- Ambiguous repository binding returns an explicit error rather than selecting
+  by timestamp.
+- Desktop absence has no effect on MCP.
 
-## Unit 3 — Reversible current-version installation
+## Unit 2 — Private-by-default checkpoints and bounded results
 
 ### Changes
 
-- Replace whole-file backups with managed JSON nodes, TOML blocks, instruction
-  blocks/files, and plugin files. Record only Intero-owned node identity,
-  installed-value hash, and ownership marker. No original config value is
-  copied into Intero state.
-- On upgrade, remove the previous Intero node before adding the new one. On
-  uninstall, remove only an unchanged Intero-owned node; report conflicts
-  rather than restoring a stale global file.
-- Respect `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `OPENCODE_CONFIG_DIR`.
-- Install auto-loaded user instructions:
-  - Codex: a managed block in `AGENTS.md`;
-  - Claude Code: `rules/intero.md`;
-  - OpenCode: `intero.md` referenced by `instructions`.
-- Register each MCP server with source, cwd, and connection descriptor
-  arguments. Generate the OpenCode plugin against the `1.17.4` event contract
-  with a short fail-open child-process timeout.
-- Add an `intero-mcp integration install|status|repair|uninstall` CLI for one
-  adapter or all adapters.
-- Report staged diagnostics:
-  `not_detected`, `not_installed`, `config_written`, `pending_trust`,
-  `blocked_by_policy`, `healthy`, or `needs_repair`.
-
-### Primary files
-
-- `packages/integrations/src/index.ts`
-- `packages/integrations/src/installer.ts`
-- `packages/integrations/src/*.test.ts`
-- `apps/mcp-stdio/src/index.ts`
-- `apps/mcp-stdio/package.json`
+- Implement exactly `work_started`, `work_progressed`, `decision_recorded`,
+  `dependency_declared`, `blocker_raised`, `review_requested`,
+  `work_completed`, `coordination_requested`, `artifact_produced`, and
+  `validation_completed`.
+- Require bounded safe summary, stable client event/idempotency ID, Project,
+  authenticated Agent, provenance, occurred-at time, and schema version. Plan
+  changes belong only in `work_progressed`.
+- Parse bounded typed arguments and reject unknown or forbidden content shapes.
+- Store each report as a user-private sourced Claim.
+- Run deterministic Work State reduction before optional model interpretation.
+- For explicit structured blocker, dependency, review, conflict, or coordination
+  signals, allow automatic creation of a Project-scoped internal coordination
+  Thread/request with safe context and candidate next steps, response
+  collection, and clarification.
+- Reject raw disclosure, cross-Project scope, external actions, priority changes,
+  irreversible commitments, and final decision claims; commitments require
+  responsible-participant confirmation. This is not general A2A federation.
+- Permit cloud model processing and Stand-in reuse for private summaries.
+  Keep the underlying policy axes independently enforced behind the simple
+  project posture.
+- Limit model use to the authorized Workspace with no public/general-model
+  training or cross-customer/Workspace reuse.
+- Apply 180-day retention to structured private Work State/Claims and 30-day
+  default retention to explicitly authorized raw uploads.
+- Return bounded team context only when the authenticated Agent and user are
+  authorized for it.
+- Prevent private evidence or complete coordination transcripts from leaking
+  through tool results.
+- Reject raw prompts/files/diffs/terminal/tool logs and low-level file/resource
+  touch events. Route dependency/blocker/review/coordination-conflict signals to
+  bounded coordination and artifact/validation/completion to status and safe
+  Team Pulse.
 
 ### Acceptance
 
-- Install, reinstall with a changed executable/descriptor, user edit, repair,
-  conflict, and uninstall all preserve unrelated user configuration.
-- A fake credential in an existing Agent config remains only in the original
-  file and never appears under `~/.intero`.
-- Codex reports pending trust rather than silently bypassing it.
-- Each Agent CLI parses and lists the Intero MCP registration.
+- Canary credentials and forbidden content do not appear in events, logs,
+  diagnostics, audit summaries, or shared state.
+- A personal/unbound checkpoint updates private Work State with no Team Pulse
+  item.
+- A bound team project updates the person's Team Pulse column with an authorized
+  peer active-work card, plain Stand-in header summary, and active/blocked
+  counts without per-event approval; raw prompts, files, diffs, terminal/tool
+  output never become team-visible through that posture.
+- The Pulse header is plain non-interactive text with no citations, links,
+  click-through, or state-setting. Card order and **N more** are presentation
+  only; no primary/secondary/focus field or rank is inferred.
+- Duplicate delivery does not duplicate Claims, publications, or Pulse cards.
+- A completion report with conflicting evidence remains contradictory rather
+  than overwriting state.
+- A blocker may automatically open one auditable Project-scoped coordination
+  Thread but cannot create an external action or unconfirmed commitment.
+- Contract fixtures accept all and only the ten canonical semantics, enforce
+  common metadata/idempotency, keep plan changes in `work_progressed`, and reject
+  raw, legacy, and low-level touch events.
+- Model/provider canaries prove no cross-customer/Workspace reuse or training
+  path, and retention fixtures distinguish structured from authorized raw data.
 
-## Unit 4 — Desktop Settings control surface
+## Unit 3 — Reversible cloud MCP registration
 
 ### Changes
 
-- Add narrow Electron Main IPC for status, preview, install/repair, and
-  uninstall. The renderer may pass only an adapter enum and action; Main derives
-  home/config roots, executable, and connection path. Mutations require a
-  renderer-visible preview followed by a direct user click.
-- Reject subframes and non-application senders, serialize mutations, and expose
-  no config contents or credentials.
-- Add three integration cards with detected version, lifecycle/MCP status,
-  privacy disclosure, Codex trust guidance, and install/repair/uninstall
-  actions.
-- Add complete English and Simplified Chinese strings and truthful
-  loading/success/error states.
-
-### Primary files
-
-- `apps/desktop/src/main/index.ts`
-- `apps/desktop/src/preload/index.ts`
-- `apps/desktop/src/renderer/src/vite-env.d.ts`
-- `apps/desktop/src/renderer/src/views/SettingsView.tsx`
-- `apps/desktop/src/renderer/src/i18n.ts`
-- `apps/desktop/src/renderer/src/styles.css`
+- Install only Intero-owned JSON nodes, TOML blocks, instruction blocks/files, or
+  equivalent supported configuration.
+- From a bound project page, generate a copy-ready one-time **Connect Agent**
+  prompt tailored to Codex, Claude Code, or OpenCode. It includes the
+  team-derived Intero endpoint and a short-lived, single-use, project-scoped
+  connection ticket.
+- The pasted prompt lets the Agent write its own MCP configuration, bind the
+  project, and report success. Users never generate, copy, or manage a personal
+  API key.
+- Store only Intero-owned configuration identity and non-secret diagnostic
+  state; do not copy ticket or credential values into installer backups.
+- Preserve optional Desktop one-click configuration for the same three clients.
+  It uses the same endpoint/ticket, writes the relevant MCP configuration, and
+  reports success/failure/disconnect without becoming runtime infrastructure.
+- Record only Intero-owned node identity, installed-value hash, ownership marker,
+  and non-secret diagnostic state.
+- On upgrade, replace the prior Intero node safely. On uninstall, remove only an
+  unchanged Intero-owned node and report conflicts.
+- Respect vendor-specific configuration roots and symlink boundaries.
+- Provide `install`, `status`, `repair`, and `uninstall` through Web-guided
+  instructions and a CLI. Optional Desktop may invoke the same bounded
+  operations.
+- Report staged diagnostics such as `not_detected`, `not_installed`,
+  `credential_required`, `config_written`, `pending_trust`, `unauthorized`,
+  `healthy`, or `needs_repair`.
 
 ### Acceptance
 
-- Settings installs and removes all three integrations without accepting
-  arbitrary paths or commands from the renderer.
-- Restarting the desktop preserves and accurately diagnoses state.
-- Chinese and English render complete integration status and action text.
+- Install, reinstall, user edit, repair, conflict, token revocation, and
+  uninstall preserve unrelated user configuration.
+- Fake credentials in existing Agent configs never appear in Intero state,
+  diagnostics, or backups.
+- Each Agent CLI parses and lists the remote Intero MCP registration.
+- Web/CLI installation succeeds with Desktop absent.
+- Diagnostics distinguish configuration presence, authentication, MCP
+  handshake, tool authorization, and publication behavior.
 
-## Unit 5 — Real-Agent vertical acceptance
+## Unit 4 — Web-first integration management
+
+### Changes
+
+- Add Web Settings for connection instructions, credential issuance or linking,
+  scoped status, revocation, and repair guidance using session-backed
+  authentication.
+- Add administrator entry and connectivity validation for the Intero deployment
+  base URL before team creation/joining, first-project creation, and invitations.
+- Add a distinct AI Provider section containing the model provider endpoint,
+  server-only API key, default model, connection test, rotation/replacement, and
+  disable. Never label this endpoint as the Intero server or MCP endpoint.
+- Add per-recipient, exact-email-bound invitations with expiry, copy,
+  regenerate, revoke, and approved endpoint/team inheritance before the separate
+  Workspace/Project binding step. V1 requires no SMTP.
+- Defer bulk email/CSV, SCIM, and domain auto-join.
+- Show separate status for MCP configuration, authentication, repository
+  binding, Agent trust, tool handshake, and last content-safe checkpoint.
+- Show Agent connection success on the bound project page and provide disconnect
+  and reconnect. Revocation invalidates Intero access without blocking local
+  coding.
+- Explain the current Private Work or Collaborate with Project posture, concise
+  visibility, opt-out/pause, audit, and withdrawal without exposing four daily
+  toggles.
+- Provide complete English and Simplified Chinese states.
+- Keep management complete in Web/CLI. Desktop may enhance context only while
+  open in the foreground after opt-in.
+
+### Acceptance
+
+- After valid AI-provider setup, a user can connect and revoke each supported
+  Agent from the Web-guided path.
+- An invited member completes Web and Agent setup without entering a server URL.
+- Without a valid AI provider, the invited member can use basic human
+  collaboration/chat, while Agent setup remains disabled with actionable
+  administrator status.
+- Revocation takes effect without requiring Desktop or access to the original
+  machine.
+- Settings never displays secret credential values.
+- The AI Provider section never returns the provider key and supports connection
+  test, rotation/replacement, disable, and actionable unavailable status.
+- Personal/unbound and private/paused checkpoints are not labeled as team
+  publication.
+
+## Unit 5 — Content-safe event ingress and offline outbox
+
+Git and Coding Agent lifecycle hooks may report compact, content-safe events to
+a separate authenticated cloud event endpoint. The event credential cannot call
+Stand-in coordination tools. Closed event schemas, size/frequency limits,
+transport authentication mechanics, and installation details require a
+follow-up reviewed specification.
+
+The accepted client contract is:
+
+- Per-user outbox maximum: 10,000 events or 50 MiB; maximum age: seven days.
+- Queue only schema-permitted payloads. Raw content requires explicit
+  per-project raw-upload authorization.
+- Encrypt with an OS-provided credential/key store; keys and payloads never sync.
+- Stable client IDs and per-project order metadata; cloud ingestion idempotent.
+- On each MCP/Hook/CLI invocation, attempt FIFO delivery with at most three
+  short bounded-exponential-backoff retries; later invocations resume.
+- No daemon, continuous process, background observation, or Desktop dependency.
+- Evict oldest non-terminal events first on capacity/TTL, preserve
+  `work_completed`, `blocker_raised`, and `decision_recorded` where possible,
+  and record a non-sensitive gap.
+- Missing/reset keys, revoked authorization, or disallowed payloads cause secure
+  discard with no recovery/export promise.
+- Expired/revoked credentials stop delivery and require re-authentication.
+- Delivery is best-effort and never blocks coding or Git commits.
+
+### Acceptance gate
+
+- No production hook registration ships before the contract and security review.
+- MCP-only operation remains a supported complete integration.
+- Any future hook failure cannot block Git or Coding Agent work.
+
+## Unit 6 — Real-Agent cloud acceptance
 
 ### Sequence
 
-1. Build the daemon, sidecar, MCP bridge, and desktop.
-2. Start the standard development stack with one stable connection descriptor.
-3. Enroll the Intero repository, then install all three integrations through
-   the shipped management surface.
-4. Validate CLI configuration parsing and MCP initialize/list-tools for Codex,
-   Claude Code, and OpenCode.
-5. Run a real Codex session with native hook trust bypassed only for this
-   controlled smoke test, and direct it to call the Intero checkpoint MCP tool.
-6. Verify one lifecycle event, one automatically created Workstream, one
-   UUID-free checkpoint Claim, and its Team Pulse projection.
-7. Verify an unregistered directory and a same-remote clone create no state.
-8. Exercise reinstall and uninstall in an isolated home with a fake credential
-   canary.
+1. Start from one already-running Intero deployment and open administrator
+   `/setup`.
+2. Enter the Intero deployment base URL, validate connectivity, and create or
+   join the team context plus first project.
+3. Create an exact-email-bound invitation for user B, copy the link, and verify
+   pending/accepted/expired/revoked behavior, matching-email enforcement,
+   regenerate, and revoke. Accept it in a second browser context and inherit
+   Web, credentials, and connection instructions without member URL entry.
+4. Associate the Project with Teams A and B, then verify members of either Team
+   can open it without individual Project membership while Agent connection state
+   remains Project-bound.
+5. Before configuring AI, verify both users can use basic human collaboration
+   and chat while Stand-in and Agent setup show actionable provider
+   configuration status.
+6. In the separate AI Provider section, configure and test the model endpoint,
+   server-only key, and default model.
+7. Explicitly bind a bounded test Workspace/project, then register Codex, Claude
+   Code, and OpenCode through their tailored Connect Agent prompts.
+8. Validate MCP initialization, tool listing, authentication, and
+   `current_context`.
+9. Run a real Agent call to `report_checkpoint`.
+10. Verify personal/unbound work produces one private Claim and zero Team Pulse
+    updates.
+11. Bind a team project and verify its peer card, person-column summary,
+    active/blocked counts, and visual-only **N more** behavior, then opt
+    out/pause and verify future publication stops.
+12. Verify unavailable ingress queues permitted payloads and a later invocation
+    flushes FIFO with stable-ID idempotency and no coding/Git blockage.
+13. Verify cap, TTL, eviction priority, key loss, revoked authorization,
+    credential expiry, secure discard, and gap markers.
+14. Verify cross-user denial and minimized repository binding.
+15. Repeat the core flow with Desktop not installed.
+16. Exercise reinstall and uninstall in an isolated config root with credential
+    canaries.
+17. Use two isolated browser/client contexts for distinct users A and B against
+    the same approved Intero endpoint. Capture browser-visible reusable-link
+    join, a persistent A-B direct-message exchange, safe shared Team Pulse, and
+    privacy/pause/withdrawal propagation to the other context.
 
 ### Gates
 
-```bash
-corepack pnpm format:check
-corepack pnpm lint
-corepack pnpm test
-corepack pnpm build
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-The implementation may merge only after two plan reviews, at least two code
-review/fix passes, no unresolved P0-P2 findings, and the real Codex vertical
-smoke. Claude Code and OpenCode require real config/MCP handshake proof; their
-model-backed sessions are optional if authentication or cost would make the
-acceptance non-deterministic.
+- Markdown and contract consistency checks.
+- Unit and integration tests for authentication, privacy axes, Claim reduction,
+  publication, tenant isolation, and installer ownership.
+- Real Connect Agent prompt and MCP handshakes for Codex, Claude Code, and
+  OpenCode.
+- Optional Desktop one-click setup for all three clients, plus proof that Web
+  prompts and team operation work with Desktop absent.
+- Administrator endpoint-entry/connectivity validation and per-recipient
+  invitation acceptance against an approved deployment, with no member-entered
+  URL and no SMTP dependency.
+- Two isolated user sessions with browser-visible cross-client evidence;
+  API-only or single-client proof is insufficient.
+- At least one personal/private checkpoint and one default bound-project safe
+  publication.
+- No unresolved high-severity authentication, tenant-isolation, credential,
+  private-data, or publication finding.
 
 ## Risks and fallbacks
 
-- **Vendor hook drift:** fail open, mark diagnostics `needs_repair`, and preserve
-  MCP-only operation.
-- **Codex hook trust:** show `pending_trust`; never modify private trust state.
-- **Concurrent session ambiguity:** bind by vendor session ID; if the MCP
-  process cannot provide it, return an explicit ambiguous-context error rather
-  than choosing another session.
-- **Config conflicts:** stop and surface the exact Intero-owned node that
-  conflicts; do not overwrite or restore a whole file.
-- **Daemon unavailable:** hooks exit silently and Agents continue normally.
-- **Public noise:** session lifecycle changes private state; only first active
-  Workstream and explicit organizational checkpoints create public
-  projections.
+- **Credential theft or over-broad scope:** short-lived or revocable scoped
+  credentials, least privilege, visible sessions, and audit.
+- **Repository ambiguity:** fail closed and require explicit binding.
+- **Deployment-origin confusion:** validate the administrator-entered Intero
+  endpoint, derive it from invite association for members, show it read-only
+  where useful, and never conflate it with the AI provider endpoint or
+  Workspace/project binding.
+- **Service unavailable:** return explicit MCP failure, queue only permitted
+  payloads, and resume best-effort delivery on later invocations.
+- **Outbox data exposure:** enforce schema/raw authorization, OS-key-store
+  encryption, local-only keys/payloads, secure discard, and gap markers.
+- **Private-to-shared leak:** safe-summary allowlist, bound-project posture,
+  destination authorization, canary tests, opt-out, withdrawal, and audit.
+- **Model/data-use leak:** enforce Workspace-scoped contexts, provider contracts,
+  and no-training/no-cross-customer canaries.
+- **Config conflict:** stop and identify the Intero-owned node; never overwrite
+  unrelated user edits.
+- **Vendor MCP drift:** mark diagnostics `needs_repair` and preserve user config.
+- **Event wire drift:** keep schemas closed and review transport details without
+  weakening the accepted client/outbox contract.
+- **Desktop coupling returns:** test installation, MCP, checkpointing,
+  publication, and Web management with Desktop absent.
 
 ## Plan review record
 
-### Review 1 — contract and product flow
+### Preserved from the local implementation
 
-- Replaced inert Codex/Claude instruction files with real user-level loading
-  surfaces.
-- Removed `Stop` and tool/prompt hooks from automatic lifecycle semantics.
-- Corrected OpenCode nested session IDs and dedicated hook/event boundaries.
-- Made UUID-free MCP context and a real Agent call part of the exit criteria.
-- Distinguished configuration presence, MCP handshake, hook trust, event
-  ingestion, and UI projection as separate evidence.
+- Content-safe checkpoint schemas and forbidden-field canaries.
+- UUID-free Agent tools.
+- Reversible managed configuration with no whole-file backups.
+- Native Agent trust decisions.
+- Explicit distinction between configuration, authentication, handshake,
+  ingestion, private Work State, and publication.
 
-### Review 2 — security and feasibility
+### Replaced by ADR-0006
 
-- Rejected whole-file configuration backups and stale-file restoration.
-- Split local RPC roles into separate descriptors and explicit method
-  allowlists, while documenting the same-UID sandbox boundary honestly.
-- Limited hook input to known, content-free lifecycle contracts and 64 KiB.
-- Required linked-worktree common-directory proof instead of remote or path
-  heuristics.
-- Added preview/user-gesture constraints to Electron mutations and fail-closed
-  conflict handling to the installer.
-- Deferred signed packaging, production supervision, retention UX, and automatic
-  semantic inference so the vertical MVP remains testable in this repository.
+- Local daemon ingress and capability descriptors.
+- Local Stand-in and local/public synchronization.
+- Electron-bundled MCP launcher.
+- Desktop-only installation and Settings control.
+- Daemon enrollment as repository authority.
+- Team visibility as an automatic consequence of public/cloud synchronization.
+- A single canonical hosted-only endpoint assumption and member-entered server
+  URLs.

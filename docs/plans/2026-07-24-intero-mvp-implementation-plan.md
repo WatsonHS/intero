@@ -1,346 +1,612 @@
-# Intero MVP Implementation Plan
+# Intero Cloud-first MVP Implementation Plan
 
-Status: implemented locally; external pilot validation pending
+Status: implemented through Phase 5 on `main`; production deployment validation
+remains environment-specific
 
-Date: 2026-07-24
+Date: 2026-07-25
+
+Canonical target terminology is **Stand-in** in English and **替身** in Chinese.
+Contracts use `stand_in`; paths/slugs use `stand-in`. Historical evidence may
+retain literal old names. Active code and persisted identifiers use the
+canonical Stand-in vocabulary.
 
 Inputs:
 
 - `docs/brainstorms/2026-07-24-intero-product-requirements.md`
 - `docs/ARCHITECTURE.md`
+- `docs/adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md`
 
-## Verification record
+## Historical verification record
 
-As of 2026-07-24, M0 through M4 and the locally automatable M5 hardening are
-implemented. The repository has been verified with:
+On 2026-07-24, the repository verified a locally implemented MVP through an
+Electron application, `interod`, a Local Stand-in sidecar, SQLCipher, a
+local MCP bridge, and local/public synchronization. That implementation included
+valuable domain, authorization, conversation, Spec, and UI behavior.
 
-- the packaged Coding Agent hook and MCP bridge through `interod`, the Local
-  Stand-in, PostgreSQL, and the desktop UI;
-- real PostgreSQL/RLS, SpiceDB, Centrifugo, MinIO, Better Auth, Graphile Worker,
-  OpenMLS, SQLCipher, cursor-repair, retry, and offline-fallback tests;
-- TypeScript and Rust unit/integration suites, strict Clippy, deterministic
-  OpenAPI generation, production builds, and a PostgreSQL backup/restore smoke
-  test.
-
-M5 still requires evidence outside this repository: signed desktop update
-rollback, passkeys on Windows/macOS/Linux, and a real engineering-team pilot.
-Those results are deliberately not claimed by this implementation record.
+This evidence is historical. The Phase 1–5 implementation now separately proves
+direct cloud MCP, the canonical browser product, private-by-default cloud
+processing, independent publication policy, onboarding/admin, Project work, and
+Spec Review. The implemented milestones below replace the required daemon,
+Local Stand-in, and Electron runtime topology.
 
 ## 1. MVP outcome
 
-The MVP proves one end-to-end coordination loop:
+The cloud-first MVP proves one end-to-end coordination loop:
 
 ```text
-Engineer starts Coding Agent work in an authorized Workspace
-→ hooks and semantic checkpoints reach the Local Stand-in
-→ the Stand-in maintains a private Workstream
-→ meaningful state appears in Team Pulse
+An already-running Intero deployment exists
+→ team administrator enters and validates the Intero deployment URL in /setup
+→ administrator creates/joins team, creates first project, invitations, and separate AI Provider
+→ exact-email-bound invitation associates the Engineer with the deployment/team without URL entry
+→ Engineer explicitly binds a Workspace/project and connects a Coding Agent
+→ a semantic checkpoint becomes a user-private Claim
+→ the cloud Stand-in maintains private Work State
+→ a bound team project's collaboration posture publishes a safe summary
+→ Team Pulse shows the authorized projection
 → the Coding Agent requests team context at a branch point
 → Stand-ins coordinate in a visible Thread
-→ the Coding Agent receives a structured result
-→ a high-impact plan can become a versioned Spec Review
+→ the Coding Agent receives a bounded structured result
+→ a high-impact plan becomes a versioned Spec Review
 ```
 
-The MVP is successful only if this loop works without collecting a raw Coding
-Agent session and while the Public Stand-in can provide an honest,
-freshness-labeled fallback when the user's machine is offline.
+The loop works from the Web without a daemon or Desktop App. Uploading or
+processing work data never makes it team-visible by itself.
 
 ## 2. Delivery principles
 
 - Build vertical slices before broad feature completeness.
-- Treat privacy and authorization as acceptance gates, not later hardening.
-- Keep Local and Public Stand-in behavior contract-compatible.
-- Make deterministic state reduction work before adding model interpretation.
-- Start with OpenCode as the richest hook integration, then bring Codex and
-  Claude Code to the same adapter contract.
-- Keep project management modular and minimal.
-- Do not implement A2A Gateway, local Embeddings, mobile, or full Jira parity in
-  the MVP.
+- Treat private-data isolation, processing policy, publication authorization,
+  and Capability Grants as acceptance gates.
+- Keep everyday privacy low-friction through Private Work and Collaborate with
+  Project postures; do not expose four normal-flow toggles or per-event prompts.
+- Keep deterministic Claim and Work State reduction ahead of model
+  interpretation.
+- Make the Web application the complete primary client.
+- Make direct authenticated cloud MCP the only required Agent integration path.
+- Support an Intero-operated or self-hosted selected team deployment origin
+  without exposing an arbitrary URL field to ordinary members.
+- Treat the foreground-only Desktop App and content-safe event hooks as optional
+  enhancements.
+- Include the invocation-driven encrypted outbox without introducing a daemon,
+  background observer, or offline Stand-in.
+- Preserve provenance, freshness, contradiction, and human correction.
+- Do not design the hook event protocol until its follow-up decision is made.
+- Keep project management modular and defer A2A Gateway.
 
 ## 3. Milestone map
 
 ```mermaid
 flowchart LR
-    M0["M0 Foundation"] --> M1["M1 Local Work State"]
-    M1 --> M2["M2 Shared Platform"]
-    M2 --> M3["M3 Stand-in Coordination"]
-    M3 --> M4["M4 Spec Review and Attention"]
-    M4 --> M5["M5 Pilot Hardening"]
+    M0["M0 Cloud contracts and policy"] --> M1["M1 Private cloud Work State"]
+    M1 --> M2["M2 Web collaboration"]
+    M2 --> M3["M3 Coordination and publication"]
+    M3 --> M4["M4 Spec Review and memory"]
+    M4 --> M5["M5 Pilot hardening"]
 ```
 
-## 4. M0 — Repository and contract foundation
+## 4. M0 — Cloud contracts, identity, and policy foundation
 
 ### Deliverables
 
-- Initialize the pnpm/Turborepo and Cargo workspaces.
-- Create Electron, server API, server Worker, Local Stand-in, and
-  `interod` application shells.
-- Add a root Justfile for setup, generation, lint, test, and local development.
-- Establish Zod-to-OpenAPI generation and the generated Rust/TypeScript client
-  checks.
-- Add shared domain identifiers, clocks, idempotency keys, and event envelopes.
-- Stand up local PostgreSQL, SpiceDB, Centrifugo, and S3-compatible development
-  dependencies.
-- Add OpenTelemetry, Pino, and Rust `tracing` bootstraps with content-safe
-  defaults.
+- Establish Web/product API, cloud MCP, Stand-in job, domain, and policy
+  module boundaries.
+- Implement working `ModelGateway`, `AuthorizationPort`, `RealtimePort`,
+  `ObjectStorePort`, `JobRunnerPort`, and `CoordinationTransport` boundaries.
+- Implemented adapters are Vercel AI SDK `ModelGateway`, SpiceDB-backed
+  authorization, Centrifugo realtime, MinIO object storage with uploads disabled
+  by product policy, Graphile Worker plus transactional outbox, and bounded
+  Project-internal coordination.
+- Preserve additional provider and adapter replacement seams. Temporal and
+  general A2A gateway/federation remain deferred.
+- Add contract tests for every port and require replacements to pass before
+  adoption. Domain policy, canonical Agent events, and Work State must not
+  import adapter types.
+- Deliver the two-day vertical slice first, then the normalized PostgreSQL,
+  durable-job, authorization, realtime, object-storage, health, telemetry, and
+  operator foundation completed in Phases 1–3.
+- Treat deployment packaging and infrastructure provisioning as outside the
+  pilot.
+- Add team-administrator Web `/setup` entry and connectivity validation for the
+  Intero deployment base URL before team creation/joining, first project, and
+  invitation capability.
+- Add a separate AI Provider section containing the cloud model endpoint,
+  server-only secret key, default model, connection test, rotation/replacement,
+  and disable.
+- Add per-recipient, exact-email-bound invitations in **Team Settings → Member
+  Management**, with expiry, copy, regenerate, revoke, and endpoint/team
+  inheritance without member URL entry.
+- Require no SMTP in V1; defer bulk email/CSV, SCIM, and domain auto-join.
+- Define stable principals independent of authentication providers.
+- Add least-privilege, revocable personal/device credentials with separate MCP
+  and event-ingress scopes.
+- Add explicit user-selected Workspace/project binding without default absolute
+  path collection and with minimized repository metadata.
+- Model Organization as tenant and Project owner. Model Team membership
+  separately with a many-to-many Team/Project association, optional
+  primary/display Team, and additional participating Teams.
+- Grant V1 Project access when the user belongs to any associated Team; do not
+  add individual Project roles or ACLs.
+- Allow deployment endpoint and AI Provider settings to be Organization-scoped;
+  keep per-recipient email-bound invitations Team-scoped.
+- Bind Agent connections, Claims/Work State, Team Pulse, collaboration posture,
+  and project conversation to one Project; keep DMs as Team-member
+  relationships.
+- Define Claims with provenance, freshness, confidence, contradiction, and
+  independent storage, processing, reuse, and visibility policy.
+- Enforce Workspace-scoped model processing with no public/general-model
+  training or cross-customer/Workspace reuse.
+- Define 180-day structured-private, 30-day raw-upload, project-life summary,
+  withdrawal, and user-private deletion semantics.
+- Define Private Work for personal/unbound space and default Collaborate with
+  Project for bound team projects as audited domain postures.
+- Establish tenant and per-object authorization for user-private, Thread, team,
+  project, and organization scopes.
+- Add content-safe telemetry defaults.
+- Define ticket/workspace-scoped, time-limited, visible, auditable, revocable
+  support-case access; team-admin status grants no private-data access.
+- Record the optional event endpoint as a deferred contract, not an implemented
+  protocol.
 
 ### Exit criteria
 
-- One command starts all development dependencies and application shells.
-- OpenAPI generation is deterministic and CI detects drift.
-- TypeScript and Rust tests run from the root.
-- Telemetry tests prove message, prompt, file, and secret fields are excluded.
-- No application module imports another module's database implementation.
+- A stored object is not readable merely because it belongs to the same
+  organization.
+- A member of any Team associated with a Project can participate without
+  individual Project enrollment, while private raw-data policy still applies.
+- Tests independently vary storage, model-processing, Stand-in-reuse, and
+  publication permission.
+- Project posture and publication record actor, destination, policy version,
+  source, and time.
+- No application contract requires a daemon, desktop process, local socket, or
+  internal Intero UUID from a Coding Agent.
+- An invited member reaches the selected deployment and receives MCP connection
+  instructions without typing a server URL, then explicitly selects the
+  Workspace/project binding.
+- Without a valid provider, Setup reports basic collaboration ready but
+  Stand-in configuration needed; invitations and human chat work, while
+  AI Stand-in, Agent binding, Agent Work State projection, automated
+  summaries, and automated Team Pulse remain disabled.
+- Telemetry tests exclude messages, prompts, file data, credentials, and private
+  Claims by default.
 
-## 5. M1 — Local private plane and Coding Agent adapters
+## 5. M1 — Direct cloud MCP and private Work State
 
-### M1.1 Privacy daemon
+### M1.1 Authenticated MCP
 
-- Implement local IPC over Unix Domain Socket and Windows Named Pipe.
-- Add OS-user-bound local authentication.
-- Add SQLCipher storage and OS credential-store key management.
-- Implement Workspace enrollment, repository identity, trusted-parent rules,
-  worktree discovery, sensitive-path defaults, and revocation.
-- Implement local event queue and synchronization cursor.
-- Expose bounded read-only workspace and Git tools.
+- Implement the canonical MCP tools over the selected team deployment's cloud
+  endpoint.
+- Authenticate the user and bind requests to bounded repository, project, and
+  Workstream context.
+- Resolve internal identifiers server-side.
+- Enforce least-privilege scopes, expiry, revocation, rate limits, and audit.
+- Return explicit non-blocking unavailable, unauthenticated, unauthorized, and
+  ambiguous-context errors.
 
-### M1.2 Local Stand-in
+Exact credential protocol mechanics remain a follow-up implementation decision;
+the product contract requires revocable personal/device identity, separate
+scopes, and explicit user-selected binding.
 
-- Add the event-driven Stand-in loop using `stand-in-core`.
+### M1.2 Cloud Stand-in and Work State
+
+- Implement a minimal real Vercel AI SDK `ModelGateway` loop that reads only
+  allowed structured Work State and emits safe Stand-in summaries and
+  bounded coordination suggestions.
+- Reject unauthorized raw content, cross-Organization/Workspace context,
+  auto-commit behavior, external action, and general autonomous-Agent behavior.
 - Implement deterministic Workstream and Claim reducers before model calls.
-- Add structured local memory and SQLite FTS5.
-- Add model egress modes: managed API, user-provided API, and disabled.
-- Add Context Builder, prompt compiler, run budgets, and provenance.
-- Implement meaningful public-projection diff generation.
+- Store every checkpoint as a user-private Claim. Personal/unbound work remains
+  private; bound team projects may publish only the safe structured summary
+  allowed by their default collaboration posture.
+- Permit private cloud model processing of uploaded material; keep
+  Stand-in reuse and publication independently enforced.
+- Prevent model providers and derived memory from training on or reusing data
+  across customers/Workspaces.
+- Add authorized Context Builder, prompt compiler, provenance, and run budgets.
+- Prevent stored-but-not-reusable data from entering model context.
+- Preserve conflicting Claims instead of overwriting them.
+- Add private Work State queries through MCP and Web.
 
-### M1.3 Adapter contract
+### M1.3 Optional Agent adapters
 
-- Implement the stateless MCP stdio bridge.
-- Define the common MCP tools and checkpoint schema.
-- Implement an adapter conformance test suite around Canonical Work Events.
-- Implement OpenCode integration:
-  - managed global plugin;
-  - user-level instruction file;
-  - MCP registration;
-  - session, file, todo, validation, and tool lifecycle normalization.
-- Implement Claude Code and Codex adapters with graceful capability detection.
-- Add reversible install, upgrade, diagnostics, and uninstall operations.
+- Implement project-page Connect Agent prompts tailored to Codex, Claude Code,
+  and OpenCode. Each prompt lets the Agent configure MCP and project binding
+  itself.
+- Back onboarding with a short-lived, single-use, project-scoped connection
+  ticket that is not presented as a user-managed API key.
+- Register the administrator-approved MCP URL inherited from the team-join
+  context; do not expose a member-facing URL field.
+- Add connection-success reporting, visible status, disconnect/reconnect, and
+  revocation that never blocks local coding.
+- Preserve optional Desktop one-click MCP configuration for all three supported
+  clients using the same endpoint and connection ticket. It writes the relevant
+  client configuration and reports success/failure/disconnect without adding a
+  daemon or runtime dependency.
+- Enable registration only when the team has a successfully tested provider;
+  missing, invalid, disabled, or unavailable provider state returns actionable
+  administrator setup guidance.
+- Add user-level instructions for semantic checkpoint reporting.
+- Implement exactly `work_started`, `work_progressed`, `decision_recorded`,
+  `dependency_declared`, `blocker_raised`, `review_requested`,
+  `work_completed`, `coordination_requested`, `artifact_produced`, and
+  `validation_completed`.
+- Require bounded safe summary, stable event/idempotency ID, Project, Agent,
+  provenance, occurred-at time, and schema version. Plan changes belong only in
+  `work_progressed`.
+- Route dependency/blocker/review/coordination-conflict signals to bounded
+  coordination eligibility and artifact/validation/completion to status and
+  safe Team Pulse. Reject raw prompts/files/diffs/terminal/tool logs and
+  low-level file/resource touch events.
+- Preserve user configuration and store no copied credentials or whole-file
+  backups.
+- Add the client-owned encrypted outbox contract shared by MCP, Hook, and
+  explicit CLI clients without creating persistent local processes.
 
 ### Exit criteria
 
-- Unregistered directories produce zero persisted work signals.
-- Registered Workspace events create and update multiple local Workstreams.
-- `report_checkpoint` produces a sourced Claim rather than directly overwriting
-  state.
-- Hooks never persist raw prompts, assistant responses, tool input/output,
-  terminal logs, or file contents as events.
-- Local Work State remains queryable with the network and model disabled.
-- OpenCode, Codex, and Claude Code can all invoke the same MCP contract.
+- Codex, Claude Code, and OpenCode each initialize MCP from their tailored
+  prompt and call `current_context` and `report_checkpoint` without a daemon,
+  Desktop App, internal UUID, or user-managed API key.
+- Optional Desktop setup configures each supported client with the same
+  endpoint/ticket contract, while Web setup and team operation pass with Desktop
+  absent.
+- Contract tests accept all and only the ten canonical semantics, require common
+  metadata/idempotency, and reject legacy, raw, and low-level touch events.
+- A checkpoint in personal/unbound work creates private Work State only; the
+  same checkpoint in a bound team project may update the person's authorized
+  Team Pulse card, header summary, and active/blocked counts.
+- Raw prompts, files, diffs, terminal/tool output, and credentials are absent
+  from default ingress and never become team-visible through project posture.
+- On unavailable ingress, permitted payloads enter the 10,000-event/50-MiB,
+  seven-day encrypted outbox, later flush FIFO with stable IDs and at most three
+  short retries, and use the defined eviction/discard/gap-marker behavior.
+- An unauthorized repository or ambiguous binding fails closed.
+- Service unavailability does not block unrelated Coding Agent work.
 
-## 6. M2 — Shared platform, chat, and Team Pulse
+## 6. M2 — Web collaboration, identity, and attention
 
-### M2.1 Identity and authorization
+### M2.1 Authentication and authorization
 
-- Implement Better Auth email magic link, passkey, optional GitHub account
-  linking, and Electron device authorization.
-- Introduce stable Intero principals independent of auth-provider IDs.
-- Add organizations, memberships, projects, and project-management module
-  boundaries.
-- Implement RLS tenant boundaries.
-- Add SpiceDB schemas and the shared Authorization port.
-- Implement structured Capability Grants and policy-version audit.
+- Implement user authentication, organization membership, stable principals,
+  and resource authorization.
+- Bind team-join identity to the administrator-approved Intero deployment
+  endpoint and team before the separate explicit Workspace/project binding step.
+- Keep invitations and basic human collaboration/chat usable without a provider;
+  show basic-collaboration and Stand-in-readiness separately.
+- Implement user-private object isolation inside an organization account.
+- Implement content-minimized routine diagnostics and contextual support-case
+  authorization for deliberate developer-intervention requests.
+- Add structured Capability Grants and policy-version audit.
+- Expose a concise project posture, visibility context, opt-out/refinement,
+  audit, and withdrawal path; keep advanced policy axes behind the posture.
 
-### M2.2 Domain and synchronization
+### M2.2 Domain and publication
 
-- Implement Workstreams, Claims, resolved Work State, public projection,
-  Artifacts, and typed relations.
-- Use one transaction for domain updates, Activity Events, and outbox entries.
-- Add Graphile Worker idempotency and retries.
-- Implement UUIDv7 client IDs, organization offsets, Thread sequence, and
-  cursor-based repair.
-- Add public full-text and trigram search; keep vector indexing optional.
+- Implement Workstreams, Claims, resolved Work State, Artifacts, and typed
+  relations.
+- Implement Private Work for personal/unbound work and default Collaborate with
+  Project for explicitly bound team projects.
+- Restrict quiet collaboration publication to safe summaries, status,
+  dependencies, blockers, and coordination signals.
+- Use one transaction for domain changes, Activity Events, and outbox entries.
+- Add idempotent jobs and cursor-based realtime repair.
+- Keep private and shared search behind the same authorization boundary.
+- Enforce 180-day private structured retention, 30-day authorized raw retention,
+  project-life summary retention, withdrawal, and user-private deletion.
 
 ### M2.3 Conversation platform
 
-- Implement Stand-in Threads, direct/group Human Threads, project Rooms,
-  and structured Thread foundations.
-- Integrate Centrifugo delivery with API gap repair.
-- Implement OpenMLS for Human-only Threads.
-- Implement the explicit transition from Human-only to Agent-readable when a
-  Stand-in is added, including the visible boundary event and withheld
-  history.
-- Add attachments through S3-compatible storage with checksum and scan gates.
+- Implement Stand-in Threads, basic persistent same-team 1:1 direct
+  messages, Project Rooms, and structured Threads.
+- Preserve the same-thread Human-only to Agent-readable transition, visible
+  boundary event, and withheld earlier history.
+- Treat server-readable and Agent-readable as participant-scoped, not
+  team-visible.
+- Exclude group DMs, attachments, reactions, DM search, read receipts, rich DM
+  Threads, federation, and E2EE promises.
+- Add encrypted object storage whose upload completion does not publish.
 
-### M2.4 Core desktop surfaces
+### M2.4 Complete Web surfaces
 
 - Implement Team Pulse as the default route.
-- Implement a person's concurrent Workstreams with freshness and confidence.
-- Implement Stand-in Thread with Local/Public runtime and freshness
-  indicators.
-- Implement project Room and ordinary IM conversation behavior.
-- Implement integration, Workspace, privacy, and model-policy settings.
+- Implement Team Pulse as one person column per peer, with authorized current
+  active-work cards.
+- Generate each plain non-interactive column-header summary from active work,
+  blockers, recent outcomes, and freshness; show active and blocked counts.
+- Keep cards as peer items ordered for reading. **N more** is visual compaction
+  only.
+- Do not add primary/main/secondary/subordinate/focus/rank task, work-item, or
+  Workstream fields and do not infer hierarchy from order.
+- Implement Stand-in, Room, Coordination, Spec, Decision, privacy, and
+  integration settings.
+- Show source, freshness, confidence, contradiction, visibility, and publication
+  provenance.
+- Keep the experience complete with no Desktop App installed.
 
 ### Exit criteria
 
-- A local projection reaches the correct organization and updates Team Pulse.
-- A user can sign in with magic link, add a passkey, and complete Electron device
-  authorization on supported desktop platforms.
-- SpiceDB and RLS deny cross-project or cross-organization reads.
-- Stand-in Thread messages sync across devices and are server-readable.
-- Human-only messages remain E2EE until the explicit Agent-readable transition.
-- Local offline state is visible as stale rather than silently treated as fresh.
+- A user can sign in, connect an Agent, bind a team project, receive safe
+  collaboration updates by default, and opt out, pause, inspect, or withdraw.
+- Tenant and object authorization deny unauthorized private data.
+- Team Pulse renders only safe state authorized by the bound project's posture.
+- Pulse headers have no citations, links, click-through, or state-setting;
+  active/blocked counts are correct and **N more** changes presentation only.
+- Stand-in Threads sync across clients without becoming team-visible.
+- Human-only messages retain their explicit Agent-readable boundary.
+- Two isolated users can complete a browser-visible persistent A-B direct-message
+  exchange.
+- Both isolated Team users can open the same Team Project without Project-level
+  membership and observe only that Project's authorized shared state.
+- The Web product works while the Desktop App is absent.
 
-## 7. M3 — Public Stand-in and transparent coordination
+## 7. M3 — Stand-in coordination and Action Inbox
 
-### M3.1 Public Stand-in jobs
+### M3.1 Stand-in jobs
 
-- Implement event-driven Public Stand-in runs through Graphile Worker.
-- Reuse Context Builder, Claim Resolver, prompt compiler, and policy contracts
-  from `stand-in-core`.
-- Serialize one Thread and one Workstream while permitting unrelated
-  Workstreams to run concurrently.
-- Add model, tool, step, token, retry, and per-user budget enforcement.
-- Implement public fallback responses from synchronized state.
+- Run event-driven Stand-in work in cloud jobs.
+- Automatically open a Project-scoped coordination Thread/request for explicit
+  structured blocker, dependency, review, conflict, or coordination signals.
+- Carry only safe structured summary/context and candidate next steps; collect
+  responses and drive clarification within the Thread.
+- Reject cross-Project scope, raw disclosure, external actions, priority
+  changes, irreversible commitments, and final human/business decision claims.
+  Require responsible-participant confirmation for commitments.
+- Serialize one Thread and one Workstream while allowing unrelated Workstreams
+  to run concurrently.
+- Apply processing and reuse policy before context assembly.
+- Add model, tool, step, token, retry, and per-user budgets.
+- Disclose stale or unavailable dependencies.
 
 ### M3.2 Coordination Protocol
 
-- Implement strongly typed Action Envelopes with human-readable messages.
-- Implement status query/response, ownership declaration, dependency request,
-  conflict notice, coordination request, correction, withdrawal, and human
-  escalation.
-- Enforce Capability Grants at command execution.
-- Link Coordination Threads to Workstreams, Claims, evidence, participants, and
-  result.
-- Return bounded structured coordination results through MCP.
+- Implement typed Action Envelopes with human-readable messages.
+- Implement status response, ownership declaration, dependency request,
+  conflict notice, coordination request, correction, withdrawal, and escalation.
+- Enforce Capability Grants and publication policy at command execution.
+- Return bounded structured results through cloud MCP.
+- Keep automatic internal coordination distinct from the deferred external A2A
+  Gateway/federation.
 
 ### M3.3 Action Inbox
 
-- Create Action items only for human decisions, scope expansion, consequential
-  commitments, unresolved high-impact contradictions, review requests, and
-  imminent blockers.
-- Keep ordinary progress in Team Pulse.
-- Add in-app and system-notification thresholds.
+- Create Action items for human decisions, scope expansion, consequential
+  commitments, high-impact contradictions, review requests, and imminent
+  blockers. Normal bound-project publication does not create approval prompts.
+- Keep ordinary authorized progress in Team Pulse.
+- Link every item to its source, authority, and destination scope.
 
 ### Exit criteria
 
-- A Coding Agent can request coordination and receive a structured answer.
-- Every Stand-in action is visible in the linked Thread and has an
-  enforceable grant reference.
-- A Stand-in can declare ownership only inside existing authorized scope.
-- Scope expansion creates one actionable user item instead of an Agent promise.
-- Job retry cannot duplicate a message, action, ownership claim, or Inbox item.
-- Public fallback states the freshness of its information.
+- A Coding Agent receives a bounded coordination answer through cloud MCP.
+- A structured blocker automatically creates one auditable Project-scoped
+  coordination Thread and cannot produce an unconfirmed commitment.
+- Every Stand-in action is visible to affected participants and has an
+  enforceable grant.
+- Scope expansion or unauthorized publication creates an Action Inbox item
+  instead of an Agent promise.
+- Job retry cannot duplicate messages, actions, publications, or Inbox items.
 
 ## 8. M4 — Spec Review, Decisions, and durable memory
 
-### M4.1 Spec authoring and revisions
+### Deliverables
 
-- Implement Markdown Spec editing with CodeMirror and preview.
-- Persist versioned Spec revisions.
-- Generate stable block records from parsed Markdown for revision-specific
-  comments.
-- Implement revision diff summaries and affected-reviewer calculation.
-
-### M4.2 Review
-
-- Allow Coding Agents to request Spec Review through MCP.
-- Let the Stand-in publish the review and select or propose affected
-  reviewers.
-- Distinguish Stand-in impact analysis, human acknowledgement, approval,
-  conditional approval, and changes requested.
-- Invalidate only approvals affected by a material revision.
-
-### M4.3 Decisions and memory
-
-- Generate Decision Records from confirmed Spec and Coordination outcomes.
-- Add supersession and affected-scope relationships.
-- Add Workstream, Claim, Decision, Spec, Artifact, and participant retrieval to
-  Context Builder.
-- Add user-visible provenance navigation.
+- Implement private Spec candidates and explicit review publication.
+- Persist versioned revisions, comments, review states, and Decision Records.
+- Distinguish Stand-in impact analysis from human approval.
+- Invalidate only confirmations affected by material revisions.
+- Add authorized retrieval of Workstreams, Claims, Decisions, Specs, Artifacts,
+  and participants.
+- Propagate source processing, reuse, and visibility restrictions into derived
+  summaries and memory.
 
 ### Exit criteria
 
-- A Coding Agent can turn a plan into a Review request without directly
-  publishing or approving it.
-- Inline comments remain attached to the revision and block they reviewed.
-- A material public-interface change invalidates affected review only.
-- A Stand-in review never counts as human approval.
-- Confirmed outcomes are retrievable as versioned Decisions with sources.
+- A Coding Agent requests review without directly publishing or approving it.
+- Private draft content remains private until authorized for review.
+- Inline comments bind to the reviewed revision.
+- Stand-in analysis never counts as human approval.
+- Derived memory never widens source visibility.
 
-## 9. M5 — Pilot hardening
+## 9. M5 — Cloud pilot hardening
 
 ### Reliability
 
-- Exercise desktop update rollback and daemon/sidecar version compatibility.
+- Exercise Web/API/MCP deployment rollback and compatibility.
+- Validate administrator entry/connectivity checking of the Intero deployment
+  base URL, team creation/joining, and member invitation inheritance against one
+  self-hosted deployment.
+- Validate provider secret isolation, connection test, rotation/replacement,
+  disable, and AI/Agent gating without blocking invitations or basic chat.
 - Add database backup and restore tests.
-- Add local queue crash recovery and public Worker retry chaos tests.
-- Validate Centrifugo gap repair and cursor compaction.
-- Validate S3 scan failure and orphan cleanup.
-- Run SpiceDB-unavailable fail-closed tests.
+- Validate job retry, realtime gap repair, and object-scan failure.
+- Test visible non-blocking MCP failure and fail-open Hook behavior.
+- Test the outbox's 10,000-event/50-MiB cap, seven-day TTL, OS-key-store
+  boundary, stable IDs, per-project order metadata, FIFO flush, three short
+  retries, eviction priority, secure discard, gap markers, and re-authentication.
 
 ### Privacy and security
 
-- Threat-model local IPC, Workspace path escape, symlink traversal, integration
-  configuration injection, prompt injection into Action Envelopes, and stale
-  Capability Grants.
-- Add privacy regression fixtures for every Coding Agent adapter.
-- Verify logs, traces, crash reports, and diagnostic exports against the
-  telemetry allowlist.
-- Validate passkeys on Windows Hello, macOS, and supported Linux browser flows.
+- Threat-model MCP authentication, tenant isolation, repository binding, token
+  theft, private-to-shared transitions, prompt injection, stale grants,
+  support-case access, and model-provider boundaries.
+- Verify accepted retention/deletion defaults and no-training/no-cross-customer
+  reuse. Set backup-deletion timing, legal holds, regions, precise support
+  role/legal process, and subprocessor contracts before pilot.
+- Add canary tests proving private data does not enter team views, model context,
+  logs, diagnostics, or unrelated Stand-in runs.
+- Add support-case tests for ticket/workspace scope, time limit, continuous user
+  visibility, close/withdraw revocation, audit, and team-admin denial.
 
 ### Pilot
 
 - Select one engineering team and one cross-cutting feature.
-- Enroll only the repositories needed for that feature.
-- Capture baseline manual coordination behavior.
-- Run Team Pulse, one Coding Agent coordination branch, and one Spec Review.
-- Collect false publication, missed state, unnecessary Inbox item, stale answer,
-  and unauthorized action metrics.
+- Connect only the repositories needed for that feature.
+- Use two isolated browser/client contexts for distinct users A and B against
+  the same administrator-approved Intero deployment endpoint.
+- Capture browser-visible proof of admin-created invitation, matching-email
+  acceptance, basic human collaboration, a real persistent A-B direct-message
+  exchange, safe shared Team Pulse state with AI configured, and
+  privacy/pause/withdrawal propagation to the other client. API-only and
+  single-client evidence do not count.
+- Run personal/private checkpointing, team-project binding with default safe
+  publication, opt-out/withdrawal, one outbox recovery path, Team Pulse, one
+  cloud MCP coordination branch, and one Spec Review.
+- Collect false publication, missed state, unnecessary Inbox, stale answer,
+  unauthorized access, and manual-status-chasing metrics.
 
 ### Exit criteria
 
-- The pilot team can reconstruct why a public state, ownership action, or review
-  request exists from visible evidence.
-- No raw Coding Agent transcript crosses the privacy boundary.
-- False or noisy public updates are correctable without deleting history.
-- Offline Local and unavailable model modes fail usefully.
-- The team reports less manual status chasing on the pilot feature.
+- The pilot reconstructs why every shared state, ownership action, and review
+  request exists.
+- Private storage or processing never creates implicit team visibility.
+- False or noisy publications are correctable without deleting history.
+- Cloud and dependency failures are explicit and useful.
+- The team reports less manual status chasing.
+- Two isolated sessions show the required cross-client membership,
+  collaboration, shared-state, and privacy propagation behavior.
+
+## 9.1 Accepted post-Pilot delivery sequence
+
+Phases 1–5 are implemented on `main`. The sections below record their delivered
+scope. Phase 6 and Phase 7 remain future work.
+
+### Phase 4 — onboarding and administration
+
+- Keep registration invite-only with one active Organization per account.
+- Deliver **Team Settings → Member Management** for Organization admins, Team
+  `member|leader` roles, access revocation, and Project governance.
+- Create invitations from admin-entered display name and exact email. Store
+  expiring/revocable email-bound links with
+  `pending|accepted|expired|revoked` lifecycle and copy, regenerate ("resend"),
+  and revoke actions.
+- Require no SMTP in V1. Admin shares a copied link through their own channel;
+  retain SMTP only as later optional deployment configuration.
+- Deliver a separate short Accept Invitation surface: context confirmation,
+  matching-email login/registration, then joined Team/accessible Projects with
+  Project or Team Pulse entry and a skippable Connect Coding Agent step.
+- Do not expose deployment endpoint, model keys, governance, invitation
+  controls, or admin Settings to the recipient. Seed the initial display name
+  and allow later edits in Personal Settings.
+- Permit zero or multiple Team Leaders and use Organization admins as fallback.
+- Prevent removal or demotion of the last Organization admin.
+- Allow Organization admins and the Project primary Team's Leaders to edit
+  review policy and PI/Sprint governance.
+
+### Phase 5 — Project work management and Spec Review
+
+- Implement optional Epic → Feature → Work Item hierarchy, with Epic
+  roadmap-only, directly executable Features, and one Project Board.
+- Implement separate Backlog/current Sprint views and fixed Work Item statuses:
+  `todo`, `in_progress`, `ready_for_test`, `done`. Backlog is scheduling state,
+  not a status.
+- Preserve source Sprint and carryover for unfinished work without automatic
+  rescheduling.
+- Add the accepted Work Item fields, relations, Coordination Threads,
+  comments/replies, and explicit PR/Commit/branch associations.
+- Generate Project-level PI/Sprint structure from start date, Sprint count, and
+  duration; derive status from Project timezone.
+- Implement immutable Project Specs, version-bound inline comments, explicit
+  `request_review`, `list_confirmed`, `get_confirmed(specId)`, reviewer
+  nominations, and configurable version-specific confirmation policy.
+- Let Project-authorized Agents create/update content through MCP with
+  provenance/history/revert. Keep manual editing available. Agents are not
+  assignees and cannot administer access.
+
+### Phase 6 — Action Inbox, notifications, and search
+
+- Route nominated Spec reviews and other targeted actions into Action Inbox.
+- Keep unassigned pending-review volume as a compact Team Pulse count.
+- Add authorized notifications and search only after the source objects,
+  visibility, and provenance contracts are stable.
+
+### Phase 7 — deeper Agent automation
+
+- Extend bounded automation only after Agent content authorization,
+  disconnect/revocation, version history, review policy, notifications, and
+  search are proven.
+- Preserve the prohibition on membership/visibility administration,
+  unauthorized data use, hidden commitments, and uncontrolled external action.
+
+### Post-Pilot acceptance gates
+
+- Invite-only and last-admin invariants pass authorization tests.
+- Invitation tests cover exact-email denial, expiry/revocation, copy/regenerate,
+  status transitions, no-SMTP operation, recipient-only disclosure, initial
+  display name, and skippable Agent onboarding.
+- Agent-created work/Spec content is attributable, versioned, revertible, and
+  stops on revocation.
+- Optional hierarchy, Board status, actor/time, and Sprint carryover behave as
+  specified.
+- PI/Sprint generation and timezone status are deterministic.
+- Spec comments remain bound to immutable versions; confirmation follows Project
+  policy; confirmed lookup does not expose an unconfirmed version.
+- Code associations require explicit reports and never infer from branch names.
+- Work Item detail uses the established center timeline, right facts/code rail,
+  and bottom comment composer.
 
 ## 10. Cross-cutting test matrix
 
-| Area              | Unit              | Integration                 | End-to-end                              |
-| ----------------- | ----------------- | --------------------------- | --------------------------------------- |
-| Claim resolution  | reducer fixtures  | SQLite/PostgreSQL parity    | conflicting completion report           |
-| Workspace privacy | path-policy tests | daemon IPC                  | unregistered directory produces nothing |
-| Agent adapters    | event fixtures    | managed integration install | checkpoint to Team Pulse                |
-| Authorization     | policy tests      | RLS + SpiceDB               | cross-project denial                    |
-| Coordination      | command tests     | Worker idempotency          | Agent branch to visible result          |
-| Conversation      | message state     | Centrifugo repair           | Human-only to Agent-readable boundary   |
-| Spec Review       | revision matching | storage and review state    | material revision reconfirmation        |
-| Offline           | queue tests       | reconnect replay            | public freshness fallback               |
+| Area             | Unit                 | Integration             | End-to-end                         |
+| ---------------- | -------------------- | ----------------------- | ---------------------------------- |
+| Claim resolution | reducer fixtures     | relational persistence  | conflicting completion             |
+| Privacy axes     | policy combinations  | context assembly        | stored but not visible             |
+| Cloud MCP        | schema and auth      | real Agent handshake    | checkpoint to private Work State   |
+| Publication      | posture/grant tests  | audit/withdrawal        | bound project to Team Pulse        |
+| Team Pulse       | person-column view   | summary/count policy    | peer cards and visual N-more       |
+| Authorization    | object policy        | tenant boundaries       | cross-user denial                  |
+| Coordination     | command tests        | job idempotency         | Agent branch to visible result     |
+| Conversation     | access transition    | realtime repair         | Human-only to Agent-readable       |
+| Spec Review      | revision matching    | storage and review      | private draft to authorized review |
+| Availability     | outbox policy        | idempotent FIFO flush   | unavailable then resumed delivery  |
+| Data lifecycle   | retention clocks     | delete/withdraw         | 180d/30d/project-life behavior     |
+| Support access   | scope/expiry policy  | audit and revocation    | case open, inspect, close          |
+| Model data use   | context isolation    | provider boundary       | no training/cross-workspace reuse  |
+| Deployment setup | endpoint validation  | invite-origin binding   | member setup without URL entry     |
+| Two-user Web     | isolated sessions    | cross-client updates    | A/B visible privacy propagation    |
+| Post-Pilot roles | last-admin invariant | primary-Team governance | invite-only admin Settings         |
+| Project work     | state/relations      | history and carryover   | Backlog/current Sprint views       |
+| Agent content    | mutation policy      | provenance and revoke   | Agent create, human revert         |
+| PI/Sprint        | generated dates      | timezone transitions    | PI and Sprint planning             |
+| Spec versions    | review policy        | confirmed lookup        | version comments and nomination    |
+| Code references  | explicit association | adjustment/history      | no branch-name inference           |
 
 ## 11. Migration and replacement boundaries
 
-The MVP must keep these dependencies behind ports:
-
-- Graphile Worker behind Queue.
-- Centrifugo behind Realtime.
-- PostgreSQL search behind Search.
-- SpiceDB behind Authorization.
-- S3-compatible storage behind ObjectStore.
-- Vercel AI SDK providers behind Model.
-- Coding Agent specifics behind IntegrationAdapter.
-
-The plan does not build alternative implementations. It only prevents domain
-types from depending on vendor-specific identifiers.
+- Preserve existing domain, Claim, Capability Grant, conversation, Spec, and UI
+  logic where it matches the new requirements.
+- Do not treat `interod`, the Local Stand-in, local IPC, SQLCipher, or the
+  Electron MCP launcher as target dependencies.
+- Keep queue, realtime, search, authorization, object storage, model providers,
+  and Coding Agent specifics behind ports.
+- Preserve historical local implementation tests as historical evidence.
+- Require new acceptance before claiming cloud-first implementation.
 
 ## 12. Explicitly excluded from this plan
 
-- A2A Gateway implementation.
-- `team-presence` code or frontend reuse.
-- Raw Coding Agent session import.
-- Stand-in file editing or arbitrary shell execution.
+- Designing event-ingress wire mechanics beyond the accepted client/outbox
+  contract.
+- Productized deployment packages, Docker/install wizards, infrastructure
+  workflows, DNS/TLS guidance, tenant automation, and end-user self-hosting
+  documentation are outside the pilot.
+- Bulk email/CSV invitations, SCIM provisioning, and domain auto-join.
+- Project-level individual membership, roles, restricted visibility, and other
+  fine-grained Project ACLs beyond Team association.
+- Multi-Organization switching, advanced Organization administration, billing,
+  enterprise identity, and cross-Team governance beyond the primary-Team
+  fallback.
+- Live GitHub/GitHub Enterprise synchronization. The later boundary is an
+  Organization-installed, selected-repository, read-only GitHub App with webhook
+  sync, no personal access token, and no merge/comment writes.
+- Detailed AI-provider secret-management mechanics or multi-provider routing.
+- An arbitrary deployment URL field in ordinary member Setup; developer endpoint
+  overrides remain non-product configuration.
+- Required daemon, Local Stand-in, or Desktop runtime.
+- Default raw Coding Agent session import.
+- Ambient filesystem access or arbitrary shell execution.
 - Agent-generated Coding Agent subagents.
-- Local Embedding download and lifecycle.
+- A2A Gateway implementation.
 - Full issue-tracker migration.
-- Mobile clients.
+- Persistent retry daemons, offline Stand-in processing, and general
+  offline-first clients.
+- In-product feedback forms, issue capture, product analytics dashboards, or
+  feedback triage. Pilot feedback goes directly to the product owner outside
+  Intero and is not an acceptance dependency.
