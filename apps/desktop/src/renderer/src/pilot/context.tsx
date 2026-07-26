@@ -20,6 +20,7 @@ import {
   isPilotBrowser,
   PILOT_IDENTITY_STORAGE_KEY,
   PILOT_PROJECT_STORAGE_KEY,
+  PILOT_TEAM_STORAGE_KEY,
 } from "./api.js";
 
 interface PilotContextValue {
@@ -29,12 +30,29 @@ interface PilotContextValue {
   setIdentityId: (identityId: PrincipalId | undefined) => void;
   teams: UseQueryResult<Awaited<ReturnType<typeof getPilotTeams>>>;
   projects: UseQueryResult<Awaited<ReturnType<typeof getPilotProjects>>>;
+  /** The team the shell is scoped to. Narrows which projects are reachable. */
+  selectedTeamId: string | undefined;
+  setSelectedTeamId: (teamId: string | undefined) => void;
   selectedProjectId: string | undefined;
   setSelectedProjectId: (projectId: string | undefined) => void;
   refresh: () => Promise<void>;
 }
 
 const PilotContext = createContext<PilotContextValue | undefined>(undefined);
+
+/**
+ * A project is reachable from a team when the team owns it or takes part in
+ * it — participating teams see the same project surfaces as the owning one.
+ */
+export function projectInTeam(
+  project: { primaryTeamId: string; participatingTeamIds: string[] },
+  teamId: string,
+): boolean {
+  return (
+    project.primaryTeamId === teamId ||
+    project.participatingTeamIds.includes(teamId)
+  );
+}
 
 export function PilotProvider({ children }: { children: ReactNode }) {
   const enabled = isPilotBrowser();
@@ -51,6 +69,11 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       enabled
         ? (window.localStorage.getItem(PILOT_PROJECT_STORAGE_KEY) ?? undefined)
         : undefined,
+  );
+  const [selectedTeamId, setTeamState] = useState<string | undefined>(() =>
+    enabled
+      ? (window.localStorage.getItem(PILOT_TEAM_STORAGE_KEY) ?? undefined)
+      : undefined,
   );
 
   const bootstrap = useQuery({
@@ -75,8 +98,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (bootstrap.data?.authMode !== "session") return;
     const principalId = bootstrap.data.currentPrincipal?.id as
-      | PrincipalId
-      | undefined;
+      PrincipalId | undefined;
     setIdentityState(principalId);
     if (!principalId) setProjectState(undefined);
   }, [bootstrap.data?.authMode, bootstrap.data?.currentPrincipal?.id]);
@@ -84,13 +106,36 @@ export function PilotProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!identityId) return;
     const available = projects.data?.projects ?? [];
+    const teamList = teams.data?.teams ?? [];
+    // The team scope leads: it decides which projects are reachable. Resolve it
+    // first, falling back to the current project's team so a stored project
+    // never lands the shell on a team that cannot reach it.
+    const team =
+      teamList.find((candidate) => candidate.id === selectedTeamId) ??
+      teamList.find(
+        (candidate) =>
+          candidate.id ===
+          available.find((project) => project.id === selectedProjectId)
+            ?.primaryTeamId,
+      ) ??
+      teamList[0];
+    if (team && team.id !== selectedTeamId) setTeamState(team.id);
+    const reachable = team
+      ? available.filter((project) => projectInTeam(project, team.id))
+      : available;
     if (
-      available.length > 0 &&
-      !available.some((project) => project.id === selectedProjectId)
+      reachable.length > 0 &&
+      !reachable.some((project) => project.id === selectedProjectId)
     ) {
-      setProjectState(available[0]!.id);
+      setProjectState(reachable[0]!.id);
     }
-  }, [identityId, projects.data, selectedProjectId]);
+  }, [
+    identityId,
+    projects.data,
+    selectedProjectId,
+    selectedTeamId,
+    teams.data,
+  ]);
 
   function setIdentityId(next: PrincipalId | undefined) {
     if (bootstrap.data?.authMode === "session") return;
@@ -108,6 +153,20 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     else window.localStorage.removeItem(PILOT_PROJECT_STORAGE_KEY);
   }
 
+  function setSelectedTeamId(next: string | undefined) {
+    setTeamState(next);
+    if (next) window.localStorage.setItem(PILOT_TEAM_STORAGE_KEY, next);
+    else window.localStorage.removeItem(PILOT_TEAM_STORAGE_KEY);
+    // Switching teams invalidates the project scope; the reconciling effect
+    // picks the first reachable project on the next render.
+    const reachable = (projects.data?.projects ?? []).filter(
+      (project) => !next || projectInTeam(project, next),
+    );
+    if (!reachable.some((project) => project.id === selectedProjectId)) {
+      setSelectedProjectId(reachable[0]?.id);
+    }
+  }
+
   const value = useMemo<PilotContextValue>(
     () => ({
       enabled,
@@ -116,6 +175,8 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       setIdentityId,
       teams,
       projects,
+      selectedTeamId,
+      setSelectedTeamId,
       selectedProjectId,
       setSelectedProjectId,
       refresh: async () => {
@@ -129,6 +190,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       projects,
       queryClient,
       selectedProjectId,
+      selectedTeamId,
       teams,
     ],
   );
@@ -146,4 +208,49 @@ export function usePilot(): PilotContextValue {
 
 export function usePilotOptional(): PilotContextValue | undefined {
   return useContext(PilotContext);
+}
+
+export interface Governance {
+  /** Can change organization-wide policy, seats and roles. */
+  isOrgAdmin: boolean;
+  /** Leads the team currently in scope. */
+  isTeamLead: boolean;
+  /** Leads any team at all — enough to reach the governance surface. */
+  isAnyTeamLead: boolean;
+  canGovern: boolean;
+  /** True until memberships have loaded; callers should not deny yet. */
+  pending: boolean;
+}
+
+/**
+ * Who you are allowed to govern, resolved from team memberships rather than the
+ * bootstrap payload — `organizationRole` is only present there in session auth,
+ * but every membership row carries it in both auth modes.
+ */
+export function useGovernance(): Governance {
+  const pilot = usePilotOptional();
+  const teams = pilot?.teams.data?.teams ?? [];
+  const identityId = pilot?.identityId;
+  const memberships = teams.flatMap((team) =>
+    team.members
+      .filter((member) => member.id === identityId)
+      .map((member) => ({ teamId: team.id, ...member })),
+  );
+  const isOrgAdmin =
+    pilot?.bootstrap.data?.organizationRole === "admin" ||
+    memberships.some((member) => member.organizationRole === "admin");
+  const isAnyTeamLead = memberships.some(
+    (member) => member.teamRole === "leader",
+  );
+  const isTeamLead = memberships.some(
+    (member) =>
+      member.teamId === pilot?.selectedTeamId && member.teamRole === "leader",
+  );
+  return {
+    isOrgAdmin,
+    isTeamLead,
+    isAnyTeamLead,
+    canGovern: isOrgAdmin || isAnyTeamLead,
+    pending: Boolean(pilot?.enabled) && pilot!.teams.isPending,
+  };
 }

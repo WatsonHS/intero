@@ -1,6 +1,7 @@
 import type {
   ActionEnvelope,
   ActionInboxItem,
+  AuthorizedSearchResult,
   ActivityEvent,
   ConversationThread,
   DecisionRecord,
@@ -9,6 +10,11 @@ import type {
   KanbanCard,
   KanbanCardId,
   KanbanColumn,
+  NotificationPreferences,
+  ProjectAutomationAudit,
+  ProjectAutomationPolicy,
+  ProjectAutomationSignal,
+  ProjectAutomationSignalKind,
   Project,
   ProgramIncrement,
   PublicWorkProjection,
@@ -53,6 +59,9 @@ export interface BootstrapPayload {
 export interface ThreadPayload {
   thread: ConversationThread;
   messages: ThreadMessage[];
+  /** Messages after your read marker that you did not send. */
+  unreadCount?: number;
+  lastReadSequence?: number;
   principals: PrincipalSummary[];
   actions: Array<{ envelope: ActionEnvelope; status: "resolved" }>;
 }
@@ -92,6 +101,45 @@ export interface ProjectSpecPayload {
   confirmations: SpecConfirmation[];
   nominatedReviewerIds: string[];
   policy: SpecReviewPolicy;
+}
+
+export interface ProjectAutomationPayload {
+  policy: ProjectAutomationPolicy;
+  signals: Array<{
+    signal: ProjectAutomationSignal;
+    audit: ProjectAutomationAudit[];
+  }>;
+  canManage: boolean;
+}
+
+export async function getProjectAutomation(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectAutomationPayload> {
+  return getJson(`/v1/project-automation/${projectId}`, signal);
+}
+
+export async function updateProjectAutomation(
+  projectId: string,
+  input: {
+    enabled: boolean;
+    enabledSignals: ProjectAutomationSignalKind[];
+    staleSpecReviewHours: number;
+    unresolvedCoordinationHours: number;
+    quietUntil?: string | null;
+  },
+): Promise<ProjectAutomationPolicy> {
+  return putJson(`/v1/project-automation/${projectId}`, input);
+}
+
+export async function revertProjectAutomationSignal(
+  projectId: string,
+  signalId: string,
+): Promise<ProjectAutomationSignal> {
+  return postJson(
+    `/v1/project-automation/${projectId}/signals/${signalId}/revert`,
+    {},
+  );
 }
 
 export async function getProjectWork(
@@ -138,10 +186,7 @@ export async function updateWorkItem(
   workItemId: string,
   input: Record<string, unknown>,
 ): Promise<WorkItem> {
-  return patchJson(
-    `/v1/project-work/${projectId}/items/${workItemId}`,
-    input,
-  );
+  return patchJson(`/v1/project-work/${projectId}/items/${workItemId}`, input);
 }
 
 export async function addWorkComment(
@@ -195,10 +240,7 @@ export async function createProgramIncrement(
     timezone: string;
   },
 ): Promise<{ pi: ProgramIncrement; sprints: Sprint[] }> {
-  return postJson(
-    `/v1/project-work/${projectId}/program-increments`,
-    input,
-  );
+  return postJson(`/v1/project-work/${projectId}/program-increments`, input);
 }
 
 export async function closeSprint(
@@ -229,10 +271,7 @@ export async function updateProjectSpecReviewPolicy(
     authorSelfConfirmation: boolean;
   },
 ): Promise<SpecReviewPolicy> {
-  return patchJson(
-    `/v1/project-work/${projectId}/spec-review-policy`,
-    input,
-  );
+  return patchJson(`/v1/project-work/${projectId}/spec-review-policy`, input);
 }
 
 export async function getProjectSpecs(
@@ -299,10 +338,7 @@ export async function confirmProjectSpec(
   projectId: string,
   specId: string,
 ): Promise<ProjectSpecPayload> {
-  return postJson(
-    `/v1/project-work/${projectId}/specs/${specId}/confirm`,
-    {},
-  );
+  return postJson(`/v1/project-work/${projectId}/specs/${specId}/confirm`, {});
 }
 
 export async function getBootstrap(
@@ -317,20 +353,57 @@ export async function getTeamPulse(
   return getJson<TeamPulsePayload>("/v1/team-pulse", signal);
 }
 
-export async function getActionInbox(
-  signal?: AbortSignal,
-): Promise<{ items: ActionInboxItem[] }> {
-  return getJson<{ items: ActionInboxItem[] }>("/v1/action-inbox", signal);
+export async function getActionInbox(signal?: AbortSignal): Promise<{
+  items: ActionInboxItem[];
+  preferences: NotificationPreferences;
+  unreadCount: number;
+  automationSummary: Array<{
+    projectId: string;
+    projectName: string;
+    openSignalCount: number;
+    confirmedSignalCount: number;
+    latestSafeContext: string;
+    updatedAt: string;
+  }>;
+}> {
+  return getJson("/v1/action-inbox", signal);
 }
 
-export async function getOfflineStatus(signal?: AbortSignal): Promise<{
-  localRuntime: "online" | "offline";
-  fallback: "local" | "public";
-  freshnessAt: string | null;
-  stale: boolean;
-  disclosure: string;
-}> {
-  return getJson("/v1/offline-status", signal);
+export async function updateActionInbox(
+  itemId: string,
+  action: "read" | "unread" | "dismiss" | "restore" | "resolve",
+) {
+  return patchJson<{ item: ActionInboxItem }>(
+    `/v1/action-inbox/${encodeURIComponent(itemId)}`,
+    { action },
+  );
+}
+
+export async function setNotificationPreferences(input: {
+  mutedKinds: ActionInboxItem["kind"][];
+  muteUntil?: string;
+}) {
+  return putJson<{ preferences: NotificationPreferences }>(
+    "/v1/notification-preferences",
+    input,
+  );
+}
+
+export async function searchAuthorizedContent(
+  input: {
+    query: string;
+    projectId?: string;
+    types?: AuthorizedSearchResult["type"][];
+  },
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({ q: input.query });
+  if (input.projectId) params.set("projectId", input.projectId);
+  if (input.types?.length) params.set("types", input.types.join(","));
+  return getJson<{ items: AuthorizedSearchResult[] }>(
+    `/v1/search?${params}`,
+    signal,
+  );
 }
 
 export async function getThreads(
@@ -406,12 +479,41 @@ export async function createConversationThread(input: {
   title: string;
   participantIds: string[];
   standInIds: string[];
+  /** Optional owning team — a conversation may deliberately have none. */
+  teamId?: string;
+  /** Set when branching a temporary discussion out of another conversation. */
+  parentThreadId?: string;
 }): Promise<ConversationThread> {
   return postJson("/v1/threads", {
     id: crypto.randomUUID(),
     ...input,
     accessMode: "agent_readable",
     priorHistoryGranted: false,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function markThreadRead(input: {
+  threadId: string;
+  principalId: string;
+  sequence: number;
+}): Promise<void> {
+  await postJson(`/v1/threads/${input.threadId}/read`, {
+    principalId: input.principalId,
+    sequence: input.sequence,
+  });
+}
+
+/** Post the branch's conclusion into its parent and close the branch. */
+export async function concludeThread(input: {
+  threadId: string;
+  actorId: string;
+  conclusion: string;
+}): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
+  return postJson(`/v1/threads/${input.threadId}/conclusion`, {
+    messageId: crypto.randomUUID(),
+    actorId: input.actorId,
+    conclusion: input.conclusion,
     createdAt: new Date().toISOString(),
   });
 }
@@ -486,6 +588,24 @@ export async function getDecisions(
   return getJson<{ items: DecisionRecord[] }>("/v1/decisions", signal);
 }
 
+export interface GovernanceAuditEntry {
+  id: string;
+  eventType: string;
+  actorId: string;
+  subjectId?: string;
+  aggregateId: string;
+  /** Structured facts only — role names and invitation addresses. */
+  detail: Record<string, string | number | boolean | null>;
+  occurredAt: string;
+}
+
+export async function getGovernanceAudit(signal?: AbortSignal): Promise<{
+  entries: GovernanceAuditEntry[];
+  principals: PrincipalSummary[];
+}> {
+  return getJson("/v1/governance-audit", signal);
+}
+
 export async function getActivity(
   after = 0,
   limit = 200,
@@ -543,10 +663,11 @@ export async function manageCodingAgentIntegration(input: {
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(
-    `${API_URL}${path}`,
-    { ...(signal ? { signal } : {}), credentials: "include" },
-  );
+  const response = await fetch(`${API_URL}${path}`, {
+    ...(signal ? { signal } : {}),
+    credentials: "include",
+    headers: developmentIdentityHeaders(),
+  });
   if (!response.ok) {
     throw new Error(`Intero API returned ${response.status}.`);
   }
@@ -557,7 +678,10 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...developmentIdentityHeaders(),
+    },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -570,7 +694,26 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "PATCH",
     credentials: "include",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...developmentIdentityHeaders(),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Intero API returned ${response.status}.`);
+  }
+  return (await response.json()) as T;
+}
+
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      ...developmentIdentityHeaders(),
+    },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -583,8 +726,15 @@ async function deleteJson(path: string): Promise<void> {
   const response = await fetch(`${API_URL}${path}`, {
     method: "DELETE",
     credentials: "include",
+    headers: developmentIdentityHeaders(),
   });
   if (!response.ok) {
     throw new Error(`Intero API returned ${response.status}.`);
   }
+}
+
+function developmentIdentityHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const principalId = window.localStorage.getItem("intero.pilot.identity.v1");
+  return principalId ? { "x-intero-dev-principal-id": principalId } : {};
 }

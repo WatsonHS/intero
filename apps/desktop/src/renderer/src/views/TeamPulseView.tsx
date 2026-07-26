@@ -2,10 +2,8 @@ import {
   ArrowUpRightIcon,
   CaretDownIcon,
   CaretUpIcon,
-  CloudArrowDownIcon,
   PlantIcon,
   ShieldCheckIcon,
-  TimerIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type {
@@ -20,7 +18,6 @@ import { useState, type ReactNode } from "react";
 
 import {
   getActionInbox,
-  getOfflineStatus,
   getProjectSpecs,
   getProjectWork,
   getTeamPulse,
@@ -41,7 +38,6 @@ import {
   loadSummary,
   orderByAttention,
   revealMove,
-  staleAfterMinutes,
   type Tone,
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
@@ -114,10 +110,6 @@ function CanonicalTeamPulseView({
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
-  });
-  const runtime = useQuery({
-    queryKey: ["offline-status"],
-    queryFn: ({ signal }) => getOfflineStatus(signal),
   });
   const standInThreads = useQuery({
     queryKey: ["threads", "stand_in"],
@@ -194,11 +186,6 @@ function CanonicalTeamPulseView({
   const staleProjections = projections.filter((item) =>
     isStale(item.freshnessAt, staleAfterSeconds),
   );
-  const isOffline = runtime.data?.fallback === "public";
-  const hasQueryError = pulse.isError || runtime.isError;
-  const offlineSyncTime = runtime.data?.freshnessAt
-    ? formatRelative(runtime.data.freshnessAt)
-    : t("general.none");
 
   const pilotActive = Boolean(
     pilot?.enabled && pilot.identityId && pilotProject,
@@ -211,50 +198,8 @@ function CanonicalTeamPulseView({
   const isErrorState = pulse.isError && (!pilotActive || pilotOverview.isError);
   const showCards = pulseReady && projections.length > 0;
 
-  let runtimeBg = "bg-raise";
-  let runtimeDotClass = "bg-faint";
-  let runtimeInkClass = "text-ink-muted";
-  let runtimeTitle = t("pulse.runtime.connecting");
-  let runtimeDetail = "";
-  if (runtime.isPending) {
-    runtimeBg = "bg-raise";
-    runtimeDotClass = "bg-faint";
-    runtimeInkClass = "text-ink-muted";
-    runtimeTitle = t("pulse.runtime.connecting");
-    runtimeDetail = "";
-  } else if (hasQueryError) {
-    runtimeBg = "bg-danger-soft";
-    runtimeDotClass = "bg-danger";
-    runtimeInkClass = "text-danger";
-    runtimeTitle = t("pulse.runtime.errorTitle");
-    runtimeDetail = t("pulse.runtime.errorDetail");
-  } else if (isOffline) {
-    runtimeBg = "bg-amber-soft";
-    runtimeDotClass = "bg-amber";
-    runtimeInkClass = "text-amber";
-    runtimeTitle = t("pulse.runtime.public");
-    runtimeDetail = t("pulse.runtime.lastSync", { time: offlineSyncTime });
-  } else if (staleProjections.length > 0) {
-    runtimeBg = "bg-amber-soft";
-    runtimeDotClass = "bg-amber";
-    runtimeInkClass = "text-amber";
-    runtimeTitle = t("pulse.runtime.local");
-    runtimeDetail = t("pulse.runtime.staleDetail", {
-      count: staleProjections.length,
-      minutes: staleAfterMinutes(staleAfterSeconds),
-    });
-  } else {
-    runtimeBg = "bg-green-soft";
-    runtimeDotClass = "bg-green";
-    runtimeInkClass = "text-green";
-    runtimeTitle = t("pulse.runtime.local");
-    runtimeDetail = t("pulse.runtime.fresh", { time: offlineSyncTime });
-  }
-
-  const hasBanner = isOffline || staleProjections.length > 0;
-  const freshPill = isOffline
-    ? { tone: "amber" as Tone, text: t("pulse.fresh.outdated") }
-    : staleProjections.length > 0
+  const freshPill =
+    staleProjections.length > 0
       ? { tone: "amber" as Tone, text: t("pulse.fresh.partial") }
       : { tone: "green" as Tone, text: t("pulse.fresh.live") };
   const freshPillClasses = TONE_CLASSES[freshPill.tone];
@@ -289,65 +234,7 @@ function CanonicalTeamPulseView({
               {t("pulse.lede")}
             </p>
           </div>
-          <div
-            className={cn(
-              "flex items-center gap-[9px] rounded-pill px-3.5 py-2",
-              runtimeBg,
-            )}
-          >
-            <span
-              className={cn(
-                "h-[7px] w-[7px] animate-breathe rounded-full",
-                runtimeDotClass,
-              )}
-            />
-            <span className="grid">
-              <strong
-                className={cn("text-[11.5px] font-[620]", runtimeInkClass)}
-              >
-                {runtimeTitle}
-              </strong>
-              {runtimeDetail ? (
-                <small className="mt-[2px] font-mono text-[9.5px] text-ink-muted">
-                  {runtimeDetail}
-                </small>
-              ) : null}
-            </span>
-          </div>
         </header>
-
-        {hasBanner ? (
-          <div className="mt-[22px] grid grid-cols-[20px_minmax(0,1fr)_auto] items-start gap-3 rounded-[13px] border border-amber-soft bg-amber-soft py-[15px] px-[17px]">
-            {isOffline ? (
-              <CloudArrowDownIcon size={18} className="text-amber" />
-            ) : (
-              <TimerIcon size={18} className="text-amber" />
-            )}
-            <span className="grid gap-[5px]">
-              <strong className="text-[12.5px] font-[620] text-amber">
-                {isOffline
-                  ? t("pulse.banner.offlineTitle")
-                  : t("pulse.banner.staleTitle", {
-                      count: staleProjections.length,
-                    })}
-              </strong>
-              <span className="text-[12px] leading-[1.65] text-ink-muted [text-wrap:pretty]">
-                {isOffline
-                  ? t("pulse.banner.offlineBody")
-                  : t("pulse.banner.staleBody", {
-                      minutes: staleAfterMinutes(staleAfterSeconds),
-                    })}
-              </span>
-            </span>
-            <span className="font-mono text-[10px] text-faint">
-              {isOffline
-                ? t("pulse.banner.offlineMeta", { time: offlineSyncTime })
-                : t("pulse.banner.staleMeta", {
-                    minutes: staleAfterMinutes(staleAfterSeconds),
-                  })}
-            </span>
-          </div>
-        ) : null}
 
         {showCards ? (
           <div className="mt-6 flex items-center rounded-card bg-raise py-[18px] px-[22px]">
@@ -505,8 +392,6 @@ function CanonicalTeamPulseView({
                 workstreams={workstreams}
                 index={index}
                 staleAfterSeconds={staleAfterSeconds}
-                offline={isOffline}
-                offlineSyncTime={offlineSyncTime}
                 open={openOwners.has(ownerId)}
                 onToggle={() => toggleOwner(ownerId)}
                 onOpen={() => onOpenPerson(ownerId)}
@@ -637,7 +522,7 @@ function CanonicalTeamPulseView({
  * One person, one card. The card is a list of everything they have in flight
  * at once — ordered by how much attention each workstream needs, not by
  * priority. Every line is a projection published by that person's
- * Representative; nothing here is entered by hand.
+ * Stand-in; nothing here is entered by hand.
  */
 function PersonCard({
   ownerId,
@@ -645,8 +530,6 @@ function PersonCard({
   workstreams,
   index,
   staleAfterSeconds,
-  offline,
-  offlineSyncTime,
   open,
   onToggle,
   onOpen,
@@ -661,8 +544,6 @@ function PersonCard({
   workstreams: PublicWorkProjection[];
   index: number;
   staleAfterSeconds: number | undefined;
-  offline: boolean;
-  offlineSyncTime: string;
   open: boolean;
   onToggle: () => void;
   onOpen: () => void;
@@ -713,10 +594,8 @@ function PersonCard({
             <strong className="truncate text-[13.5px] font-[620] tracking-[-0.01em]">
               {name}
             </strong>
-            <Meta tone={offline || leadStale ? "amber" : "faint"}>
-              {offline
-                ? t("pulse.card.syncedAt", { time: offlineSyncTime })
-                : formatRelative(lead.freshnessAt)}
+            <Meta tone={leadStale ? "amber" : "faint"}>
+              {formatRelative(lead.freshnessAt)}
             </Meta>
           </span>
           <small className="mt-[3px] truncate text-[10.5px] text-faint">
@@ -752,8 +631,6 @@ function PersonCard({
               projectContextByProjectionId,
             )}
             stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
-            offline={offline}
-            offlineSyncTime={offlineSyncTime}
             onOpen={onOpen}
           />
         ))}
@@ -804,15 +681,11 @@ function ParallelTaskRow({
   workstream,
   line,
   stale,
-  offline,
-  offlineSyncTime,
   onOpen,
 }: {
   workstream: PublicWorkProjection;
   line: WorkLine;
   stale: boolean;
-  offline: boolean;
-  offlineSyncTime: string;
   onOpen: () => void;
 }) {
   const { t, formatRelative } = useI18n();
@@ -859,12 +732,10 @@ function ParallelTaskRow({
             </span>
           ) : null}
           <Meta
-            tone={offline || stale ? "amber" : "faint"}
+            tone={stale ? "amber" : "faint"}
             className="ml-auto shrink-0 text-[9.5px]"
           >
-            {offline
-              ? t("pulse.card.syncedAt", { time: offlineSyncTime })
-              : formatRelative(workstream.freshnessAt)}
+            {formatRelative(workstream.freshnessAt)}
           </Meta>
         </span>
         <span className="mt-px grid grid-cols-[34px_minmax(0,1fr)] gap-x-[9px] gap-y-2">

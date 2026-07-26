@@ -9,7 +9,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import type { ThreadPayload } from "../api.js";
-import { getBootstrap, getTeamPulse, getThreads } from "../api.js";
+import {
+  getBootstrap,
+  getProjectAutomation,
+  getTeamPulse,
+  getThreads,
+  revertProjectAutomationSignal,
+} from "../api.js";
 import {
   Avatar,
   AvatarPair,
@@ -56,14 +62,18 @@ const FILTERS: Array<{ id: BranchState | "all"; label: TranslationKey }> = [
 const PAGE_SIZE = 8;
 
 export function CoordinationView({
+  initialThreadId,
   onOpenThread,
 }: {
+  initialThreadId?: string | undefined;
   onOpenThread: () => void;
 }) {
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
   const { formatRelative, formatTime, t } = useI18n();
-  const [selectedThreadId, setSelectedThreadId] = useState<string>();
+  const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
+    initialThreadId,
+  );
   const [filter, setFilter] = useState<BranchState | "all">("all");
   const [shown, setShown] = useState(PAGE_SIZE);
   const [conclusion, setConclusion] = useState("");
@@ -93,6 +103,12 @@ export function CoordinationView({
     enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
     refetchInterval: 1_500,
   });
+  const automation = useQuery({
+    queryKey: ["project-automation", pilotProject?.id],
+    queryFn: ({ signal }) => getProjectAutomation(pilotProject!.id, signal),
+    enabled: Boolean(pilotProject?.id),
+    refetchInterval: 3_000,
+  });
 
   const pilotPrincipals = pilotOverview.data?.principals ?? [];
   const pilotThreads = pilotOverview.data?.coordination ?? [];
@@ -121,6 +137,11 @@ export function CoordinationView({
   const currentPilotThread = current
     ? pilotThreadById.get(current.thread.id)
     : undefined;
+  const currentAutomation = current
+    ? automation.data?.signals.find(
+        ({ signal }) => signal.coordinationThreadId === current.thread.id,
+      )
+    : undefined;
 
   const principalNames = new Map<string, string>();
   for (const principal of pulse.data?.principals ?? []) {
@@ -145,6 +166,10 @@ export function CoordinationView({
   function nameOf(id: string): string {
     return principalNames.get(id) ?? id.slice(0, 8);
   }
+
+  useEffect(() => {
+    if (initialThreadId) setSelectedThreadId(initialThreadId);
+  }, [initialThreadId]);
 
   useEffect(() => {
     if (!currentPilotThread) return;
@@ -174,6 +199,22 @@ export function CoordinationView({
     mutationFn: () =>
       confirmPilotConclusion(pilot!.identityId!, currentPilotThread!.id),
     onSuccess: invalidatePilot,
+  });
+  const revertAutomation = useMutation({
+    mutationFn: () =>
+      revertProjectAutomationSignal(
+        pilotProject!.id,
+        currentAutomation!.signal.id,
+      ),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["project-automation", pilotProject?.id],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["pilot", "overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["action-inbox"] }),
+      ]);
+    },
   });
 
   if (threads.isLoading && pilotOverview.isLoading) {
@@ -382,6 +423,65 @@ export function CoordinationView({
         <p className="mt-3 max-w-[620px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
           {t("coord.lede")}
         </p>
+
+        {currentAutomation ? (
+          <section
+            className="mt-5 max-w-[660px] rounded-[13px] border border-accent-soft bg-accent-soft px-4 py-[15px]"
+            data-testid="automation-coordination-context"
+          >
+            <div className="flex items-center gap-2">
+              <span className="rounded-pill bg-panel2 px-2.5 py-1 text-[10px] font-[650] text-accent-strong">
+                {t("general.standIn")} · {currentAutomation.signal.kind}
+              </span>
+              <Meta className="ml-auto text-[9.5px]">
+                {formatRelative(currentAutomation.signal.detectedAt)}
+              </Meta>
+            </div>
+            <p className="mt-3 text-[12.5px] leading-[1.7] text-ink [text-wrap:pretty]">
+              {currentAutomation.signal.safeContext}
+            </p>
+            <div className="mt-3 grid gap-1.5">
+              {currentAutomation.signal.candidateNextSteps.map(
+                (step, index) => (
+                  <p
+                    key={`${currentAutomation.signal.id}-${index}`}
+                    className="text-[11.5px] leading-[1.6] text-ink-muted"
+                  >
+                    {index + 1}. {step}
+                  </p>
+                ),
+              )}
+            </div>
+            <details className="mt-3 border-t border-line pt-3">
+              <summary className="cursor-pointer text-[10.5px] text-faint">
+                {t("coord.automationAudit")}
+              </summary>
+              <div className="mt-2 grid gap-1">
+                {currentAutomation.audit.map((entry) => (
+                  <p
+                    key={entry.id}
+                    className="font-mono text-[9.5px] leading-[1.55] text-faint"
+                  >
+                    {entry.action} · {formatTime(entry.createdAt)} ·{" "}
+                    {entry.detail}
+                  </p>
+                ))}
+              </div>
+            </details>
+            {automation.data?.canManage &&
+            currentAutomation.signal.status !== "reverted" ? (
+              <button
+                type="button"
+                data-testid="automation-coordination-revert"
+                disabled={revertAutomation.isPending}
+                onClick={() => revertAutomation.mutate()}
+                className="mt-3 h-8 rounded-btn border border-line2 bg-panel2 px-3 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-45"
+              >
+                {t("coord.automationRevert")}
+              </button>
+            ) : null}
+          </section>
+        ) : null}
 
         {scopesByActor.size > 0 ? (
           <div className="mt-6 grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2.5">

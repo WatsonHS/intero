@@ -23,6 +23,7 @@ export const PILOT_API_URL =
 
 export const PILOT_IDENTITY_STORAGE_KEY = "intero.pilot.identity.v1";
 export const PILOT_PROJECT_STORAGE_KEY = "intero.pilot.project.v1";
+export const PILOT_TEAM_STORAGE_KEY = "intero.pilot.team.v1";
 
 export interface PilotBootstrapPayload {
   authMode: "session" | "development_identity" | "unavailable";
@@ -61,10 +62,7 @@ export interface PilotTeamPayload extends PilotTeam {
 }
 
 export type PilotInvitationStatus =
-  | "pending"
-  | "accepted"
-  | "expired"
-  | "revoked";
+  "pending" | "accepted" | "expired" | "revoked";
 
 export interface PilotInvitationPayload {
   id: string;
@@ -164,16 +162,23 @@ export function getPilotProfile(signal?: AbortSignal) {
     profile: PrincipalSummary & {
       email: string;
       organizationRole?: PilotOrganizationRole;
+      avatarTone?: "accent" | "green" | "amber" | "cool";
     };
   }>("/v1/pilot/profile", { ...(signal ? { signal } : {}) });
 }
 
-export function updatePilotProfile(displayName: string) {
+export function updatePilotProfile(input: {
+  displayName?: string;
+  avatarTone?: "accent" | "green" | "amber" | "cool";
+}) {
   return request<{
-    profile: PrincipalSummary & { email: string };
+    profile: PrincipalSummary & {
+      email: string;
+      avatarTone?: "accent" | "green" | "amber" | "cool";
+    };
   }>("/v1/pilot/profile", {
     method: "PATCH",
-    body: { displayName },
+    body: input,
   });
 }
 
@@ -218,7 +223,7 @@ export function createPilotInvitation(
   return request<{
     invitation: PilotInvitationPayload;
     token: string;
-    acceptPath: string;
+    activationPath: string;
   }>(`/v1/pilot/teams/${teamId}/invitations`, {
     method: "POST",
     body: input,
@@ -232,7 +237,7 @@ export function regeneratePilotInvitation(
   return request<{
     invitation: PilotInvitationPayload;
     token: string;
-    acceptPath: string;
+    activationPath: string;
   }>(`/v1/pilot/invitations/${invitationId}/regenerate`, {
     method: "POST",
     body: { expiresInDays },
@@ -251,8 +256,25 @@ export function getPilotInvitation(token: string, signal?: AbortSignal) {
     invitation: PilotInvitationPayload;
     organization: { id: string; name: string };
     team: { id: string; name: string };
+    activationRequired: boolean;
   }>(`/v1/pilot/invitations/${encodeURIComponent(token)}`, {
     ...(signal ? { signal } : {}),
+  });
+}
+
+export function activatePilotInvitation(
+  token: string,
+  input:
+    | { credential: "passkey" }
+    | { credential: "password" | "both"; password: string },
+) {
+  return request<{
+    activated: true;
+    credential: "passkey" | "password" | "both";
+    passkeyEnrollmentRequired: boolean;
+  }>(`/v1/pilot/invitations/${encodeURIComponent(token)}/activate`, {
+    method: "POST",
+    body: input,
   });
 }
 
@@ -276,35 +298,15 @@ export function updatePilotMember(
     organizationRole?: PilotOrganizationRole;
   },
 ) {
-  return request<unknown>(
-    `/v1/pilot/teams/${teamId}/members/${memberId}`,
-    { method: "PATCH", body: input },
-  );
+  return request<unknown>(`/v1/pilot/teams/${teamId}/members/${memberId}`, {
+    method: "PATCH",
+    body: input,
+  });
 }
 
 export function removePilotMember(teamId: string, memberId: PrincipalId) {
   return request<void>(`/v1/pilot/teams/${teamId}/members/${memberId}`, {
     method: "DELETE",
-  });
-}
-
-export function requestMagicLink(
-  email: string,
-  callbackURL: string,
-  name?: string,
-  invitationToken?: string,
-) {
-  return requestAuth<{ status: boolean }>("/api/auth/sign-in/magic-link", {
-    method: "POST",
-    body: {
-      email,
-      callbackURL,
-      newUserCallbackURL: callbackURL,
-      ...(name ? { name } : {}),
-      ...(invitationToken
-        ? { metadata: { invitationToken } }
-        : {}),
-    },
   });
 }
 
@@ -410,10 +412,7 @@ export function sendPilotDm(
   );
 }
 
-export function addPilotStandIn(
-  identityId: PrincipalId,
-  threadId: string,
-) {
+export function addPilotStandIn(identityId: PrincipalId, threadId: string) {
   return request<{ thread: PilotDirectMessageThread }>(
     `/v1/pilot/dms/${threadId}/stand-in`,
     { method: "POST", identityId, body: {} },

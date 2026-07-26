@@ -48,7 +48,13 @@ const CLIENTS: Array<{ id: PilotAgentClient; label: string }> = [
   { id: "opencode", label: "OpenCode" },
 ];
 
-export function PilotTestSetupFlow({ onDone }: { onDone: () => void }) {
+export function PilotTestSetupFlow({
+  testMode = false,
+  onDone,
+}: {
+  testMode?: boolean;
+  onDone: () => void;
+}) {
   const pilot = usePilot();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
@@ -196,7 +202,7 @@ export function PilotTestSetupFlow({ onDone }: { onDone: () => void }) {
           I
         </span>
         <h2 className="mt-[18px] text-[19px] font-[600] tracking-[-0.025em]">
-          Intero Cloud Pilot
+          {testMode ? "Intero Cloud Test Setup" : "Intero Cloud Setup"}
         </h2>
         <p className="mt-2.5 text-[11.5px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
           连接现有 Intero 部署，让团队成员和 Coding Agent 开始协作。
@@ -207,7 +213,7 @@ export function PilotTestSetupFlow({ onDone }: { onDone: () => void }) {
           onClick={onDone}
           className="mt-4 h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-ink"
         >
-          退出测试流程
+          {testMode ? "退出测试流程" : "退出引导"}
         </button>
 
         <div className="mt-[26px] flex flex-col gap-0.5">

@@ -57,9 +57,7 @@ export function pilotDmToThreadPayload(
   principals: PrincipalSummary[],
   currentIdentityId?: string,
 ): ThreadPayload {
-  const standInIds = item.thread.standInId
-    ? [item.thread.standInId]
-    : [];
+  const standInIds = item.thread.standInId ? [item.thread.standInId] : [];
   const participantIds = [...item.thread.participantIds, ...standInIds];
   return {
     thread: {
@@ -71,8 +69,7 @@ export function pilotDmToThreadPayload(
       accessMode: "agent_readable",
       ...(item.thread.standInAddedAfterSequence !== undefined
         ? {
-            accessChangedAtSequence:
-              item.thread.standInAddedAfterSequence + 1,
+            accessChangedAtSequence: item.thread.standInAddedAfterSequence + 1,
           }
         : {}),
       priorHistoryGranted: false,
@@ -150,18 +147,21 @@ export function pilotCoordinationToThreadPayload(
   principals: PrincipalSummary[],
   standIn?: PrincipalSummary,
 ): ThreadPayload {
-  const standInIds: PrincipalId[] = standIn
-    ? [standIn.id as PrincipalId]
-    : [];
+  const standInIds: PrincipalId[] = standIn ? [standIn.id as PrincipalId] : [];
   const participantIds = [...coordination.participantIds, ...standInIds];
   const sourceId = coordination.participantIds[0]!;
   const suggestionSenderId =
     (standIn?.id as PrincipalId | undefined) ?? sourceId;
   const operationId = coordination.id as OperationId;
   const threadId = coordination.id as ThreadId;
+  const sourceMessageId =
+    coordination.workStateId ??
+    coordination.automationSignalId ??
+    coordination.id;
+  const suggestionMessageId = coordination.sourceBindingId ?? coordination.id;
   const messages: ThreadPayload["messages"] = [
     {
-      id: coordination.workStateId as MessageId,
+      id: sourceMessageId as MessageId,
       threadId,
       senderId: sourceId,
       sequence: 1,
@@ -172,7 +172,7 @@ export function pilotCoordinationToThreadPayload(
       operationId,
     },
     {
-      id: coordination.sourceBindingId as MessageId,
+      id: suggestionMessageId as MessageId,
       threadId,
       senderId: suggestionSenderId,
       sequence: 2,
@@ -217,14 +217,24 @@ export function pilotCoordinationToThreadPayload(
           operationId,
           action: pilotCoordinationAction(coordination.trigger),
           actorId: sourceId,
-          authorityGrantId: coordination.sourceBindingId as CapabilityGrantId,
+          authorityGrantId: (coordination.sourceBindingId ??
+            coordination.automationSignalId ??
+            coordination.id) as CapabilityGrantId,
           policyVersion: "project-internal-v1",
           threadId,
-          workstreamId: coordination.workStateId as WorkstreamId,
+          ...(coordination.workStateId
+            ? {
+                workstreamId: coordination.workStateId as WorkstreamId,
+              }
+            : {}),
           humanMessage: coordination.safeContext,
           resourceScope: [`project:${coordination.projectId}`],
           relatedClaimIds: [],
-          evidenceRefs: [`work-state:${coordination.workStateId}`],
+          evidenceRefs: [
+            coordination.workStateId
+              ? `work-state:${coordination.workStateId}`
+              : `automation-signal:${coordination.automationSignalId ?? coordination.id}`,
+          ],
           requestedActions:
             coordination.trigger === "review_requested"
               ? ["arrange_review"]

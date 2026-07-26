@@ -11,7 +11,7 @@ import type { WorkLine } from "./work-lines.js";
 
 /**
  * Project work (Work Items and Features) is a third source of Team Pulse
- * projections, alongside the public plane and pilot pulse entries. Every
+ * projections, alongside the cloud service and pilot pulse entries. Every
  * surface that shows what someone has in flight must merge all three, or a
  * person's parallel work silently loses whichever source it skipped.
  */

@@ -1,69 +1,71 @@
 import {
   CheckIcon,
   CircleHalfIcon,
-  CloudCheckIcon,
-  CloudSlashIcon,
-  FolderOpenIcon,
-  KeyIcon,
+  CodeIcon,
+  FolderSimpleIcon,
   MoonIcon,
   PathIcon,
   PlugsIcon,
   ShootingStarIcon,
   SunIcon,
-  TimerIcon,
+  UserCircleIcon,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import {
-  getCodingAgentIntegrations,
-  getLocalRuntimeStatus,
-  getTeamPulse,
-  manageCodingAgentIntegration,
-  previewCodingAgentIntegration,
-  setModelEgress,
-} from "../api.js";
 import { ACCENTS, lum, useTheme } from "../design/theme.js";
-import { staleAfterMinutes } from "../design/utils.js";
-import { type Locale, type TranslationKey, useI18n } from "../i18n/index.js";
+import { type Locale, useI18n } from "../i18n/index.js";
 import {
-  configurePilotProvider,
   createPilotAgentTicket,
   disconnectPilotAgent,
   getPilotOverview,
-  updatePilotDeploymentEndpoint,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
+import { NotificationSettings } from "./settings/NotificationSettings.js";
+import { AccountSecuritySettings } from "./settings/AccountSecuritySettings.js";
+import { ProjectAutomationSettings } from "./settings/ProjectAutomationSettings.js";
 
-const EGRESS_CHOICES: Array<{
-  value: ModelEgressMode;
-  labelKey: TranslationKey;
-  detailKey: TranslationKey;
-}> = [
+// Team members, deployment and model service moved to 团队管理 — they are
+// governance settings for a whole team or organization, not personal ones.
+export type SettingsCategory = "personal" | "project" | "agent";
+
+const SETTINGS_CATEGORIES = [
   {
-    value: "managed_api",
-    labelKey: "settings.egress.managed",
-    detailKey: "settings.egress.managedDetail",
+    id: "personal",
+    label: "Personal",
+    detail: "个人资料与偏好",
+    icon: UserCircleIcon,
   },
   {
-    value: "user_provided_api",
-    labelKey: "settings.egress.user",
-    detailKey: "settings.egress.userDetail",
+    id: "project",
+    label: "Project",
+    detail: "项目有效设置",
+    icon: FolderSimpleIcon,
   },
   {
-    value: "disabled",
-    labelKey: "settings.egress.disabled",
-    detailKey: "settings.egress.disabledDetail",
+    id: "agent",
+    label: "Coding Agent",
+    detail: "连接状态与接入",
+    icon: CodeIcon,
   },
-];
+] as const satisfies ReadonlyArray<{
+  id: SettingsCategory;
+  label: string;
+  detail: string;
+  icon: typeof UserCircleIcon;
+}>;
 
 export function SettingsView({
   onOpenSetup,
   onOpenTestSetup,
+  initialCategory = "personal",
+  onCategoryChange,
 }: {
   onOpenSetup: () => void;
   onOpenTestSetup?: () => void;
+  initialCategory?: SettingsCategory;
+  onCategoryChange?: (category: SettingsCategory) => void;
 }) {
   const { locale, setLocale, t } = useI18n();
   const {
@@ -77,12 +79,8 @@ export function SettingsView({
   } = useTheme();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
-  const [editingPilotProvider, setEditingPilotProvider] = useState(false);
-  const [pilotProviderEndpoint, setPilotProviderEndpoint] = useState("");
-  const [pilotProviderKey, setPilotProviderKey] = useState("");
-  const [pilotProviderModel, setPilotProviderModel] = useState("");
-  const [editingDeployment, setEditingDeployment] = useState(false);
-  const [deploymentEndpoint, setDeploymentEndpoint] = useState("");
+  const [activeCategory, setActiveCategory] =
+    useState<SettingsCategory>(initialCategory);
   const [agentPrompt, setAgentPrompt] = useState<{
     client: "codex" | "claude-code" | "opencode";
     prompt: string;
@@ -92,49 +90,6 @@ export function SettingsView({
       (project) => project.id === pilot.selectedProjectId,
     ) ?? pilot?.projects.data?.projects[0];
 
-  const local = useQuery({
-    queryKey: ["local-runtime-status"],
-    queryFn: getLocalRuntimeStatus,
-    refetchInterval: 5_000,
-  });
-  const updateEgress = useMutation({
-    mutationFn: setModelEgress,
-    onSuccess: ({ modelEgress }) => {
-      queryClient.setQueryData<LocalRuntimeStatus>(
-        ["local-runtime-status"],
-        (current) =>
-          current?.available ? { ...current, modelEgress } : current,
-      );
-    },
-  });
-  const integrations = useQuery({
-    queryKey: ["coding-agent-integrations"],
-    queryFn: getCodingAgentIntegrations,
-    refetchInterval: 10_000,
-  });
-  const manageIntegration = useMutation({
-    mutationFn: async (input: {
-      adapter: CodingAgentAdapter;
-      action: CodingAgentIntegrationAction;
-    }) => {
-      const preview = await previewCodingAgentIntegration({
-        ...input,
-        locale,
-      });
-      if (!preview) return undefined;
-      return manageCodingAgentIntegration({
-        adapter: input.adapter,
-        token: preview.token,
-      });
-    },
-    onSuccess: (next) => {
-      if (next) queryClient.setQueryData(["coding-agent-integrations"], next);
-    },
-  });
-  const pulse = useQuery({
-    queryKey: ["team-pulse"],
-    queryFn: ({ signal }) => getTeamPulse(signal),
-  });
   const pilotOverview = useQuery({
     queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
     queryFn: ({ signal }) =>
@@ -149,26 +104,6 @@ export function SettingsView({
       await queryClient.invalidateQueries({ queryKey: ["pilot", "overview"] });
     },
   });
-  const configureProvider = useMutation({
-    mutationFn: () =>
-      configurePilotProvider(pilot!.identityId!, {
-        endpoint: pilotProviderEndpoint,
-        apiKey: pilotProviderKey,
-        defaultModel: pilotProviderModel,
-      }),
-    onSuccess: async () => {
-      setPilotProviderKey("");
-      setEditingPilotProvider(false);
-      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
-    },
-  });
-  const updateDeployment = useMutation({
-    mutationFn: () => updatePilotDeploymentEndpoint(deploymentEndpoint),
-    onSuccess: async () => {
-      setEditingDeployment(false);
-      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
-    },
-  });
   const connectAgent = useMutation({
     mutationFn: (client: "codex" | "claude-code" | "opencode") =>
       createPilotAgentTicket(pilot!.identityId!, pilotProject!.id, client),
@@ -177,866 +112,438 @@ export function SettingsView({
     },
   });
 
-  const localState = local.data?.available ? local.data : undefined;
-  const unavailableReason =
-    local.data && !local.data.available ? local.data.reason : undefined;
-  const connected = localState !== undefined;
-  const egress = localState?.modelEgress;
   const currentAccent = ACCENTS.find((a) => a.hex === accent) ?? ACCENTS[0]!;
-  const configuredCount =
-    integrations.data?.filter((integration) => integration.configured).length ??
-    0;
   const pilotOrganization = pilot?.bootstrap.data?.organization;
-  const isPilotAdministrator =
-    pilot?.bootstrap.data?.organizationRole === "admin";
+  const activeCategoryMeta =
+    SETTINGS_CATEGORIES.find((category) => category.id === activeCategory) ??
+    SETTINGS_CATEGORIES[0]!;
+  const categoryLede: Record<SettingsCategory, string> = {
+    personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
+    project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
+    agent: "查看当前项目的 Coding Agent 状态，并生成一次性连接提示。",
+  };
 
-  function openPilotProviderEditor() {
-    setPilotProviderEndpoint(
-      pilotOrganization?.provider.endpoint ?? "https://api.openai.com/v1",
-    );
-    setPilotProviderModel(
-      pilotOrganization?.provider.defaultModel ?? "gpt-5.4",
-    );
-    setPilotProviderKey("");
-    setEditingPilotProvider(true);
+  useEffect(() => {
+    setActiveCategory(initialCategory);
+  }, [initialCategory]);
+
+  function selectCategory(category: SettingsCategory) {
+    setActiveCategory(category);
+    onCategoryChange?.(category);
   }
 
   return (
-    <div className="animate-view-enter h-full overflow-auto p-[34px_34px_70px]">
-      <div className="max-w-[820px]">
-        <p className="text-[11px] font-[650] tracking-[0.1em] text-accent-strong">
-          {t("settings.eyebrow")}
+    <div className="animate-view-enter grid h-full grid-cols-[210px_minmax(0,1fr)] overflow-hidden">
+      <aside
+        className="overflow-auto border-r border-line bg-panel px-3 py-5"
+        aria-label="设置类别"
+      >
+        <p className="px-3 text-[10px] font-[650] tracking-[0.11em] text-accent-strong">
+          SETTINGS
         </p>
-        <h1 className="mt-2.5 text-[28px] font-[540] tracking-[-0.035em]">
-          {t("settings.title")}
-        </h1>
-        <p className="mt-3 max-w-[560px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
-          {t("settings.lede")}
-        </p>
-
-        {/* 外观 */}
-        <div className="mt-7">
-          <strong className="text-[14px] font-[620]">
-            {t("settings.appearance")}
-          </strong>
-          <p className="mt-2 max-w-[520px] text-[12px] leading-[1.7] text-ink-muted">
-            {t("settings.appearanceLede")}
-          </p>
-          <div className="mt-3.5 grid grid-cols-2 gap-3">
-            <div className="rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
-              <div className="flex items-center gap-2.5">
-                <span className="text-[12px] text-ink-muted">
-                  {t("settings.accent")}
+        <nav className="mt-4 grid gap-1" aria-label="设置类别">
+          {SETTINGS_CATEGORIES.map((category) => {
+            const Icon = category.icon;
+            const active = activeCategory === category.id;
+            return (
+              <button
+                key={category.id}
+                type="button"
+                data-testid={`settings-category-${category.id}`}
+                aria-current={active ? "page" : undefined}
+                onClick={() => selectCategory(category.id)}
+                className={[
+                  "grid min-h-[52px] grid-cols-[28px_minmax(0,1fr)] items-center gap-2 rounded-[11px] border-0 px-2.5 text-left",
+                  "focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-strong",
+                  active
+                    ? "bg-sel text-ink"
+                    : "bg-transparent text-ink-muted hover:bg-hover-wash hover:text-ink",
+                ].join(" ")}
+              >
+                <span className="grid h-7 w-7 place-items-center rounded-[8px] bg-raise">
+                  <Icon size={14} />
                 </span>
-                <span className="ml-auto font-mono text-[10.5px] text-faint">
-                  {currentAccent.name} · {accent}
+                <span className="min-w-0">
+                  <strong className="block truncate text-[11.5px] font-[620]">
+                    {category.label}
+                  </strong>
+                  <small className="mt-0.5 block truncate text-[9.5px] text-faint">
+                    {category.detail}
+                  </small>
                 </span>
-              </div>
-              <div className="mt-3.5 flex gap-2.5">
-                {ACCENTS.map((option) => {
-                  const selected = option.hex === accent;
-                  const ink = lum(option.hex) > 0.62 ? "#1a1710" : "#fffaf2";
-                  return (
-                    <button
-                      key={option.hex}
-                      type="button"
-                      title={option.name}
-                      onClick={() => setAccent(option.hex)}
-                      className={[
-                        "grid h-8 w-8 cursor-pointer place-items-center rounded-full border-2",
-                        selected ? "border-ink" : "border-transparent",
-                      ].join(" ")}
-                      style={{ background: option.hex }}
-                    >
-                      {selected ? (
-                        <CheckIcon size={13} weight="fill" color={ink} />
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
-              <span className="text-[12px] text-ink-muted">
-                {t("settings.theme")}
-              </span>
-              <div className="mt-3.5 grid grid-cols-3 gap-[9px]">
-                {(
-                  [
-                    {
-                      id: "system",
-                      label: t("settings.system"),
-                      icon: <CircleHalfIcon size={14} />,
-                    },
-                    {
-                      id: "light",
-                      label: t("settings.light"),
-                      icon: <SunIcon size={14} />,
-                    },
-                    {
-                      id: "dark",
-                      label: t("settings.dark"),
-                      icon: <MoonIcon size={14} />,
-                    },
-                  ] as const
-                ).map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    aria-pressed={preference === option.id}
-                    onClick={() => setPreference(option.id)}
-                    className={[
-                      "flex h-[34px] cursor-pointer items-center justify-center gap-2 rounded-[9px] border px-3 text-[12px]",
-                      preference === option.id
-                        ? "border-accent-strong bg-accent-soft"
-                        : "border-line2 hover:border-accent-strong",
-                    ].join(" ")}
-                  >
-                    {option.icon}
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              {preference === "system" ? (
-                <p className="mt-2.5 text-[10.5px] text-faint">
-                  {t("settings.systemNow", {
-                    mode:
-                      mode === "dark"
-                        ? t("settings.dark")
-                        : t("settings.light"),
-                  })}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        {/* 减少动态效果 */}
-        <button
-          type="button"
-          onClick={() => setReduceMotion(!reduceMotion)}
-          className="mt-3 grid w-full cursor-pointer grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[16px_18px] text-left hover:border-accent-strong"
-        >
-          <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-            <ShootingStarIcon size={16} />
-          </span>
-          <span className="grid">
-            <strong className="text-[12.5px] font-[620]">
-              {t("settings.motionTitle")}
-            </strong>
-            <small className="mt-1 text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-              {t("settings.motionDetail")}
-            </small>
-          </span>
-          <span
-            className={[
-              "inline-flex h-6 w-[42px] items-center rounded-pill p-[3px] transition-colors duration-200",
-              reduceMotion
-                ? "justify-end bg-accent-strong"
-                : "justify-start bg-raise",
-            ].join(" ")}
-          >
-            <span
-              className={[
-                "h-[18px] w-[18px] rounded-full",
-                reduceMotion ? "bg-on-accent" : "bg-faint",
-              ].join(" ")}
-            />
-          </span>
-        </button>
-
-        {/* 界面语言 */}
-        <div className="mt-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
-          <span className="text-[12px] text-ink-muted">
-            {t("settings.language")}
-          </span>
-          <p className="mt-1.5 text-[11px] text-faint">
-            {t("settings.languageDetail")}
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+      <div className="overflow-auto p-[34px_34px_70px]">
+        <div className="max-w-[820px]">
+          <p className="text-[11px] font-[650] tracking-[0.1em] text-accent-strong">
+            SETTINGS · {activeCategoryMeta.label.toUpperCase()}
           </p>
-          <div className="mt-3.5 grid grid-cols-2 gap-[9px]">
-            <LanguageOption
-              value="zh-CN"
-              current={locale}
-              label={t("settings.chinese")}
-              onSelect={setLocale}
-            />
-            <LanguageOption
-              value="en-US"
-              current={locale}
-              label={t("settings.english")}
-              onSelect={setLocale}
-            />
-          </div>
-        </div>
+          <h1 className="mt-2.5 text-[28px] font-[540] tracking-[-0.035em]">
+            {activeCategoryMeta.label}
+          </h1>
+          <p className="mt-3 max-w-[560px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
+            {categoryLede[activeCategory]}
+          </p>
 
-        {/* Workspaces */}
-        <div className="mt-8">
-          <div className="flex items-center gap-2.5">
-            <strong className="text-[14px] font-[620]">
-              {t("settings.workspaces")}
-            </strong>
-            <span className="text-[11px] text-faint">
-              {t("settings.workspacesHint")}
-            </span>
-          </div>
-          <div className="mt-3.5 flex flex-col gap-2">
-            {localState
-              ? localState.workspaces.map((workspace) => (
-                  <div
-                    key={workspace.id}
-                    className="grid grid-cols-[34px_minmax(0,1fr)_auto_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[14px_16px]"
-                  >
-                    <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-                      <FolderOpenIcon size={16} />
-                    </span>
-                    <span className="grid min-w-0">
-                      <strong className="truncate font-mono text-[12px] font-[500]">
-                        {workspace.root}
-                      </strong>
-                      <small className="mt-1 text-[10.5px] text-faint">
-                        {workspaceName(workspace.root)}
-                      </small>
-                    </span>
-                    <span
-                      className={[
-                        "rounded-pill px-2.5 py-1 text-[10.5px] font-[620]",
-                        workspace.revoked
-                          ? "bg-raise text-faint"
-                          : "bg-green-soft text-green",
-                      ].join(" ")}
-                    >
-                      {workspace.revoked
-                        ? t("settings.workspaceRevoked")
-                        : t("settings.workspaceActive")}
-                    </span>
-                    <span className="text-[11px] text-ink-muted">
-                      {t("settings.managedByDaemon")}
-                    </span>
-                  </div>
-                ))
-              : null}
-            {localState && localState.workspaces.length === 0 ? (
-              <p className="text-[12px] text-ink-muted">
-                {t("settings.noWorkspaces")}
-              </p>
-            ) : null}
-            {local.isPending ? (
-              <p className="text-[12px] text-ink-muted">
-                {t("general.loading")}
-              </p>
-            ) : null}
-            {!local.isPending && !connected ? (
-              <p className="text-[12px] text-danger">
-                {unavailableReason === "desktop_required"
-                  ? t("settings.desktopRequired")
-                  : t("settings.daemonUnavailable")}
-              </p>
-            ) : null}
-          </div>
-        </div>
-
-        {/* 本地运行时 */}
-        <div className="mt-8">
-          <strong className="text-[14px] font-[620]">
-            {t("settings.localRuntime")}
-          </strong>
-          <div className="mt-3.5 flex flex-col gap-2">
-            <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]">
-              <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-                <CloudSlashIcon size={16} />
-              </span>
-              <span className="grid">
-                <strong className="text-[12.5px] font-[620]">
-                  {t("settings.egress")}
+          {activeCategory === "personal" ? (
+            <>
+              {/* 外观 */}
+              <div className="mt-7">
+                <strong className="text-[14px] font-[620]">
+                  {t("settings.appearance")}
                 </strong>
-                <small className="mt-1 text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-                  {t("settings.egressDetail")}
-                </small>
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-pill border border-line2 p-[3px]">
-                {EGRESS_CHOICES.map((choice) => {
-                  const selected = egress === choice.value;
-                  return (
-                    <button
-                      key={choice.value}
-                      type="button"
-                      title={t(choice.detailKey)}
-                      disabled={!connected || updateEgress.isPending}
-                      onClick={() => updateEgress.mutate(choice.value)}
-                      className={[
-                        "cursor-pointer rounded-pill px-2.5 py-1 text-[10.5px] font-[620]",
-                        "disabled:cursor-not-allowed disabled:opacity-55",
-                        selected
-                          ? choice.value === "disabled"
-                            ? "bg-green-soft text-green"
-                            : "bg-accent-soft text-accent-strong"
-                          : "text-faint hover:text-ink",
-                      ].join(" ")}
-                    >
-                      {t(choice.labelKey)}
-                    </button>
-                  );
-                })}
-              </span>
-            </div>
-            {updateEgress.isError ? (
-              <p className="text-[11px] text-danger">
-                {t("settings.egressFailed")}
-              </p>
-            ) : null}
+                <p className="mt-2 max-w-[520px] text-[12px] leading-[1.7] text-ink-muted">
+                  {t("settings.appearanceLede")}
+                </p>
+                <div className="mt-3.5 grid grid-cols-2 gap-3">
+                  <div className="rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-[12px] text-ink-muted">
+                        {t("settings.accent")}
+                      </span>
+                      <span className="ml-auto font-mono text-[10.5px] text-faint">
+                        {currentAccent.name} · {accent}
+                      </span>
+                    </div>
+                    <div className="mt-3.5 flex gap-2.5">
+                      {ACCENTS.map((option) => {
+                        const selected = option.hex === accent;
+                        const ink =
+                          lum(option.hex) > 0.62 ? "#1a1710" : "#fffaf2";
+                        return (
+                          <button
+                            key={option.hex}
+                            type="button"
+                            title={option.name}
+                            onClick={() => setAccent(option.hex)}
+                            className={[
+                              "grid h-8 w-8 cursor-pointer place-items-center rounded-full border-2",
+                              selected ? "border-ink" : "border-transparent",
+                            ].join(" ")}
+                            style={{ background: option.hex }}
+                          >
+                            {selected ? (
+                              <CheckIcon size={13} weight="fill" color={ink} />
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
+                    <span className="text-[12px] text-ink-muted">
+                      {t("settings.theme")}
+                    </span>
+                    <div className="mt-3.5 grid grid-cols-3 gap-[9px]">
+                      {(
+                        [
+                          {
+                            id: "system",
+                            label: t("settings.system"),
+                            icon: <CircleHalfIcon size={14} />,
+                          },
+                          {
+                            id: "light",
+                            label: t("settings.light"),
+                            icon: <SunIcon size={14} />,
+                          },
+                          {
+                            id: "dark",
+                            label: t("settings.dark"),
+                            icon: <MoonIcon size={14} />,
+                          },
+                        ] as const
+                      ).map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={preference === option.id}
+                          onClick={() => setPreference(option.id)}
+                          className={[
+                            "flex h-[34px] cursor-pointer items-center justify-center gap-2 rounded-[9px] border px-3 text-[12px]",
+                            preference === option.id
+                              ? "border-accent-strong bg-accent-soft"
+                              : "border-line2 hover:border-accent-strong",
+                          ].join(" ")}
+                        >
+                          {option.icon}
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    {preference === "system" ? (
+                      <p className="mt-2.5 text-[10.5px] text-faint">
+                        {t("settings.systemNow", {
+                          mode:
+                            mode === "dark"
+                              ? t("settings.dark")
+                              : t("settings.light"),
+                        })}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
 
-            {localState?.health.encryptedStorage ? (
-              <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]">
+              {/* 减少动态效果 */}
+              <button
+                type="button"
+                onClick={() => setReduceMotion(!reduceMotion)}
+                className="mt-3 grid w-full cursor-pointer grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[16px_18px] text-left hover:border-accent-strong"
+              >
                 <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-                  <KeyIcon size={16} />
+                  <ShootingStarIcon size={16} />
                 </span>
                 <span className="grid">
                   <strong className="text-[12.5px] font-[620]">
-                    {t("settings.storage")}
+                    {t("settings.motionTitle")}
                   </strong>
                   <small className="mt-1 text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-                    {t("settings.storageDetail")}
+                    {t("settings.motionDetail")}
                   </small>
                 </span>
-                <span className="rounded-pill bg-green-soft px-2.5 py-1 text-[11px] font-[600] text-green">
-                  {t("settings.storageReady")}
-                </span>
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]">
-              <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-                <PlugsIcon size={16} />
-              </span>
-              <span className="grid">
-                <strong className="text-[12.5px] font-[620]">
-                  {t("settings.adapters")}
-                </strong>
-                <small className="mt-1 text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-                  {t("settings.adaptersDetail")}
-                </small>
-              </span>
-              <span className="rounded-pill bg-green-soft px-2.5 py-1 text-[11px] font-[600] text-green">
-                {t("settings.adaptersConnected", { count: configuredCount })}
-              </span>
-            </div>
-            <p className="text-[11px] text-faint">
-              {t("settings.integrationDisclosure")}
-            </p>
-            <div className="flex flex-col gap-2">
-              {integrations.data?.map((integration) => (
-                <IntegrationCard
-                  key={integration.adapter}
-                  integration={integration}
-                  busy={
-                    manageIntegration.isPending &&
-                    manageIntegration.variables?.adapter === integration.adapter
-                  }
-                  onAction={(action) => {
-                    manageIntegration.mutate({
-                      adapter: integration.adapter,
-                      action,
-                    });
-                  }}
-                />
-              ))}
-              {integrations.isPending ? (
-                <p className="text-[12px] text-ink-muted">
-                  {t("general.loading")}
-                </p>
-              ) : null}
-              {!integrations.isPending && integrations.data?.length === 0 ? (
-                <p className="text-[12px] text-danger">
-                  {t("settings.desktopRequired")}
-                </p>
-              ) : null}
-              {manageIntegration.isError || integrations.isError ? (
-                <p className="text-[12px] text-danger" role="alert">
-                  {t("settings.integrationActionFailed")}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]">
-              <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-ink-muted">
-                <TimerIcon size={16} />
-              </span>
-              <span className="grid">
-                <strong className="text-[12.5px] font-[620]">
-                  {t("settings.freshnessThreshold")}
-                </strong>
-                <small className="mt-1 text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
-                  {t("settings.freshnessDetail")}
-                </small>
-              </span>
-              <span className="rounded-pill bg-raise px-2.5 py-1 text-[11px] font-[600] text-faint">
-                {pulse.isPending
-                  ? t("general.unavailable")
-                  : t("settings.freshnessValue", {
-                      minutes: staleAfterMinutes(pulse.data?.staleAfterSeconds),
-                    })}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {pilot?.enabled && pilot.identityId ? (
-          <OnboardingAdminSettings />
-        ) : null}
-
-        {pilot?.enabled ? (
-          <div className="mt-8" data-testid="pilot-cloud-settings">
-            <strong className="text-[14px] font-[620]">Intero 云服务</strong>
-            <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
-              查看当前部署、模型服务和 Agent 连接。模型服务密钥仅保存在 Intero
-              服务端，不会返回给浏览器或团队成员。
-            </p>
-            <div className="mt-3.5 grid gap-3">
-              <div className="rounded-[13px] border border-line bg-panel2 p-[15px_16px]">
-                <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px]">
-                  <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-green">
-                    <CloudCheckIcon size={16} />
-                  </span>
-                  <span className="grid">
-                    <strong className="text-[12.5px] font-[620]">
-                      Intero 部署地址
-                    </strong>
-                    <small className="mt-1 truncate font-mono text-[11px] text-ink-muted">
-                      {pilotOrganization?.deploymentBaseUrl ??
-                        "尚未配置 Intero 部署"}
-                    </small>
-                  </span>
-                  {isPilotAdministrator ? (
-                    <button
-                      type="button"
-                      data-testid="deployment-endpoint-edit"
-                      onClick={() => {
-                        setDeploymentEndpoint(
-                          pilotOrganization?.deploymentBaseUrl ?? "",
-                        );
-                        setEditingDeployment(true);
-                      }}
-                      className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
-                    >
-                      修改并重新校验
-                    </button>
-                  ) : (
-                    <span className="rounded-pill bg-raise px-2.5 py-1 text-[10.5px] text-faint">
-                      继承组织配置
-                    </span>
-                  )}
-                </div>
-                {editingDeployment ? (
-                  <div className="mt-4 flex gap-2 border-t border-line pt-4">
-                    <input
-                      type="url"
-                      value={deploymentEndpoint}
-                      onChange={(event) =>
-                        setDeploymentEndpoint(event.target.value)
-                      }
-                      data-testid="deployment-endpoint-input"
-                      className="h-9 min-w-0 flex-1 rounded-btn border border-line2 bg-raise px-3 font-mono text-[11.5px] outline-none focus:border-accent-strong"
-                    />
-                    <button
-                      type="button"
-                      disabled={
-                        !deploymentEndpoint.trim() || updateDeployment.isPending
-                      }
-                      onClick={() => updateDeployment.mutate()}
-                      className="h-9 rounded-btn border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:opacity-50"
-                    >
-                      {updateDeployment.isPending ? "校验中…" : "校验并保存"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditingDeployment(false)}
-                      className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[12px]"
-                    >
-                      取消
-                    </button>
-                  </div>
-                ) : null}
-                {updateDeployment.isError ? (
-                  <p className="mt-3 text-[11px] text-danger" role="alert">
-                    无法通过该地址访问 Intero 健康检查，配置未保存。
-                  </p>
-                ) : null}
-              </div>
-
-              <div
-                className="rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
-                data-testid="pilot-provider-settings"
-              >
-                <div className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px]">
+                <span
+                  className={[
+                    "inline-flex h-6 w-[42px] items-center rounded-pill p-[3px] transition-colors duration-200",
+                    reduceMotion
+                      ? "justify-end bg-accent-strong"
+                      : "justify-start bg-raise",
+                  ].join(" ")}
+                >
                   <span
                     className={[
-                      "grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise",
-                      pilotOrganization?.provider.configured
-                        ? "text-green"
-                        : "text-ink-muted",
+                      "h-[18px] w-[18px] rounded-full",
+                      reduceMotion ? "bg-on-accent" : "bg-faint",
                     ].join(" ")}
-                  >
-                    <KeyIcon size={16} />
-                  </span>
-                  <span className="grid min-w-0">
-                    <strong className="text-[12.5px] font-[620]">
-                      模型服务
-                    </strong>
-                    <small className="mt-1 truncate text-[11px] text-ink-muted">
-                      {pilotOrganization?.provider.configured
-                        ? `${pilotOrganization.provider.endpoint} · ${pilotOrganization.provider.defaultModel}`
-                        : "尚未配置；替身和 Agent 工作摘要暂不可用"}
-                    </small>
-                  </span>
-                  {isPilotAdministrator ? (
-                    <button
-                      type="button"
-                      data-testid="pilot-provider-settings-edit"
-                      onClick={openPilotProviderEditor}
-                      className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink hover:border-accent-strong"
-                    >
-                      {pilotOrganization?.provider.configured
-                        ? "修改配置"
-                        : "配置模型服务"}
-                    </button>
-                  ) : (
-                    <span className="rounded-pill bg-raise px-2.5 py-1 text-[10.5px] text-faint">
-                      {pilotOrganization?.provider.configured
-                        ? "已配置"
-                        : "未配置"}
-                    </span>
-                  )}
-                </div>
+                  />
+                </span>
+              </button>
 
-                {editingPilotProvider ? (
+              {/* 界面语言 */}
+              <div className="mt-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
+                <span className="text-[12px] text-ink-muted">
+                  {t("settings.language")}
+                </span>
+                <p className="mt-1.5 text-[11px] text-faint">
+                  {t("settings.languageDetail")}
+                </p>
+                <div className="mt-3.5 grid grid-cols-2 gap-[9px]">
+                  <LanguageOption
+                    value="zh-CN"
+                    current={locale}
+                    label={t("settings.chinese")}
+                    onSelect={setLocale}
+                  />
+                  <LanguageOption
+                    value="en-US"
+                    current={locale}
+                    label={t("settings.english")}
+                    onSelect={setLocale}
+                  />
+                </div>
+              </div>
+
+              {pilot?.enabled && pilot.identityId ? (
+                <>
+                  <OnboardingAdminSettings section="personal" />
+                  <AccountSecuritySettings />
+                  <NotificationSettings />
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          {activeCategory === "project" &&
+          pilot?.enabled &&
+          pilot.identityId ? (
+            <>
+              <OnboardingAdminSettings section="project" />
+              <ProjectAutomationSettings
+                projectId={pilotProject?.id}
+                projectName={pilotProject?.name}
+              />
+            </>
+          ) : null}
+
+          {pilot?.enabled && activeCategory === "agent" ? (
+            <div className="mt-8" data-testid="pilot-cloud-settings">
+              <strong className="text-[14px] font-[620]">Coding Agent</strong>
+              <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
+                管理当前项目的 Coding Agent 连接状态与一次性接入提示。
+              </p>
+              <div className="mt-3.5 grid gap-3">
+                {activeCategory === "agent"
+                  ? (pilotOverview.data?.bindings ?? [])
+                      .filter((binding) => !binding.disconnectedAt)
+                      .map((binding) => (
+                        <div
+                          key={binding.id}
+                          className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
+                        >
+                          <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-green">
+                            <PlugsIcon size={16} />
+                          </span>
+                          <span className="grid">
+                            <strong className="text-[12.5px] font-[620]">
+                              {binding.name}
+                            </strong>
+                            <small className="mt-1 text-[11px] text-ink-muted">
+                              {binding.client} · {pilotProject?.name} ·{" "}
+                              {binding.lastSeenAt ? "已收到工作动态" : "已连接"}
+                            </small>
+                          </span>
+                          {binding.ownerId === pilot?.identityId ? (
+                            <button
+                              type="button"
+                              data-testid={`pilot-agent-disconnect-${binding.client}`}
+                              disabled={disconnectAgent.isPending}
+                              onClick={() => disconnectAgent.mutate(binding.id)}
+                              className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-danger hover:text-danger"
+                            >
+                              断开
+                            </button>
+                          ) : null}
+                        </div>
+                      ))
+                  : null}
+                {activeCategory === "agent" && pilotProject ? (
                   <div
-                    className="mt-4 grid gap-3 border-t border-line pt-4"
-                    data-testid="pilot-provider-settings-form"
+                    className="rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
+                    data-testid="agent-connection-settings"
                   >
-                    <label className="grid gap-1.5">
-                      <span className="text-[11px] text-ink-muted">
-                        服务地址
-                      </span>
-                      <input
-                        type="url"
-                        value={pilotProviderEndpoint}
-                        onChange={(event) =>
-                          setPilotProviderEndpoint(event.target.value)
-                        }
-                        data-testid="pilot-provider-settings-endpoint"
-                        className="h-9 rounded-btn border border-line2 bg-raise px-3 font-mono text-[11.5px] text-ink outline-none focus:border-accent-strong"
-                      />
-                    </label>
-                    <label className="grid gap-1.5">
-                      <span className="text-[11px] text-ink-muted">
-                        API 密钥
-                      </span>
-                      <input
-                        type="password"
-                        value={pilotProviderKey}
-                        onChange={(event) =>
-                          setPilotProviderKey(event.target.value)
-                        }
-                        placeholder="修改配置时需重新输入"
-                        autoComplete="new-password"
-                        data-testid="pilot-provider-settings-key"
-                        className="h-9 rounded-btn border border-line2 bg-raise px-3 font-mono text-[11.5px] text-ink outline-none placeholder:text-faint focus:border-accent-strong"
-                      />
-                    </label>
-                    <label className="grid gap-1.5">
-                      <span className="text-[11px] text-ink-muted">
-                        默认模型
-                      </span>
-                      <input
-                        value={pilotProviderModel}
-                        onChange={(event) =>
-                          setPilotProviderModel(event.target.value)
-                        }
-                        data-testid="pilot-provider-settings-model"
-                        className="h-9 rounded-btn border border-line2 bg-raise px-3 font-mono text-[11.5px] text-ink outline-none focus:border-accent-strong"
-                      />
-                    </label>
-                    <p className="text-[10.5px] leading-[1.6] text-faint">
-                      出于安全考虑，Intero
-                      不会回显已有密钥；保存修改时需要重新输入。
+                    <strong className="text-[12.5px] font-[620]">
+                      连接 Coding Agent
+                    </strong>
+                    <p className="mt-1.5 text-[10.5px] leading-[1.6] text-ink-muted">
+                      生成一次性项目连接提示。无需手动创建或管理 API Key。
                     </p>
-                    {configureProvider.isError ? (
-                      <p className="text-[11px] text-danger" role="alert">
-                        保存失败，请检查服务地址、密钥和模型名称后重试。
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          ["codex", "Codex"],
+                          ["claude-code", "Claude Code"],
+                          ["opencode", "OpenCode"],
+                        ] as const
+                      ).map(([client, label]) => {
+                        const active = pilotOverview.data?.bindings.some(
+                          (binding) =>
+                            binding.client === client &&
+                            binding.ownerId === pilot.identityId &&
+                            !binding.disconnectedAt,
+                        );
+                        return (
+                          <button
+                            key={client}
+                            type="button"
+                            disabled={
+                              active ||
+                              connectAgent.isPending ||
+                              !pilotOrganization?.provider.configured
+                            }
+                            data-testid={`connect-agent-${client}`}
+                            onClick={() => connectAgent.mutate(client)}
+                            className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong disabled:opacity-50"
+                          >
+                            {active ? `${label} 已连接` : `连接 ${label}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {agentPrompt ? (
+                      <div className="mt-3 grid gap-2 border-t border-line pt-3">
+                        <span className="text-[10.5px] text-ink-muted">
+                          将以下提示粘贴到{" "}
+                          {agentPrompt.client === "claude-code"
+                            ? "Claude Code"
+                            : agentPrompt.client === "opencode"
+                              ? "OpenCode"
+                              : "Codex"}
+                          ：
+                        </span>
+                        <textarea
+                          readOnly
+                          rows={5}
+                          value={agentPrompt.prompt}
+                          data-testid="agent-connect-prompt"
+                          className="resize-none rounded-[9px] border border-line bg-bg p-3 font-mono text-[10px] leading-[1.55] text-ink-muted outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigator.clipboard.writeText(agentPrompt.prompt)
+                          }
+                          className="justify-self-start h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong"
+                        >
+                          复制连接提示
+                        </button>
+                      </div>
+                    ) : null}
+                    {connectAgent.isError ? (
+                      <p className="mt-3 text-[11px] text-danger" role="alert">
+                        无法生成连接提示。请先确认模型服务已配置。
                       </p>
                     ) : null}
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        data-testid="pilot-provider-settings-submit"
-                        disabled={
-                          !pilotProviderEndpoint.trim() ||
-                          !pilotProviderKey.trim() ||
-                          !pilotProviderModel.trim() ||
-                          configureProvider.isPending
-                        }
-                        onClick={() => configureProvider.mutate()}
-                        className="h-9 rounded-btn border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:opacity-50"
-                      >
-                        {configureProvider.isPending
-                          ? "保存中…"
-                          : "保存模型服务配置"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={configureProvider.isPending}
-                        onClick={() => {
-                          setPilotProviderKey("");
-                          setEditingPilotProvider(false);
-                        }}
-                        className="h-9 rounded-btn border border-line2 bg-transparent px-4 text-[12px] text-ink-muted hover:border-accent-strong"
-                      >
-                        取消
-                      </button>
-                    </div>
                   </div>
                 ) : null}
               </div>
-
-              {(pilotOverview.data?.bindings ?? [])
-                .filter((binding) => !binding.disconnectedAt)
-                .map((binding) => (
-                  <div
-                    key={binding.id}
-                    className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
-                  >
-                    <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-green">
-                      <PlugsIcon size={16} />
-                    </span>
-                    <span className="grid">
-                      <strong className="text-[12.5px] font-[620]">
-                        {binding.name}
-                      </strong>
-                      <small className="mt-1 text-[11px] text-ink-muted">
-                        {binding.client} · {pilotProject?.name} ·{" "}
-                        {binding.lastSeenAt ? "已收到工作动态" : "已连接"}
-                      </small>
-                    </span>
-                    {binding.ownerId === pilot?.identityId ? (
-                      <button
-                        type="button"
-                        data-testid={`pilot-agent-disconnect-${binding.client}`}
-                        disabled={disconnectAgent.isPending}
-                        onClick={() => disconnectAgent.mutate(binding.id)}
-                        className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-danger hover:text-danger"
-                      >
-                        断开
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-              {pilotProject ? (
-                <div
-                  className="rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
-                  data-testid="agent-connection-settings"
-                >
-                  <strong className="text-[12.5px] font-[620]">
-                    连接 Coding Agent
-                  </strong>
-                  <p className="mt-1.5 text-[10.5px] leading-[1.6] text-ink-muted">
-                    生成一次性项目连接提示。无需手动创建或管理 API Key。
-                  </p>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    {(
-                      [
-                        ["codex", "Codex"],
-                        ["claude-code", "Claude Code"],
-                        ["opencode", "OpenCode"],
-                      ] as const
-                    ).map(([client, label]) => {
-                      const active = pilotOverview.data?.bindings.some(
-                        (binding) =>
-                          binding.client === client &&
-                          binding.ownerId === pilot.identityId &&
-                          !binding.disconnectedAt,
-                      );
-                      return (
-                        <button
-                          key={client}
-                          type="button"
-                          disabled={
-                            active ||
-                            connectAgent.isPending ||
-                            !pilotOrganization?.provider.configured
-                          }
-                          data-testid={`connect-agent-${client}`}
-                          onClick={() => connectAgent.mutate(client)}
-                          className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong disabled:opacity-50"
-                        >
-                          {active ? `${label} 已连接` : `连接 ${label}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {agentPrompt ? (
-                    <div className="mt-3 grid gap-2 border-t border-line pt-3">
-                      <span className="text-[10.5px] text-ink-muted">
-                        将以下提示粘贴到{" "}
-                        {agentPrompt.client === "claude-code"
-                          ? "Claude Code"
-                          : agentPrompt.client === "opencode"
-                            ? "OpenCode"
-                            : "Codex"}
-                        ：
-                      </span>
-                      <textarea
-                        readOnly
-                        rows={5}
-                        value={agentPrompt.prompt}
-                        data-testid="agent-connect-prompt"
-                        className="resize-none rounded-[9px] border border-line bg-bg p-3 font-mono text-[10px] leading-[1.55] text-ink-muted outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigator.clipboard.writeText(agentPrompt.prompt)
-                        }
-                        className="justify-self-start h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong"
-                      >
-                        复制连接提示
-                      </button>
-                    </div>
-                  ) : null}
-                  {connectAgent.isError ? (
-                    <p className="mt-3 text-[11px] text-danger" role="alert">
-                      无法生成连接提示。请先确认模型服务已配置。
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {/* 重新运行首次引导 */}
-        <div className="mt-8 flex items-center gap-3 rounded-[13px] border border-dashed border-line2 p-[16px_18px]">
-          <PathIcon size={17} className="text-accent-strong" />
-          <span className="grid">
-            <strong className="text-[12.5px] font-[620]">
-              {t("settings.rerunSetup")}
-            </strong>
-            <small className="mt-1 text-[11px] text-ink-muted">
-              {t("settings.rerunSetupDetail")}
-            </small>
-          </span>
-          <button
-            type="button"
-            onClick={onOpenSetup}
-            className="ml-auto h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong"
-          >
-            {t("general.open")}
-          </button>
-        </div>
+          {/* Re-running first-run setup re-walks deployment, org, model,
+              project and agent, so it sits with the connection category. */}
+          {activeCategory === "agent" ? (
+            <div className="mt-8 flex items-center gap-3 rounded-[13px] border border-dashed border-line2 p-[16px_18px]">
+              <PathIcon size={17} className="text-accent-strong" />
+              <span className="grid">
+                <strong className="text-[12.5px] font-[620]">
+                  {t("settings.rerunSetup")}
+                </strong>
+                <small className="mt-1 text-[11px] text-ink-muted">
+                  {t("settings.rerunSetupDetail")}
+                </small>
+              </span>
+              <button
+                type="button"
+                onClick={onOpenSetup}
+                className="ml-auto h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong"
+              >
+                {t("general.open")}
+              </button>
+            </div>
+          ) : null}
 
-        {onOpenTestSetup ? (
-          <div
-            className="mt-3 flex items-center gap-3 rounded-[13px] border border-dashed border-accent-soft bg-accent-soft p-[16px_18px]"
-            data-testid="test-setup-entry"
-          >
-            <PathIcon size={17} className="text-accent-strong" />
-            <span className="grid">
-              <strong className="text-[12.5px] font-[620]">Test Setup</strong>
-              <small className="mt-1 text-[11px] text-ink-muted">
-                仅开发环境可见，用于验证云部署、团队、Provider、项目与 Agent
-                连接。
-              </small>
-            </span>
-            <button
-              type="button"
-              onClick={onOpenTestSetup}
-              className="ml-auto h-8 cursor-pointer rounded-btn border border-accent-strong bg-transparent px-3.5 text-[12px] text-accent-strong"
+          {activeCategory === "agent" && onOpenTestSetup ? (
+            <div
+              className="mt-3 flex items-center gap-3 rounded-[13px] border border-dashed border-accent-soft bg-accent-soft p-[16px_18px]"
+              data-testid="test-setup-entry"
             >
-              打开测试流程
-            </button>
-          </div>
-        ) : null}
+              <PathIcon size={17} className="text-accent-strong" />
+              <span className="grid">
+                <strong className="text-[12.5px] font-[620]">Test Setup</strong>
+                <small className="mt-1 text-[11px] text-ink-muted">
+                  仅开发环境可见，用于验证云部署、团队、Provider、项目与 Agent
+                  连接。
+                </small>
+              </span>
+              <button
+                type="button"
+                onClick={onOpenTestSetup}
+                className="ml-auto h-8 cursor-pointer rounded-btn border border-accent-strong bg-transparent px-3.5 text-[12px] text-accent-strong"
+              >
+                打开测试流程
+              </button>
+            </div>
+          ) : null}
 
-        <p className="mt-[26px] max-w-[620px] rounded-[13px] bg-raise p-[16px_18px] text-[11.5px] leading-[1.75] text-faint [text-wrap:pretty]">
-          {t("settings.footer")}
-        </p>
+          <p className="mt-[26px] max-w-[620px] rounded-[13px] bg-raise p-[16px_18px] text-[11.5px] leading-[1.75] text-faint [text-wrap:pretty]">
+            {t("settings.footer")}
+          </p>
+        </div>
       </div>
     </div>
-  );
-}
-
-function IntegrationCard({
-  integration,
-  busy,
-  onAction,
-}: {
-  integration: CodingAgentIntegrationStatus;
-  busy: boolean;
-  onAction: (action: CodingAgentIntegrationAction) => void;
-}) {
-  const { t } = useI18n();
-  const configured = integration.configured;
-  const action: CodingAgentIntegrationAction =
-    integration.state === "needs_repair"
-      ? "repair"
-      : configured
-        ? "uninstall"
-        : "install";
-  const adapterName =
-    integration.adapter === "claude-code"
-      ? "Claude Code"
-      : integration.adapter === "opencode"
-        ? "OpenCode"
-        : "Codex";
-  const stateKey: TranslationKey = `settings.integrationState.${integration.state}`;
-  const actionKey: TranslationKey = `settings.integrationAction.${action}`;
-  const stateClass =
-    integration.state === "needs_repair"
-      ? "bg-danger-soft text-danger"
-      : configured
-        ? "bg-green-soft text-green"
-        : "bg-raise text-faint";
-
-  return (
-    <article className="grid grid-cols-[34px_minmax(0,1fr)_auto_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[14px_16px]">
-      <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-[11px] font-[650] text-ink-muted">
-        {adapterName.slice(0, 2).toUpperCase()}
-      </span>
-      <span className="grid min-w-0">
-        <strong className="text-[12.5px] font-[620]">{adapterName}</strong>
-        <small className="mt-1 text-[11px] text-ink-muted">
-          {integration.detected
-            ? integration.version
-            : t("settings.notDetected")}
-        </small>
-      </span>
-      <span
-        className={`rounded-pill px-2.5 py-1 text-[10.5px] font-[620] ${stateClass}`}
-      >
-        {t(stateKey)}
-      </span>
-      <button
-        type="button"
-        disabled={busy || (!integration.supported && action !== "uninstall")}
-        onClick={() => onAction(action)}
-        className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong disabled:cursor-not-allowed disabled:opacity-55"
-      >
-        {busy ? t("settings.integrationWorking") : t(actionKey)}
-      </button>
-      {integration.state === "pending_trust" ? (
-        <p className="col-span-4 text-[10.5px] text-faint">
-          {t("settings.codexTrust")}
-        </p>
-      ) : null}
-      {integration.warnings.map((warning) => (
-        <p key={warning} className="col-span-4 text-[10.5px] text-faint">
-          {warning === "codex_override_shadows_instructions"
-            ? t("settings.codexOverrideWarning")
-            : warning === "agent_runtime_unreachable"
-              ? t("settings.agentRuntimeUnreachable")
-              : warning}
-        </p>
-      ))}
-    </article>
   );
 }
 
@@ -1066,8 +573,4 @@ function LanguageOption({
       {label}
     </button>
   );
-}
-
-function workspaceName(root: string): string {
-  return root.split(/[\\/]/).filter(Boolean).at(-1) ?? root;
 }

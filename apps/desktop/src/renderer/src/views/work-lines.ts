@@ -1,7 +1,7 @@
 import type { PilotWorkNarrative, PublicWorkProjection } from "@intero/domain";
 
 /**
- * The five things a Representative reports about one workstream, flattened to
+ * The five things a Stand-in reports about one workstream, flattened to
  * plain strings so every surface (pulse card, person detail) renders the same
  * facts at a different density. Fields are absent when nothing was reported —
  * views must fall back, never invent.

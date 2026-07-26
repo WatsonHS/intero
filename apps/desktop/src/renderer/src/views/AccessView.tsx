@@ -1,7 +1,10 @@
 import {
   ArrowRightIcon,
   CheckCircleIcon,
-  EnvelopeSimpleIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  FingerprintIcon,
+  KeyIcon,
   PlugsIcon,
   SignOutIcon,
   WarningCircleIcon,
@@ -9,55 +12,107 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { authClient } from "../auth-client.js";
+import { Checkbox } from "../design/primitives.js";
 import {
+  activatePilotInvitation,
   acceptPilotInvitation,
   getPilotInvitation,
-  requestMagicLink,
   signOut,
 } from "../pilot/api.js";
 import { usePilot } from "../pilot/context.js";
 
 export function SignInView() {
   const [email, setEmail] = useState("");
-  const signIn = useMutation({
-    mutationFn: () => requestMagicLink(email, window.location.href),
+  const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const passwordSignIn = useMutation({
+    mutationFn: async () => {
+      const result = await authClient.signIn.email({ email, password });
+      if (result.error) throw new Error(result.error.message);
+    },
+    onSuccess: () => window.location.reload(),
+  });
+  const passkeySignIn = useMutation({
+    mutationFn: async () => {
+      const result = await authClient.signIn.passkey();
+      if (result.error) throw new Error(result.error.message);
+    },
+    onSuccess: () => window.location.reload(),
   });
 
   return (
     <AccessShell eyebrow="INTERO · 登录" title="回到你的团队">
       <p className="text-[13px] leading-[1.75] text-ink-muted">
-        输入团队已邀请的邮箱。Intero 会发送一次性登录链接；未加入任何团队的账号无法进入工作区。
+        使用已激活账号的邮箱和密码登录，也可以使用 Passkey。Intero
+        不开放公开注册。
       </p>
-      <label className="mt-6 grid gap-2">
-        <span className="text-[11px] font-[620] text-ink-muted">邮箱</span>
-        <input
-          type="email"
-          autoComplete="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          className="h-10 rounded-btn border border-line2 bg-raise px-3 text-[12.5px] text-ink outline-none focus:border-accent-strong"
-          placeholder="you@company.com"
+      <form
+        className="mt-6"
+        data-testid="password-sign-in-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          passwordSignIn.mutate();
+        }}
+      >
+        <label className="grid gap-2">
+          <span className="text-[11px] font-[620] text-ink-muted">邮箱</span>
+          <input
+            type="email"
+            autoComplete="email"
+            value={email}
+            data-testid="sign-in-email"
+            onChange={(event) => setEmail(event.target.value)}
+            className="h-10 rounded-btn border border-line2 bg-raise px-3 text-[12.5px] text-ink outline-none focus-visible:border-accent-strong focus-visible:ring-1 focus-visible:ring-accent-strong"
+            placeholder="you@company.com"
+          />
+        </label>
+        <PasswordField
+          className="mt-3"
+          label="密码"
+          autoComplete="current-password"
+          value={password}
+          visible={passwordVisible}
+          inputTestId="sign-in-password"
+          toggleTestId="sign-in-password-toggle"
+          onChange={setPassword}
+          onToggle={() => setPasswordVisible((current) => !current)}
         />
-      </label>
-      {signIn.isSuccess ? (
-        <Notice tone="success">
-          登录链接已发送。请在同一浏览器中打开邮件里的链接。
-        </Notice>
-      ) : null}
-      {signIn.isError ? (
-        <Notice tone="danger">
-          无法发送登录链接。请确认该邮箱已接受团队邀请，或联系组织管理员。
-        </Notice>
-      ) : null}
+        {passwordSignIn.isError || passkeySignIn.isError ? (
+          <Notice tone="danger">
+            登录失败。请检查凭据；如果账号尚未激活或需要恢复访问，请联系组织管理员。
+          </Notice>
+        ) : null}
+        <button
+          type="submit"
+          data-testid="sign-in-password-submit"
+          disabled={
+            !email.trim() || password.length < 12 || passwordSignIn.isPending
+          }
+          className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12.5px] font-[620] text-on-accent disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+        >
+          <KeyIcon size={15} />
+          {passwordSignIn.isPending ? "正在登录…" : "使用邮箱和密码登录"}
+        </button>
+      </form>
+      <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+        <span className="h-px flex-1 bg-line" />
+        或使用 Passkey
+        <span className="h-px flex-1 bg-line" />
+      </div>
       <button
         type="button"
-        disabled={!email.trim() || signIn.isPending}
-        onClick={() => signIn.mutate()}
-        className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12.5px] font-[620] text-on-accent disabled:opacity-50"
+        data-testid="sign-in-passkey"
+        disabled={passkeySignIn.isPending}
+        onClick={() => passkeySignIn.mutate()}
+        className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
       >
-        <EnvelopeSimpleIcon size={15} />
-        {signIn.isPending ? "正在发送…" : "发送一次性登录链接"}
+        <FingerprintIcon size={17} />
+        {passkeySignIn.isPending ? "正在验证…" : "使用 Passkey 登录"}
       </button>
+      <p className="mt-4 text-[10.5px] leading-[1.65] text-faint">
+        当前不提供自助密码找回。管理员可以通过受控的人工恢复流程协助，系统不会发送虚假的找回邮件。
+      </p>
     </AccessShell>
   );
 }
@@ -73,7 +128,9 @@ export function AcceptInvitationView({
 }) {
   const queryClient = useQueryClient();
   const pilot = usePilot();
-  const [linkSent, setLinkSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [alsoAddPasskey, setAlsoAddPasskey] = useState(false);
   const invitation = useQuery({
     queryKey: ["pilot", "invitation", token],
     queryFn: ({ signal }) => getPilotInvitation(token, signal),
@@ -84,20 +141,49 @@ export function AcceptInvitationView({
       ? signedIn.email.toLowerCase() ===
         invitation.data.invitation.email.toLowerCase()
       : false;
-  const sendLink = useMutation({
-    mutationFn: async () => {
-      if (!invitation.data) return;
-      await requestMagicLink(
-        invitation.data.invitation.email,
-        window.location.href,
-        invitation.data.invitation.displayName,
-        token,
-      );
-      setLinkSent(true);
-    },
-  });
   const accept = useMutation({
     mutationFn: () => acceptPilotInvitation(token),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+    },
+  });
+  const activate = useMutation({
+    mutationFn: async (input: {
+      credential: "passkey" | "password" | "both";
+      password?: string;
+    }) => {
+      await activatePilotInvitation(
+        token,
+        input.credential === "passkey"
+          ? { credential: "passkey" }
+          : {
+              credential: input.credential,
+              password: input.password!,
+            },
+      );
+      if (input.credential === "passkey" || input.credential === "both") {
+        const passkey = await authClient.passkey.addPasskey({
+          name: "Intero Passkey",
+        });
+        if (passkey.error) throw new Error(passkey.error.message);
+      }
+      return acceptPilotInvitation(token);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+    },
+  });
+  const signInExisting = useMutation({
+    mutationFn: async (input: { mode: "passkey" | "password" }) => {
+      const result =
+        input.mode === "passkey"
+          ? await authClient.signIn.passkey()
+          : await authClient.signIn.email({
+              email: invitation.data!.invitation.email,
+              password,
+            });
+      if (result.error) throw new Error(result.error.message);
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
@@ -128,7 +214,7 @@ export function AcceptInvitationView({
   }
 
   const detail = invitation.data;
-  const accepted = accept.data;
+  const accepted = accept.data ?? activate.data;
   const status = detail.invitation.status;
 
   return (
@@ -143,7 +229,8 @@ export function AcceptInvitationView({
       {accepted ? (
         <>
           <Notice tone="success">
-            已加入 {accepted.team.name}。你的姓名已写入个人设置，并已获得团队关联项目的访问权限。
+            已加入 {accepted.team.name}
+            。你的姓名已写入个人设置，并已获得团队关联项目的访问权限。
           </Notice>
           <div className="mt-5 grid grid-cols-2 gap-3">
             <button
@@ -172,29 +259,119 @@ export function AcceptInvitationView({
               ? "这个邀请已过期。请让组织管理员重新生成。"
               : "这个邀请已被撤销。请联系组织管理员。"}
         </Notice>
+      ) : !signedIn && detail.activationRequired ? (
+        <>
+          <p className="mt-5 text-[12px] leading-[1.7] text-ink-muted">
+            这个一次性激活链接只用于建立首个登录凭据。推荐创建
+            Passkey，也可以先设置密码。激活完成后，链接不能用于再次登录。
+          </p>
+          {activate.isError ? (
+            <Notice tone="danger">
+              激活失败。请重试，或让组织管理员撤销并重新生成激活链接。
+            </Notice>
+          ) : null}
+          <form
+            className="mt-5"
+            data-testid="activation-password-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              activate.mutate({
+                credential: alsoAddPasskey ? "both" : "password",
+                password,
+              });
+            }}
+          >
+            <PasswordField
+              label="新密码"
+              autoComplete="new-password"
+              value={password}
+              visible={passwordVisible}
+              inputTestId="activation-password"
+              toggleTestId="activation-password-toggle"
+              onChange={setPassword}
+              onToggle={() => setPasswordVisible((current) => !current)}
+            />
+            <Checkbox
+              className="mt-3"
+              checked={alsoAddPasskey}
+              onChange={setAlsoAddPasskey}
+              label="激活后同时添加 Passkey"
+            />
+            <button
+              type="submit"
+              data-testid="activation-password-submit"
+              disabled={password.length < 12 || activate.isPending}
+              className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+            >
+              <KeyIcon size={15} />
+              设置密码并激活
+            </button>
+          </form>
+          <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+            <span className="h-px flex-1 bg-line" />
+            或使用 Passkey
+            <span className="h-px flex-1 bg-line" />
+          </div>
+          <button
+            type="button"
+            data-testid="activation-passkey"
+            disabled={activate.isPending}
+            onClick={() => activate.mutate({ credential: "passkey" })}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+          >
+            <FingerprintIcon size={16} />
+            {activate.isPending ? "正在激活…" : "使用 Passkey 激活"}
+          </button>
+        </>
       ) : !signedIn ? (
         <>
           <p className="mt-5 text-[12px] leading-[1.7] text-ink-muted">
-            请先使用上面的受邀邮箱完成登录。姓名会在接受后写入个人设置，之后可以自行修改。
+            这个账号已经激活。请用 Passkey 或已有密码登录，再确认加入团队。
           </p>
-          {linkSent ? (
-            <Notice tone="success">
-              登录链接已发送到 {detail.invitation.email}。
+          {signInExisting.isError ? (
+            <Notice tone="danger">
+              登录失败，请检查凭据或联系组织管理员。
             </Notice>
           ) : null}
-          {sendLink.isError ? (
-            <Notice tone="danger">登录链接发送失败，请稍后重试。</Notice>
-          ) : null}
+          <form
+            className="mt-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              signInExisting.mutate({ mode: "password" });
+            }}
+          >
+            <PasswordField
+              label="密码"
+              autoComplete="current-password"
+              value={password}
+              visible={passwordVisible}
+              inputTestId="invitation-sign-in-password"
+              toggleTestId="invitation-sign-in-password-toggle"
+              onChange={setPassword}
+              onToggle={() => setPasswordVisible((current) => !current)}
+            />
+            <button
+              type="submit"
+              disabled={password.length < 12 || signInExisting.isPending}
+              className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+            >
+              <KeyIcon size={15} />
+              使用密码登录
+            </button>
+          </form>
+          <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+            <span className="h-px flex-1 bg-line" />
+            或使用 Passkey
+            <span className="h-px flex-1 bg-line" />
+          </div>
           <button
             type="button"
-            disabled={sendLink.isPending}
-            onClick={() => sendLink.mutate()}
-            className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12.5px] font-[620] text-on-accent disabled:opacity-50"
+            disabled={signInExisting.isPending}
+            onClick={() => signInExisting.mutate({ mode: "passkey" })}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
           >
-            <EnvelopeSimpleIcon size={15} />
-            {sendLink.isPending
-              ? "正在发送…"
-              : `使用 ${detail.invitation.email} 登录`}
+            <FingerprintIcon size={16} />
+            使用 Passkey 登录
           </button>
         </>
       ) : !emailMatches ? (
@@ -279,6 +456,55 @@ function InvitationRow({
         {value}
       </strong>
     </div>
+  );
+}
+
+export function PasswordField({
+  label,
+  autoComplete,
+  value,
+  visible,
+  onChange,
+  onToggle,
+  inputTestId,
+  toggleTestId,
+  className = "",
+}: {
+  label: string;
+  autoComplete: "current-password" | "new-password";
+  value: string;
+  visible: boolean;
+  onChange: (value: string) => void;
+  onToggle: () => void;
+  inputTestId: string;
+  toggleTestId: string;
+  className?: string;
+}) {
+  return (
+    <label className={["grid gap-2", className].join(" ")}>
+      <span className="text-[11px] font-[620] text-ink-muted">{label}</span>
+      <span className="grid grid-cols-[minmax(0,1fr)_40px] overflow-hidden rounded-btn border border-line2 bg-raise focus-within:border-accent-strong focus-within:ring-1 focus-within:ring-accent-strong">
+        <input
+          type={visible ? "text" : "password"}
+          autoComplete={autoComplete}
+          value={value}
+          data-testid={inputTestId}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-10 min-w-0 border-0 bg-transparent px-3 text-[12.5px] text-ink outline-none"
+          placeholder="至少 12 位"
+        />
+        <button
+          type="button"
+          data-testid={toggleTestId}
+          aria-label={visible ? "隐藏密码" : "显示密码"}
+          aria-pressed={visible}
+          onClick={onToggle}
+          className="grid h-10 w-10 place-items-center border-0 border-l border-line bg-transparent text-faint hover:bg-hover-wash hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent-strong"
+        >
+          {visible ? <EyeSlashIcon size={15} /> : <EyeIcon size={15} />}
+        </button>
+      </span>
+    </label>
   );
 }
 

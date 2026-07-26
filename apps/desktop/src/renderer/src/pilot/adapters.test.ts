@@ -134,6 +134,38 @@ describe("pilot renderer adapters", () => {
     ).not.toThrow();
   });
 
+  it("maps automation coordination without a Work State or Agent binding", () => {
+    const coordination: PilotCoordinationThread = {
+      id: IDS.thread,
+      projectId: IDS.project as PilotCoordinationThread["projectId"],
+      trigger: "coordination_requested",
+      automationSignalId: IDS.question,
+      automationKind: "project_work_risk",
+      participantIds: [
+        PrincipalId.parse(IDS.owner),
+        PrincipalId.parse(IDS.peer),
+      ],
+      safeContext: "延续工作仍在进行，需要负责人确认风险。",
+      candidateNextSteps: ["确认当前验收条件。"],
+      status: "open",
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const payload = pilotCoordinationToThreadPayload(coordination, [
+      { id: IDS.owner, displayName: "Alex", kind: "human" },
+      { id: IDS.peer, displayName: "Morgan", kind: "human" },
+    ]);
+
+    expect(payload.messages.map((message) => message.id)).toEqual([
+      IDS.question,
+      IDS.thread,
+    ]);
+    expect(() => ThreadMessage.parse(payload.messages[0])).not.toThrow();
+    expect(() =>
+      ActionEnvelope.parse(payload.actions[0]!.envelope),
+    ).not.toThrow();
+  });
+
   it("maps grounded Stand-in exchanges into the canonical conversation", () => {
     const project = {
       id: IDS.project,

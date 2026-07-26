@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   getActivity,
-  getOfflineStatus,
   getProjectWork,
   getTeamPulse,
   getThreads,
@@ -47,7 +46,7 @@ import {
 /**
  * One person's detail page. It is the expanded form of their Team Pulse card:
  * the same parallel workstreams, ordered the same way, with the full narrative
- * each Representative published instead of the two-line summary.
+ * each Stand-in published instead of the two-line summary.
  */
 export function PersonView({
   ownerId,
@@ -69,10 +68,6 @@ export function PersonView({
     queryKey: ["team-pulse"],
     queryFn: ({ signal }) => getTeamPulse(signal),
     refetchInterval: 30_000,
-  });
-  const runtime = useQuery({
-    queryKey: ["offline-status"],
-    queryFn: ({ signal }) => getOfflineStatus(signal),
   });
   const threads = useQuery({
     queryKey: ["threads"],
@@ -128,11 +123,6 @@ export function PersonView({
     ownerId.slice(0, 8);
   const pulseReady = pulse.isSuccess || pilotOverview.isSuccess;
   const pulsePending = pulse.isPending && pilotOverview.isPending;
-  const offline = runtime.data?.fallback === "public";
-  const offlineSyncTime = runtime.data?.freshnessAt
-    ? formatRelative(runtime.data.freshnessAt)
-    : t("general.none");
-
   if (!pulseReady || workstreams.length === 0) {
     return (
       <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
@@ -228,14 +218,12 @@ export function PersonView({
                 <span
                   className={cn(
                     "h-1.5 w-1.5 rounded-full",
-                    offline || leadStale ? "bg-amber" : "bg-green",
+                    leadStale ? "bg-amber" : "bg-green",
                   )}
                 />
-                {offline
-                  ? t("person.standInPublic", { time: offlineSyncTime })
-                  : t("person.standInLocal", {
-                      time: formatRelative(lead.freshnessAt),
-                    })}
+                {t("person.standInUpdated", {
+                  time: formatRelative(lead.freshnessAt),
+                })}
               </span>
             </span>
           </span>
@@ -284,8 +272,6 @@ export function PersonView({
                 projectPulse.contexts,
               )}
               stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
-              offline={offline}
-              offlineSyncTime={offlineSyncTime}
             />
           ))}
         </div>
@@ -464,14 +450,10 @@ function WorkstreamCard({
   workstream,
   line,
   stale,
-  offline,
-  offlineSyncTime,
 }: {
   workstream: PublicWorkProjection;
   line: WorkLine;
   stale: boolean;
-  offline: boolean;
-  offlineSyncTime: string;
 }) {
   const { t, formatRelative } = useI18n();
   const blocked = PHASE_META[workstream.phase].tone === "danger";
@@ -514,10 +496,8 @@ function WorkstreamCard({
             {workstream.artifactIds.length}
           </span>
         ) : null}
-        <Meta tone={offline || stale ? "amber" : "faint"} className="ml-auto">
-          {offline
-            ? t("pulse.card.syncedAt", { time: offlineSyncTime })
-            : formatRelative(workstream.freshnessAt)}
+        <Meta tone={stale ? "amber" : "faint"} className="ml-auto">
+          {formatRelative(workstream.freshnessAt)}
         </Meta>
       </div>
       <h2 className="mt-3 text-[16px] font-[570] leading-[1.4] tracking-[-0.02em] [text-wrap:pretty]">

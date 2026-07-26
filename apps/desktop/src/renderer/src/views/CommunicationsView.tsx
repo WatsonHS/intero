@@ -1,8 +1,8 @@
 import {
+  ArrowBendDownRightIcon,
   ArrowUpIcon,
   CheckCircleIcon,
   CircleNotchIcon,
-  CloudArrowDownIcon,
   GitBranchIcon,
   HandTapIcon,
   LockSimpleIcon,
@@ -18,18 +18,20 @@ import type {
   ThreadMessage,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
+  concludeThread,
   createConversationThread,
   getBootstrap,
-  getOfflineStatus,
+  markThreadRead,
   getTeamPulse,
   getThreads,
   sendThreadMessage,
   type PrincipalSummary,
   type ThreadPayload,
 } from "../api.js";
+import { Avatar, cn } from "../design/primitives.js";
 import { initials, tintFor } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
@@ -46,6 +48,7 @@ import {
   sendPilotDm,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { NewConversationModal } from "./chat/NewConversationModal.js";
 
 const THREAD_GROUPS: Array<{
   kind: ConversationThread["kind"];
@@ -66,12 +69,9 @@ export function CommunicationsView() {
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
-  const [newThreadTitle, setNewThreadTitle] = useState("");
-  const [newThreadKind, setNewThreadKind] = useState<
-    "human_group" | "room" | "human_direct"
-  >("human_group");
-  const [pilotPeerId, setPilotPeerId] = useState<PrincipalId>();
   const [draft, setDraft] = useState("");
+  const [concluding, setConcluding] = useState(false);
+  const [conclusion, setConclusion] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const threads = useQuery({
@@ -87,11 +87,6 @@ export function CommunicationsView() {
     queryKey: ["team-pulse"],
     queryFn: ({ signal }) => getTeamPulse(signal),
     refetchInterval: 30_000,
-  });
-  const offline = useQuery({
-    queryKey: ["offline-status"],
-    queryFn: ({ signal }) => getOfflineStatus(signal),
-    refetchInterval: 5_000,
   });
   const pilotDms = useQuery({
     queryKey: ["pilot", "dms", pilot?.identityId],
@@ -113,21 +108,12 @@ export function CommunicationsView() {
       pilot?.selectedProjectId,
     ],
     queryFn: ({ signal }) =>
-      getPilotStandIn(
-        pilot!.identityId!,
-        pilot!.selectedProjectId!,
-        signal,
-      ),
+      getPilotStandIn(pilot!.identityId!, pilot!.selectedProjectId!, signal),
     enabled: Boolean(
       pilot?.enabled && pilot.identityId && pilot.selectedProjectId,
     ),
     refetchInterval: 1_500,
   });
-  const offlinePublic = offline.data?.fallback === "public";
-  const offlineTime = offline.data?.freshnessAt
-    ? formatRelative(offline.data.freshnessAt)
-    : t("general.unavailable");
-
   const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
     pilotDmToThreadPayload(
       item,
@@ -174,15 +160,36 @@ export function CommunicationsView() {
     ...(pilotDms.data?.principals ?? []),
   ]);
   const principalNames = buildPrincipalNames(principals);
-  const pilotPeers = [
+  const teamNames = new Map(
+    (pilot?.teams.data?.teams ?? []).map((team) => [team.id, team.name]),
+  );
+  // Branch rows name their origin, so every thread title is looked up by id.
+  const threadTitles = new Map(
+    allItems.map((item) => [item.thread.id, item.thread.title]),
+  );
+  // Everyone you could put in a conversation, tagged with the team they came
+  // from so the picker can narrow by team.
+  const conversationCandidates = [
     ...new Map(
-      (pilot?.teams.data?.teams ?? [])
-        .flatMap((team) => team.members)
-        .filter(
-          (member) =>
-            member.kind === "human" && member.id !== pilot?.identityId,
-        )
-        .map((member) => [member.id, member]),
+      (pilot?.teams.data?.teams ?? []).flatMap((team) =>
+        team.members
+          .filter(
+            (member) =>
+              member.kind === "human" && member.id !== pilot?.identityId,
+          )
+          .map(
+            (member) =>
+              [
+                member.id,
+                {
+                  id: member.id,
+                  displayName: member.displayName,
+                  teamId: team.id,
+                  teamName: team.name,
+                },
+              ] as const,
+          ),
+      ),
     ).values(),
   ];
   const currentSenderId = !current
@@ -196,6 +203,50 @@ export function CommunicationsView() {
         : current.thread.participantIds.find(
             (id) => !current.thread.standInIds.includes(id),
           );
+
+  const markRead = useMutation({
+    mutationFn: (input: { threadId: string; sequence: number }) =>
+      markThreadRead({
+        threadId: input.threadId,
+        principalId: bootstrap.data!.currentPrincipal.id,
+        sequence: input.sequence,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+  });
+  const conclude = useMutation({
+    mutationFn: (input: { threadId: string; conclusion: string }) =>
+      concludeThread({
+        threadId: input.threadId,
+        actorId: bootstrap.data!.currentPrincipal.id,
+        conclusion: input.conclusion,
+      }),
+    onSuccess: async ({ thread }) => {
+      setConcluding(false);
+      setConclusion("");
+      if (thread.parentThreadId) setSelectedThreadId(thread.parentThreadId);
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+
+  // Opening a thread is what marks it read; nothing else moves the marker.
+  const currentUnread = current?.unreadCount ?? 0;
+  const currentLastSequence = current?.messages.at(-1)?.sequence ?? 0;
+  useEffect(() => {
+    if (
+      !current ||
+      currentIsPilot ||
+      currentIsPilotStandIn ||
+      currentUnread === 0 ||
+      !bootstrap.data?.currentPrincipal.id ||
+      markRead.isPending
+    ) {
+      return;
+    }
+    markRead.mutate({
+      threadId: current.thread.id,
+      sequence: currentLastSequence,
+    });
+  }, [current?.thread.id, currentUnread, currentLastSequence]);
 
   const send = useMutation({
     mutationFn: async (input: {
@@ -234,38 +285,50 @@ export function CommunicationsView() {
     },
   });
   const create = useMutation({
-    mutationFn: async () => {
-      if (newThreadKind === "human_direct") {
-        const teamId = pilot?.teams.data?.teams[0]?.id;
-        if (!pilot?.identityId || !teamId || !pilotPeerId) {
+    mutationFn: async (input: {
+      kind: "human_group" | "room" | "human_direct";
+      title: string;
+      memberIds: string[];
+      teamId?: string;
+    }) => {
+      if (input.kind === "human_direct") {
+        const peerId = input.memberIds[0] as PrincipalId | undefined;
+        // Direct messages are created inside the team the peer is actually in,
+        // not whichever team happens to sort first.
+        const teamId = pilot?.teams.data?.teams.find((team) =>
+          team.members.some((member) => member.id === peerId),
+        )?.id;
+        if (!pilot?.identityId || !teamId || !peerId) {
           throw new Error("Choose a team member.");
         }
         const result = await createPilotDm(pilot.identityId, {
           teamId,
-          peerId: pilotPeerId,
+          peerId,
         });
         return { threadId: result.thread.id };
       }
       const identity = bootstrap.data;
       if (!identity) throw new Error("Identity is unavailable.");
       const thread = await createConversationThread({
-        kind: newThreadKind,
+        kind: input.kind,
+        ...(input.teamId ? { teamId: input.teamId } : {}),
         title:
-          newThreadTitle.trim() ||
-          (newThreadKind === "room"
+          input.title ||
+          (input.kind === "room"
             ? t("chat.defaultRoomTitle")
             : t("chat.defaultGroupTitle")),
         participantIds: [
           identity.currentPrincipal.id,
           identity.standInPrincipal.id,
+          ...input.memberIds.filter(
+            (id) => id !== identity.currentPrincipal.id,
+          ),
         ],
         standInIds: [identity.standInPrincipal.id],
       });
       return { threadId: thread.id };
     },
     onSuccess: async ({ threadId }) => {
-      setNewThreadTitle("");
-      setPilotPeerId(undefined);
       setShowCreate(false);
       setSelectedThreadId(threadId);
       await Promise.all([
@@ -386,9 +449,7 @@ export function CommunicationsView() {
       );
     }
 
-    const isStandIn = thread.standInIds.includes(
-      message.senderId,
-    );
+    const isStandIn = thread.standInIds.includes(message.senderId);
     const senderName =
       principalNames.get(message.senderId) ?? message.senderId.slice(0, 8);
 
@@ -413,17 +474,6 @@ export function CommunicationsView() {
               <strong className="text-[12px] font-[620]">{senderName}</strong>
               <span className="rounded-pill bg-accent-soft px-[7px] py-0.5 text-[9.5px] font-[620] text-accent-strong">
                 {t("chat.agentOf", { name: ownerName })}
-              </span>
-              <span
-                className={
-                  offlinePublic
-                    ? "font-mono text-[9.5px] text-amber"
-                    : "font-mono text-[9.5px] text-green"
-                }
-              >
-                {offlinePublic
-                  ? t("chat.public", { time: offlineTime })
-                  : t("chat.local")}
               </span>
               <time className="ml-auto font-mono text-[9.5px] text-faint">
                 {formatTime(message.createdAt)}
@@ -568,103 +618,18 @@ export function CommunicationsView() {
         </div>
 
         {showCreate ? (
-          <div className="mx-2.5 mb-3 flex flex-col gap-2 rounded-[13px] border border-line2 bg-panel2 p-3">
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                className={
-                  newThreadKind === "human_group"
-                    ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] font-[600] text-accent-strong cursor-pointer"
-                    : "rounded-pill bg-raise px-[9px] py-[3px] text-[10px] font-[600] text-ink-muted cursor-pointer"
-                }
-                onClick={() => setNewThreadKind("human_group")}
-              >
-                {t("chat.temporaryGroup")}
-              </button>
-              <button
-                type="button"
-                className={
-                  newThreadKind === "room"
-                    ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] font-[600] text-accent-strong cursor-pointer"
-                    : "rounded-pill bg-raise px-[9px] py-[3px] text-[10px] font-[600] text-ink-muted cursor-pointer"
-                }
-                onClick={() => setNewThreadKind("room")}
-              >
-                {t("chat.room")}
-              </button>
-              {pilot?.enabled && pilot.identityId ? (
-                <button
-                  type="button"
-                  data-testid="pilot-new-direct-message"
-                  className={
-                    newThreadKind === "human_direct"
-                      ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] font-[600] text-accent-strong cursor-pointer"
-                      : "rounded-pill bg-raise px-[9px] py-[3px] text-[10px] font-[600] text-ink-muted cursor-pointer"
-                  }
-                  onClick={() => setNewThreadKind("human_direct")}
-                >
-                  1:1 私聊
-                </button>
-              ) : null}
-            </div>
-            {newThreadKind === "human_direct" ? (
-              <select
-                value={pilotPeerId ?? ""}
-                data-testid="pilot-dm-peer"
-                onChange={(event) =>
-                  setPilotPeerId(event.target.value as PrincipalId)
-                }
-                className="h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none"
-              >
-                <option value="">选择团队成员</option>
-                {pilotPeers.map((peer) => (
-                  <option value={peer.id} key={peer.id}>
-                    {peer.displayName}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={newThreadTitle}
-                onChange={(event) => setNewThreadTitle(event.target.value)}
-                placeholder={t("chat.threadTitle")}
-                aria-label={t("chat.threadTitle")}
-                className="h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none placeholder:text-faint"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !create.isPending) {
-                    event.preventDefault();
-                    create.mutate();
-                  }
-                }}
-              />
-            )}
-            <button
-              type="button"
-              data-testid={
-                newThreadKind === "human_direct" ? "pilot-create-dm" : undefined
-              }
-              disabled={
-                create.isPending ||
-                (newThreadKind === "human_direct"
-                  ? !pilotPeerId
-                  : !bootstrap.data)
-              }
-              onClick={() => create.mutate()}
-              className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
-            >
-              {create.isPending ? (
-                <CircleNotchIcon size={14} className="animate-spin" />
-              ) : (
-                <PlusIcon size={14} />
-              )}
-              {newThreadKind === "human_direct" ? "开始私聊" : t("chat.create")}
-            </button>
-            {create.isError ? (
-              <p className="text-[11px] text-danger">
-                {t("chat.createFailed")}
-              </p>
-            ) : null}
-          </div>
+          <NewConversationModal
+            kinds={
+              pilot?.enabled && pilot.identityId
+                ? ["human_group", "room", "human_direct"]
+                : ["human_group", "room"]
+            }
+            candidates={conversationCandidates}
+            busy={create.isPending}
+            error={create.isError}
+            onClose={() => setShowCreate(false)}
+            onCreate={(input) => create.mutate(input)}
+          />
         ) : null}
 
         {threads.isPending ? (
@@ -705,6 +670,8 @@ export function CommunicationsView() {
                         item={item}
                         active={current?.thread.id === item.thread.id}
                         principalNames={principalNames}
+                        teamNames={teamNames}
+                        threadTitles={threadTitles}
                         formatRelative={formatRelative}
                         t={t}
                         onSelect={() => setSelectedThreadId(item.thread.id)}
@@ -746,9 +713,7 @@ export function CommunicationsView() {
                 type="button"
                 data-testid="pilot-add-stand-in"
                 disabled={addStandIn.isPending}
-                onClick={() =>
-                  addStandIn.mutate(currentPilotItem.thread.id)
-                }
+                onClick={() => addStandIn.mutate(currentPilotItem.thread.id)}
                 className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
               >
                 {addStandIn.isPending ? (
@@ -766,20 +731,90 @@ export function CommunicationsView() {
             ) : null}
           </header>
 
+          {/* A branched discussion is meant to end: its conclusion is posted
+              back into the conversation it came from, then it closes. */}
+          {current.thread.parentThreadId && !currentIsPilot ? (
+            <div className="border-b border-line px-[26px] py-3">
+              {current.thread.concludedAt ? (
+                <div className="flex items-center gap-2 rounded-inset bg-green-soft px-3 py-2.5 text-[11.5px] text-green">
+                  <CheckCircleIcon size={14} weight="fill" />
+                  {t("chat.concludedInto", {
+                    title:
+                      threadTitles.get(current.thread.parentThreadId) ?? "—",
+                  })}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedThreadId(current.thread.parentThreadId)
+                    }
+                    className="ml-auto cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-accent-strong hover:underline"
+                  >
+                    {t("chat.openOrigin")}
+                  </button>
+                </div>
+              ) : concluding ? (
+                <div className="grid gap-2 rounded-inset border border-line2 bg-panel2 p-3">
+                  <span className="text-[11px] text-faint">
+                    {t("chat.concludeHint", {
+                      title:
+                        threadTitles.get(current.thread.parentThreadId) ?? "—",
+                    })}
+                  </span>
+                  <textarea
+                    rows={2}
+                    autoFocus
+                    value={conclusion}
+                    onChange={(event) => setConclusion(event.target.value)}
+                    placeholder={t("chat.concludePlaceholder")}
+                    className="w-full resize-none rounded-btn border border-line bg-panel px-3 py-2 text-[12px] leading-[1.6] text-ink outline-none placeholder:text-faint focus:border-accent-strong"
+                  />
+                  <div className="flex items-center gap-2">
+                    {conclude.isError ? (
+                      <span role="alert" className="text-[11px] text-danger">
+                        {t("chat.concludeFailed")}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={!conclusion.trim() || conclude.isPending}
+                      onClick={() =>
+                        conclude.mutate({
+                          threadId: current.thread.id,
+                          conclusion: conclusion.trim(),
+                        })
+                      }
+                      className="ml-auto h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {t("chat.concludeSend")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConcluding(false)}
+                      className="h-8 cursor-pointer border-0 bg-transparent px-2 text-[12px] text-faint hover:text-ink"
+                    >
+                      {t("general.close")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConcluding(true)}
+                  className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+                >
+                  <ArrowBendDownRightIcon size={13} />
+                  {t("chat.conclude")}
+                </button>
+              )}
+            </div>
+          ) : null}
+
           <div className="overflow-auto p-[22px_26px_30px]">
             <div className="mx-auto flex max-w-[800px] flex-col gap-4">
               {currentIsPilot && currentPilotItem?.thread.standInId ? (
                 <p className="rounded-inset bg-raise p-[12px_16px] text-center text-[11.5px] leading-[1.7] text-ink-muted">
                   替身只会看到加入后的消息，不会读取此前的私聊历史。
                 </p>
-              ) : null}
-              {offlinePublic ? (
-                <div className="flex items-center gap-[11px] rounded-[13px] border border-amber-soft bg-amber-soft p-[13px_16px]">
-                  <CloudArrowDownIcon size={17} className="text-amber" />
-                  <span className="text-[12px] leading-[1.6] text-ink [text-wrap:pretty]">
-                    {t("chat.offlineBanner", { time: offlineTime })}
-                  </span>
-                </div>
               ) : null}
               {current.messages.length === 0 ? (
                 <div className="flex flex-col items-center gap-1.5 py-10 text-center">
@@ -811,7 +846,8 @@ export function CommunicationsView() {
               <div className="rounded-card border border-line2 bg-panel2 p-[11px_13px]">
                 <div className="mb-[9px] flex items-center gap-[7px]">
                   {current.thread.standInIds.map((standInId, index) => {
-                    const name = principalNames.get(standInId) ?? standInId.slice(0, 8);
+                    const name =
+                      principalNames.get(standInId) ?? standInId.slice(0, 8);
                     return (
                       <button
                         type="button"
@@ -837,9 +873,7 @@ export function CommunicationsView() {
                         ? "只使用可引用的结构化 Work State"
                         : current.thread.accessMode === "human_only_e2ee"
                           ? t("chat.e2ee")
-                          : offlinePublic
-                            ? t("chat.hintOffline")
-                            : t("chat.hint")}
+                          : t("chat.hint")}
                   </span>
                 </div>
                 <div className="grid grid-cols-[1fr_34px] items-end gap-[9px]">
@@ -971,6 +1005,8 @@ function SidebarThreadItem({
   item,
   active,
   principalNames,
+  teamNames,
+  threadTitles,
   formatRelative,
   t,
   onSelect,
@@ -978,6 +1014,8 @@ function SidebarThreadItem({
   item: ThreadPayload;
   active: boolean;
   principalNames: Map<string, string>;
+  teamNames: Map<string, string>;
+  threadTitles: Map<string, string>;
   formatRelative: (value: string) => string;
   t: (key: TranslationKey, values?: Record<string, string | number>) => string;
   onSelect: () => void;
@@ -989,6 +1027,16 @@ function SidebarThreadItem({
       : t("chat.encryptedMessage")
     : "—";
   const time = formatRelative(lastMessage?.createdAt ?? item.thread.createdAt);
+  const humanParticipants = item.thread.participantIds.filter(
+    (id) => !item.thread.standInIds.includes(id),
+  );
+  const unread = item.unreadCount ?? 0;
+  const teamName = item.thread.teamId
+    ? teamNames.get(item.thread.teamId)
+    : undefined;
+  const origin = item.thread.parentThreadId
+    ? threadTitles.get(item.thread.parentThreadId)
+    : undefined;
 
   return (
     <button
@@ -1002,14 +1050,72 @@ function SidebarThreadItem({
     >
       <ThreadGlyph thread={item.thread} principalNames={principalNames} />
       <span className="grid min-w-0 gap-[3px]">
-        <span className="truncate text-[12.5px] font-[570]">
-          {item.thread.title}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              "truncate text-[12.5px]",
+              unread > 0 ? "font-[650] text-ink" : "font-[570]",
+            )}
+          >
+            {item.thread.title}
+          </span>
+          {teamName ? (
+            <span
+              title={teamName}
+              className="shrink-0 rounded-[6px] bg-raise px-1.5 py-0.5 font-mono text-[8.5px] font-[650] tracking-[0.04em] text-ink-muted"
+            >
+              {teamName}
+            </span>
+          ) : null}
+          {item.thread.standInIds.length > 0 ? (
+            <RobotIcon
+              size={11}
+              className="shrink-0 text-accent-strong"
+              aria-label={t("chat.standInPresent")}
+            />
+          ) : null}
         </span>
+        {origin ? (
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-[10px] text-faint">
+            <ArrowBendDownRightIcon size={11} className="shrink-0" />
+            <span className="truncate">
+              {t("chat.branchedFrom", { title: origin })}
+            </span>
+          </span>
+        ) : null}
         <span className="truncate text-[11px] text-ink-muted">{preview}</span>
+        {item.thread.concludedAt ? (
+          <span className="justify-self-start rounded-pill bg-green-soft px-2 py-[3px] text-[9.5px] font-[620] text-green">
+            {t("chat.concluded")}
+          </span>
+        ) : null}
+        {humanParticipants.length > 1 ? (
+          <span className="mt-0.5 flex items-center">
+            {humanParticipants.slice(0, 4).map((id, index) => (
+              <Avatar
+                key={id}
+                id={id}
+                name={principalNames.get(id)}
+                size="xs"
+                className={index > 0 ? "-ml-[5px] ring-1 ring-panel" : ""}
+              />
+            ))}
+            {humanParticipants.length > 4 ? (
+              <span className="ml-1.5 font-mono text-[9px] text-faint">
+                +{humanParticipants.length - 4}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
-      <time className="self-start font-mono text-[9.5px] text-faint">
-        {time}
-      </time>
+      <span className="grid justify-items-end gap-1.5">
+        <time className="font-mono text-[9.5px] text-faint">{time}</time>
+        {unread > 0 ? (
+          <span className="animate-badge-bounce grid h-[17px] min-w-[17px] place-items-center rounded-[9px] bg-accent-strong px-[5px] font-mono text-[9.5px] text-on-accent">
+            {unread > 99 ? "99+" : unread}
+          </span>
+        ) : null}
+      </span>
     </button>
   );
 }

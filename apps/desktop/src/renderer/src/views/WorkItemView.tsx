@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   CaretDownIcon,
+  CheckIcon,
   CircleNotchIcon,
   GitCommitIcon,
   HandTapIcon,
@@ -16,20 +17,26 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { getActivity, getBootstrap, getKanban, updateKanbanCard } from "../api.js";
+import {
+  getActivity,
+  getBootstrap,
+  getKanban,
+  updateKanbanCard,
+} from "../api.js";
 import { confidencePercent, PHASE_META, type Tone } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { WorkItemDetailSurface } from "./project/WorkItemDetailSurface.js";
 
-const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> = [
-  { id: "backlog", label: "project.column.backlog", tone: "faint" },
-  { id: "planned", label: "project.column.planned", tone: "faint" },
-  { id: "in_progress", label: "project.column.in_progress", tone: "green" },
-  { id: "review", label: "project.column.review", tone: "amber" },
-  { id: "done", label: "project.column.done", tone: "faint" },
-];
+const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> =
+  [
+    { id: "backlog", label: "project.column.backlog", tone: "faint" },
+    { id: "planned", label: "project.column.planned", tone: "faint" },
+    { id: "in_progress", label: "project.column.in_progress", tone: "green" },
+    { id: "review", label: "project.column.review", tone: "amber" },
+    { id: "done", label: "project.column.done", tone: "faint" },
+  ];
 
 function columnMeta(column: KanbanColumn) {
   return COLUMNS.find((item) => item.id === column) ?? COLUMNS[0]!;
@@ -170,7 +177,9 @@ function LegacyWorkItemView({
   const humanPrincipals = principals.filter(
     (principal) => principal.kind === "human",
   );
-  const project = board.data.projects.find((item) => item.id === card.projectId);
+  const project = board.data.projects.find(
+    (item) => item.id === card.projectId,
+  );
   const col = columnMeta(card.column);
   const relatedWorkstreamIdSet = new Set<string>(card.relatedWorkstreamIds);
 
@@ -181,7 +190,8 @@ function LegacyWorkItemView({
         relatedWorkstreamIdSet.has(event.aggregateId),
     )
     .toSorted(
-      (left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt),
+      (left, right) =>
+        Date.parse(right.occurredAt) - Date.parse(left.occurredAt),
     );
 
   const contradictionCount = workstream?.contradictionClaimIds.length ?? 0;
@@ -211,7 +221,8 @@ function LegacyWorkItemView({
     if (raw.trim() === "") return;
     const parsed = Math.min(100, Math.max(0, Math.round(Number(raw))));
     if (Number.isNaN(parsed)) return;
-    if (parsed !== card!.estimatePoints) update.mutate({ estimatePoints: parsed });
+    if (parsed !== card!.estimatePoints)
+      update.mutate({ estimatePoints: parsed });
   }
 
   return (
@@ -297,7 +308,9 @@ function LegacyWorkItemView({
               <p className="text-[12px] text-faint">{t("general.loading")}</p>
             ) : null}
             {activityItems.length === 0 && !activity.isPending ? (
-              <p className="text-[12px] text-faint">{t("item.activityEmpty")}</p>
+              <p className="text-[12px] text-faint">
+                {t("item.activityEmpty")}
+              </p>
             ) : (
               activityItems.map((event, index) => (
                 <div
@@ -378,7 +391,9 @@ function LegacyWorkItemView({
                   key={field}
                   className="grid grid-cols-[104px_minmax(0,1fr)_74px] items-center gap-3 border-b border-line px-3 py-[13px]"
                 >
-                  <span className="font-mono text-[11px] text-ink">{field}</span>
+                  <span className="font-mono text-[11px] text-ink">
+                    {field}
+                  </span>
                   <span className="text-[11px] text-ink-muted">
                     {t("item.changes.projected")}
                   </span>
@@ -497,11 +512,21 @@ function LegacyWorkItemView({
                         : "border-transparent hover:border-line2 hover:bg-panel2"
                     }`}
                   >
+                    <span
+                      aria-hidden="true"
+                      className={`grid h-[15px] w-[15px] shrink-0 place-items-center rounded-[4px] border ${
+                        checked
+                          ? "border-accent-strong bg-accent-strong text-on-accent"
+                          : "border-line2 text-transparent"
+                      }`}
+                    >
+                      <CheckIcon size={10} weight="bold" />
+                    </span>
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggleWorkstream(option.id)}
-                      className="h-3.5 w-3.5 accent-[var(--intero-accent)]"
+                      className="sr-only"
                     />
                     <span className="grid min-w-0">
                       <strong className="truncate text-[11.5px] font-[560]">
@@ -549,7 +574,9 @@ function LegacyWorkItemView({
                 <span className="relative h-1 w-14 overflow-hidden rounded-[2px] bg-line2">
                   <span
                     className={`absolute inset-y-0 left-0 ${toneBgClass(PHASE_META[workstream.phase].tone)}`}
-                    style={{ width: `${confidencePercent(workstream.confidence)}%` }}
+                    style={{
+                      width: `${confidencePercent(workstream.confidence)}%`,
+                    }}
                   />
                 </span>
                 <span className="font-mono text-[11px] text-ink-muted">

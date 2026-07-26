@@ -3,6 +3,7 @@ import {
   CaretLeftIcon,
   CaretRightIcon,
   CheckIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import type { WorkstreamPhase } from "@intero/domain";
 import {
@@ -154,9 +155,11 @@ export function AvatarPair({
 export function SectionLabel({
   children,
   className,
+  disabled = false,
 }: {
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <div
@@ -349,18 +352,21 @@ export function FilterChip({
   children,
   leading,
   className,
+  testId,
 }: {
   active: boolean;
   onClick: () => void;
   children: ReactNode;
   leading?: ReactNode;
   className?: string;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
+      {...(testId ? { "data-testid": testId } : {})}
       className={cn(
         "inline-flex h-[26px] shrink-0 cursor-pointer items-center gap-1.5 rounded-pill border text-[11px]",
         leading ? "pl-1 pr-2.5" : "px-2.5",
@@ -425,6 +431,7 @@ export function ListPane({
   lede,
   filters,
   action,
+  header,
   children,
   footer,
   onScroll,
@@ -435,6 +442,8 @@ export function ListPane({
   lede?: ReactNode;
   filters?: ReactNode;
   action?: ReactNode;
+  /** Slot above the title — the scope this list belongs to. */
+  header?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
   onScroll?: (event: UIEvent<HTMLDivElement>) => void;
@@ -445,7 +454,8 @@ export function ListPane({
       className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] border-r border-line bg-panel"
       style={{ width }}
     >
-      <div className="px-5 pb-3.5 pt-6">
+      <div className="px-5 pb-3.5 pt-5">
+        {header}
         <div className="flex items-baseline gap-2.5">
           <strong className="text-[13.5px] font-[650]">{title}</strong>
           {count === undefined ? null : (
@@ -659,6 +669,7 @@ export function SelectMenu<T extends string>({
   label,
   children,
   className,
+  disabled = false,
 }: {
   value: T;
   options: ReadonlyArray<{ id: T; label: string; leading?: ReactNode }>;
@@ -666,6 +677,7 @@ export function SelectMenu<T extends string>({
   label: string;
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -755,22 +767,24 @@ export function SelectMenu<T extends string>({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
+        disabled={disabled}
         {...(open ? { "aria-controls": menuId } : {})}
         draggable={false}
         onDragStart={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
+          if (disabled) return;
           if (open) setOpen(false);
           else openMenu();
         }}
         onKeyDown={(event) => {
           if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
             event.preventDefault();
-            openMenu();
+            if (!disabled) openMenu();
           }
         }}
         className={cn(
-          "inline-flex cursor-pointer items-center rounded-pill border-0 bg-transparent p-0 outline-offset-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-strong",
+          "inline-flex cursor-pointer items-center rounded-pill border-0 bg-transparent p-0 outline-offset-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-strong disabled:cursor-default disabled:opacity-55",
           className,
         )}
       >
@@ -787,10 +801,17 @@ export function SelectMenu<T extends string>({
               aria-activedescendant={`${menuId}-${activeIndex}`}
               tabIndex={-1}
               onKeyDown={(event) => {
-                if (event.key === "Escape" || event.key === "Tab") {
+                if (event.key === "Escape") {
                   event.preventDefault();
                   setOpen(false);
                   triggerRef.current?.focus();
+                } else if (event.key === "Tab") {
+                  event.preventDefault();
+                  const trigger = triggerRef.current;
+                  setOpen(false);
+                  if (trigger) {
+                    focusAdjacentControl(trigger, event.shiftKey ? -1 : 1);
+                  }
                 } else if (event.key === "ArrowDown") {
                   event.preventDefault();
                   setActiveIndex((index) => (index + 1) % options.length);
@@ -847,6 +868,16 @@ export function SelectMenu<T extends string>({
         : null}
     </>
   );
+}
+
+function focusAdjacentControl(origin: HTMLElement, direction: -1 | 1) {
+  const controls = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+  const current = controls.indexOf(origin);
+  controls[current + direction]?.focus();
 }
 
 /** Dashed empty slot used inside lists and trees. */
@@ -941,5 +972,406 @@ export function SearchField({
         style={{ width }}
       />
     </label>
+  );
+}
+
+const MARK_SIZES = {
+  sm: "h-[22px] w-[22px] rounded-quiet text-[9px]",
+  md: "h-[28px] w-[28px] rounded-[9px] text-[10px]",
+  lg: "h-8 w-8 rounded-[9px] text-[10px]",
+} as const;
+
+/**
+ * Square counterpart to <Avatar> for the things people belong to — orgs, teams,
+ * projects. Rounded-square keeps places visually distinct from people, and the
+ * tint derives from the id so the same team reads the same colour everywhere.
+ */
+export function ScopeMark({
+  id,
+  label,
+  size = "md",
+  filled = false,
+  className,
+}: {
+  id: string;
+  label: string;
+  size?: keyof typeof MARK_SIZES;
+  /** Solid tint (on-tint text) instead of the washed tint-on-dark treatment. */
+  filled?: boolean;
+  className?: string;
+}) {
+  const tint = tintFor(id);
+  return (
+    <span
+      className={cn(
+        "grid shrink-0 place-items-center font-mono font-[650] uppercase",
+        MARK_SIZES[size],
+        filled ? "text-on-tint" : undefined,
+        className,
+      )}
+      style={
+        filled
+          ? { background: tint }
+          : {
+              background: `color-mix(in srgb, ${tint} 18%, transparent)`,
+              color: tint,
+            }
+      }
+    >
+      {initials(label)}
+    </span>
+  );
+}
+
+/**
+ * Anchored floating panel. Renders through a portal above a click-catching
+ * scrim so the trigger stays in the titlebar's drag region without the panel
+ * inheriting its clipping.
+ */
+export function Popover({
+  anchor,
+  onClose,
+  width = 332,
+  align = "start",
+  children,
+  className,
+}: {
+  anchor: DOMRect | undefined;
+  onClose: () => void;
+  width?: number;
+  align?: "start" | "end";
+  children: ReactNode;
+  className?: string;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!anchor) return null;
+  const left =
+    align === "end"
+      ? Math.max(
+          8,
+          Math.min(anchor.right - width, window.innerWidth - width - 8),
+        )
+      : Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8));
+  return createPortal(
+    <>
+      <span
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        data-testid="popover-scrim"
+      />
+      <div
+        role="dialog"
+        className={cn(
+          "animate-card-enter fixed z-50 rounded-container border border-line2 bg-panel2 p-[9px]",
+          "shadow-[0_26px_64px_rgba(0,0,0,0.38)]",
+          className,
+        )}
+        style={{ left, top: anchor.bottom + 6, width }}
+      >
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+/** Centred modal over a scrim. Header / scrolling body / footer. */
+export function Modal({
+  title,
+  onClose,
+  width = 470,
+  footer,
+  head,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  width?: number;
+  footer?: ReactNode;
+  /** Fixed area under the title that does not scroll with the body. */
+  head?: ReactNode;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="animate-view-enter fixed inset-0 z-[60] grid place-items-center bg-black/45">
+      <span className="absolute inset-0" onClick={onClose} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={[
+          "animate-card-enter relative grid max-h-[80vh] grid-rows-[auto_minmax(0,1fr)_auto]",
+          "rounded-[18px] border border-line2 bg-panel2 px-[22px] pb-4 pt-5",
+          "shadow-[0_40px_90px_rgba(0,0,0,0.5)]",
+        ].join(" ")}
+        style={{ width }}
+      >
+        <div>
+          <div className="flex items-center gap-2.5">
+            <strong className="text-[15px] font-[620] tracking-[-0.02em]">
+              {title}
+            </strong>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="ml-auto grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-transparent text-faint hover:bg-hover-wash hover:text-ink"
+            >
+              <XIcon size={14} />
+            </button>
+          </div>
+          {head}
+        </div>
+        <div className="-mx-1.5 mt-2 min-h-0 overflow-auto px-1.5">
+          {children}
+        </div>
+        {footer ? (
+          <div className="mt-3.5 flex items-center gap-2 border-t border-line pt-3.5">
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Underlined tab strip. */
+export function Tabs<Id extends string>({
+  value,
+  onChange,
+  items,
+  className,
+}: {
+  value: Id;
+  onChange: (value: Id) => void;
+  items: ReadonlyArray<{ id: Id; label: string; icon?: ReactNode }>;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex gap-1 border-b border-line", className)}>
+      {items.map((item) => {
+        const active = item.id === value;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(item.id)}
+            className={cn(
+              "inline-flex cursor-pointer items-center gap-2 border-0 border-b-2 bg-transparent px-3.5 py-[11px] text-[12.5px] font-[560]",
+              active
+                ? "border-b-accent-strong text-ink"
+                : "border-b-transparent text-faint hover:text-ink",
+            )}
+          >
+            {item.icon}
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Checkbox drawn from the kit rather than the browser default, so it carries
+ * the accent instead of the OS blue. The native input stays underneath for
+ * keyboard and assistive-technology support.
+ */
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+  className,
+  testId,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: ReactNode;
+  disabled?: boolean;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <label
+      className={cn(
+        "group inline-flex items-center gap-2.5",
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+        className,
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        {...(testId ? { "data-testid": testId } : {})}
+        className="peer sr-only"
+      />
+      <span
+        aria-hidden="true"
+        className={cn(
+          "grid h-[15px] w-[15px] shrink-0 place-items-center rounded-[4px] border transition-colors duration-150",
+          "peer-focus-visible:ring-2 peer-focus-visible:ring-accent-strong peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-panel2",
+          checked
+            ? "border-accent-strong bg-accent-strong text-on-accent"
+            : "border-line2 bg-transparent text-transparent group-hover:border-accent-strong",
+        )}
+      >
+        <CheckIcon size={10} weight="bold" />
+      </span>
+      <span className="min-w-0 text-[12px] text-ink">{label}</span>
+    </label>
+  );
+}
+
+/** Pill switch used by the policy rows. Purely presentational. */
+export function Switch({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-flex h-6 w-[42px] items-center rounded-pill p-[3px] transition-colors duration-200",
+        on ? "justify-end bg-accent-strong" : "justify-start bg-raise",
+      )}
+    >
+      <span
+        className={cn(
+          "h-[18px] w-[18px] rounded-full",
+          on ? "bg-on-accent" : "bg-faint",
+        )}
+      />
+    </span>
+  );
+}
+
+/**
+ * Radio-shaped card for a mutually exclusive policy choice. `locked` marks the
+ * options a tighter parent policy has taken off the table.
+ */
+export function OptionCard({
+  selected,
+  title,
+  detail,
+  disabled = false,
+  onClick,
+}: {
+  selected: boolean;
+  title: string;
+  detail: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "grid gap-[7px] rounded-[13px] border p-4 text-left",
+        selected ? "border-accent-strong bg-sel" : "border-line bg-panel2",
+        disabled
+          ? "cursor-not-allowed opacity-45"
+          : "cursor-pointer hover:border-accent-strong",
+      )}
+    >
+      <span className="flex items-center gap-2">
+        <span
+          className={cn(
+            "h-3.5 w-3.5 rounded-full border",
+            selected
+              ? "border-accent-strong bg-accent-strong"
+              : "border-line2 bg-transparent",
+          )}
+        />
+        <strong className="text-[12px] font-[620]">{title}</strong>
+      </span>
+      <span className="text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
+        {detail}
+      </span>
+    </button>
+  );
+}
+
+/** Single number with a label and a line of context. */
+export function StatCard({
+  title,
+  value,
+  detail,
+}: {
+  title: string;
+  value: ReactNode;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-[13px] border border-line bg-panel2 px-[18px] py-4">
+      <div className="text-[11px] text-ink-muted">{title}</div>
+      <div className="mt-[9px] font-mono text-[19px] tracking-[-0.02em]">
+        {value}
+      </div>
+      <div className="mt-[7px] text-[10.5px] leading-[1.6] text-faint [text-wrap:pretty]">
+        {detail}
+      </div>
+    </div>
+  );
+}
+
+/** Card carrying one call to action — the admin attention queue. */
+export function QueueCard({
+  tone,
+  icon,
+  title,
+  detail,
+  onClick,
+}: {
+  tone: Tone;
+  icon: ReactNode;
+  title: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  const classes = TONE_CLASSES[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="grid cursor-pointer grid-cols-[32px_minmax(0,1fr)] items-start gap-3 rounded-[13px] border border-line bg-panel2 px-4 py-[15px] text-left text-ink hover:border-accent-strong"
+    >
+      <span
+        className={cn(
+          "grid h-8 w-8 place-items-center rounded-[10px]",
+          classes.bg,
+          classes.text,
+        )}
+      >
+        {icon}
+      </span>
+      <span className="grid min-w-0">
+        <strong className="text-[12.5px] font-[620]">{title}</strong>
+        <small className="mt-[5px] text-[11px] leading-[1.6] text-ink-muted [text-wrap:pretty]">
+          {detail}
+        </small>
+      </span>
+    </button>
   );
 }
