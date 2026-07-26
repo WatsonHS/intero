@@ -14,10 +14,6 @@ import type {
   PilotPulseEntry,
   PilotWorkNarrative,
   PublicWorkProjection,
-  Feature,
-  WorkHistoryEntry,
-  WorkItem,
-  WorkstreamPhase,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
@@ -29,9 +25,14 @@ import {
   getProjectWork,
   getTeamPulse,
   getThreads,
-  type ProjectWorkPayload,
 } from "../api.js";
-import { Avatar, Meta, TONE_CLASSES, cn } from "../design/primitives.js";
+import {
+  Avatar,
+  MasonryColumns,
+  Meta,
+  TONE_CLASSES,
+  cn,
+} from "../design/primitives.js";
 import { Reveal } from "../design/reveal.js";
 import {
   PHASE_META,
@@ -53,6 +54,11 @@ import {
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import {
+  projectWorkToPulse,
+  workLineFromProjectContext,
+  type ProjectPulseContext,
+} from "./project-pulse.js";
+import {
   mergeWorkLines,
   workLineFromNarrative,
   workLineFromProjection,
@@ -63,16 +69,19 @@ export function TeamPulseView({
   onOpenPerson,
   onOpenAction,
   onOpenSetup,
+  onOpenSpecs,
 }: {
   onOpenPerson: (ownerId: string) => void;
   onOpenAction: (sourceRef: string) => void;
   onOpenSetup: () => void;
+  onOpenSpecs: () => void;
 }) {
   return (
     <CanonicalTeamPulseView
       onOpenPerson={onOpenPerson}
       onOpenAction={onOpenAction}
       onOpenSetup={onOpenSetup}
+      onOpenSpecs={onOpenSpecs}
     />
   );
 }
@@ -81,10 +90,12 @@ function CanonicalTeamPulseView({
   onOpenPerson,
   onOpenAction,
   onOpenSetup,
+  onOpenSpecs,
 }: {
   onOpenPerson: (ownerId: string) => void;
   onOpenAction: (sourceRef: string) => void;
   onOpenSetup: () => void;
+  onOpenSpecs: () => void;
 }) {
   const { t, formatDate, formatRelative, formatTime } = useI18n();
   const queryClient = useQueryClient();
@@ -177,6 +188,9 @@ function CanonicalTeamPulseView({
     principalNames.set(principal.id, principal.displayName);
   }
   const people = groupByOwner(projections);
+  const specsInReview =
+    projectSpecs.data?.items.filter((item) => item.spec.status === "in_review")
+      .length ?? 0;
   const staleProjections = projections.filter((item) =>
     isStale(item.freshnessAt, staleAfterSeconds),
   );
@@ -360,16 +374,6 @@ function CanonicalTeamPulseView({
               </span>
             </div>
             <div className="border-l border-line px-7">
-              <span className="inline-block animate-count-up font-mono text-[24px] tracking-[-0.04em]">
-                {projectSpecs.data?.items.filter(
-                  (item) => item.spec.status === "in_review",
-                ).length ?? 0}
-              </span>
-              <span className="ml-2 text-[12px] text-ink-muted">
-                Specs in review
-              </span>
-            </div>
-            <div className="border-l border-line px-7">
               <span
                 key={inbox.data?.items.length ?? 0}
                 className="inline-block animate-count-up font-mono text-[24px] tracking-[-0.04em] text-danger"
@@ -380,6 +384,21 @@ function CanonicalTeamPulseView({
                 {t("pulse.countInbox")}
               </span>
             </div>
+            <button
+              type="button"
+              onClick={onOpenSpecs}
+              className="flex cursor-pointer items-baseline gap-2 border-0 border-l border-line bg-transparent px-7 text-left hover:opacity-70"
+            >
+              <span
+                key={specsInReview}
+                className="inline-block animate-count-up font-mono text-[24px] tracking-[-0.04em] text-amber"
+              >
+                {specsInReview}
+              </span>
+              <span className="text-[12px] text-ink-muted">
+                {t("pulse.countSpecs")}
+              </span>
+            </button>
             <span
               className={cn(
                 "ml-auto flex items-center gap-2 rounded-pill px-3 py-1.5",
@@ -397,7 +416,7 @@ function CanonicalTeamPulseView({
         ) : null}
 
         {isLoadingState ? (
-          <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(310px,1fr))] items-start gap-3">
+          <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(330px,1fr))] items-start gap-3">
             {[0, 1, 2].map((index) => (
               <div
                 key={index}
@@ -475,10 +494,12 @@ function CanonicalTeamPulseView({
         ) : null}
 
         {showCards ? (
-          <div className="mt-[22px] grid grid-cols-[repeat(auto-fill,minmax(310px,1fr))] items-start gap-3">
-            {people.map(({ ownerId, workstreams }, index) => (
+          <MasonryColumns
+            className="mt-[22px]"
+            items={people}
+            keyOf={(person) => person.ownerId}
+            renderItem={({ ownerId, workstreams }, index) => (
               <PersonCard
-                key={ownerId}
                 ownerId={ownerId}
                 name={principalNames.get(ownerId) ?? ownerId.slice(0, 8)}
                 workstreams={workstreams}
@@ -497,8 +518,8 @@ function CanonicalTeamPulseView({
                 onWithdraw={(workStateId) => withdraw.mutate(workStateId)}
                 projectContextByProjectionId={projectPulse.contexts}
               />
-            ))}
-          </div>
+            )}
+          />
         ) : null}
       </div>
 
@@ -668,7 +689,9 @@ function PersonCard({
 
   return (
     <section
-      className="relative overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
+      // `group` is load-bearing: every Reveal layer is opacity-0 until
+      // group-hover, so without it the acrylic never becomes visible.
+      className="group relative overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
       style={{ animationDelay: `${Math.min(index * 45, 320)}ms` }}
       onMouseEnter={revealMove}
       onMouseMove={revealMove}
@@ -686,8 +709,8 @@ function PersonCard({
           className="animate-avatar-pop transition-transform duration-[240ms] ease-decelerate hover:scale-[1.06]"
         />
         <span className="grid min-w-0">
-          <span className="flex items-center gap-2">
-            <strong className="text-[13.5px] font-[620] tracking-[-0.01em]">
+          <span className="flex min-w-0 items-center gap-2">
+            <strong className="truncate text-[13.5px] font-[620] tracking-[-0.01em]">
               {name}
             </strong>
             <Meta tone={offline || leadStale ? "amber" : "faint"}>
@@ -718,7 +741,7 @@ function PersonCard({
         <Meta tone={load.blocked > 0 ? "danger" : "faint"}>{loadLabel}</Meta>
       </div>
 
-      <div className="relative mt-2 flex flex-col gap-0.5">
+      <div className="relative mt-2.5 flex flex-col gap-2">
         {visible.map((workstream) => (
           <ParallelTaskRow
             key={workstream.id}
@@ -826,12 +849,12 @@ function ParallelTaskRow({
         >
           {workstream.title}
         </span>
-        <span className="flex items-center gap-2">
-          <span className={cn("text-[9.5px] font-[650]", tone.text)}>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={cn("shrink-0 text-[9.5px] font-[650]", tone.text)}>
             {t(`phase.${workstream.phase}` as TranslationKey)}
           </span>
           {line.evidence ? (
-            <span className="truncate font-mono text-[9px] text-faint">
+            <span className="min-w-0 truncate font-mono text-[9px] text-faint">
               {line.evidence}
             </span>
           ) : null}
@@ -888,18 +911,6 @@ function lineFor(
     narrative ? workLineFromNarrative(narrative) : undefined,
     context ? workLineFromProjectContext(context) : undefined,
   );
-}
-
-function workLineFromProjectContext(context: ProjectPulseContext): WorkLine {
-  return {
-    focus: context.description || context.statusLabel,
-    ...(context.completedOutcome ? { done: context.completedOutcome } : {}),
-    ...(context.evidence ? { evidence: context.evidence } : {}),
-    next: context.nextStep,
-    ...(context.blockers.length > 0
-      ? { collaboration: context.blockers.join("；") }
-      : {}),
-  };
 }
 
 /** Pulse entries this person published themselves, so they can retract them. */
@@ -992,156 +1003,6 @@ export function PilotWorkNarrativeContent({
       </NarrativeLine>
     </>
   );
-}
-
-type ProjectPulseContext = {
-  kind: "work_item" | "feature";
-  description: string;
-  statusLabel: string;
-  completedOutcome?: string;
-  evidence?: string;
-  blockers: string[];
-  nextStep: string;
-  source: string;
-  updatedAt: string;
-};
-
-function projectWorkToPulse(data: ProjectWorkPayload): {
-  projections: PublicWorkProjection[];
-  contexts: Map<string, ProjectPulseContext>;
-} {
-  const contexts = new Map<string, ProjectPulseContext>();
-  const workItemTitles = new Map(
-    data.workItems.map((item) => [item.id, item.title]),
-  );
-  const projections: PublicWorkProjection[] = [];
-  for (const item of data.workItems) {
-    if (!item.ownerId) continue;
-    const blockers = blockersFor(item, data, workItemTitles);
-    const latestHistory = data.history
-      .filter((entry) => entry.workItemId === item.id)
-      .at(-1);
-    projections.push({
-      id: item.id as unknown as PublicWorkProjection["id"],
-      projectId: item.projectId,
-      ownerId: item.ownerId,
-      title: item.title,
-      phase: blockers.length > 0 ? "blocked" : phaseForWorkItem(item.status),
-      blockers,
-      dependencies: [],
-      decisions: [],
-      artifactIds: [],
-      freshnessAt: item.updatedAt,
-      confidence: 1,
-      contradictionClaimIds: [],
-      version: data.history.filter((entry) => entry.workItemId === item.id)
-        .length,
-      changedFields: ["phase"],
-      projectedAt: item.updatedAt,
-    });
-    contexts.set(item.id, {
-      kind: "work_item",
-      description: item.description,
-      statusLabel: workItemStatusLabel(item.status),
-      ...(item.status === "done" ? { completedOutcome: item.title } : {}),
-      ...(item.completionEvidence ? { evidence: item.completionEvidence } : {}),
-      blockers,
-      nextStep: workItemNextStep(item.status),
-      source: historySource(latestHistory),
-      updatedAt: item.updatedAt,
-    });
-  }
-  const parentFeatureIds = new Set(
-    data.workItems.flatMap((item) => (item.featureId ? [item.featureId] : [])),
-  );
-  for (const feature of data.features) {
-    if (!feature.ownerId || parentFeatureIds.has(feature.id)) continue;
-    projections.push({
-      id: feature.id as unknown as PublicWorkProjection["id"],
-      projectId: feature.projectId,
-      ownerId: feature.ownerId,
-      title: feature.title,
-      phase: phaseForFeature(feature.stage),
-      blockers: [],
-      dependencies: [],
-      decisions: [],
-      artifactIds: [],
-      freshnessAt: feature.updatedAt,
-      confidence: 1,
-      contradictionClaimIds: [],
-      version: 1,
-      changedFields: ["phase"],
-      projectedAt: feature.updatedAt,
-    });
-    contexts.set(feature.id, {
-      kind: "feature",
-      description: feature.description,
-      statusLabel: feature.stage.replaceAll("_", " "),
-      ...(feature.stage === "released"
-        ? { completedOutcome: feature.title }
-        : {}),
-      blockers: [],
-      nextStep:
-        feature.stage === "planned"
-          ? "开始开发"
-          : feature.stage === "in_development"
-            ? "完成并发布"
-            : "观察发布结果",
-      source: "Project Feature",
-      updatedAt: feature.updatedAt,
-    });
-  }
-  return { projections, contexts };
-}
-
-function blockersFor(
-  item: WorkItem,
-  data: ProjectWorkPayload,
-  titles: Map<string, string>,
-): string[] {
-  return data.relations.flatMap((relation) => {
-    if (relation.sourceId === item.id && relation.kind === "blocked_by") {
-      return [`受 ${titles.get(relation.targetId) ?? "另一 Work Item"} 阻塞`];
-    }
-    if (relation.targetId === item.id && relation.kind === "blocks") {
-      return [`受 ${titles.get(relation.sourceId) ?? "另一 Work Item"} 阻塞`];
-    }
-    return [];
-  });
-}
-
-function phaseForWorkItem(status: WorkItem["status"]): WorkstreamPhase {
-  if (status === "done") return "completed";
-  if (status === "ready_for_test") return "validating";
-  if (status === "in_progress") return "implementing";
-  return "planning";
-}
-
-function phaseForFeature(stage: Feature["stage"]): WorkstreamPhase {
-  if (stage === "released") return "completed";
-  if (stage === "in_development") return "implementing";
-  return "planning";
-}
-
-function workItemStatusLabel(status: WorkItem["status"]): string {
-  if (status === "ready_for_test") return "等待测试";
-  if (status === "in_progress") return "开发中";
-  if (status === "done") return "已完成";
-  return "待开始";
-}
-
-function workItemNextStep(status: WorkItem["status"]): string {
-  if (status === "ready_for_test") return "由项目参与者完成验收";
-  if (status === "in_progress") return "继续开发并提交验证依据";
-  if (status === "done") return "观察结果或领取下一项工作";
-  return "开始工作";
-}
-
-function historySource(history: WorkHistoryEntry | undefined): string {
-  if (!history) return "Project Work";
-  return history.actor.kind === "agent"
-    ? "Connected Coding Agent"
-    : "Intero member";
 }
 
 function PilotProjectContextCard({

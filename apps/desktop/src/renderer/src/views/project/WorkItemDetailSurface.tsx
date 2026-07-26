@@ -43,11 +43,9 @@ export function WorkItemDetailSurface({
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<string>();
   const [codeValue, setCodeValue] = useState("");
-  const [codeKind, setCodeKind] =
-    useState<CodeReferenceKind>("pull_request");
+  const [codeKind, setCodeKind] = useState<CodeReferenceKind>("pull_request");
   const [relationTargetId, setRelationTargetId] = useState("");
-  const [relationKind, setRelationKind] =
-    useState<WorkRelationKind>("related");
+  const [relationKind, setRelationKind] = useState<WorkRelationKind>("related");
   const work = useQuery({
     queryKey: ["project-work", projectId],
     queryFn: ({ signal }) => getProjectWork(projectId, signal),
@@ -110,7 +108,9 @@ export function WorkItemDetailSurface({
     },
   });
 
-  const item = work.data?.workItems.find((candidate) => candidate.id === workItemId);
+  const item = work.data?.workItems.find(
+    (candidate) => candidate.id === workItemId,
+  );
   if (!item || !work.data) {
     return (
       <div className="grid h-full place-items-center text-[12px] text-faint">
@@ -379,7 +379,11 @@ export function WorkItemDetailSurface({
               </option>
               {work.data.sprints.map((sprint) => (
                 <option value={sprint.id} key={sprint.id}>
-                  Sprint {sprint.number} · {sprint.status}
+                  Sprint{" "}
+                  {work.data.programIncrements.find(
+                    (pi) => pi.id === sprint.piId,
+                  )?.number ?? "?"}
+                  .{sprint.number} · {sprint.status}
                 </option>
               ))}
             </select>
@@ -391,7 +395,10 @@ export function WorkItemDetailSurface({
         </h2>
         <div className="mt-3 grid gap-2 text-[11px]">
           {relations.map((relation) => (
-            <div key={`${relation.sourceId}:${relation.targetId}:${relation.kind}`} className="rounded-card bg-raise p-2.5">
+            <div
+              key={`${relation.sourceId}:${relation.targetId}:${relation.kind}`}
+              className="rounded-card bg-raise p-2.5"
+            >
               {relation.kind} ·{" "}
               {(relation.sourceId === item.id
                 ? relation.targetId
@@ -550,13 +557,7 @@ function CommentThread({
   );
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center rounded-[9px] p-2 hover:bg-panel2">
       <span className="text-[10.5px] text-faint">{label}</span>

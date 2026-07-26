@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   getActivity,
   getOfflineStatus,
+  getProjectWork,
   getTeamPulse,
   getThreads,
 } from "../api.js";
@@ -27,9 +28,15 @@ import {
   orderByAttention,
 } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
+import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { pilotPulseEntryToProjection } from "../pilot/adapters.js";
 import { getPilotOverview } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import {
+  projectWorkToPulse,
+  workLineFromProjectContext,
+  type ProjectPulseContext,
+} from "./project-pulse.js";
 import {
   mergeWorkLines,
   workLineFromNarrative,
@@ -82,11 +89,26 @@ export function PersonView({
     enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
     refetchInterval: 1_500,
   });
+  const projectWork = useQuery({
+    queryKey: ["project-work", pilotProject?.id],
+    queryFn: ({ signal }) => getProjectWork(pilotProject!.id, signal),
+    enabled: Boolean(
+      pilotProject &&
+      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+    ),
+    refetchInterval: 4_000,
+  });
 
+  // Same three sources Team Pulse merges. Dropping one here would show fewer
+  // parallel workstreams on the detail page than the card the reader came from.
   const pilotEntries = pilotOverview.data?.pulse ?? [];
+  const projectPulse = projectWork.data
+    ? projectWorkToPulse(projectWork.data)
+    : { projections: [], contexts: new Map<string, ProjectPulseContext>() };
   const projections = [
     ...(pulse.data?.projections ?? []),
     ...pilotEntries.map(pilotPulseEntryToProjection),
+    ...projectPulse.projections,
   ];
   const workstreams = [
     ...new Map(
@@ -256,13 +278,10 @@ export function PersonView({
             <WorkstreamCard
               key={workstream.id}
               workstream={workstream}
-              line={mergeWorkLines(
-                workLineFromProjection(workstream),
-                entryByProjectionId.get(workstream.id)?.narrative
-                  ? workLineFromNarrative(
-                      entryByProjectionId.get(workstream.id)!.narrative,
-                    )
-                  : undefined,
+              line={lineFor(
+                workstream,
+                entryByProjectionId,
+                projectPulse.contexts,
               )}
               stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
               offline={offline}
@@ -291,17 +310,18 @@ export function PersonView({
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-[11px] font-[650] text-accent-strong">
-                      {event.eventType}
+                      {eventLabel(t, event.eventType)}
                     </span>
                     <time className="font-mono text-[9.5px] text-faint">
                       {formatTime(event.occurredAt)}
                     </time>
                   </div>
                   <p className="mt-2 max-w-[600px] text-[12.5px] leading-[1.7] text-ink [text-wrap:pretty]">
-                    {event.aggregateType} · {event.eventType}
+                    {aggregateLabel(t, event.aggregateType)} ·{" "}
+                    {event.aggregateId.slice(0, 8)}
                   </p>
                   <Meta className="mt-1.5 block text-[9.5px]">
-                    seq {event.sequence}
+                    {event.eventType} · seq {event.sequence}
                   </Meta>
                 </TimelineEntry>
               ))}
@@ -376,6 +396,70 @@ export function PersonView({
  * claim, and the narrative rows. Blocked work carries the danger surface so it
  * is legible before the text is read.
  */
+// The activity feed carries machine event names. They are a closed vocabulary,
+// so translate the ones we know and fall back to the raw name rather than
+// inventing a label for an event type the server added after this build.
+const KNOWN_EVENTS = [
+  "demo.seed.completed",
+  "project.epic.created",
+  "project.epic.updated",
+  "project.feature.created",
+  "project.feature.updated",
+  "project.pi.closed",
+  "project.pi.created",
+  "project.spec.review_policy_updated",
+  "project.spec.review_requested",
+  "project.spec.version_created",
+  "project.spec.version_revoked",
+  "project.sprint.closed",
+  "project.work_item.created",
+  "project.work_item.reverted",
+  "project.work_item.revoked",
+  "project.work_item.updated",
+] as const;
+
+const KNOWN_AGGREGATES = [
+  "demo_seed",
+  "epic",
+  "feature",
+  "pi",
+  "spec",
+  "sprint",
+  "work_item",
+] as const;
+
+type Translate = (
+  key: TranslationKey,
+  values?: Record<string, string | number>,
+) => string;
+
+function eventLabel(t: Translate, eventType: string): string {
+  return (KNOWN_EVENTS as readonly string[]).includes(eventType)
+    ? t(`activity.${eventType}` as TranslationKey)
+    : eventType;
+}
+
+function aggregateLabel(t: Translate, aggregateType: string): string {
+  return (KNOWN_AGGREGATES as readonly string[]).includes(aggregateType)
+    ? t(`aggregate.${aggregateType}` as TranslationKey)
+    : aggregateType;
+}
+
+/** Narrative for a workstream, whichever of the three sources published it. */
+function lineFor(
+  workstream: PublicWorkProjection,
+  pilotEntries: Map<string, PilotPulseEntry>,
+  projectContexts: Map<string, ProjectPulseContext>,
+): WorkLine {
+  const narrative = pilotEntries.get(workstream.id)?.narrative;
+  const context = projectContexts.get(workstream.id);
+  return mergeWorkLines(
+    workLineFromProjection(workstream),
+    narrative ? workLineFromNarrative(narrative) : undefined,
+    context ? workLineFromProjectContext(context) : undefined,
+  );
+}
+
 function WorkstreamCard({
   workstream,
   line,
@@ -477,11 +561,11 @@ function RelationList({
                 : "border-line bg-panel2",
             )}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <Meta tone={tone === "danger" ? "danger" : "faint"}>
                 {item.workstreamId.slice(0, 8)}
               </Meta>
-              <span className="truncate text-[11px] text-ink-muted">
+              <span className="min-w-0 truncate text-[11px] text-ink-muted">
                 {item.title}
               </span>
             </div>

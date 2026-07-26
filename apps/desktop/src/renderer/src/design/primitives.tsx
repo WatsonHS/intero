@@ -2,9 +2,21 @@ import {
   CaretDownIcon,
   CaretLeftIcon,
   CaretRightIcon,
+  CheckIcon,
 } from "@phosphor-icons/react";
 import type { WorkstreamPhase } from "@intero/domain";
-import { Fragment, type ReactNode, type UIEvent } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent,
+} from "react";
+import { createPortal } from "react-dom";
 
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
@@ -552,6 +564,288 @@ export function Pager({
         {label}
       </span>
     </div>
+  );
+}
+
+/**
+ * Masonry wall. Cards whose height varies a lot (one person has one workstream,
+ * the next has five) leave a void under every short card in a fixed grid row,
+ * and CSS multicol balances them into a fraction of the available width. So the
+ * columns are built explicitly: measure the container, derive the column count,
+ * and deal the items round-robin so every column stays the same length.
+ */
+export function MasonryColumns<T>({
+  items,
+  keyOf,
+  renderItem,
+  minColumnWidth = 330,
+  gap = 12,
+  className,
+}: {
+  items: readonly T[];
+  keyOf: (item: T) => string;
+  renderItem: (item: T, index: number) => ReactNode;
+  minColumnWidth?: number;
+  gap?: number;
+  className?: string;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const [columnCount, setColumnCount] = useState(1);
+
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width ?? 0;
+      setColumnCount(
+        Math.max(1, Math.floor((width + gap) / (minColumnWidth + gap))),
+      );
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [gap, minColumnWidth]);
+
+  // Never open more columns than there are cards, or the trailing empty ones
+  // reintroduce exactly the dead space this component exists to remove.
+  const used = Math.max(1, Math.min(columnCount, items.length));
+  const columns: Array<Array<{ item: T; index: number }>> = Array.from(
+    { length: used },
+    () => [],
+  );
+  items.forEach((item, index) => {
+    columns[index % used]!.push({ item, index });
+  });
+
+  return (
+    <div
+      ref={container}
+      className={cn("flex items-start", className)}
+      style={{ gap }}
+    >
+      {columns.map((column, columnIndex) => (
+        <div
+          key={columnIndex}
+          className="flex min-w-0 flex-1 flex-col"
+          style={{ gap }}
+        >
+          {column.map(({ item, index }) => (
+            <Fragment key={keyOf(item)}>{renderItem(item, index)}</Fragment>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const MENU_MIN_WIDTH = 176;
+const MENU_ROW_HEIGHT = 30;
+const MENU_MAX_ROWS = 8;
+
+/**
+ * A dropdown built from the token layer instead of the platform's native
+ * <select>, whose popup is drawn by the OS and ignores our surfaces, type, and
+ * theme entirely.
+ *
+ * The trigger renders whatever chip the caller passes, so a card keeps its own
+ * typography; the menu is portalled to the body and positioned against the
+ * trigger, because cards live inside scrolling panes that would otherwise clip
+ * an absolutely-positioned popup. Keyboard and ARIA behaviour is implemented
+ * explicitly to match what the native control gave us for free.
+ */
+export function SelectMenu<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+  children,
+  className,
+}: {
+  value: T;
+  options: ReadonlyArray<{ id: T; label: string; leading?: ReactNode }>;
+  onChange: (value: T) => void;
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    top: number;
+    left: number;
+    minWidth: number;
+  }>();
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.id === value),
+  );
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  const menuId = useId();
+
+  const place = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const height =
+      Math.min(options.length, MENU_MAX_ROWS) * MENU_ROW_HEIGHT + 10;
+    const below = window.innerHeight - rect.bottom;
+    // Flip above the trigger when the menu would run off the bottom.
+    const top =
+      below < height && rect.top > below
+        ? rect.top - height - 6
+        : rect.bottom + 6;
+    const width = Math.max(rect.width, MENU_MIN_WIDTH);
+    const left = Math.max(
+      8,
+      Math.min(rect.left, window.innerWidth - width - 8),
+    );
+    setPosition({ top, left, minWidth: width });
+  }, [options.length]);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        triggerRef.current?.contains(target) ||
+        menuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    // A scroll or resize invalidates the measured position; closing is both
+    // simpler and less jarring than chasing the trigger around.
+    const close = () => setOpen(false);
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) menuRef.current?.focus();
+  }, [open, position]);
+
+  function openMenu() {
+    setActiveIndex(selectedIndex);
+    setOpen(true);
+  }
+
+  function commit(index: number) {
+    const option = options[index];
+    if (option && option.id !== value) onChange(option.id);
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        {...(open ? { "aria-controls": menuId } : {})}
+        draggable={false}
+        onDragStart={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (open) setOpen(false);
+          else openMenu();
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+            event.preventDefault();
+            openMenu();
+          }
+        }}
+        className={cn(
+          "inline-flex cursor-pointer items-center rounded-pill border-0 bg-transparent p-0 outline-offset-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-strong",
+          className,
+        )}
+      >
+        {children}
+      </button>
+
+      {open && position
+        ? createPortal(
+            <div
+              ref={menuRef}
+              id={menuId}
+              role="listbox"
+              aria-label={label}
+              aria-activedescendant={`${menuId}-${activeIndex}`}
+              tabIndex={-1}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" || event.key === "Tab") {
+                  event.preventDefault();
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                } else if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setActiveIndex((index) => (index + 1) % options.length);
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActiveIndex(
+                    (index) => (index - 1 + options.length) % options.length,
+                  );
+                } else if (event.key === "Home") {
+                  event.preventDefault();
+                  setActiveIndex(0);
+                } else if (event.key === "End") {
+                  event.preventDefault();
+                  setActiveIndex(options.length - 1);
+                } else if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  commit(activeIndex);
+                }
+              }}
+              style={{
+                top: position.top,
+                left: position.left,
+                minWidth: position.minWidth,
+              }}
+              className="fixed z-50 max-h-[280px] overflow-auto rounded-inset border border-line2 bg-panel2 p-1 outline-none animate-message-enter"
+            >
+              {options.map((option, index) => (
+                <div
+                  key={option.id}
+                  id={`${menuId}-${index}`}
+                  role="option"
+                  aria-selected={option.id === value}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => commit(index)}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-quiet px-2.5 py-1.5 text-[11.5px]",
+                    index === activeIndex
+                      ? "bg-hover-wash text-ink"
+                      : "text-ink-muted",
+                  )}
+                >
+                  {option.leading}
+                  <span className="min-w-0 flex-1 truncate">
+                    {option.label}
+                  </span>
+                  {option.id === value ? (
+                    <CheckIcon size={12} className="text-accent-strong" />
+                  ) : null}
+                </div>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 

@@ -5,18 +5,13 @@ import {
   CaretDownIcon,
   CaretRightIcon,
   CircleNotchIcon,
+  CrosshairSimpleIcon,
   FileTextIcon,
   GitPullRequestIcon,
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
-import type {
-  Epic,
-  Feature,
-  Sprint,
-  WorkItem,
-  WorkItemStatus,
-} from "@intero/domain";
+import type { Epic, Feature, WorkItem, WorkItemStatus } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -35,6 +30,7 @@ import {
   Avatar,
   EmptySlot,
   FilterChip,
+  SelectMenu,
   Meta,
   Meter,
   Pager,
@@ -45,7 +41,8 @@ import {
   TableHead,
   cn,
 } from "../../design/primitives.js";
-import { isStale, type Tone } from "../../design/utils.js";
+import { Reveal } from "../../design/reveal.js";
+import { isStale, revealMove, type Tone } from "../../design/utils.js";
 import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { getPilotOverview } from "../../pilot/api.js";
@@ -73,6 +70,9 @@ const STAGE_TONE: Record<Feature["stage"], Tone> = {
   in_development: "green",
   released: "accent",
 };
+
+const PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+const STAGES = ["planned", "in_development", "released"] as const;
 
 const PRIORITY_TONE: Record<WorkItem["priority"], Tone> = {
   P0: "danger",
@@ -161,9 +161,11 @@ export function ProjectWorkSurface({
       onOpenItem(item.id);
     },
   });
-  const move = useMutation({
-    mutationFn: (input: { id: string; status: WorkItemStatus }) =>
-      updateWorkItem(projectId, input.id, { status: input.status }),
+  // One mutation for every inline field edit on a card; the board patches
+  // status, owner, points, and priority through the same path.
+  const update = useMutation({
+    mutationFn: (input: { id: string; patch: Record<string, unknown> }) =>
+      updateWorkItem(projectId, input.id, input.patch),
     onSuccess: refresh,
   });
   const createPi = useMutation({
@@ -233,6 +235,9 @@ export function ProjectWorkSurface({
     ]),
   );
   const nameOf = (id: string) => names.get(id) ?? id.slice(0, 8);
+  const assignableOwners = (overview.data?.principals ?? []).filter(
+    (principal) => principal.kind === "human",
+  );
   // Branded ids are strings at the UI boundary; the maps are keyed loosely so
   // filter state (plain strings) can look rows up without casting.
   const epicOfFeature = new Map<string, string | undefined>(
@@ -249,6 +254,24 @@ export function ProjectWorkSurface({
   const epicNames = new Map<string, string>(
     work.epics.map((epic) => [epic.id, epic.title]),
   );
+  // Sprint numbers restart inside each Program Increment, so a bare "Sprint 1"
+  // is ambiguous the moment a second PI exists. Every sprint is labelled
+  // <PI>.<sprint>, and the chips are ordered the same way.
+  const piNumberById = new Map<string, number>(
+    work.programIncrements.map((pi) => [pi.id, pi.number]),
+  );
+  const sprintLabelOf = (sprintId: string | undefined): string => {
+    const sprint = work.sprints.find((candidate) => candidate.id === sprintId);
+    if (!sprint) return "—";
+    const pi = piNumberById.get(sprint.piId);
+    return pi === undefined ? `${sprint.number}` : `${pi}.${sprint.number}`;
+  };
+  const orderedSprints = work.sprints.toSorted(
+    (left, right) =>
+      (piNumberById.get(left.piId) ?? 0) -
+        (piNumberById.get(right.piId) ?? 0) || left.number - right.number,
+  );
+
   const prCount = new Map<string, number>();
   for (const reference of work.codeReferences) {
     prCount.set(
@@ -284,51 +307,48 @@ export function ProjectWorkSurface({
   return (
     <div className="animate-view-enter grid h-full grid-rows-[auto_minmax(0,1fr)]">
       <header className="border-b border-line px-[30px] pb-[18px] pt-[26px]">
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
-          <div>
-            <p className="text-[11.5px] text-faint">{t("project.eyebrow")}</p>
-            <h1 className="mt-1.5 text-[22px] font-[570] tracking-[-0.03em]">
-              {work.project.name}
-            </h1>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5">
-            <FilterChip
-              active={activeSprintId === "all"}
-              onClick={() => {
-                setSprintFilter("all");
-                resetPages();
-              }}
-            >
-              {t("general.all")}
-            </FilterChip>
-            {work.sprints.map((sprint) => (
-              <FilterChip
-                key={sprint.id}
-                active={activeSprintId === sprint.id}
-                onClick={() => {
-                  setSprintFilter(sprint.id);
-                  resetPages();
-                }}
-              >
-                {t("project.sprintNumber", { n: sprint.number })}
-              </FilterChip>
-            ))}
-          </div>
-
-          <span className="text-[11.5px] text-faint">
-            {selectedSprint
-              ? `${selectedSprint.startDate} – ${selectedSprint.endDate} · ${t(
-                  `project.sprintStatus.${selectedSprint.status}` as TranslationKey,
-                )}`
-              : t("project.allSprints")}
-          </span>
-
-          <span className="inline-flex items-center gap-[9px]">
+        {/* Identity row: what you are looking at. The sprint here reports the
+            current *selection*, not the date-active sprint, so it can never
+            contradict the picker below it. */}
+        <p className="text-[11.5px] text-faint">{t("project.eyebrow")}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
+          <h1 className="text-[22px] font-[570] tracking-[-0.03em]">
+            {work.project.name}
+          </h1>
+          {/* The sprint, its dates, and its burn-down are one fact about the
+              selection, so they share a pill instead of sitting at opposite
+              ends of the header. */}
+          <span className="inline-flex items-center gap-3 rounded-pill bg-raise py-1.5 pl-2.5 pr-3.5">
+            {selectedSprint ? (
+              <>
+                <StatusPill
+                  tone={selectedSprint.status === "active" ? "green" : "faint"}
+                  size="sm"
+                  dot
+                >
+                  {t("project.sprintNumber", {
+                    n: sprintLabelOf(selectedSprint.id),
+                  })}
+                </StatusPill>
+                <span className="text-[11.5px] text-ink-muted">
+                  {selectedSprint.startDate} – {selectedSprint.endDate}
+                </span>
+                <span className="text-[11.5px] text-faint">
+                  {t(
+                    `project.sprintStatus.${selectedSprint.status}` as TranslationKey,
+                  )}
+                </span>
+              </>
+            ) : (
+              <span className="pl-0.5 text-[11.5px] text-ink-muted">
+                {t("project.allSprints")}
+              </span>
+            )}
+            <span className="h-3.5 w-px bg-line2" />
             <Meter
               percent={totalPoints > 0 ? (donePoints / totalPoints) * 100 : 0}
               tone="green"
-              width={96}
+              width={72}
               grow
             />
             <span className="font-mono text-[11px] text-ink-muted">
@@ -338,6 +358,81 @@ export function ProjectWorkSurface({
               })}
             </span>
           </span>
+
+          {/* Only meaningful once you have navigated away from the sprint the
+              calendar says you are in. */}
+          {currentSprint && activeSprintId !== currentSprint.id ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSprintFilter(currentSprint.id);
+                resetPages();
+              }}
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+            >
+              <CrosshairSimpleIcon size={13} />
+              {t("project.backToCurrent", {
+                n: sprintLabelOf(currentSprint.id),
+              })}
+            </button>
+          ) : null}
+
+          {canGovern ? (
+            <span className="ml-auto flex items-center gap-2">
+              {currentSprint ? (
+                <button
+                  type="button"
+                  disabled={
+                    currentSprint.status === "ended" ||
+                    closeCurrentSprint.isPending
+                  }
+                  onClick={() => closeCurrentSprint.mutate(currentSprint.id)}
+                  className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink hover:border-accent-strong disabled:opacity-40"
+                >
+                  {t("project.closeSprint")}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setShowPi((value) => !value)}
+                aria-expanded={showPi}
+                className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink hover:border-accent-strong"
+              >
+                {t("project.planPi")}
+              </button>
+            </span>
+          ) : null}
+        </div>
+
+        {/* Control row: what you can change. The sprint list grows with every
+            PI, so it gets its own line instead of reflowing the title. */}
+        <div className="mt-3.5 flex flex-wrap items-center gap-x-3.5 gap-y-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <SectionLabel className="mr-0.5 tracking-[0.06em]">
+              {t("project.sprintFilter")}
+            </SectionLabel>
+            <FilterChip
+              active={activeSprintId === "all"}
+              onClick={() => {
+                setSprintFilter("all");
+                resetPages();
+              }}
+            >
+              {t("general.all")}
+            </FilterChip>
+            {orderedSprints.map((sprint) => (
+              <FilterChip
+                key={sprint.id}
+                active={activeSprintId === sprint.id}
+                onClick={() => {
+                  setSprintFilter(sprint.id);
+                  resetPages();
+                }}
+              >
+                {t("project.sprintNumber", { n: sprintLabelOf(sprint.id) })}
+              </FilterChip>
+            ))}
+          </div>
 
           <SegmentedControl
             className="ml-auto"
@@ -354,29 +449,6 @@ export function ProjectWorkSurface({
               },
             ]}
           />
-
-          {canGovern && currentSprint ? (
-            <button
-              type="button"
-              disabled={
-                currentSprint.status === "ended" || closeCurrentSprint.isPending
-              }
-              onClick={() => closeCurrentSprint.mutate(currentSprint.id)}
-              className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink hover:border-accent-strong disabled:opacity-40"
-            >
-              {t("project.closeSprint")}
-            </button>
-          ) : null}
-          {canGovern ? (
-            <button
-              type="button"
-              onClick={() => setShowPi((value) => !value)}
-              aria-expanded={showPi}
-              className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink hover:border-accent-strong"
-            >
-              {t("project.planPi")}
-            </button>
-          ) : null}
         </div>
 
         <p className="mt-3.5 inline-flex items-center gap-2 rounded-pill bg-accent-soft px-3 py-[7px] text-[11.5px] text-accent-strong">
@@ -427,12 +499,13 @@ export function ProjectWorkSurface({
       {pane === "board" ? (
         <BoardPane
           items={scheduled}
-          sprints={work.sprints}
+          sprintLabelOf={sprintLabelOf}
           prCount={prCount}
           nameOf={nameOf}
           formatRelative={formatRelative}
           onOpenItem={onOpenItem}
-          onMove={(id, status) => move.mutate({ id, status })}
+          owners={assignableOwners}
+          onUpdate={(id, patch) => update.mutate({ id, patch })}
         />
       ) : null}
 
@@ -556,29 +629,81 @@ export function ProjectWorkSurface({
 
 function BoardPane({
   items,
-  sprints,
+  sprintLabelOf,
   prCount,
   nameOf,
   formatRelative,
   onOpenItem,
-  onMove,
+  owners,
+  onUpdate,
 }: {
   items: WorkItem[];
-  sprints: Array<Sprint & { status: string }>;
+  sprintLabelOf: (sprintId: string | undefined) => string;
   prCount: Map<string, number>;
   nameOf: (id: string) => string;
   formatRelative: (value: string) => string;
   onOpenItem: (id: string) => void;
-  onMove: (id: string, status: WorkItemStatus) => void;
+  owners: ReadonlyArray<{ id: string; displayName: string }>;
+  onUpdate: (id: string, patch: Record<string, unknown>) => void;
 }) {
   const { t } = useI18n();
+  // Native HTML5 drag and drop: no dependency, and the pointer never leaves the
+  // card it is carrying. The status select below each card stays as the
+  // keyboard-operable path, since HTML5 drag has no keyboard equivalent.
+  const [dragging, setDragging] = useState<{
+    id: string;
+    status: WorkItemStatus;
+  }>();
+  const [dropTarget, setDropTarget] = useState<WorkItemStatus>();
+
+  function drop(status: WorkItemStatus) {
+    if (dragging && dragging.status !== status) {
+      onUpdate(dragging.id, { status });
+    }
+    setDragging(undefined);
+    setDropTarget(undefined);
+  }
+
   return (
     <div className="min-h-0 overflow-auto px-[30px] pb-[34px] pt-5">
       <div className="grid grid-cols-[repeat(4,minmax(0,1fr))] items-start gap-2.5">
         {COLUMNS.map((column) => {
           const columnItems = items.filter((item) => item.status === column.id);
+          const isTarget = dropTarget === column.id;
+          const canDrop =
+            dragging !== undefined && dragging.status !== column.id;
           return (
-            <div className="flex flex-col gap-[9px]" key={column.id}>
+            <div
+              key={column.id}
+              onDragOver={(event) => {
+                if (!dragging) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDropTarget(column.id);
+              }}
+              onDragLeave={(event) => {
+                // Moving between a column's own children fires dragleave too;
+                // only clear when the pointer actually leaves the column.
+                if (event.currentTarget.contains(event.relatedTarget as Node)) {
+                  return;
+                }
+                setDropTarget((current) =>
+                  current === column.id ? undefined : current,
+                );
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                drop(column.id);
+              }}
+              className={cn(
+                "flex flex-col gap-[9px] rounded-container border border-dashed p-1.5 transition-colors duration-[180ms]",
+                isTarget && canDrop
+                  ? "border-accent-strong bg-accent-soft"
+                  : canDrop
+                    ? "border-line2"
+                    : "border-transparent",
+              )}
+            >
               <div className="flex items-center gap-2 px-1">
                 <span
                   className={cn(
@@ -598,92 +723,202 @@ function BoardPane({
               {columnItems.map((item) => (
                 <article
                   key={item.id}
-                  className="grid gap-2.5 rounded-[13px] border border-line bg-panel2 px-3.5 py-3 transition-[border-color,transform] duration-[180ms] hover:-translate-y-px hover:border-accent-strong"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("text/plain", item.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    setDragging({ id: item.id, status: item.status });
+                  }}
+                  onDragEnd={() => {
+                    setDragging(undefined);
+                    setDropTarget(undefined);
+                  }}
+                  onMouseEnter={revealMove}
+                  onMouseMove={revealMove}
+                  className={cn(
+                    "group relative grid cursor-grab gap-3 overflow-hidden rounded-[13px] border border-line bg-panel2-glass px-4 py-3.5 transition-[border-color,transform,opacity] duration-[180ms] hover:-translate-y-px hover:border-accent-strong active:cursor-grabbing",
+                    dragging?.id === item.id ? "opacity-45" : undefined,
+                  )}
                 >
-                  <button
-                    type="button"
-                    onClick={() => onOpenItem(item.id)}
-                    className="grid w-full cursor-pointer gap-2.5 border-0 bg-transparent p-0 text-left text-ink"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Meta>{item.id.slice(0, 8)}</Meta>
+                  <Reveal />
+                  {/* Facts the card owns are edited on the card. They sit
+                      outside the navigating button — an editable control
+                      nested in a button is invalid and swallows its own
+                      clicks. */}
+                  <div className="flex items-center gap-2">
+                    <Meta>{item.id.slice(0, 8)}</Meta>
+                    <SelectMenu
+                      value={item.priority}
+                      label={t("project.col.priority")}
+                      options={PRIORITIES.map((priority) => ({
+                        id: priority,
+                        label: priority,
+                      }))}
+                      onChange={(priority) => onUpdate(item.id, { priority })}
+                    >
                       <StatusPill tone={PRIORITY_TONE[item.priority]} size="sm">
                         {item.priority}
                       </StatusPill>
-                      {item.carryover ? (
-                        <StatusPill tone="amber" size="sm">
-                          {t("project.carryover", {
-                            n:
-                              sprints.find(
-                                (sprint) => sprint.id === item.sourceSprintId,
-                              )?.number ?? "—",
-                          })}
-                        </StatusPill>
-                      ) : null}
-                    </span>
-                    <span className="text-[12.5px] font-[560] leading-[1.45] [text-wrap:pretty]">
-                      {item.title}
-                    </span>
-                    <span className="flex flex-wrap items-center gap-x-2 gap-y-[7px]">
-                      {item.ownerId ? (
-                        <Avatar
-                          id={item.ownerId}
-                          name={nameOf(item.ownerId)}
-                          size="sm"
-                        />
-                      ) : (
-                        <span className="text-[10px] text-faint">
-                          {t("project.unassigned")}
-                        </span>
-                      )}
-                      {item.points === undefined ? null : (
-                        <span className="inline-grid h-[18px] min-w-5 place-items-center rounded-quiet bg-raise px-1.5 font-mono text-[10px] text-ink-muted">
-                          {item.points}
-                        </span>
-                      )}
-                      {prCount.get(item.id) ? (
-                        <span className="inline-flex items-center gap-1 font-mono text-[10px] text-faint">
-                          <GitPullRequestIcon size={12} />
-                          {prCount.get(item.id)}
-                        </span>
-                      ) : null}
-                      <Meta
-                        tone={
-                          isStale(item.updatedAt, undefined) ? "amber" : "faint"
-                        }
-                        className="ml-auto text-[9.5px]"
-                      >
-                        {formatRelative(item.updatedAt)}
-                      </Meta>
-                    </span>
-                  </button>
-                  <label className="flex items-center gap-1.5 border-t border-line pt-2 text-[9.5px] text-faint">
-                    {t("project.moveTo")}
-                    <select
-                      value={item.status}
-                      aria-label={t("project.moveTo")}
-                      onChange={(event) =>
-                        onMove(item.id, event.target.value as WorkItemStatus)
+                    </SelectMenu>
+                    {item.carryover ? (
+                      <StatusPill tone="amber" size="sm">
+                        {t("project.carryover", {
+                          n: sprintLabelOf(item.sourceSprintId),
+                        })}
+                      </StatusPill>
+                    ) : null}
+                    <Meta
+                      tone={
+                        isStale(item.updatedAt, undefined) ? "amber" : "faint"
                       }
-                      className="ml-auto h-6 cursor-pointer rounded-quiet border border-line2 bg-transparent px-1.5 text-[10px] text-ink-muted"
+                      className="ml-auto text-[9.5px]"
                     >
-                      {COLUMNS.map((option) => (
-                        <option value={option.id} key={option.id}>
-                          {t(option.label)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      {formatRelative(item.updatedAt)}
+                    </Meta>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenItem(item.id)}
+                    className="w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[13px] font-[560] leading-[1.5] text-ink [text-wrap:pretty] hover:text-accent-strong"
+                  >
+                    {item.title}
+                  </button>
+
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-[7px]">
+                    <SelectMenu
+                      value={item.ownerId ?? ""}
+                      label={t("project.col.owner")}
+                      options={[
+                        { id: "", label: t("project.unassigned") },
+                        ...owners.map((owner) => ({
+                          id: owner.id,
+                          label: owner.displayName,
+                          leading: (
+                            <Avatar
+                              id={owner.id}
+                              name={owner.displayName}
+                              size="sm"
+                            />
+                          ),
+                        })),
+                      ]}
+                      onChange={(ownerId) =>
+                        onUpdate(item.id, { ownerId: ownerId || null })
+                      }
+                    >
+                      {item.ownerId ? (
+                        <span className="inline-flex max-w-[132px] items-center gap-1.5 rounded-pill bg-raise py-[3px] pl-[3px] pr-2.5">
+                          <Avatar
+                            id={item.ownerId}
+                            name={nameOf(item.ownerId)}
+                            size="sm"
+                          />
+                          <span className="min-w-0 truncate text-[10.5px] text-ink-muted">
+                            {nameOf(item.ownerId)}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-pill border border-dashed border-line2 py-[3px] pl-[3px] pr-2.5">
+                          <span className="inline-grid h-5 w-5 place-items-center rounded-full bg-raise text-[10px] text-faint">
+                            +
+                          </span>
+                          <span className="text-[10.5px] text-faint">
+                            {t("project.unassigned")}
+                          </span>
+                        </span>
+                      )}
+                    </SelectMenu>
+
+                    <PointsField
+                      item={item}
+                      onCommit={(points) => onUpdate(item.id, { points })}
+                    />
+
+                    {prCount.get(item.id) ? (
+                      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-faint">
+                        <GitPullRequestIcon size={12} />
+                        {prCount.get(item.id)}
+                      </span>
+                    ) : null}
+
+                    <SelectMenu
+                      className="ml-auto"
+                      value={item.status}
+                      label={t("project.moveTo")}
+                      options={COLUMNS.map((option) => ({
+                        id: option.id,
+                        label: t(option.label),
+                      }))}
+                      onChange={(status) => onUpdate(item.id, { status })}
+                    >
+                      <span className="inline-flex items-center gap-1.5 rounded-pill bg-raise px-2 py-[3px] text-[9.5px] text-ink-muted">
+                        <span
+                          className={cn(
+                            "h-1 w-1 rounded-full",
+                            column.tone === "green"
+                              ? "bg-green"
+                              : column.tone === "amber"
+                                ? "bg-amber"
+                                : "bg-faint",
+                          )}
+                        />
+                        {t(column.label)}
+                      </span>
+                    </SelectMenu>
+                  </div>
                 </article>
               ))}
               {columnItems.length === 0 ? (
-                <EmptySlot>{t("project.columnEmpty")}</EmptySlot>
+                <EmptySlot>
+                  {canDrop ? t("project.dropHere") : t("project.columnEmpty")}
+                </EmptySlot>
               ) : null}
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * Story points, edited in place. Uncontrolled and keyed on the item's
+ * updatedAt so a background refetch replaces the value only between edits,
+ * never while it is being typed. Blank clears the estimate rather than
+ * writing 0 — "unestimated" and "zero points" are different facts.
+ */
+function PointsField({
+  item,
+  onCommit,
+}: {
+  item: WorkItem;
+  onCommit: (points: number | null) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <input
+      key={`${item.id}:points:${item.updatedAt}`}
+      type="number"
+      min={0}
+      inputMode="numeric"
+      defaultValue={item.points ?? ""}
+      placeholder="—"
+      aria-label={t("project.col.points")}
+      draggable={false}
+      onDragStart={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+      onBlur={(event) => {
+        const raw = event.target.value.trim();
+        const next = raw === "" ? null : Number(raw);
+        if (next !== null && !Number.isFinite(next)) return;
+        if ((item.points ?? null) !== next) onCommit(next);
+      }}
+      className="h-[18px] w-9 rounded-quiet bg-raise px-1 text-center font-mono text-[10px] text-ink-muted outline-none [appearance:textfield] placeholder:text-faint focus:outline focus:outline-1 focus:outline-accent-strong [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+    />
   );
 }
 
@@ -1162,25 +1397,26 @@ function EpicPane({
                                 : t("project.featureEmptyShort")}
                             </Meta>
                           </button>
-                          <select
+                          <SelectMenu
                             value={feature.stage}
-                            aria-label={t("project.moveTo")}
-                            onChange={(event) =>
-                              onMoveFeature(
-                                feature.id,
-                                event.target.value as Feature["stage"],
-                              )
+                            label={t("project.moveTo")}
+                            options={STAGES.map((stage) => ({
+                              id: stage,
+                              label: t(
+                                `project.stage.${stage}` as TranslationKey,
+                              ),
+                            }))}
+                            onChange={(stage) =>
+                              onMoveFeature(feature.id, stage)
                             }
-                            className="h-6 cursor-pointer rounded-quiet border border-line2 bg-transparent px-1.5 text-[10px] text-ink-muted"
                           >
-                            {(
-                              ["planned", "in_development", "released"] as const
-                            ).map((option) => (
-                              <option value={option} key={option}>
-                                {t(`project.stage.${option}` as TranslationKey)}
-                              </option>
-                            ))}
-                          </select>
+                            <span className="inline-flex h-6 items-center gap-1.5 rounded-quiet border border-line2 px-2 text-[10px] text-ink-muted">
+                              {t(
+                                `project.stage.${feature.stage}` as TranslationKey,
+                              )}
+                              <CaretDownIcon size={10} className="text-faint" />
+                            </span>
+                          </SelectMenu>
                         </div>
 
                         {featureOpen ? (

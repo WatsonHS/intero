@@ -1,5 +1,6 @@
 import {
   CheckIcon,
+  CircleHalfIcon,
   CloudCheckIcon,
   CloudSlashIcon,
   FolderOpenIcon,
@@ -65,8 +66,15 @@ export function SettingsView({
   onOpenTestSetup?: () => void;
 }) {
   const { locale, setLocale, t } = useI18n();
-  const { accent, mode, reduceMotion, setAccent, setMode, setReduceMotion } =
-    useTheme();
+  const {
+    accent,
+    mode,
+    preference,
+    reduceMotion,
+    setAccent,
+    setPreference,
+    setReduceMotion,
+  } = useTheme();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
   const [editingPilotProvider, setEditingPilotProvider] = useState(false);
@@ -252,34 +260,53 @@ export function SettingsView({
               <span className="text-[12px] text-ink-muted">
                 {t("settings.theme")}
               </span>
-              <div className="mt-3.5 grid grid-cols-2 gap-[9px]">
-                <button
-                  type="button"
-                  onClick={() => setMode("dark")}
-                  className={[
-                    "flex h-[34px] cursor-pointer items-center gap-2 rounded-[9px] border px-3 text-[12px]",
-                    mode === "dark"
-                      ? "border-accent-strong bg-accent-soft"
-                      : "border-line2 hover:border-accent-strong",
-                  ].join(" ")}
-                >
-                  <MoonIcon size={14} />
-                  {t("settings.dark")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode("light")}
-                  className={[
-                    "flex h-[34px] cursor-pointer items-center gap-2 rounded-[9px] border px-3 text-[12px]",
-                    mode === "light"
-                      ? "border-accent-strong bg-accent-soft"
-                      : "border-line2 hover:border-accent-strong",
-                  ].join(" ")}
-                >
-                  <SunIcon size={14} />
-                  {t("settings.light")}
-                </button>
+              <div className="mt-3.5 grid grid-cols-3 gap-[9px]">
+                {(
+                  [
+                    {
+                      id: "system",
+                      label: t("settings.system"),
+                      icon: <CircleHalfIcon size={14} />,
+                    },
+                    {
+                      id: "light",
+                      label: t("settings.light"),
+                      icon: <SunIcon size={14} />,
+                    },
+                    {
+                      id: "dark",
+                      label: t("settings.dark"),
+                      icon: <MoonIcon size={14} />,
+                    },
+                  ] as const
+                ).map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    aria-pressed={preference === option.id}
+                    onClick={() => setPreference(option.id)}
+                    className={[
+                      "flex h-[34px] cursor-pointer items-center justify-center gap-2 rounded-[9px] border px-3 text-[12px]",
+                      preference === option.id
+                        ? "border-accent-strong bg-accent-soft"
+                        : "border-line2 hover:border-accent-strong",
+                    ].join(" ")}
+                  >
+                    {option.icon}
+                    {option.label}
+                  </button>
+                ))}
               </div>
+              {preference === "system" ? (
+                <p className="mt-2.5 text-[10.5px] text-faint">
+                  {t("settings.systemNow", {
+                    mode:
+                      mode === "dark"
+                        ? t("settings.dark")
+                        : t("settings.light"),
+                  })}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -613,8 +640,7 @@ export function SettingsView({
                     <button
                       type="button"
                       disabled={
-                        !deploymentEndpoint.trim() ||
-                        updateDeployment.isPending
+                        !deploymentEndpoint.trim() || updateDeployment.isPending
                       }
                       onClick={() => updateDeployment.mutate()}
                       className="h-9 rounded-btn border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:opacity-50"

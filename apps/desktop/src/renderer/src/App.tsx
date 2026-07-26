@@ -6,16 +6,13 @@ import {
   GitBranchIcon,
   KanbanIcon,
   MagnifyingGlassIcon,
-  MoonIcon,
   PulseIcon,
   SidebarSimpleIcon,
-  SunIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { getActionInbox, getBootstrap } from "./api.js";
-import { useTheme } from "./design/theme.js";
 import { initials } from "./design/utils.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
@@ -44,11 +41,11 @@ type View =
 
 type SetupMode = "canonical" | "pilot-test";
 
+// The primary group is the places work lives. Settings configures the app
+// rather than holding any work, so it sits below the spacer with the other
+// app-level controls instead of inside this list.
 const NAV: Array<{
-  id: Extract<
-    View,
-    "pulse" | "chat" | "coord" | "spec" | "project" | "settings"
-  >;
+  id: Extract<View, "pulse" | "chat" | "coord" | "spec" | "project">;
   label: TranslationKey;
   icon: typeof PulseIcon;
 }> = [
@@ -57,7 +54,6 @@ const NAV: Array<{
   { id: "coord", label: "nav.coord", icon: GitBranchIcon },
   { id: "spec", label: "nav.spec", icon: FileTextIcon },
   { id: "project", label: "nav.project", icon: KanbanIcon },
-  { id: "settings", label: "nav.settings", icon: GearSixIcon },
 ];
 
 const TITLES: Record<View, TranslationKey> = {
@@ -87,7 +83,6 @@ function navButtonClass(open: boolean, active: boolean): string {
 
 export function App() {
   const { t } = useI18n();
-  const { mode, setMode } = useTheme();
   const pilot = usePilotOptional();
   const [view, setView] = useState<View>("pulse");
   const [setupMode, setSetupMode] = useState<SetupMode>("canonical");
@@ -243,30 +238,28 @@ export function App() {
           );
         })}
         <span className="flex-1" />
+        {/* Settings is a destination, so it keeps nav styling and the active
+            state — it is only separated from the work surfaces above. */}
         <button
           type="button"
-          className={[
-            "grid h-9 cursor-pointer items-center gap-[11px] rounded-[11px] border border-line2 bg-transparent p-0 text-ink-muted",
-            "mb-2 transition-colors duration-[180ms] hover:border-accent-strong hover:text-accent-strong",
-            navOpen
-              ? "w-full grid-cols-[18px_minmax(0,1fr)] justify-start px-[9px]"
-              : "w-9 grid-cols-[18px] justify-center",
-          ].join(" ")}
-          title={mode === "light" ? t("theme.toDark") : t("theme.toLight")}
-          onClick={() => setMode(mode === "light" ? "dark" : "light")}
+          title={t("nav.settings")}
+          className={navButtonClass(navOpen, activeNav === "settings")}
+          aria-current={activeNav === "settings" ? "page" : undefined}
+          onClick={() => setView("settings")}
         >
           <span className="grid place-items-center justify-self-center">
-            {mode === "light" ? <MoonIcon size={17} /> : <SunIcon size={17} />}
+            <GearSixIcon size={18} />
           </span>
           {navOpen ? (
             <span
-              className="animate-message-enter whitespace-nowrap text-left text-[12px]"
+              className="animate-message-enter whitespace-nowrap text-left text-[12.5px] font-[540]"
               style={{ animationDelay: `${NAV.length * 30}ms` }}
             >
-              {mode === "light" ? t("theme.toDark") : t("theme.toLight")}
+              {t("nav.settings")}
             </span>
           ) : null}
         </button>
+        <span className="my-2 h-px w-full shrink-0 bg-line" />
         <button
           type="button"
           className={[
@@ -329,6 +322,7 @@ export function App() {
               setView(sourceRef.startsWith("spec:") ? "spec" : "coord")
             }
             onOpenSetup={() => openSetup("canonical")}
+            onOpenSpecs={() => setView("spec")}
           />
         ) : null}
         {view === "person" && personId ? (

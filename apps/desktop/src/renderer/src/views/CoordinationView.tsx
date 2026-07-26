@@ -317,7 +317,7 @@ export function CoordinationView({
                 ? { testId: `pilot-coordination-thread-${pilotThread.id}` }
                 : {})}
             >
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2">
                 <Meta>{item.thread.id.slice(0, 8)}</Meta>
                 <StatusPill tone={STATE_TONE[state]} size="sm">
                   {t(`coord.state.${state}` as TranslationKey)}
@@ -331,7 +331,7 @@ export function CoordinationView({
               <span className="text-[12.5px] font-[560] leading-[1.4] [text-wrap:pretty]">
                 {item.thread.title}
               </span>
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2">
                 {first && second ? (
                   <AvatarPair
                     left={{ id: first, name: nameOf(first) }}
@@ -340,7 +340,7 @@ export function CoordinationView({
                 ) : first ? (
                   <Avatar id={first} name={nameOf(first)} size="xs" />
                 ) : null}
-                <span className="truncate text-[10px] text-faint">
+                <span className="min-w-0 truncate text-[10px] text-faint">
                   {pilotProject?.name ?? "Intero"} ·{" "}
                   {item.thread.participantIds.map(nameOf).join(", ")}
                 </span>

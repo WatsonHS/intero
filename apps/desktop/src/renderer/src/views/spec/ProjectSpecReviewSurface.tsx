@@ -338,7 +338,7 @@ export function ProjectSpecReviewSurface({
               onClick={() => setActiveId(item.spec.id)}
               testId={`project-spec-row-${item.spec.id}`}
             >
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2">
                 <Meta>
                   {item.spec.id.slice(0, 8)} ·{" "}
                   {t("spec.rev", { n: head?.revision ?? 1 })}
@@ -353,7 +353,7 @@ export function ProjectSpecReviewSurface({
               <span className="text-[12.5px] font-[560] leading-[1.4] [text-wrap:pretty]">
                 {item.spec.title}
               </span>
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2">
                 {head ? (
                   <Avatar
                     id={head.createdBy}
@@ -361,7 +361,7 @@ export function ProjectSpecReviewSurface({
                     size="xs"
                   />
                 ) : null}
-                <span className="truncate text-[10px] text-faint">
+                <span className="min-w-0 truncate text-[10px] text-faint">
                   {head ? nameOf(head.createdBy) : "—"} ·{" "}
                   {t("spec.scopeCount", { count: scopes })}
                 </span>
