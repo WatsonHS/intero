@@ -1655,6 +1655,9 @@ export const pilotCoordinationThreads = pgTable(
       table.updatedAt,
     ),
     index("pilot_coordination_work_state_idx").on(table.workStateId),
+    uniqueIndex("pilot_coordination_work_state_unique_idx")
+      .on(table.workStateId)
+      .where(sql`${table.workStateId} is not null`),
   ],
 );
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { PilotCheckpointInput, uuidv7 } from "./index.js";
+import {
+  personalStandInId,
+  PilotCheckpointInput,
+  PrincipalId,
+  uuidv7,
+} from "./index.js";
 
 const checkpoint = {
   schemaVersion: 2,
@@ -55,5 +60,42 @@ describe("pilot checkpoint narrative contract", () => {
         terminalOutput: "pnpm test --filter billing",
       }),
     ).toThrow();
+  });
+
+  it("accepts a structured dependency target and rejects a non-principal value", () => {
+    const targetPrincipalId = uuidv7();
+    expect(
+      PilotCheckpointInput.parse({
+        ...checkpoint,
+        narrative: {
+          ...checkpoint.narrative,
+          collaboration: {
+            ...checkpoint.narrative.collaboration,
+            targetPrincipalId,
+          },
+        },
+      }).narrative.collaboration.targetPrincipalId,
+    ).toBe(targetPrincipalId);
+    expect(() =>
+      PilotCheckpointInput.parse({
+        ...checkpoint,
+        narrative: {
+          ...checkpoint.narrative,
+          collaboration: {
+            ...checkpoint.narrative.collaboration,
+            targetPrincipalId: "Finance",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("derives one stable personal Stand-in identity per human principal", () => {
+    const owner = PrincipalId.parse("019f9f20-0000-7000-8000-000000000001");
+    const other = PrincipalId.parse("019f9f20-0000-7000-8000-000000000002");
+
+    expect(personalStandInId(owner)).toBe(personalStandInId(owner));
+    expect(personalStandInId(owner)).not.toBe(owner);
+    expect(personalStandInId(owner)).not.toBe(personalStandInId(other));
   });
 });

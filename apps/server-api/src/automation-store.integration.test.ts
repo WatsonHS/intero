@@ -1,9 +1,18 @@
-import { OrganizationId, PrincipalId, ProjectId, uuidv7 } from "@intero/domain";
+import {
+  OrganizationId,
+  type PilotAgentBinding,
+  type PilotCheckpointInput,
+  type PilotProject,
+  PrincipalId,
+  ProjectId,
+  uuidv7,
+} from "@intero/domain";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresAutomationStore } from "./automation-store.js";
 import { migrateDatabase } from "./database/migrate.js";
+import { NormalizedPostgresPilotStore } from "./normalized-postgres-pilot-store.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const databaseAppUrl = process.env.DATABASE_APP_URL;
@@ -22,6 +31,45 @@ databaseSuite("bounded Project automation store", () => {
   const projectB = ProjectId.parse(uuidv7());
   const teamA = uuidv7();
   const workItemA = uuidv7();
+  const bindingA = uuidv7();
+  const workStateA = uuidv7();
+  const standInJobA = uuidv7();
+  const checkpointA: PilotCheckpointInput = {
+    schemaVersion: 2,
+    clientEventId: "automation-provider-recovery-0001",
+    projectId: projectA,
+    occurredAt: "2026-07-26T04:20:00.000Z",
+    eventType: "blocker_raised",
+    workstream: {
+      key: "provider-recovery",
+      title: "Provider recovery correlation",
+      phase: "blocked",
+    },
+    narrative: {
+      currentFocus: "Waiting for Morgan to confirm the retry contract.",
+      completedOutcome: "The failing provider request is isolated.",
+      evidence: ["The structured failure was reproduced."],
+      nextStep: "Morgan confirms the bounded retry behavior.",
+      collaboration: {
+        needed: true,
+        request: "Confirm the retry contract.",
+        requestedFrom: "Member A",
+        targetPrincipalId: memberA,
+      },
+    },
+    evidenceRefs: [],
+  };
+  const bindingData: PilotAgentBinding = {
+    id: bindingA,
+    projectId: projectA,
+    ownerId: adminA,
+    client: "codex",
+    name: "Correlation test Agent",
+    workspaceId: uuidv7(),
+    preferredLanguage: "en-US",
+    credentialHash: "c".repeat(64),
+    createdAt: "2026-07-26T04:19:00.000Z",
+  };
   const storeA = new PostgresAutomationStore(appPoolA, organizationA);
   const storeB = new PostgresAutomationStore(appPoolB, organizationB);
 
@@ -57,10 +105,11 @@ databaseSuite("bounded Project automation store", () => {
       [projectA, organizationA, projectB, organizationB],
     );
     await admin.query(
-      `INSERT INTO pilot_teams (id,organization_id,name,data)
+      `INSERT INTO pilot_teams (id,organization_id,name,data,created_at)
        VALUES ($1::uuid,$2::uuid,'Platform',jsonb_build_object(
-         'id',$1::uuid::text,'organizationId',$2::uuid::text,'name','Platform'
-       ))`,
+         'id',$1::uuid::text,'organizationId',$2::uuid::text,'name','Platform',
+         'createdAt','2026-07-26T03:50:00.000Z'
+       ),'2026-07-26T03:50:00.000Z')`,
       [teamA, organizationA],
     );
     await admin.query(
@@ -72,13 +121,24 @@ databaseSuite("bounded Project automation store", () => {
     await admin.query(
       `INSERT INTO pilot_project_settings
          (project_id,organization_id,owner_id,primary_team_id,posture,data)
-       VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'sharing',jsonb_build_object(
-         'projectId',$1::uuid::text,'ownerId',$3::uuid::text,
-         'primaryTeamId',$4::uuid::text,'posture','sharing',
-         'rawContentAuthorized',false,
-         'participatingTeamIds',jsonb_build_array($4::uuid::text)
-       ))`,
-      [projectA, organizationA, adminA, teamA],
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'collaborative',$5::jsonb)`,
+      [
+        projectA,
+        organizationA,
+        adminA,
+        teamA,
+        JSON.stringify({
+          id: projectA,
+          organizationId: organizationA,
+          name: "Delivery A",
+          ownerId: adminA,
+          primaryTeamId: teamA,
+          participatingTeamIds: [teamA],
+          posture: "collaborative",
+          createdAt: "2026-07-26T03:50:00.000Z",
+          updatedAt: "2026-07-26T03:50:00.000Z",
+        } satisfies PilotProject),
+      ],
     );
     await admin.query(
       `INSERT INTO pilot_project_teams (organization_id,project_id,team_id)
@@ -101,6 +161,93 @@ databaseSuite("bounded Project automation store", () => {
           kind: "human",
           source: "web",
         }),
+      ],
+    );
+    await admin.query(
+      `INSERT INTO pilot_agent_bindings
+        (id,organization_id,project_id,owner_id,credential_hash,data,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+      [
+        bindingA,
+        organizationA,
+        projectA,
+        adminA,
+        bindingData.credentialHash,
+        JSON.stringify(bindingData),
+        bindingData.createdAt,
+      ],
+    );
+    const workStateData = {
+      id: workStateA,
+      projectId: projectA,
+      ownerId: adminA,
+      bindingId: bindingA,
+      workstreamKey: checkpointA.workstream.key,
+      title: checkpointA.workstream.title,
+      phase: checkpointA.workstream.phase,
+      narrative: checkpointA.narrative,
+      claims: [],
+      standIn: {
+        jobId: standInJobA,
+        jobKey: checkpointA.clientEventId,
+        status: "pending",
+        attempts: 0,
+        queuedAt: "2026-07-26T04:20:00.000Z",
+        updatedAt: "2026-07-26T04:20:00.000Z",
+      },
+      freshnessAt: checkpointA.occurredAt,
+      expiresAt: "2027-01-22T04:20:00.000Z",
+      createdAt: "2026-07-26T04:20:00.000Z",
+      updatedAt: "2026-07-26T04:20:00.000Z",
+    };
+    await admin.query(
+      `INSERT INTO pilot_work_states
+        (id,organization_id,project_id,owner_id,binding_id,workstream_key,
+         stand_in_job_id,stand_in_status,freshness_at,expires_at,data,
+         created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10::jsonb,$11,$11)`,
+      [
+        workStateA,
+        organizationA,
+        projectA,
+        adminA,
+        bindingA,
+        checkpointA.workstream.key,
+        standInJobA,
+        checkpointA.occurredAt,
+        workStateData.expiresAt,
+        JSON.stringify({ ...workStateData, claims: [] }),
+        workStateData.createdAt,
+      ],
+    );
+    const jobData = {
+      id: standInJobA,
+      jobKey: checkpointA.clientEventId,
+      projectId: projectA,
+      workStateId: workStateA,
+      binding: bindingData,
+      checkpoint: checkpointA,
+      receivedAt: "2026-07-26T04:20:00.000Z",
+      status: "pending",
+      attempts: 0,
+      maxAttempts: 8,
+      queuedAt: "2026-07-26T04:20:00.000Z",
+      updatedAt: "2026-07-26T04:20:00.000Z",
+    };
+    await admin.query(
+      `INSERT INTO pilot_stand_in_jobs
+        (id,organization_id,project_id,work_state_id,binding_id,job_key,status,
+         attempts,max_attempts,queued_at,data,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'pending',0,8,$7,$8::jsonb,$7,$7)`,
+      [
+        standInJobA,
+        organizationA,
+        projectA,
+        workStateA,
+        bindingA,
+        checkpointA.clientEventId,
+        jobData.queuedAt,
+        JSON.stringify(jobData),
       ],
     );
   });
@@ -127,6 +274,10 @@ databaseSuite("bounded Project automation store", () => {
       "pilot_coordination_threads",
       "project_automation_signals",
       "project_automation_policies",
+      "pilot_pulse_entries",
+      "pilot_stand_in_jobs",
+      "pilot_work_states",
+      "pilot_agent_bindings",
       "project_work_items",
       "pilot_project_teams",
       "pilot_project_settings",
@@ -246,5 +397,99 @@ databaseSuite("bounded Project automation store", () => {
       "confirmed",
       "reverted",
     ]);
+  });
+
+  it("correlates automation and provider recovery to one targeted thread", async () => {
+    await storeA.updatePolicy({
+      projectId: projectA,
+      enabled: true,
+      enabledSignals: ["blocker"],
+      staleSpecReviewHours: 48,
+      unresolvedCoordinationHours: 24,
+      actorId: adminA,
+    });
+    expect(
+      await storeA.detectMeaningfulSignals("2026-07-26T04:20:01.000Z"),
+    ).toBe(1);
+    const [queued] = await storeA.claimOutbox();
+    expect(queued).toBeDefined();
+    const opened = await storeA.openCoordination(
+      queued!.payload.signalId,
+      "2026-07-26T04:20:02.000Z",
+    );
+    expect(opened).toMatchObject({
+      sourceRef: `work-state:${workStateA}`,
+      participantIds: expect.arrayContaining([adminA, memberA]),
+    });
+
+    const normalized = new NormalizedPostgresPilotStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationA,
+    );
+    try {
+      await normalized.claimStandInJob({
+        jobKey: checkpointA.clientEventId,
+        workerId: "provider-recovery-test",
+        attempt: 1,
+        maxAttempts: 8,
+        now: "2026-07-26T04:20:03.000Z",
+      });
+      const completed = await normalized.completeStandInJob({
+        jobKey: checkpointA.clientEventId,
+        workerId: "provider-recovery-test",
+        actorId: adminA,
+        projectId: projectA,
+        workStateId: workStateA,
+        output: {
+          safeSummary: "Provider recovery published the bounded update.",
+          narrative: checkpointA.narrative,
+          coordination: {
+            shouldOpen: true,
+            safeContext: "Morgan must confirm the retry contract.",
+            candidateNextSteps: ["Confirm the bounded retry behavior."],
+          },
+        },
+        coordination: {
+          safeContext: "Morgan must confirm the retry contract.",
+          candidateNextSteps: ["Confirm the bounded retry behavior."],
+        },
+        now: "2026-07-26T04:20:04.000Z",
+      });
+      expect(completed.coordinationThread?.id).toBe(
+        opened.coordinationThreadId,
+      );
+    } finally {
+      await normalized.close();
+    }
+
+    const effects = await admin.query<{
+      thread_count: string;
+      pulse_count: string;
+      inbox_count: string;
+      participant_ids: string[];
+    }>(
+      `SELECT
+         (SELECT count(*)::text FROM pilot_coordination_threads
+          WHERE organization_id=$1 AND work_state_id=$2) thread_count,
+         (SELECT count(*)::text FROM pilot_pulse_entries
+          WHERE organization_id=$1 AND work_state_id=$2) pulse_count,
+         (SELECT count(*)::text FROM action_inbox
+          WHERE organization_id=$1 AND dedupe_key=$3) inbox_count,
+         (SELECT array_agg(principal_id::text ORDER BY principal_id)
+          FROM pilot_coordination_participants
+          WHERE thread_id=$4) participant_ids`,
+      [
+        organizationA,
+        workStateA,
+        `work-state-coordination:${workStateA}`,
+        opened.coordinationThreadId,
+      ],
+    );
+    expect(effects.rows[0]).toMatchObject({
+      thread_count: "1",
+      pulse_count: "1",
+      inbox_count: "1",
+      participant_ids: [adminA, memberA].toSorted(),
+    });
   });
 });

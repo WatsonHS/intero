@@ -328,7 +328,8 @@ describe("pilot adapter contracts", () => {
           name: "Intero Pilot",
           posture: "collaborative",
         },
-        principalId: MEMBER,
+        standInOwnerId: ADMIN,
+        askedByPrincipalId: MEMBER,
         preferredLanguage: "en-US",
         question: "What is the current status?",
         sources: [

@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import type {
   ConversationThread,
+  PilotProject,
   PilotStandInAnswerDetail,
   PrincipalId,
   ThreadMessage,
@@ -46,6 +47,7 @@ import {
   getPilotDms,
   getPilotStandIn,
   sendPilotDm,
+  type PilotTeamPayload,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
@@ -70,6 +72,8 @@ export function CommunicationsView() {
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState("");
+  const [selectedStandInOwnerId, setSelectedStandInOwnerId] =
+    useState<PrincipalId>();
   const [concluding, setConcluding] = useState(false);
   const [conclusion, setConclusion] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -97,20 +101,32 @@ export function CommunicationsView() {
   const pilotProject = pilot?.projects.data?.projects.find(
     (project) => project.id === pilot.selectedProjectId,
   );
-  const pilotPrincipal = pilot?.bootstrap.data?.identities.find(
-    (principal) => principal.id === pilot.identityId,
+  const pilotPrincipal = resolvePilotCommunicationPrincipal(
+    pilot?.identityId,
+    pilot?.bootstrap.data,
   );
+  const activeStandInOwnerId =
+    selectedStandInOwnerId ?? (pilotPrincipal?.id as PrincipalId | undefined);
   const pilotStandIn = useQuery({
     queryKey: [
       "pilot",
       "stand_in",
       pilot?.identityId,
       pilot?.selectedProjectId,
+      activeStandInOwnerId,
     ],
     queryFn: ({ signal }) =>
-      getPilotStandIn(pilot!.identityId!, pilot!.selectedProjectId!, signal),
+      getPilotStandIn(
+        pilot!.identityId!,
+        pilot!.selectedProjectId!,
+        activeStandInOwnerId!,
+        signal,
+      ),
     enabled: Boolean(
-      pilot?.enabled && pilot.identityId && pilot.selectedProjectId,
+      pilot?.enabled &&
+        pilot.identityId &&
+        pilot.selectedProjectId &&
+        activeStandInOwnerId,
     ),
     refetchInterval: 1_500,
   });
@@ -121,20 +137,45 @@ export function CommunicationsView() {
       pilot?.identityId,
     ),
   );
+  const activeStandInOwner =
+    pilotStandIn.data?.standInOwner ??
+    (pilotPrincipal?.id === activeStandInOwnerId
+      ? pilotPrincipal
+      : (pilot?.teams.data?.teams
+          .flatMap((team) => team.members)
+          .find((member) => member.id === activeStandInOwnerId) as
+          | PrincipalSummary
+          | undefined));
+  const activeStandInPrincipal =
+    pilotStandIn.data?.standIn ??
+    (activeStandInOwner
+      ? {
+          id: personalStandInPrincipalId(
+            activeStandInOwner.id as PrincipalId,
+          ),
+          displayName: `${activeStandInOwner.displayName} 的替身`,
+          kind: "stand_in" as const,
+        }
+      : undefined);
   const pilotStandInItem =
-    pilotProject && pilotPrincipal && pilot?.bootstrap.data?.standIn
+    pilotProject &&
+    pilotPrincipal &&
+    activeStandInOwner &&
+    activeStandInPrincipal
       ? pilotStandInToThreadPayload(
           pilotProject,
           pilotStandIn.data?.exchanges ?? [],
           pilotPrincipal,
-          pilot.bootstrap.data.standIn,
+          activeStandInOwner,
+          activeStandInPrincipal,
         )
       : undefined;
-  const allItems = [
-    ...(pilotStandInItem ? [pilotStandInItem] : []),
-    ...(threads.data?.items ?? []),
-    ...pilotItems,
-  ];
+  const allItems = mergeCommunicationItems(
+    pilotStandInItem,
+    threads.data?.items ?? [],
+    pilotItems,
+    Boolean(pilot?.enabled && pilotProject && pilotPrincipal),
+  );
   const items = allItems.filter((item) => RELEVANT_KINDS.has(item.thread.kind));
   const query = search.trim().toLocaleLowerCase();
   const visibleItems = query
@@ -157,6 +198,8 @@ export function CommunicationsView() {
   const principals = collectPrincipals(allItems, pulse.data?.principals ?? [], [
     bootstrap.data?.currentPrincipal,
     bootstrap.data?.standInPrincipal,
+    pilotStandIn.data?.standInOwner,
+    pilotStandIn.data?.standIn,
     ...(pilotDms.data?.principals ?? []),
   ]);
   const principalNames = buildPrincipalNames(principals);
@@ -192,6 +235,22 @@ export function CommunicationsView() {
       ),
     ).values(),
   ];
+  const standInMentionCandidates = personalStandInMentionCandidates({
+    project: pilotProject,
+    teams: pilot?.teams.data?.teams ?? [],
+    currentPrincipalId: pilot?.identityId,
+  });
+  const activeStandInMention =
+    currentIsPilotStandIn && draft.includes("@")
+      ? personalStandInMentionQuery(draft)
+      : undefined;
+  const visibleStandInMentionCandidates = activeStandInMention
+    ? standInMentionCandidates.filter((candidate) =>
+        candidate.displayName
+          .toLocaleLowerCase()
+          .includes(activeStandInMention.query.toLocaleLowerCase()),
+      )
+    : [];
   const currentSenderId = !current
     ? undefined
     : currentIsPilot || currentIsPilotStandIn
@@ -232,6 +291,10 @@ export function CommunicationsView() {
   const currentUnread = current?.unreadCount ?? 0;
   const currentLastSequence = current?.messages.at(-1)?.sequence ?? 0;
   useEffect(() => {
+    setSelectedStandInOwnerId(undefined);
+  }, [pilot?.identityId, pilot?.selectedProjectId]);
+
+  useEffect(() => {
     if (
       !current ||
       currentIsPilot ||
@@ -254,6 +317,7 @@ export function CommunicationsView() {
       senderId: string;
       body: string;
       mode: "canonical" | "pilot-dm" | "pilot-stand-in";
+      standInOwnerId?: PrincipalId;
     }) => {
       if (input.mode === "pilot-dm") {
         await sendPilotDm(
@@ -264,9 +328,13 @@ export function CommunicationsView() {
         return;
       }
       if (input.mode === "pilot-stand-in") {
+        if (!input.standInOwnerId) {
+          throw new Error("Choose a personal Stand-in.");
+        }
         await askPilotStandIn(
           input.senderId as PrincipalId,
           pilot!.selectedProjectId!,
+          input.standInOwnerId,
           input.body,
         );
         return;
@@ -378,6 +446,9 @@ export function CommunicationsView() {
       threadId: current.thread.id,
       senderId: currentSenderId,
       body: draft.trim(),
+      ...(currentIsPilotStandIn && activeStandInOwnerId
+        ? { standInOwnerId: activeStandInOwnerId }
+        : {}),
       mode: currentIsPilot
         ? "pilot-dm"
         : currentIsPilotStandIn
@@ -632,13 +703,13 @@ export function CommunicationsView() {
           />
         ) : null}
 
-        {threads.isPending ? (
+        {threads.isPending && items.length === 0 ? (
           <div className="flex items-center gap-2 px-2.5 py-4 text-[12px] text-ink-muted">
             <CircleNotchIcon size={18} className="animate-spin" />
             <span>{t("chat.loading")}</span>
           </div>
         ) : null}
-        {threads.isError ? (
+        {threads.isError && items.length === 0 ? (
           <div className="flex flex-col items-start gap-2 px-2.5 py-4 text-[12px] text-ink-muted">
             <span>{t("chat.unavailable")}</span>
             <button
@@ -651,7 +722,17 @@ export function CommunicationsView() {
           </div>
         ) : null}
 
-        {!threads.isPending && !threads.isError ? (
+        {threads.isError && items.length > 0 ? (
+          <div className="px-2.5 py-2 text-[11px] text-ink-muted">
+            部分常规会话暂不可用；个人替身与云端会话仍可使用。
+          </div>
+        ) : null}
+
+        {canRenderCommunicationItems({
+          itemCount: items.length,
+          canonicalPending: threads.isPending,
+          canonicalError: threads.isError,
+        }) ? (
           <div className="min-h-0 flex-1 overflow-auto px-2.5 pb-4">
             {THREAD_GROUPS.map((group) => {
               const grouped = visibleItems.filter(
@@ -697,7 +778,7 @@ export function CommunicationsView() {
               </strong>
               <small className="mt-[3px] truncate text-[11px] text-ink-muted">
                 {currentIsPilotStandIn
-                  ? "基于项目内已发布的结构化 Work State 回答"
+                  ? "个人替身 · 仅使用该成员在当前项目内已共享的 Work State"
                   : currentIsPilot
                     ? "同团队 · 仅参与者可见 · 持久化 1:1"
                     : t("chat.subPeopleStandIns", {
@@ -870,14 +951,55 @@ export function CommunicationsView() {
                     {currentIsPilot
                       ? "仅两位参与者可见 · 暂不支持附件"
                       : currentIsPilotStandIn
-                        ? "只使用可引用的结构化 Work State"
+                        ? "不读取私聊历史、私有 Work State 或原始数据"
                         : current.thread.accessMode === "human_only_e2ee"
                           ? t("chat.e2ee")
                           : t("chat.hint")}
                   </span>
                 </div>
+                {currentIsPilotStandIn &&
+                activeStandInMention &&
+                visibleStandInMentionCandidates.length > 0 ? (
+                  <div
+                    data-testid="personal-stand-in-mention-picker"
+                    className="mb-2 grid gap-1 rounded-inset border border-line bg-panel p-1.5"
+                  >
+                    {visibleStandInMentionCandidates.map((candidate) => (
+                      <button
+                        type="button"
+                        key={candidate.principalId}
+                        data-testid={`personal-stand-in-option-${candidate.principalId}`}
+                        onClick={() => {
+                          setSelectedStandInOwnerId(candidate.principalId);
+                          setDraft(
+                            applyPersonalStandInMention(
+                              draft,
+                              activeStandInMention,
+                              candidate,
+                            ),
+                          );
+                        }}
+                        className="flex cursor-pointer items-center gap-2 rounded-btn border-0 bg-transparent px-2.5 py-2 text-left hover:bg-raise"
+                      >
+                        <RobotIcon
+                          size={14}
+                          className="text-accent-strong"
+                        />
+                        <span className="grid">
+                          <strong className="text-[11.5px] font-[620] text-ink">
+                            {candidate.displayName} 的替身
+                          </strong>
+                          <small className="text-[10px] text-ink-muted">
+                            {candidate.teamName} · 当前项目共享范围
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-[1fr_34px] items-end gap-[9px]">
                   <textarea
+                    data-testid="communications-composer"
                     rows={1}
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
@@ -953,6 +1075,123 @@ export function CommunicationsView() {
       ) : null}
     </div>
   );
+}
+
+export function resolvePilotCommunicationPrincipal(
+  identityId: PrincipalId | undefined,
+  bootstrap:
+    | {
+        identities: PrincipalSummary[];
+        currentPrincipal?: PrincipalSummary;
+      }
+    | undefined,
+): PrincipalSummary | undefined {
+  if (!identityId || !bootstrap) return undefined;
+  return bootstrap.currentPrincipal?.id === identityId
+    ? bootstrap.currentPrincipal
+    : bootstrap.identities.find((principal) => principal.id === identityId);
+}
+
+export function canRenderCommunicationItems(input: {
+  itemCount: number;
+  canonicalPending: boolean;
+  canonicalError: boolean;
+}): boolean {
+  return (
+    input.itemCount > 0 || (!input.canonicalPending && !input.canonicalError)
+  );
+}
+
+export interface PersonalStandInMentionCandidate {
+  principalId: PrincipalId;
+  displayName: string;
+  teamName: string;
+}
+
+export interface PersonalStandInMention {
+  start: number;
+  end: number;
+  query: string;
+}
+
+export function personalStandInMentionCandidates(input: {
+  project: PilotProject | undefined;
+  teams: PilotTeamPayload[];
+  currentPrincipalId: PrincipalId | undefined;
+}): PersonalStandInMentionCandidate[] {
+  if (!input.project) return [];
+  const participatingTeamIds = new Set(input.project.participatingTeamIds);
+  return [
+    ...new Map(
+      input.teams
+        .filter((team) => participatingTeamIds.has(team.id))
+        .flatMap((team) =>
+          team.members
+            .filter(
+              (member) =>
+                member.kind === "human" &&
+                member.id !== input.currentPrincipalId,
+            )
+            .map(
+              (member) =>
+                [
+                  member.id,
+                  {
+                    principalId: member.id,
+                    displayName: member.displayName,
+                    teamName: team.name,
+                  },
+                ] as const,
+            ),
+        ),
+    ).values(),
+  ].toSorted((left, right) =>
+    left.displayName.localeCompare(right.displayName),
+  );
+}
+
+export function personalStandInMentionQuery(
+  draft: string,
+): PersonalStandInMention | undefined {
+  const match = /(?:^|\s)@([^\s@]*)$/u.exec(draft);
+  if (!match) return undefined;
+  const matchedText = match[0];
+  const atOffset = matchedText.lastIndexOf("@");
+  const start = match.index + atOffset;
+  return {
+    start,
+    end: draft.length,
+    query: match[1] ?? "",
+  };
+}
+
+export function applyPersonalStandInMention(
+  draft: string,
+  mention: PersonalStandInMention,
+  candidate: PersonalStandInMentionCandidate,
+): string {
+  return `${draft.slice(0, mention.start)}@${candidate.displayName} 的替身 ${draft.slice(mention.end)}`;
+}
+
+export function personalStandInPrincipalId(
+  ownerId: PrincipalId,
+): PrincipalId {
+  return `${ownerId.slice(0, 14)}5${ownerId.slice(15)}` as PrincipalId;
+}
+
+export function mergeCommunicationItems(
+  personalStandInItem: ThreadPayload | undefined,
+  canonicalItems: ThreadPayload[],
+  pilotItems: ThreadPayload[],
+  hideCanonicalStandIns = Boolean(personalStandInItem),
+): ThreadPayload[] {
+  return [
+    ...(personalStandInItem ? [personalStandInItem] : []),
+    ...canonicalItems.filter(
+      (item) => !(hideCanonicalStandIns && item.thread.kind === "stand_in"),
+    ),
+    ...pilotItems,
+  ];
 }
 
 function AnswerLine({
@@ -1041,6 +1280,11 @@ function SidebarThreadItem({
   return (
     <button
       type="button"
+      data-testid={
+        item.thread.kind === "stand_in"
+          ? "personal-stand-in-conversation"
+          : undefined
+      }
       onClick={onSelect}
       className={
         active

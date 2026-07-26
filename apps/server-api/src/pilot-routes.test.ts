@@ -722,7 +722,72 @@ describe("pilot cloud-first vertical slice", () => {
     expect(crossProject.json().code).toBe("CROSS_PROJECT_WRITE");
   });
 
-  it("persists a grounded Stand-in exchange for the asking participant", async () => {
+  it("routes structured collaboration only to an authorized Project member", async () => {
+    const fixture = await readyProject(app);
+    const connection = await connectAgent(app, fixture.project.id);
+    const missingTarget = checkpoint(fixture.project.id, {
+      eventType: "dependency_declared",
+      summary: "Waiting for a structured dependency owner.",
+      clientEventId: "client-event-targeted-dependency-missing-0001",
+      phase: "blocked",
+    });
+    missingTarget.narrative.collaboration = {
+      needed: true,
+      request: "Confirm the integration contract.",
+      requestedFrom: "display-only owner",
+    };
+    const missing = await sendCheckpoint(
+      app,
+      connection.credential,
+      missingTarget,
+    );
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json().code).toBe("COLLABORATION_TARGET_REQUIRED");
+
+    const targeted = checkpoint(fixture.project.id, {
+      eventType: "dependency_declared",
+      summary: "Waiting for the integration contract owner.",
+      clientEventId: "client-event-targeted-dependency-0001",
+      phase: "blocked",
+    });
+    targeted.narrative.collaboration = {
+      needed: true,
+      request: "Confirm the integration contract.",
+      requestedFrom: "Morgan Chen",
+      targetPrincipalId: B,
+    };
+
+    const accepted = await sendCheckpoint(app, connection.credential, targeted);
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json().coordinationThread.participantIds).toEqual([A, B]);
+
+    const crossProjectTarget = structuredClone(targeted);
+    crossProjectTarget.clientEventId =
+      "client-event-targeted-dependency-unauthorized-0001";
+    crossProjectTarget.narrative.collaboration.requestedFrom = "Taylor Singh";
+    crossProjectTarget.narrative.collaboration.targetPrincipalId = C;
+    const rejected = await sendCheckpoint(
+      app,
+      connection.credential,
+      crossProjectTarget,
+    );
+    expect(rejected.statusCode).toBe(403);
+    expect(rejected.json().code).toBe("COLLABORATION_TARGET_NOT_AUTHORIZED");
+
+    const inactiveRequest = structuredClone(targeted);
+    inactiveRequest.clientEventId =
+      "client-event-targeted-dependency-inactive-0001";
+    inactiveRequest.narrative.collaboration.needed = false;
+    const inactive = await sendCheckpoint(
+      app,
+      connection.credential,
+      inactiveRequest,
+    );
+    expect(inactive.statusCode).toBe(400);
+    expect(inactive.json().code).toBe("COLLABORATION_TARGET_WITHOUT_REQUEST");
+  });
+
+  it("routes a personal Stand-in to its owner's shared Project Work State only", async () => {
     const fixture = await readyProject(app);
     const connection = await connectAgent(app, fixture.project.id);
     await sendCheckpoint(
@@ -735,11 +800,15 @@ describe("pilot cloud-first vertical slice", () => {
       method: "POST",
       url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
       headers: identity(B),
-      payload: { question: "What is the current implementation status?" },
+      payload: {
+        question: "What is the current implementation status?",
+        standInOwnerId: A,
+      },
     });
     expect(asked.statusCode).toBe(201);
     expect(asked.json().exchange).toMatchObject({
-      principalId: B,
+      principalId: A,
+      askedByPrincipalId: B,
       question: "What is the current implementation status?",
       answer: "Grounded in: Implemented scoped checkpoint ingestion.",
       structuredAnswer: {
@@ -768,17 +837,47 @@ describe("pilot cloud-first vertical slice", () => {
 
     const visibleToB = await app.inject({
       method: "GET",
-      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in?standInOwnerId=${A}`,
       headers: identity(B),
     });
     expect(visibleToB.json().exchanges).toHaveLength(1);
+    expect(visibleToB.json()).toMatchObject({
+      standInOwner: { id: A, kind: "human" },
+      standIn: { kind: "stand_in" },
+    });
+    expect(visibleToB.json().standIn.id).not.toBe(A);
 
     const privateToAsker = await app.inject({
       method: "GET",
-      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in?standInOwnerId=${A}`,
       headers: identity(A),
     });
     expect(privateToAsker.json().exchanges).toEqual([]);
+
+    const noSharedStateForB = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      headers: identity(A),
+      payload: {
+        question: "What private work is Morgan doing?",
+        standInOwnerId: B,
+      },
+    });
+    expect(noSharedStateForB.statusCode).toBe(409);
+    expect(noSharedStateForB.json().code).toBe(
+      "STAND_IN_CONTEXT_UNAVAILABLE",
+    );
+
+    const unauthorizedTarget = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      headers: identity(B),
+      payload: {
+        question: "What is Taylor doing?",
+        standInOwnerId: C,
+      },
+    });
+    expect(unauthorizedTarget.statusCode).toBe(403);
   });
 
   it("persists private Work State when the model provider is unavailable", async () => {
@@ -847,9 +946,23 @@ describe("pilot cloud-first vertical slice", () => {
     const withdrawn = await app.inject({
       method: "POST",
       url: `/v1/pilot/projects/${fixture.project.id}/pulse/${workStateId}/withdraw`,
-      headers: identity(A),
+      headers: {
+        ...identity(A),
+        "idempotency-key": `withdraw:${fixture.project.id}:${workStateId}`,
+      },
     });
     expect(withdrawn.statusCode).toBe(200);
+    expect(withdrawn.json().duplicate).toBe(false);
+    const retried = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/pulse/${workStateId}/withdraw`,
+      headers: {
+        ...identity(A),
+        "idempotency-key": `withdraw:${fixture.project.id}:${workStateId}`,
+      },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().duplicate).toBe(true);
     expect((await overview(app, fixture.project.id, B)).pulse).toEqual([]);
   });
 
@@ -1016,6 +1129,9 @@ function checkpoint(
             : "",
         requestedFrom:
           overrides.eventType === "blocker_raised" ? "Project owner" : "",
+        ...(overrides.eventType === "blocker_raised"
+          ? { targetPrincipalId: B }
+          : {}),
       },
     },
     evidenceRefs: ["test:pilot"],

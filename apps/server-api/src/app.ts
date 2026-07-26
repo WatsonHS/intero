@@ -26,6 +26,7 @@ import {
   PrivacySafeMetrics,
 } from "@intero/config";
 import {
+  personalStandInId,
   ThreadKind,
   type KanbanCard,
   type KanbanCardId,
@@ -333,12 +334,19 @@ export async function buildApp(
       .send(readiness);
   });
 
-  app.get("/v1/bootstrap", async (request) => ({
-    organization,
-    currentPrincipal:
-      (await requestAuth.resolve(request, false)) ?? currentPrincipal,
-    standInPrincipal,
-  }));
+  app.get("/v1/bootstrap", async (request) => {
+    const resolvedPrincipal =
+      (await requestAuth.resolve(request, false)) ?? currentPrincipal;
+    return {
+      organization,
+      currentPrincipal: resolvedPrincipal,
+      standInPrincipal: {
+        id: personalStandInId(resolvedPrincipal.id),
+        displayName: `${resolvedPrincipal.displayName} 的替身`,
+        kind: "stand_in" as const,
+      },
+    };
+  });
 
   await registerPilotRoutes(app, {
     store: pilotStore,

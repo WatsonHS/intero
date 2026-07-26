@@ -436,40 +436,105 @@ export class PostgresAutomationStore {
         };
       }
 
-      const threadId = signal.coordinationThreadId ?? uuidv7();
+      const workStateId = workStateIdFromSourceRef(signal.sourceRef);
+      if (workStateId) {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`intero:pilot:${this.organizationId}`],
+        );
+      }
+      const correlated = workStateId
+        ? (
+            await client.query<{
+              id: string;
+              data: Record<string, unknown>;
+            }>(
+              `SELECT id,data
+               FROM pilot_coordination_threads
+               WHERE organization_id=$1 AND project_id=$2 AND work_state_id=$3
+               FOR UPDATE`,
+              [this.organizationId, signal.projectId, workStateId],
+            )
+          ).rows[0]
+        : undefined;
+      const correlatedData = correlated?.data ?? {};
+      const threadId =
+        correlated?.id ?? signal.coordinationThreadId ?? uuidv7();
       const trigger = triggerForKind(signal.kind);
       const thread = {
+        ...correlatedData,
         id: threadId,
         projectId: signal.projectId,
+        ...(workStateId ? { workStateId } : {}),
         automationSignalId: signal.id,
         automationKind: signal.kind,
-        trigger,
-        participantIds: signal.participantIds,
-        safeContext: signal.safeContext,
-        candidateNextSteps: signal.candidateNextSteps,
+        trigger: correlatedData.trigger ?? trigger,
+        participantIds: [
+          ...new Set([
+            ...((correlatedData.participantIds as PrincipalId[] | undefined) ??
+              []),
+            ...signal.participantIds,
+          ]),
+        ],
+        safeContext:
+          typeof correlatedData.safeContext === "string"
+            ? correlatedData.safeContext
+            : signal.safeContext,
+        candidateNextSteps:
+          Array.isArray(correlatedData.candidateNextSteps) &&
+          correlatedData.candidateNextSteps.length > 0
+            ? correlatedData.candidateNextSteps
+            : signal.candidateNextSteps,
         status: "open" as const,
-        createdAt: signal.detectedAt,
+        createdAt:
+          typeof correlatedData.createdAt === "string"
+            ? correlatedData.createdAt
+            : signal.detectedAt,
         updatedAt: now,
       };
-      await client.query(
-        `INSERT INTO pilot_coordination_threads
-          (id,organization_id,project_id,automation_signal_id,status,data,
-           created_at,updated_at)
-         VALUES ($1,$2,$3,$4,'open',$5,$6,$7)
-         ON CONFLICT (automation_signal_id) WHERE automation_signal_id IS NOT NULL
-         DO UPDATE SET data=EXCLUDED.data,status='open',updated_at=EXCLUDED.updated_at
-         RETURNING id`,
-        [
-          threadId,
-          this.organizationId,
-          signal.projectId,
-          signal.id,
-          JSON.stringify(thread),
-          signal.detectedAt,
-          now,
-        ],
-      );
-      for (const principalId of signal.participantIds) {
+      if (correlated) {
+        await client.query(
+          `UPDATE pilot_coordination_threads
+           SET automation_signal_id=$4,status='open',data=$5,updated_at=$6
+           WHERE id=$1 AND organization_id=$2 AND project_id=$3`,
+          [
+            threadId,
+            this.organizationId,
+            signal.projectId,
+            signal.id,
+            JSON.stringify(thread),
+            now,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO pilot_coordination_threads
+            (id,organization_id,project_id,work_state_id,automation_signal_id,
+             status,data,created_at,updated_at)
+           VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8)
+           ON CONFLICT (automation_signal_id)
+             WHERE automation_signal_id IS NOT NULL
+           DO UPDATE SET
+             work_state_id=COALESCE(
+               pilot_coordination_threads.work_state_id,
+               EXCLUDED.work_state_id
+             ),
+             data=EXCLUDED.data,
+             status='open',
+             updated_at=EXCLUDED.updated_at`,
+          [
+            threadId,
+            this.organizationId,
+            signal.projectId,
+            workStateId ?? null,
+            signal.id,
+            JSON.stringify(thread),
+            signal.detectedAt,
+            now,
+          ],
+        );
+      }
+      for (const principalId of thread.participantIds) {
         await client.query(
           `INSERT INTO pilot_coordination_participants
             (organization_id,thread_id,principal_id)
@@ -505,7 +570,9 @@ export class PostgresAutomationStore {
             inboxTitle(signal.kind),
             signal.safeContext,
             `coordination:${threadId}`,
-            `automation-signal:${signal.id}`,
+            workStateId
+              ? `work-state-coordination:${workStateId}`
+              : `automation-signal:${signal.id}`,
           ],
         );
       }
@@ -745,7 +812,12 @@ export class PostgresAutomationStore {
       const narrative = row.data.checkpoint.narrative as {
         currentFocus?: string;
         nextStep?: string;
+        collaboration?: {
+          targetPrincipalId?: string;
+        };
       };
+      const targetPrincipalId = narrative.collaboration?.targetPrincipalId as
+        PrincipalId | undefined;
       candidates.push({
         projectId: policy.projectId,
         kind,
@@ -758,7 +830,13 @@ export class PostgresAutomationStore {
           narrative.nextStep ||
             "Confirm the responsible participant and next step.",
         ],
-        preferredParticipantIds: [String(row.owner_id) as PrincipalId],
+        preferredParticipantIds: [
+          String(row.owner_id) as PrincipalId,
+          ...(targetPrincipalId ? [targetPrincipalId] : []),
+        ],
+        ...(targetPrincipalId
+          ? { preferredTargetIds: [targetPrincipalId] }
+          : {}),
       });
     }
 
@@ -1080,6 +1158,11 @@ function parseJobReference(
     throw new Error("invalid_automation_job_reference");
   }
   return input as AutomationJobReference;
+}
+
+function workStateIdFromSourceRef(sourceRef: string): string | undefined {
+  const match = /^work-state:([0-9a-f-]{36})$/i.exec(sourceRef);
+  return match?.[1];
 }
 
 function triggerForKind(kind: ProjectAutomationSignalKind) {

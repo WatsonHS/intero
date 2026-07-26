@@ -338,11 +338,13 @@ export interface PilotStore {
   ): Promise<PilotPulseEntry[]>;
   listStandInExchanges(
     projectId: ProjectId,
-    principalId: PrincipalId,
+    viewerPrincipalId: PrincipalId,
+    standInOwnerId: PrincipalId,
   ): Promise<PilotStandInExchange[]>;
   recordStandInExchange(input: {
     projectId: ProjectId;
-    principalId: PrincipalId;
+    standInOwnerId: PrincipalId;
+    askedByPrincipalId: PrincipalId;
     question: string;
     answer: string;
     structuredAnswer: PilotStandInAnswerDetail;
@@ -353,8 +355,9 @@ export interface PilotStore {
     projectId: ProjectId,
     workStateId: string,
     principalId: PrincipalId,
+    clientMutationId: string,
     now: string,
-  ): Promise<PilotPulseEntry>;
+  ): Promise<{ entry: PilotPulseEntry; duplicate: boolean }>;
   listCoordination(
     projectId: ProjectId,
     principalId: PrincipalId,
@@ -1374,7 +1377,26 @@ export abstract class SnapshotPilotStore implements PilotStore {
           };
         }
 
-        requireProject(snapshot, input.projectId);
+        const project = requireProject(snapshot, input.projectId);
+        const targetPrincipalId =
+          input.narrative.collaboration.targetPrincipalId;
+        if (targetPrincipalId && !input.narrative.collaboration.needed) {
+          throw new PilotStoreError(
+            "COLLABORATION_TARGET_WITHOUT_REQUEST",
+            400,
+            "A structured collaboration target requires collaboration.needed.",
+          );
+        }
+        if (
+          targetPrincipalId &&
+          !canParticipate(snapshot, project, targetPrincipalId)
+        ) {
+          throw new PilotStoreError(
+            "COLLABORATION_TARGET_NOT_AUTHORIZED",
+            403,
+            "The requested collaboration target does not participate in this project.",
+          );
+        }
         const existing = snapshot.workStates.find(
           (state) =>
             state.bindingId === binding.id &&
@@ -1589,6 +1611,17 @@ export abstract class SnapshotPilotStore implements PilotStore {
                 thread.status !== "resolved",
             );
             if (currentThread) {
+              currentThread.sourceBindingId ??= job.binding.id;
+              currentThread.participantIds = [
+                ...new Set([
+                  ...currentThread.participantIds,
+                  ...coordinationParticipantIds(
+                    project,
+                    job.binding,
+                    job.checkpoint,
+                  ),
+                ]),
+              ];
               currentThread.safeContext = input.coordination.safeContext;
               currentThread.candidateNextSteps =
                 input.coordination.candidateNextSteps;
@@ -1844,26 +1877,28 @@ export abstract class SnapshotPilotStore implements PilotStore {
 
   async listStandInExchanges(
     projectId: ProjectId,
-    principalId: PrincipalId,
+    viewerPrincipalId: PrincipalId,
+    standInOwnerId: PrincipalId,
   ): Promise<PilotStandInExchange[]> {
     const snapshot = await this.readSnapshot();
-    requireParticipant(
-      snapshot,
-      requireProject(snapshot, projectId),
-      principalId,
-    );
+    const project = requireProject(snapshot, projectId);
+    requireParticipant(snapshot, project, viewerPrincipalId);
+    requireParticipant(snapshot, project, standInOwnerId);
     return (snapshot.standInExchanges ?? [])
       .filter(
         (exchange) =>
           exchange.projectId === projectId &&
-          exchange.principalId === principalId,
+          exchange.principalId === standInOwnerId &&
+          (exchange.askedByPrincipalId ?? exchange.principalId) ===
+            viewerPrincipalId,
       )
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
   async recordStandInExchange(input: {
     projectId: ProjectId;
-    principalId: PrincipalId;
+    standInOwnerId: PrincipalId;
+    askedByPrincipalId: PrincipalId;
     question: string;
     answer: string;
     structuredAnswer: PilotStandInAnswerDetail;
@@ -1872,17 +1907,16 @@ export abstract class SnapshotPilotStore implements PilotStore {
   }): Promise<PilotStandInExchange> {
     return this.updateSnapshot(
       (snapshot) => {
-        requireParticipant(
-          snapshot,
-          requireProject(snapshot, input.projectId),
-          input.principalId,
-        );
+        const project = requireProject(snapshot, input.projectId);
+        requireParticipant(snapshot, project, input.askedByPrincipalId);
+        requireParticipant(snapshot, project, input.standInOwnerId);
         const exchange: PilotStandInExchange = {
           id: uuidv7(),
           questionMessageId: uuidv7(),
           answerMessageId: uuidv7(),
           projectId: input.projectId,
-          principalId: input.principalId,
+          principalId: input.standInOwnerId,
+          askedByPrincipalId: input.askedByPrincipalId,
           question: input.question,
           answer: input.answer,
           structuredAnswer: input.structuredAnswer,
@@ -1894,9 +1928,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
       },
       {
         eventType: "pilot.stand_in.exchange_recorded",
-        actorId: input.principalId,
-        aggregateType: "pilot_project",
-        aggregateId: input.projectId,
+        actorId: input.askedByPrincipalId,
+        aggregateType: "pilot_personal_stand_in",
+        aggregateId: input.standInOwnerId,
         visibility: "private",
         projectId: input.projectId,
       },
@@ -1907,8 +1941,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
     projectId: ProjectId,
     workStateId: string,
     principalId: PrincipalId,
+    _clientMutationId: string,
     now: string,
-  ): Promise<PilotPulseEntry> {
+  ): Promise<{ entry: PilotPulseEntry; duplicate: boolean }> {
     return this.updateSnapshot(
       (snapshot) => {
         requireParticipant(
@@ -1930,8 +1965,11 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Only the originator can withdraw this summary.",
           );
         }
+        if (entry.withdrawnAt) {
+          return { entry, duplicate: true };
+        }
         entry.withdrawnAt = now;
-        return entry;
+        return { entry, duplicate: false };
       },
       {
         eventType: "pilot.pulse.withdrawn",
@@ -2161,13 +2199,26 @@ function buildCoordinationThread(
     workStateId,
     trigger: input.eventType as PilotCoordinationThread["trigger"],
     sourceBindingId: binding.id,
-    participantIds: [...new Set([binding.ownerId, project.ownerId])],
+    participantIds: coordinationParticipantIds(project, binding, input),
     safeContext: output.coordination.safeContext,
     candidateNextSteps: output.coordination.candidateNextSteps,
     status: "open",
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function coordinationParticipantIds(
+  project: PilotProject,
+  binding: PilotAgentBinding,
+  input: PilotCheckpointInput,
+): PrincipalId[] {
+  return [
+    ...new Set([
+      binding.ownerId,
+      input.narrative.collaboration.targetPrincipalId ?? project.ownerId,
+    ]),
+  ];
 }
 
 function isCoordinationTrigger(input: PilotCheckpointInput): boolean {

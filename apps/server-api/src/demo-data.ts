@@ -33,7 +33,7 @@ import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 const DEMO_DATABASE_PATTERN = /(demo|test|validation)/i;
 const DEMO_EMAIL_SUFFIX = "@demo.intero.test";
 const DEMO_ORGANIZATION_NAME = "Intero Demo Product Studio";
-const DEMO_SEED_VERSION = 7;
+const DEMO_SEED_VERSION = 8;
 export const DEMO_PASSWORD = "Intero-demo-2026!";
 const CANONICAL_RUNTIME_PRINCIPAL_IDS = [
   "019b5ac0-7600-7000-8000-000000000002",
@@ -678,7 +678,6 @@ async function seedCanonicalCollaboration(
 ): Promise<void> {
   await seedPersistentTeamConversation(store, now);
   await seedGroupConversation(store, now);
-  await seedStandInConversation(store, now);
   await seedActionInbox(store, pool, now);
 }
 
@@ -783,58 +782,6 @@ async function seedGroupConversation(
       senderId: message.senderId,
       body: message.body,
       createdAt: offsetIso(now, (-132 + index * 11) * 60_000),
-    });
-  }
-}
-
-async function seedStandInConversation(
-  store: PostgresPlatformStore,
-  now: Date,
-): Promise<void> {
-  const thread = ConversationThread.parse({
-    id: DEMO_IDS.conversations.standInThread,
-    kind: "stand_in",
-    title: "Alex 的替身",
-    participantIds: [DEMO_IDS.principals.alex, DEMO_IDS.principals.standIn],
-    standInIds: [DEMO_IDS.principals.standIn],
-    accessMode: "agent_readable",
-    priorHistoryGranted: false,
-    sequence: 0,
-    createdAt: offsetIso(now, -62 * 60_000),
-  });
-  await store.createThread(thread);
-  const messages = [
-    {
-      senderId: DEMO_IDS.principals.alex,
-      body: "帮我总结一下统一发布控制台现在的进展，以及今天需要我决定什么。",
-    },
-    {
-      senderId: DEMO_IDS.principals.standIn,
-      body: "发布健康面板已经接入队列、实时状态和依赖就绪度；10% 灰度仍被一个跨团队权限关系阻塞。今天需要你确认：权限校验通过后是否按既定阈值推进灰度。",
-    },
-    {
-      senderId: DEMO_IDS.principals.alex,
-      body: "Morgan 的浏览器验证做到哪一步了？",
-    },
-    {
-      senderId: DEMO_IDS.principals.standIn,
-      body: "空状态和加载状态已经通过，重连场景还差一次延迟事件验证。依据来自 Morgan 最近提交的 validation_completed 检查点。",
-    },
-    {
-      senderId: DEMO_IDS.principals.standIn,
-      body: "我已把跨团队权限缺口整理成 Coordination 请求，等待 Jordan 确认责任和修复结果。",
-    },
-    {
-      senderId: DEMO_IDS.principals.standIn,
-      body: "我还把“是否推进 10% 灰度发布”放进 Action Inbox，发布动作不会自动执行。",
-    },
-  ] as const;
-  for (const [index, message] of messages.entries()) {
-    await store.appendMessage(thread.id, {
-      id: DEMO_IDS.conversations.standInMessages[index] as ThreadMessage["id"],
-      senderId: message.senderId,
-      body: message.body,
-      createdAt: offsetIso(now, (-58 + index * 7) * 60_000),
     });
   }
 }

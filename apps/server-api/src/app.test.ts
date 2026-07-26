@@ -364,8 +364,8 @@ describe("Intero API vertical slice", () => {
         kind: "human",
       },
       standInPrincipal: {
-        id: "019b5ac0-7600-7000-8000-000000000003",
-        displayName: "Intero Stand-in",
+        id: "019b5ac0-7600-5000-8000-000000000002",
+        displayName: "Intero User 的替身",
         kind: "stand_in",
       },
     });

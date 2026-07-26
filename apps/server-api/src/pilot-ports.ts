@@ -43,7 +43,8 @@ export interface ModelGateway {
 export interface StandInQuestionInput {
   organizationId: OrganizationId;
   project: Pick<PilotProject, "id" | "name" | "posture">;
-  principalId: PrincipalId;
+  standInOwnerId: PrincipalId;
+  askedByPrincipalId: PrincipalId;
   preferredLanguage: PilotAgentBinding["preferredLanguage"];
   question: string;
   sources: PilotPulseEntry[];

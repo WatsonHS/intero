@@ -100,6 +100,8 @@ export interface PilotDmPayload {
 
 export interface PilotStandInPayload {
   exchanges: PilotStandInExchange[];
+  standInOwner: PrincipalSummary;
+  standIn: PrincipalSummary;
 }
 
 export class PilotApiError extends Error {
@@ -380,9 +382,14 @@ export function withdrawPilotPulse(
   projectId: string,
   workStateId: string,
 ) {
-  return request<{ entry: PilotPulseEntry }>(
+  return request<{ entry: PilotPulseEntry; duplicate: boolean }>(
     `/v1/pilot/projects/${projectId}/pulse/${workStateId}/withdraw`,
-    { method: "POST", identityId, body: {} },
+    {
+      method: "POST",
+      identityId,
+      idempotencyKey: `pulse-withdraw:${projectId}:${workStateId}`,
+      body: {},
+    },
   );
 }
 
@@ -425,10 +432,13 @@ export function addPilotStandIn(identityId: PrincipalId, threadId: string) {
 export function getPilotStandIn(
   identityId: PrincipalId,
   projectId: string,
+  standInOwnerId: PrincipalId,
   signal?: AbortSignal,
 ) {
   return request<PilotStandInPayload>(
-    `/v1/pilot/projects/${projectId}/stand-in`,
+    `/v1/pilot/projects/${projectId}/stand-in?${new URLSearchParams({
+      standInOwnerId,
+    })}`,
     { identityId, ...(signal ? { signal } : {}) },
   );
 }
@@ -436,11 +446,20 @@ export function getPilotStandIn(
 export function askPilotStandIn(
   identityId: PrincipalId,
   projectId: string,
+  standInOwnerId: PrincipalId,
   question: string,
 ) {
-  return request<{ exchange: PilotStandInExchange }>(
+  return request<{
+    exchange: PilotStandInExchange;
+    standInOwner: PrincipalSummary;
+    standIn: PrincipalSummary;
+  }>(
     `/v1/pilot/projects/${projectId}/stand-in`,
-    { method: "POST", identityId, body: { question } },
+    {
+      method: "POST",
+      identityId,
+      body: { question, standInOwnerId },
+    },
   );
 }
 
@@ -505,6 +524,7 @@ async function request<T>(
   options: {
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     identityId?: PrincipalId;
+    idempotencyKey?: string;
     body?: unknown;
     signal?: AbortSignal;
   } = {},
@@ -518,6 +538,9 @@ async function request<T>(
       ...(options.body === undefined
         ? {}
         : { "content-type": "application/json" }),
+      ...(options.idempotencyKey
+        ? { "idempotency-key": options.idempotencyKey }
+        : {}),
     },
     ...(options.body === undefined
       ? {}

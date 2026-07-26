@@ -15,7 +15,8 @@ import {
   PilotTeamRole,
   PilotOrganizationRole,
   PreferredLanguage,
-  type PrincipalId,
+  personalStandInId,
+  PrincipalId,
   ProjectId,
   uuidv7,
 } from "@intero/domain";
@@ -83,7 +84,9 @@ export async function registerPilotRoutes(
         : {}),
       identities: options.requestAuth.developmentIdentities,
       ...(currentPrincipal ? { currentPrincipal } : {}),
-      standIn: options.standIn,
+      standIn: currentPrincipal
+        ? personalStandInPrincipal(currentPrincipal)
+        : options.standIn,
       organization: await options.store.getOrganization(),
       administratorId: await options.store.getAdministratorId(),
       organizationRole: currentPrincipal
@@ -763,7 +766,7 @@ export async function registerPilotRoutes(
         thread: await options.store.addStandInToDirectMessage({
           threadId: request.params.threadId,
           principalId: principal.id,
-          standInId: options.standIn.id,
+          standInId: personalStandInId(principal.id),
         }),
       };
     },
@@ -802,16 +805,30 @@ export async function registerPilotRoutes(
     },
   );
 
-  app.get<{ Params: { projectId: string } }>(
+  app.get<{
+    Params: { projectId: string };
+    Querystring: { standInOwnerId?: string };
+  }>(
     "/v1/pilot/projects/:projectId/stand-in",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
       const projectId = ProjectId.parse(request.params.projectId);
+      const standInOwnerId = PrincipalId.parse(
+        request.query.standInOwnerId ?? principal.id,
+      );
+      const exchanges = await options.store.listStandInExchanges(
+        projectId,
+        principal.id,
+        standInOwnerId,
+      );
+      const standInOwner = await requireDirectoryPrincipal(
+        options,
+        standInOwnerId,
+      );
       return {
-        exchanges: await options.store.listStandInExchanges(
-          projectId,
-          principal.id,
-        ),
+        exchanges,
+        standInOwner,
+        standIn: personalStandInPrincipal(standInOwner),
       };
     },
   );
@@ -822,9 +839,15 @@ export async function registerPilotRoutes(
       const principal = await requireIdentity(request, options.requestAuth);
       const projectId = ProjectId.parse(request.params.projectId);
       const input = z
-        .object({ question: z.string().min(1).max(2_000) })
+        .object({
+          question: z.string().min(1).max(2_000),
+          standInOwnerId: z.uuid().optional(),
+        })
         .strict()
         .parse(request.body);
+      const standInOwnerId = PrincipalId.parse(
+        input.standInOwnerId ?? principal.id,
+      );
       const project = (await options.store.listProjects(principal.id)).find(
         (item) => item.id === projectId,
       );
@@ -835,12 +858,23 @@ export async function registerPilotRoutes(
           "Project was not found.",
         );
       }
-      const pulse = await options.store.listTeamPulse(projectId, principal.id);
+      await options.store.listStandInExchanges(
+        projectId,
+        principal.id,
+        standInOwnerId,
+      );
+      const standInOwner = await requireDirectoryPrincipal(
+        options,
+        standInOwnerId,
+      );
+      const pulse = (
+        await options.store.listTeamPulse(projectId, principal.id)
+      ).filter((entry) => entry.ownerId === standInOwnerId);
       if (pulse.length === 0) {
         throw new PilotStoreError(
           "STAND_IN_CONTEXT_UNAVAILABLE",
           409,
-          "No published structured Work State is available for this project.",
+          "This member has no published structured Work State in the selected project.",
         );
       }
       const answer = await options.modelGateway.answerStandInQuestion({
@@ -850,8 +884,9 @@ export async function registerPilotRoutes(
           name: project.name,
           posture: project.posture,
         },
-        principalId: principal.id,
-        preferredLanguage: principal.preferredLanguage ?? "en-US",
+        standInOwnerId,
+        askedByPrincipalId: principal.id,
+        preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
         question: input.question,
         sources: pulse,
       });
@@ -884,7 +919,8 @@ export async function registerPilotRoutes(
       });
       const exchange = await options.store.recordStandInExchange({
         projectId,
-        principalId: principal.id,
+        standInOwnerId,
+        askedByPrincipalId: principal.id,
         question: input.question,
         answer: answer.answer,
         structuredAnswer: {
@@ -898,7 +934,11 @@ export async function registerPilotRoutes(
         sources,
         now: new Date().toISOString(),
       });
-      return reply.status(201).send({ exchange });
+      return reply.status(201).send({
+        exchange,
+        standInOwner,
+        standIn: personalStandInPrincipal(standInOwner),
+      });
     },
   );
 
@@ -985,6 +1025,17 @@ export async function registerPilotRoutes(
         "Structured checkpoints cannot contain raw content or secrets.",
       );
     }
+    const collaboration = input.narrative.collaboration;
+    if (
+      (input.eventType === "dependency_declared" || collaboration.needed) &&
+      !collaboration.targetPrincipalId
+    ) {
+      throw new PilotStoreError(
+        "COLLABORATION_TARGET_REQUIRED",
+        400,
+        "Routed collaboration requires a structured targetPrincipalId.",
+      );
+    }
     const result = await options.checkpointService.submit(
       binding,
       input,
@@ -1030,14 +1081,18 @@ export async function registerPilotRoutes(
     "/v1/pilot/projects/:projectId/pulse/:workStateId/withdraw",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
-      return {
-        entry: await options.store.withdrawPulseEntry(
-          ProjectId.parse(request.params.projectId),
-          request.params.workStateId,
-          principal.id,
-          new Date().toISOString(),
-        ),
-      };
+      const clientMutationId = z
+        .string()
+        .min(8)
+        .max(200)
+        .parse(request.headers["idempotency-key"]);
+      return options.store.withdrawPulseEntry(
+        ProjectId.parse(request.params.projectId),
+        request.params.workStateId,
+        principal.id,
+        clientMutationId,
+        new Date().toISOString(),
+      );
     },
   );
 
@@ -1158,9 +1213,37 @@ async function visiblePrincipals(
     ...new Set(memberships.map((membership) => membership.principalId)),
   ];
   const principals = await options.principalDirectory.list(ids);
-  return principals.some((principal) => principal.id === options.standIn.id)
-    ? principals
-    : [...principals, options.standIn];
+  return [
+    ...principals,
+    ...principals
+      .filter((principal) => principal.kind === "human")
+      .map(personalStandInPrincipal),
+  ];
+}
+
+async function requireDirectoryPrincipal(
+  options: PilotRoutesOptions,
+  principalId: PrincipalId,
+): Promise<AuthenticatedPrincipal> {
+  const principal = (await options.principalDirectory.list([principalId]))[0];
+  if (!principal || principal.kind !== "human") {
+    throw new PilotStoreError(
+      "STAND_IN_OWNER_NOT_FOUND",
+      404,
+      "The personal Stand-in owner was not found.",
+    );
+  }
+  return principal;
+}
+
+function personalStandInPrincipal(
+  owner: Pick<AuthenticatedPrincipal, "id" | "displayName">,
+): Omit<AuthenticatedPrincipal, "email"> {
+  return {
+    id: personalStandInId(owner.id),
+    displayName: `${owner.displayName} 的替身`,
+    kind: "stand_in",
+  };
 }
 
 async function requireAgentBinding(
@@ -1329,6 +1412,7 @@ function buildConnectPrompt(
         `然后配置 Agent MCP 命令：${mcpCommand}`,
         "此票据仅限当前项目，10 分钟后过期且只能使用一次。",
         "仅使用十种结构化安全摘要事件调用 stand_in.report_checkpoint。",
+        "依赖或定向协作必须使用当前项目成员的 collaboration.targetPrincipalId；requestedFrom 只是展示文案。",
         "所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN；不要上报原始 prompt、文件、diff、终端或工具日志。",
       ].join("\n")
     : [
@@ -1338,6 +1422,7 @@ function buildConnectPrompt(
         `Then configure the Agent MCP command: ${mcpCommand}`,
         "The ticket is project-scoped, expires in 10 minutes, and can be used once.",
         "Call stand_in.report_checkpoint only with one of the ten structured safe-summary event types.",
+        "Dependencies and routed collaboration must use a current Project member's collaboration.targetPrincipalId; requestedFrom is display text only.",
         "Write every narrative field, collaboration request, and human-readable evidence item in the owner's preferred language, en-US; never report raw prompts, files, diffs, terminal output, or tool logs.",
       ].join("\n");
 }

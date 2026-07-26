@@ -174,7 +174,8 @@ export class VercelAiModelGateway implements ModelGateway {
         system: standInQuestionSystemInstructions(input.preferredLanguage),
         prompt: JSON.stringify({
           project: input.project,
-          participantId: input.principalId,
+          standInOwnerId: input.standInOwnerId,
+          askedByPrincipalId: input.askedByPrincipalId,
           preferredLanguage: input.preferredLanguage,
           question: input.question,
           safeStructuredSources: input.sources.map((source) => ({

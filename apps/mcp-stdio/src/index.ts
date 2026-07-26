@@ -4,6 +4,7 @@ import {
   PilotAgentClient,
   PilotCheckpointEventType,
   PilotWorkNarrative,
+  PrincipalId,
   WorkstreamPhase,
 } from "@intero/domain";
 import {
@@ -79,8 +80,8 @@ async function runCloudMcpServer(
     {
       description:
         preferredLanguage === "zh-CN"
-          ? "向私有 Work State（策略允许时也向 Team Pulse）上报人类可读的结构化工作动态。所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN。"
-          : "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse. Write all narrative fields, collaboration requests, and human-readable evidence in the owner's preferred language, en-US.",
+          ? "向私有 Work State（策略允许时也向 Team Pulse）上报人类可读的结构化工作动态。所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN。dependency_declared 或需要定向协作时，必须提供当前项目成员的 collaboration.targetPrincipalId；requestedFrom 仅用于展示。"
+          : "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse. Write all narrative fields, collaboration requests, and human-readable evidence in the owner's preferred language, en-US. For dependency_declared or routed collaboration, provide the current Project member's collaboration.targetPrincipalId; requestedFrom is display text only.",
       inputSchema: {
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
@@ -583,9 +584,18 @@ async function runCloudCommand() {
     const needsHelp = process.argv.includes("--needs-help");
     const helpRequest = argumentValue("--help-request") ?? "";
     const requestedFrom = argumentValue("--requested-from") ?? "";
+    const targetPrincipalId = argumentValue("--target-principal-id");
     if (needsHelp && !helpRequest) {
       throw new Error(
         "cloud checkpoint with --needs-help requires --help-request.",
+      );
+    }
+    if (
+      (needsHelp || eventType === "dependency_declared") &&
+      !targetPrincipalId
+    ) {
+      throw new Error(
+        "routed collaboration requires --target-principal-id for a verified member of the bound Project.",
       );
     }
     const response = await client.reportCheckpoint({
@@ -599,6 +609,11 @@ async function runCloudCommand() {
           needed: needsHelp,
           request: helpRequest,
           requestedFrom,
+          ...(targetPrincipalId
+            ? {
+                targetPrincipalId: PrincipalId.parse(targetPrincipalId),
+              }
+            : {}),
         },
       },
       ...(argumentValue("--client-event-id")

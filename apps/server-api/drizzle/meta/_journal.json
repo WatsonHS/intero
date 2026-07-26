@@ -155,6 +155,13 @@
       "when": 1785427200000,
       "tag": "0021_preferred_language",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785513600000,
+      "tag": "0022_work_state_coordination_correlation",
+      "breakpoints": true
     }
   ]
 }

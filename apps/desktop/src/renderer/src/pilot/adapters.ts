@@ -94,18 +94,20 @@ export function pilotDmToThreadPayload(
 export function pilotStandInToThreadPayload(
   project: PilotProject,
   exchanges: PilotStandInExchange[],
-  principal: PrincipalSummary,
+  viewer: PrincipalSummary,
+  standInOwner: PrincipalSummary,
   standIn: PrincipalSummary,
 ): ThreadPayload {
   const threadId = project.id as unknown as ThreadId;
-  const principalId = principal.id as PrincipalId;
+  const viewerId = viewer.id as PrincipalId;
+  const standInOwnerId = standInOwner.id as PrincipalId;
   const standInId = standIn.id as PrincipalId;
   const messages: ThreadPayload["messages"] = exchanges.flatMap(
     (exchange, index) => [
       {
         id: exchange.questionMessageId as MessageId,
         threadId,
-        senderId: principalId,
+        senderId: (exchange.askedByPrincipalId ?? viewerId) as PrincipalId,
         sequence: index * 2 + 1,
         kind: "message" as const,
         body: exchange.question,
@@ -128,8 +130,10 @@ export function pilotStandInToThreadPayload(
     thread: {
       id: threadId,
       kind: "stand_in",
-      title: `${project.name} Stand-in`,
-      participantIds: [principalId, standInId],
+      title: standIn.displayName,
+      participantIds: [viewerId, standInOwnerId, standInId].filter(
+        (id, index, ids) => ids.indexOf(id) === index,
+      ),
       standInIds: [standInId],
       accessMode: "agent_readable",
       priorHistoryGranted: false,
@@ -137,7 +141,10 @@ export function pilotStandInToThreadPayload(
       createdAt: project.createdAt,
     },
     messages,
-    principals: [principal, standIn],
+    principals: [viewer, standInOwner, standIn].filter(
+      (principal, index, principals) =>
+        principals.findIndex((item) => item.id === principal.id) === index,
+    ),
     actions: [],
   };
 }

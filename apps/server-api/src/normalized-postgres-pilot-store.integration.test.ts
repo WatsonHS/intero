@@ -193,10 +193,23 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       now: "2026-07-26T01:20:02.000Z",
     });
     expect(await store.listTeamPulse(projectId, memberId)).toHaveLength(1);
-    await store.withdrawPulseEntry(
+    const firstWithdrawal = await store.withdrawPulseEntry(
       projectId,
       workState.id,
       adminId,
+      "normalized-withdrawal-20260726-0001",
+      "2026-07-26T01:20:03.000Z",
+    );
+    expect(firstWithdrawal.duplicate).toBe(false);
+    const replayedWithdrawal = await store.withdrawPulseEntry(
+      projectId,
+      workState.id,
+      adminId,
+      "normalized-withdrawal-20260726-0001",
+      "2026-07-26T01:20:04.000Z",
+    );
+    expect(replayedWithdrawal.duplicate).toBe(true);
+    expect(replayedWithdrawal.entry.withdrawnAt).toBe(
       "2026-07-26T01:20:03.000Z",
     );
     expect(await store.listTeamPulse(projectId, memberId)).toHaveLength(0);
@@ -220,6 +233,25 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       [organizationId],
     );
     expect(outboxCount.rows[0]?.count).toBe("1");
+    const withdrawalEffects = await admin.query<{
+      activity_count: string;
+      outbox_count: string;
+    }>(
+      `SELECT
+         (SELECT count(*)::text
+          FROM activity_events
+          WHERE organization_id=$1 AND event_type='pilot.pulse.withdrawn')
+           activity_count,
+         (SELECT count(*)::text
+          FROM outbox
+          WHERE organization_id=$1 AND topic='pilot.pulse.withdrawn')
+           outbox_count`,
+      [organizationId],
+    );
+    expect(withdrawalEffects.rows[0]).toEqual({
+      activity_count: "1",
+      outbox_count: "1",
+    });
   });
 
   it("enforces cross-Organization RLS on every normalized table", async () => {

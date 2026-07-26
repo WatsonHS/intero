@@ -869,9 +869,21 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       await client.query(
         `INSERT INTO pilot_coordination_threads
           (id, organization_id, project_id, work_state_id, source_binding_id,
-           status, data, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           automation_signal_id, status, data, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (id) DO UPDATE SET
+           work_state_id = COALESCE(
+             pilot_coordination_threads.work_state_id,
+             EXCLUDED.work_state_id
+           ),
+           source_binding_id = COALESCE(
+             pilot_coordination_threads.source_binding_id,
+             EXCLUDED.source_binding_id
+           ),
+           automation_signal_id = COALESCE(
+             pilot_coordination_threads.automation_signal_id,
+             EXCLUDED.automation_signal_id
+           ),
            status = EXCLUDED.status,
            data = EXCLUDED.data,
            updated_at = EXCLUDED.updated_at`,
@@ -881,6 +893,7 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           thread.projectId,
           thread.workStateId ?? null,
           thread.sourceBindingId ?? null,
+          thread.automationSignalId ?? null,
           thread.status,
           json(thread),
           thread.createdAt,

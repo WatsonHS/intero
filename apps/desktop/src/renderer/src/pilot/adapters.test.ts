@@ -183,7 +183,8 @@ describe("pilot renderer adapters", () => {
       questionMessageId: IDS.question,
       answerMessageId: IDS.answer,
       projectId: project.id,
-      principalId: PrincipalId.parse(IDS.peer),
+      principalId: PrincipalId.parse(IDS.owner),
+      askedByPrincipalId: PrincipalId.parse(IDS.peer),
       question: "What is the status?",
       answer: "The checkpoint path is ready.",
       structuredAnswer: {
@@ -216,14 +217,16 @@ describe("pilot renderer adapters", () => {
       project,
       [exchange],
       { id: IDS.peer, displayName: "Morgan Chen", kind: "human" },
+      { id: IDS.owner, displayName: "Alex Lin", kind: "human" },
       {
         id: IDS.standIn,
-        displayName: "Intero Stand-in",
+        displayName: "Alex Lin 的替身",
         kind: "stand_in",
       },
     );
 
     expect(payload.thread.kind).toBe("stand_in");
+    expect(payload.thread.title).toBe("Alex Lin 的替身");
     expect(payload.messages).toHaveLength(2);
     expect(payload.messages[1]?.body).toBe("The checkpoint path is ready.");
     expect(() => ConversationThread.parse(payload.thread)).not.toThrow();

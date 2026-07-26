@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "test:e2e:phase6": "playwright test tests/e2e/phase6.spec.ts",
     "test:e2e:phase7": "playwright test tests/e2e/phase7.spec.ts",
+    "test:e2e:collaboration": "playwright test tests/e2e/collaboration-chain.spec.ts",
     "check": "pnpm lint && pnpm test && pnpm build",
     "format:check": "prettier --check .",
     "demo:seed": "pnpm --filter @intero/server-api demo:seed",

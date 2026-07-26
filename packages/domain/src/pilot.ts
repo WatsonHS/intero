@@ -137,6 +137,16 @@ export const PilotProject = z
   .strict();
 export type PilotProject = z.infer<typeof PilotProject>;
 
+/**
+ * Personal Stand-ins use a stable, one-to-one UUID derived from their human
+ * owner. Human principals are UUIDv7, so replacing only the fixed version
+ * nibble keeps the mapping injective while making the Stand-in identity
+ * distinct from every human identity.
+ */
+export function personalStandInId(ownerId: PrincipalId): PrincipalId {
+  return PrincipalId.parse(`${ownerId.slice(0, 14)}5${ownerId.slice(15)}`);
+}
+
 export const PilotDirectMessageThread = z
   .object({
     id: z.uuid(),
@@ -255,6 +265,9 @@ export const PilotWorkNarrative = z
         needed: z.boolean(),
         request: z.string().max(600),
         requestedFrom: z.string().max(160),
+        targetPrincipalId: PrincipalId.optional().describe(
+          "Authorized Project member principal ID that should receive this collaboration request.",
+        ),
       })
       .strict(),
   })
@@ -442,7 +455,10 @@ export const PilotStandInExchange = z
     questionMessageId: z.uuid(),
     answerMessageId: z.uuid(),
     projectId: ProjectId,
+    /** The human member whose personal Stand-in answered. */
     principalId: PrincipalId,
+    /** The Project member who asked; older records default to the owner. */
+    askedByPrincipalId: PrincipalId.optional(),
     question: z.string().min(1).max(2_000),
     answer: z.string().min(1).max(2_000),
     structuredAnswer: PilotStandInAnswerDetail,

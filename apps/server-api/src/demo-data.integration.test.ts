@@ -183,21 +183,7 @@ integration("persisted Demo workspace", () => {
         ]),
       }),
     ]);
-    expect(standInThreads).toEqual([
-      expect.objectContaining({
-        thread: expect.objectContaining({ title: "Alex 的替身" }),
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            senderId: DEMO_IDS.principals.alex,
-            body: expect.stringContaining("今天需要我决定什么"),
-          }),
-          expect.objectContaining({
-            senderId: DEMO_IDS.principals.standIn,
-            body: expect.stringContaining("Action Inbox"),
-          }),
-        ]),
-      }),
-    ]);
+    expect(standInThreads).toEqual([]);
     expect(inbox.length).toBeGreaterThanOrEqual(2);
     expect(inbox.map((item) => item.kind)).toEqual(
       expect.arrayContaining(["consequential_commitment", "scope_expansion"]),
