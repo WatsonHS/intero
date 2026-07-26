@@ -63,7 +63,6 @@ export interface IntegrationAdapter {
   installPlan(
     homeDirectory: string,
     executable: string,
-    connectionFiles?: { hook: string; mcp: string },
     executablePrefixArgs?: string[],
   ): ManagedInstallPlan;
 }
@@ -181,28 +180,15 @@ function hookCommand(
   executable: string,
   executablePrefixArgs: string[],
   source: IntegrationKind,
-  connectionFile: string,
 ): string {
-  const arguments_ = [
-    ...executablePrefixArgs,
-    "--connection-file",
-    connectionFile,
-    "--hook-source",
-    source,
-  ];
+  const arguments_ = [...executablePrefixArgs, "--hook-source", source];
   if (
     executablePrefixArgs[0] === "/d" &&
     executablePrefixArgs[1] === "/s" &&
     executablePrefixArgs[2] === "/c"
   ) {
     const commandArguments = executablePrefixArgs.slice(3);
-    const inner = [
-      ...commandArguments,
-      "--connection-file",
-      connectionFile,
-      "--hook-source",
-      source,
-    ]
+    const inner = [...commandArguments, "--hook-source", source]
       .map(windowsCommandQuote)
       .join(" ");
     return `${windowsCommandQuote(executable)} /d /s /c "${inner}"`;
@@ -237,7 +223,6 @@ function claudeCommandHook(
   executable: string,
   executablePrefixArgs: string[],
   source: IntegrationKind,
-  connectionFile: string,
 ) {
   return [
     {
@@ -245,30 +230,12 @@ function claudeCommandHook(
         {
           type: "command",
           command: executable,
-          args: [
-            ...executablePrefixArgs,
-            "--connection-file",
-            connectionFile,
-            "--hook-source",
-            source,
-          ],
+          args: [...executablePrefixArgs, "--hook-source", source],
           timeout: 10,
         },
       ],
     },
   ];
-}
-
-function connectionFilesFor(
-  home: string,
-  connectionFiles?: { hook: string; mcp: string },
-) {
-  return (
-    connectionFiles ?? {
-      hook: `${home}/.intero/connection-hook.json`,
-      mcp: `${home}/.intero/connection-mcp.json`,
-    }
-  );
 }
 
 export const codexAdapter: IntegrationAdapter = {
@@ -282,19 +249,12 @@ export const codexAdapter: IntegrationAdapter = {
     managedPlugin: false,
   },
   normalize: (input) => normalize("codex", input),
-  installPlan: (
-    home,
-    executable,
-    providedConnections,
-    executablePrefixArgs = [],
-  ) => {
-    const connections = connectionFilesFor(home, providedConnections);
+  installPlan: (home, executable, executablePrefixArgs = []) => {
     const codexHome = process.env.CODEX_HOME || `${home}/.codex`;
     const codexHookCommand = hookCommand(
       executable,
       executablePrefixArgs,
       "codex",
-      connections.hook,
     );
     return {
       adapter: "codex",
@@ -310,7 +270,7 @@ export const codexAdapter: IntegrationAdapter = {
           path: `${codexHome}/config.toml`,
           format: "toml",
           marker: "intero-managed",
-          content: `[mcp_servers.intero]\ncommand = ${tomlString(executable)}\nargs = [${[...executablePrefixArgs, "--connection-file", connections.mcp, "--mcp-source", "codex"].map(tomlString).join(", ")}]\nrequired = false\n`,
+          content: `[mcp_servers.intero]\ncommand = ${tomlString(executable)}\nargs = [${[...executablePrefixArgs, "--mcp-source", "codex", "--cloud"].map(tomlString).join(", ")}]\nrequired = false\n`,
         },
         {
           path: `${codexHome}/hooks.json`,
@@ -351,13 +311,7 @@ export const claudeCodeAdapter: IntegrationAdapter = {
     managedPlugin: false,
   },
   normalize: (input) => normalize("claude-code", input),
-  installPlan: (
-    home,
-    executable,
-    providedConnections,
-    executablePrefixArgs = [],
-  ) => {
-    const connections = connectionFilesFor(home, providedConnections);
+  installPlan: (home, executable, executablePrefixArgs = []) => {
     const claudeHome = process.env.CLAUDE_CONFIG_DIR || `${home}/.claude`;
     const claudeMcpConfig = process.env.CLAUDE_CONFIG_DIR
       ? `${claudeHome}/.claude.json`
@@ -384,10 +338,9 @@ export const claudeCodeAdapter: IntegrationAdapter = {
                   command: executable,
                   args: [
                     ...executablePrefixArgs,
-                    "--connection-file",
-                    connections.mcp,
                     "--mcp-source",
                     "claude-code",
+                    "--cloud",
                   ],
                 },
               },
@@ -408,7 +361,6 @@ export const claudeCodeAdapter: IntegrationAdapter = {
                   executable,
                   executablePrefixArgs,
                   "claude-code",
-                  connections.hook,
                 ),
               ]),
             ),
@@ -435,13 +387,7 @@ export const openCodeAdapter: IntegrationAdapter = {
     managedPlugin: true,
   },
   normalize: (input) => normalize("opencode", input),
-  installPlan: (
-    home,
-    executable,
-    providedConnections,
-    executablePrefixArgs = [],
-  ) => {
-    const connections = connectionFilesFor(home, providedConnections);
+  installPlan: (home, executable, executablePrefixArgs = []) => {
     const openCodeHome =
       process.env.OPENCODE_CONFIG_DIR || `${home}/.config/opencode`;
     return {
@@ -466,10 +412,9 @@ export const openCodeAdapter: IntegrationAdapter = {
                   command: [
                     executable,
                     ...executablePrefixArgs,
-                    "--connection-file",
-                    connections.mcp,
                     "--mcp-source",
                     "opencode",
+                    "--cloud",
                   ],
                   enabled: true,
                 },
@@ -491,7 +436,6 @@ import type { Plugin } from "@opencode-ai/plugin";
 
 const executable = ${JSON.stringify(executable)};
 const executablePrefixArgs = ${JSON.stringify(executablePrefixArgs)};
-const hookConnection = ${JSON.stringify(connections.hook)};
 const forwarded = new Set([
   "session.created",
   "session.idle",
@@ -518,8 +462,6 @@ export const InteroPlugin: Plugin = async ({ directory, worktree }) => ({
     try {
       const child = spawn(executable, [
         ...executablePrefixArgs,
-        "--connection-file",
-        hookConnection,
         "--hook-source",
         "opencode"
       ], {

@@ -1,15 +1,19 @@
-import { SocketDaemonClient, loadConnectionSettings } from "@intero/local-ipc";
 import { execFile } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, relative, sep } from "node:path";
+import { basename } from "node:path";
 import { promisify } from "node:util";
+
+import { CloudPilotClient } from "./cloud-client.js";
 
 const MAX_HOOK_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
 
+/**
+ * Coding-Agent lifecycle hooks are an optional direct-cloud enhancement. They
+ * deliberately have no local daemon, socket, allowlist file, or persistent
+ * workspace database dependency.
+ */
 export async function runHook(
   source: "codex" | "claude-code" | "opencode",
-  connectionFile?: string,
 ): Promise<void> {
   if (!hookShouldCollect()) return;
   try {
@@ -31,37 +35,56 @@ export async function runHook(
     ) {
       return;
     }
+
     const eventId =
       stringField(input, "hook_event_id") ??
       stringField(input, "event_id") ??
-      stringField(input, "tool_use_id");
-
-    const connection = await loadConnectionSettings({
-      role: "hook",
-      ...(connectionFile ? { descriptorPath: connectionFile } : {}),
-    });
-    if (
-      !connection.workspaceAllowlistPath ||
-      !(await isAllowedWorkspace(cwd, connection.workspaceAllowlistPath))
-    ) {
-      return;
-    }
-    const daemon = new SocketDaemonClient(
-      connection.socketPath,
-      connection.authToken,
-    );
-    await daemon.call("integration.ingest_lifecycle", {
-      cwd,
-      source,
-      sourceEvent: eventName,
-      sessionId,
-      ...(eventId && eventId.length <= 240 ? { eventId } : {}),
-      occurredAt: new Date().toISOString(),
-      metadata: safeSemanticMetadata(eventName),
+      stringField(input, "tool_use_id") ??
+      sessionId;
+    const client = CloudPilotClient.load({ client: source });
+    const preferredLanguage = client.context().preferredLanguage;
+    const chinese = preferredLanguage === "zh-CN";
+    const git = await readGitContext(cwd, preferredLanguage);
+    const ended = isTerminalLifecycleEvent(eventName);
+    await client.reportCheckpoint({
+      eventType: ended ? "work_progressed" : "work_started",
+      clientEventId: `lifecycle:${source}:${eventName}:${eventId}`.slice(
+        0,
+        200,
+      ),
+      workstreamKey: git.repository,
+      workstreamTitle: git.repository,
+      phase: "implementing",
+      narrative: {
+        currentFocus: ended
+          ? chinese
+            ? "Coding Agent 会话已结束，等待下一次有意义的工作更新。"
+            : "The Coding Agent session has ended and is waiting for the next meaningful work update."
+          : chinese
+            ? "Coding Agent 已开始当前项目的工作会话。"
+            : "The Coding Agent started a work session for the current project.",
+        completedOutcome: ended
+          ? chinese
+            ? "本次会话已结束；最终成果以 Agent 的语义检查点为准。"
+            : "The session ended; final outcomes remain represented by the Agent's semantic checkpoints."
+          : chinese
+            ? "已建立当前项目的工作上下文。"
+            : "The current project work context is established.",
+        evidence: git.evidence,
+        nextStep: ended
+          ? chinese
+            ? "如有实际进展、产出、验证或阻塞，由 Agent 上报语义检查点。"
+            : "Report a semantic checkpoint for any actual progress, outcome, validation, or blocker."
+          : chinese
+            ? "在有实际进展、产出、验证或阻塞时上报语义检查点。"
+            : "Report a semantic checkpoint when meaningful progress, an outcome, validation, or a blocker occurs.",
+        collaboration: { needed: false, request: "", requestedFrom: "" },
+      },
+      evidenceRefs: git.refs,
     });
   } catch {
-    // Hooks are deliberately fail-open and silent so Agent content and local
-    // paths cannot leak through diagnostics.
+    // Hooks remain fail-open and silent. They must not block an Agent, expose
+    // local paths, or turn a transient cloud failure into a coding failure.
   }
 }
 
@@ -71,67 +94,61 @@ export function hookShouldCollect(
   return environment.INTERO_INTEGRATION_PROBE !== "1";
 }
 
-export async function isAllowedWorkspace(
+async function readGitContext(
   cwd: string,
-  allowlistPath: string,
-): Promise<boolean> {
+  preferredLanguage: "zh-CN" | "en-US",
+): Promise<{
+  repository: string;
+  evidence: string[];
+  refs: string[];
+}> {
   try {
-    const raw = await readFile(allowlistPath, "utf8");
-    if (Buffer.byteLength(raw) > 1024 * 1024) return false;
-    const parsed = JSON.parse(raw) as unknown;
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      (parsed as Record<string, unknown>).schemaVersion !== 1 ||
-      !Array.isArray((parsed as Record<string, unknown>).workspaces)
-    ) {
-      return false;
-    }
-    const canonicalCwd = await realpath(cwd);
-    const entries = (parsed as { workspaces: unknown[] }).workspaces.filter(
-      (value): value is { root: string; repositoryIdentity: string } =>
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        typeof (value as Record<string, unknown>).root === "string" &&
-        typeof (value as Record<string, unknown>).repositoryIdentity ===
-          "string",
-    );
-    if (entries.some((entry) => pathIsInside(canonicalCwd, entry.root))) {
-      return true;
-    }
     const { stdout } = await execFileAsync(
       "git",
-      [
-        "-C",
-        canonicalCwd,
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-common-dir",
-      ],
+      ["-C", cwd, "rev-parse", "--show-toplevel"],
       {
         timeout: 1_000,
         maxBuffer: 16 * 1024,
         env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
       },
     );
-    const common = await realpath(stdout.trim());
-    const identity = `git-common-dir:${common}`;
-    return entries.some((entry) => entry.repositoryIdentity === identity);
+    const root = stdout.trim();
+    const [branch, head] = await Promise.all([
+      git(cwd, ["branch", "--show-current"]),
+      git(cwd, ["rev-parse", "--short=12", "HEAD"]),
+    ]);
+    const repository = basename(root).slice(0, 160) || "repository";
+    const chinese = preferredLanguage === "zh-CN";
+    const evidence = [
+      `${chinese ? "仓库" : "Repository"}: ${repository}`,
+      ...(branch ? [`${chinese ? "分支" : "Branch"}: ${branch}`] : []),
+      ...(head ? [`${chinese ? "提交" : "Commit"}: ${head}`] : []),
+    ];
+    return {
+      repository,
+      evidence,
+      refs: [
+        ...(branch ? [`git:branch:${branch}`] : []),
+        ...(head ? [`git:commit:${head}`] : []),
+      ],
+    };
   } catch {
-    return false;
+    return { repository: "repository", evidence: [], refs: [] };
   }
 }
 
-function pathIsInside(candidate: string, root: string): boolean {
-  const fromRoot = relative(root, candidate);
-  return (
-    fromRoot === "" ||
-    (!fromRoot.startsWith(`..${sep}`) &&
-      fromRoot !== ".." &&
-      !isAbsolute(fromRoot))
-  );
+async function git(cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+      timeout: 1_000,
+      maxBuffer: 16 * 1024,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    });
+    const value = stdout.trim();
+    return value ? value.slice(0, 160) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readHookInput(): Promise<Record<string, unknown>> {
@@ -140,8 +157,7 @@ async function readHookInput(): Promise<Record<string, unknown>> {
   for await (const chunk of process.stdin) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > MAX_HOOK_BYTES)
-      throw new Error("Hook input exceeds the 2 MiB limit.");
+    if (size > MAX_HOOK_BYTES) throw new Error("Hook input is too large.");
     chunks.push(buffer);
   }
   const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
@@ -158,26 +174,18 @@ function stringField(
   return typeof input[key] === "string" ? input[key] : undefined;
 }
 
-export function safeSemanticMetadata(
-  eventName: string,
-): Record<string, string> {
-  const metadata: Record<string, string> = {
-    phase: eventName.slice(0, 80),
-  };
-  if (
+function isTerminalLifecycleEvent(eventName: string): boolean {
+  return (
     eventName === "SessionEnd" ||
     eventName === "session.idle" ||
     eventName === "session.deleted"
-  ) {
-    metadata.checkpointKind = "pause";
-  }
-  return metadata;
+  );
 }
 
 function isSupportedLifecycleEvent(
   source: "codex" | "claude-code" | "opencode",
   eventName: string,
-) {
+): boolean {
   return source === "opencode"
     ? eventName === "session.created" ||
         eventName === "session.idle" ||

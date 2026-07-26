@@ -64,9 +64,6 @@ importers:
       "@intero/integrations":
         specifier: workspace:*
         version: link:../../packages/integrations
-      "@intero/local-ipc":
-        specifier: workspace:*
-        version: link:../../packages/local-ipc
       "@intero/ui":
         specifier: workspace:*
         version: link:../../packages/ui
@@ -114,24 +111,6 @@ importers:
         specifier: ^7.0.0
         version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  apps/local-stand-in:
-    dependencies:
-      "@intero/config":
-        specifier: workspace:*
-        version: link:../../packages/config
-      "@intero/domain":
-        specifier: workspace:*
-        version: link:../../packages/domain
-      "@intero/integrations":
-        specifier: workspace:*
-        version: link:../../packages/integrations
-      "@intero/local-ipc":
-        specifier: workspace:*
-        version: link:../../packages/local-ipc
-      "@intero/stand-in-core":
-        specifier: workspace:*
-        version: link:../../packages/stand-in-core
-
   apps/mcp-stdio:
     dependencies:
       "@intero/api-contracts":
@@ -143,9 +122,6 @@ importers:
       "@intero/integrations":
         specifier: workspace:*
         version: link:../../packages/integrations
-      "@intero/local-ipc":
-        specifier: workspace:*
-        version: link:../../packages/local-ipc
       "@modelcontextprotocol/sdk":
         specifier: ^1.15.0
         version: 1.29.0(zod@4.4.3)
@@ -297,8 +273,6 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
-
-  packages/local-ipc: {}
 
   packages/project-management:
     dependencies:

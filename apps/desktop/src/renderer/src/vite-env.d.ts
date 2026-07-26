@@ -4,10 +4,6 @@ interface Window {
   interoDesktop?: {
     platform: string;
     runtimeVersion: string;
-    getLocalStatus(): Promise<LocalRuntimeStatus>;
-    setModelEgress(
-      mode: ModelEgressMode,
-    ): Promise<{ modelEgress: ModelEgressMode }>;
     getIntegrationStatus(): Promise<CodingAgentIntegrationStatus[]>;
     previewIntegration(
       adapter: CodingAgentAdapter,
@@ -15,10 +11,18 @@ interface Window {
       locale: "zh-CN" | "en-US",
     ): Promise<CodingAgentIntegrationPreview | null>;
     manageIntegration(token: string): Promise<CodingAgentIntegrationStatus[]>;
+    getGitAwarenessStatus(): Promise<GitAwarenessStatus[]>;
+    getGitAwarenessClients(): Promise<CodingAgentAdapter[]>;
+    chooseGitRepository(): Promise<GitRepositorySelection | null>;
+    configureGitAwareness(input: {
+      repositoryPath: string;
+      client: CodingAgentAdapter;
+      enabled: boolean;
+    }): Promise<GitAwarenessStatus[]>;
+    removeGitAwareness(repositoryPath: string): Promise<GitAwarenessStatus[]>;
   };
 }
 
-type ModelEgressMode = "managed_api" | "user_provided_api" | "disabled";
 type CodingAgentAdapter = "codex" | "claude-code" | "opencode";
 type CodingAgentIntegrationAction = "install" | "repair" | "uninstall";
 
@@ -47,26 +51,25 @@ interface CodingAgentIntegrationPreview {
   expiresAt: string;
 }
 
-interface LocalRuntimeWorkspace {
-  id: string;
-  root: string;
-  repositoryIdentity: string;
-  revoked: boolean;
+interface GitAwarenessSnapshot {
+  repository: string;
+  branch?: string;
+  head?: string;
+  staged: "clean" | "changed";
+  fingerprint: string;
 }
 
-type LocalRuntimeStatus =
-  | {
-      available: true;
-      health: {
-        status: "ok";
-        version: string;
-        protocolVersion: number;
-        encryptedStorage: boolean;
-      };
-      workspaces: LocalRuntimeWorkspace[];
-      modelEgress: ModelEgressMode;
-    }
-  | {
-      available: false;
-      reason: "daemon_unavailable" | "desktop_required";
-    };
+interface GitAwarenessStatus {
+  repositoryPath: string;
+  repositoryName: string;
+  client: CodingAgentAdapter;
+  enabled: boolean;
+  snapshot?: GitAwarenessSnapshot;
+  lastDeliveredAt?: string;
+  lastError?: string;
+}
+
+interface GitRepositorySelection {
+  repositoryPath: string;
+  snapshot: GitAwarenessSnapshot;
+}

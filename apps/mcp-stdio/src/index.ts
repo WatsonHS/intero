@@ -16,19 +16,14 @@ import {
 } from "@intero/integrations";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
-import { ReloadingDaemonClient, SocketDaemonClient } from "./daemon-client.js";
 import { CloudPilotClient } from "./cloud-client.js";
-import { loadConnectionSettings } from "./connection.js";
 import { runHook } from "./hook.js";
-import { createToolHandlers } from "./tools.js";
 
 const hookSource = argumentValue("--hook-source");
-const connectionFile = argumentValue("--connection-file");
 const managementMode =
   process.argv.includes("integration") ||
   process.argv.includes("--integration");
@@ -38,7 +33,7 @@ if (
   hookSource === "claude-code" ||
   hookSource === "opencode"
 ) {
-  await runHook(hookSource, connectionFile);
+  await runHook(hookSource);
 } else if (managementMode) {
   await runIntegrationManagement();
 } else if (cloudCommand) {
@@ -56,123 +51,9 @@ async function runMcpServer() {
   ) {
     throw new Error("A supported --mcp-source is required.");
   }
-  if (process.argv.includes("--cloud")) {
-    await runCloudMcpServer(mcpSource);
-    return;
-  }
-  const tools = createToolHandlers(
-    new ReloadingDaemonClient(async () => {
-      const { socketPath, authToken } = await loadConnectionSettings({
-        role: "mcp",
-        ...(connectionFile ? { descriptorPath: connectionFile } : {}),
-      });
-      return new SocketDaemonClient(socketPath, authToken);
-    }),
-    {
-      source: mcpSource,
-      cwd: process.cwd(),
-      clientSessionId: randomUUID(),
-    },
-  );
-  const server = new McpServer({ name: "intero", version: "0.1.0" });
-  const resourceScope = z.array(z.string().max(300)).max(50);
-
-  server.registerTool(
-    "stand_in.current_context",
-    {
-      description:
-        "Show the enrolled Intero Workspace and current Agent session binding.",
-      inputSchema: {},
-    },
-    async () => result(await tools.currentContext()),
-  );
-
-  server.registerTool(
-    "stand_in.lookup_team_context",
-    {
-      description:
-        "Look up bounded public team context at a technical branch point.",
-      inputSchema: {
-        query: z.string().min(1).max(1_000),
-        scope: resourceScope.optional(),
-      },
-    },
-    async (input) => result(await tools.lookupTeamContext(input)),
-  );
-
-  server.registerTool(
-    "stand_in.request_coordination",
-    {
-      description:
-        "Start visible coordination for a dependency, conflict, or ownership question.",
-      inputSchema: {
-        reason: z.string().min(1).max(2_000),
-        resourceScope,
-      },
-    },
-    async (input) => result(await tools.requestCoordination(input)),
-  );
-
-  server.registerTool(
-    "stand_in.request_spec_review",
-    {
-      description:
-        "Ask the Stand-in to publish a versioned Spec Review for human review.",
-      inputSchema: {
-        title: z.string().min(1).max(240),
-        markdown: z.string().min(1).max(500_000),
-        affectedScopes: resourceScope,
-      },
-    },
-    async (input) => result(await tools.requestSpecReview(input)),
-  );
-
-  server.registerTool(
-    "stand_in.lookup_decision",
-    {
-      description:
-        "Retrieve sourced, versioned Decisions relevant to the current work.",
-      inputSchema: {
-        query: z.string().min(1).max(1_000),
-      },
-    },
-    async (input) => result(await tools.lookupDecision(input)),
-  );
-
-  server.registerTool(
-    "stand_in.check_scope",
-    {
-      description:
-        "Check whether proposed work is inside existing delegated scope.",
-      inputSchema: { resourceScope },
-    },
-    async (input) => result(await tools.checkScope(input)),
-  );
-
-  server.registerTool(
-    "stand_in.report_checkpoint",
-    {
-      description: "Report a semantic work checkpoint as a sourced Claim.",
-      inputSchema: {
-        kind: z.enum([
-          "intent",
-          "decision",
-          "blocker",
-          "dependency",
-          "scope",
-          "artifact",
-          "validation",
-          "pause",
-          "completion",
-        ]),
-        summary: z.string().min(1).max(600),
-        evidenceRefs: z.array(z.string().max(200)).max(10).optional(),
-      },
-    },
-    async (input) => result(await tools.reportCheckpoint(input)),
-  );
-
-  await server.connect(new StdioServerTransport());
+  // Direct cloud MCP is the only runtime. `--cloud` is an explicit managed
+  // configuration marker; connection state is loaded from the cloud client.
+  await runCloudMcpServer(mcpSource);
 }
 
 async function runCloudMcpServer(
@@ -183,6 +64,7 @@ async function runCloudMcpServer(
     client: mcpSource,
     ...(configDirectory ? { configDirectory } : {}),
   });
+  const preferredLanguage = client.context().preferredLanguage;
   const server = new McpServer({ name: "intero-cloud", version: "0.1.0" });
   server.registerTool(
     "stand_in.current_context",
@@ -196,7 +78,9 @@ async function runCloudMcpServer(
     "stand_in.report_checkpoint",
     {
       description:
-        "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse.",
+        preferredLanguage === "zh-CN"
+          ? "向私有 Work State（策略允许时也向 Team Pulse）上报人类可读的结构化工作动态。所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN。"
+          : "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse. Write all narrative fields, collaboration requests, and human-readable evidence in the owner's preferred language, en-US.",
       inputSchema: {
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
@@ -774,17 +658,6 @@ async function runIntegrationManagement() {
           prefixArgs: ["/d", "/s", "/c", executable],
         }
       : { command: executable, prefixArgs: [] };
-  const adminConnection =
-    connectionFile ??
-    join(
-      process.env.INTERO_DATA_DIR ?? join(userHome, ".intero"),
-      "connection.json",
-    );
-  const connectionDirectory = dirname(adminConnection);
-  const connections = {
-    hook: join(connectionDirectory, "connection-hook.json"),
-    mcp: join(connectionDirectory, "connection-mcp.json"),
-  };
   const output = [];
   const detectedAgents = new Map(
     adapters.map((adapter) => [
@@ -813,7 +686,6 @@ async function runIntegrationManagement() {
     const plan = adapter.installPlan(
       userHome,
       executableSpec.command,
-      connections,
       executableSpec.prefixArgs,
     );
     if (action === "uninstall") {

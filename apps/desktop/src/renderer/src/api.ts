@@ -48,6 +48,7 @@ export interface PrincipalSummary {
   id: string;
   displayName: string;
   kind: "human" | "stand_in" | "service";
+  preferredLanguage?: "zh-CN" | "en-US";
 }
 
 export interface BootstrapPayload {
@@ -612,22 +613,6 @@ export async function getActivity(
   signal?: AbortSignal,
 ): Promise<{ items: ActivityEvent[]; nextCursor: number; hasMore: boolean }> {
   return getJson(`/v1/activity?after=${after}&limit=${limit}`, signal);
-}
-
-export async function getLocalRuntimeStatus(): Promise<LocalRuntimeStatus> {
-  if (typeof window === "undefined" || !window.interoDesktop) {
-    return { available: false, reason: "desktop_required" };
-  }
-  return window.interoDesktop.getLocalStatus();
-}
-
-export async function setModelEgress(
-  mode: ModelEgressMode,
-): Promise<{ modelEgress: ModelEgressMode }> {
-  if (typeof window === "undefined" || !window.interoDesktop) {
-    throw new Error("The local runtime bridge requires Intero Desktop.");
-  }
-  return window.interoDesktop.setModelEgress(mode);
 }
 
 export async function getCodingAgentIntegrations(): Promise<

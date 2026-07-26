@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { OrganizationId, PrincipalId, ProjectId } from "./ids.js";
+import { PreferredLanguage } from "./platform.js";
 import { WorkstreamPhase } from "./work-state.js";
 
 export const PilotCollaborationPosture = z.enum([
@@ -212,6 +213,7 @@ export const PilotAgentTicket = z
     projectId: ProjectId,
     ownerId: PrincipalId,
     client: PilotAgentClient,
+    preferredLanguage: PreferredLanguage,
     ticketHash: z.string().length(64),
     expiresAt: z.iso.datetime(),
     usedAt: z.iso.datetime().optional(),
@@ -228,6 +230,7 @@ export const PilotAgentBinding = z
     client: PilotAgentClient,
     name: z.string().min(1).max(120),
     workspaceId: z.uuid(),
+    preferredLanguage: PreferredLanguage,
     credentialHash: z.string().length(64),
     createdAt: z.iso.datetime(),
     lastSeenAt: z.iso.datetime().optional(),

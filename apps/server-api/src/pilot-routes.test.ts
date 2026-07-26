@@ -87,17 +87,22 @@ describe("pilot cloud-first vertical slice", () => {
     await app.close();
   });
 
-  it("persists account display name and avatar tone through the profile boundary", async () => {
+  it("persists account display name, avatar tone, and preferred language through the profile boundary", async () => {
     const updated = await app.inject({
       method: "PATCH",
       url: "/v1/pilot/profile",
       headers: identity(A),
-      payload: { displayName: "Alex Lin", avatarTone: "green" },
+      payload: {
+        displayName: "Alex Lin",
+        avatarTone: "green",
+        preferredLanguage: "zh-CN",
+      },
     });
     expect(updated.statusCode).toBe(200);
     expect(updated.json().profile).toMatchObject({
       displayName: "Alex Lin",
       avatarTone: "green",
+      preferredLanguage: "zh-CN",
     });
 
     const fetched = await app.inject({
@@ -109,6 +114,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(fetched.json().profile).toMatchObject({
       displayName: "Alex Lin",
       avatarTone: "green",
+      preferredLanguage: "zh-CN",
     });
 
     const invalid = await app.inject({
@@ -118,6 +124,95 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { avatarTone: "rainbow" },
     });
     expect(invalid.statusCode).toBe(400);
+
+    const invalidLanguage = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { preferredLanguage: "fr-FR" },
+    });
+    expect(invalidLanguage.statusCode).toBe(400);
+  });
+
+  it("defaults an unset profile language from the request locale", async () => {
+    const chinese = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/profile",
+      headers: {
+        ...identity(A),
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      },
+    });
+    expect(chinese.statusCode).toBe(200);
+    expect(chinese.json().profile.preferredLanguage).toBe("zh-CN");
+
+    const english = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/profile",
+      headers: {
+        ...identity(B),
+        "accept-language": "en-US,en;q=0.9",
+      },
+    });
+    expect(english.statusCode).toBe(200);
+    expect(english.json().profile.preferredLanguage).toBe("en-US");
+  });
+
+  it("carries the owner's preferred language into Agent prompts and bindings", async () => {
+    const { project } = await readyProject(app);
+    const chineseProfile = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { preferredLanguage: "zh-CN" },
+    });
+    expect(chineseProfile.statusCode).toBe(200);
+
+    const chineseTicket = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "codex" },
+    });
+    expect(chineseTicket.statusCode).toBe(201);
+    expect(chineseTicket.json().connectPrompt).toContain(
+      "所有 narrative 字段、协作请求和人类可读 evidence",
+    );
+    expect(chineseTicket.json().connectPrompt).toContain("zh-CN");
+    const chineseRawTicket = (
+      chineseTicket.json().connectPrompt as string
+    ).match(/--connect-ticket (ticket_[A-Za-z0-9_-]+)/)?.[1];
+    expect(chineseRawTicket).toBeDefined();
+    const chineseBinding = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket: chineseRawTicket,
+        client: "codex",
+        name: "Codex 中文连接",
+        workspaceId: uuidv7(),
+      },
+    });
+    expect(chineseBinding.statusCode).toBe(201);
+    expect(chineseBinding.json().binding.preferredLanguage).toBe("zh-CN");
+
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { preferredLanguage: "en-US" },
+    });
+    const englishTicket = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "claude-code" },
+    });
+    expect(englishTicket.statusCode).toBe(201);
+    expect(englishTicket.json().connectPrompt).toContain(
+      "Write every narrative field, collaboration request, and human-readable evidence item",
+    );
+    expect(englishTicket.json().connectPrompt).toContain("en-US");
   });
 
   it("requires a selected identity and keeps provider credentials server-only", async () => {
@@ -499,6 +594,108 @@ describe("pilot cloud-first vertical slice", () => {
     expect(JSON.stringify(overviewB.pulse)).not.toContain("claims");
   });
 
+  it("keeps each producer's language in shared checkpoint records", async () => {
+    const fixture = await readyProject(app);
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { preferredLanguage: "zh-CN" },
+    });
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(B),
+      payload: { preferredLanguage: "en-US" },
+    });
+    const chineseConnection = await connectAgent(
+      app,
+      fixture.project.id,
+      A,
+      "codex",
+    );
+    const englishConnection = await connectAgent(
+      app,
+      fixture.project.id,
+      B,
+      "claude-code",
+    );
+
+    const chineseCheckpoint = checkpoint(fixture.project.id, {
+      clientEventId: "language-checkpoint-zh-0001",
+    });
+    chineseCheckpoint.narrative = {
+      currentFocus: "正在完善项目搜索。",
+      completedOutcome: "已完成授权范围过滤。",
+      evidence: ["搜索契约测试已通过。"],
+      nextStep: "验证跨团队项目结果。",
+      collaboration: {
+        needed: false,
+        request: "",
+        requestedFrom: "",
+      },
+    };
+    const englishCheckpoint = checkpoint(fixture.project.id, {
+      clientEventId: "language-checkpoint-en-0001",
+    });
+    englishCheckpoint.narrative = {
+      currentFocus: "Refining project search.",
+      completedOutcome: "Authorization scope filtering is complete.",
+      evidence: ["The search contract suite passed."],
+      nextStep: "Validate cross-team project results.",
+      collaboration: {
+        needed: false,
+        request: "",
+        requestedFrom: "",
+      },
+    };
+
+    expect(
+      (
+        await sendCheckpoint(
+          app,
+          chineseConnection.credential,
+          chineseCheckpoint,
+        )
+      ).statusCode,
+    ).toBe(202);
+    expect(
+      (
+        await sendCheckpoint(
+          app,
+          englishConnection.credential,
+          englishCheckpoint,
+        )
+      ).statusCode,
+    ).toBe(202);
+
+    const shared = (await overview(app, fixture.project.id, B)).pulse;
+    expect(
+      shared.find(
+        (entry: { provenance: { clientEventId: string } }) =>
+          entry.provenance.clientEventId === "language-checkpoint-zh-0001",
+      ),
+    ).toMatchObject({
+      summary: "已完成授权范围过滤。",
+      narrative: {
+        evidence: ["搜索契约测试已通过。"],
+        nextStep: "验证跨团队项目结果。",
+      },
+    });
+    expect(
+      shared.find(
+        (entry: { provenance: { clientEventId: string } }) =>
+          entry.provenance.clientEventId === "language-checkpoint-en-0001",
+      ),
+    ).toMatchObject({
+      summary: "Authorization scope filtering is complete.",
+      narrative: {
+        evidence: ["The search contract suite passed."],
+        nextStep: "Validate cross-team project results.",
+      },
+    });
+  });
+
   it("rejects malformed, raw-content, and cross-project writes", async () => {
     const fixture = await readyProject(app);
     const connection = await connectAgent(app, fixture.project.id);
@@ -655,6 +852,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(withdrawn.statusCode).toBe(200);
     expect((await overview(app, fixture.project.id, B)).pulse).toEqual([]);
   });
+
 });
 
 function setupPayload() {
@@ -744,12 +942,17 @@ async function readyProject(app: FastifyInstance) {
   return { teamId, project: await createProject(app, teamId) };
 }
 
-async function connectAgent(app: FastifyInstance, projectId: string) {
+async function connectAgent(
+  app: FastifyInstance,
+  projectId: string,
+  owner: PrincipalId = A,
+  client: "codex" | "claude-code" | "opencode" = "codex",
+) {
   const ticketResponse = await app.inject({
     method: "POST",
     url: `/v1/pilot/projects/${projectId}/agent-tickets`,
-    headers: identity(A),
-    payload: { client: "codex" },
+    headers: identity(owner),
+    payload: { client },
   });
   expect(ticketResponse.statusCode).toBe(201);
   const prompt = ticketResponse.json().connectPrompt as string;
@@ -757,8 +960,8 @@ async function connectAgent(app: FastifyInstance, projectId: string) {
   expect(ticket).toBeDefined();
   const payload = {
     ticket,
-    client: "codex",
-    name: "Codex Pilot",
+    client,
+    name: client === "codex" ? "Codex Pilot" : `${client} Pilot`,
     workspaceId: uuidv7(),
   };
   const connected = await app.inject({

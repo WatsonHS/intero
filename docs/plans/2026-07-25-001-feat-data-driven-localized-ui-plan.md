@@ -18,18 +18,15 @@ Deliver a complete Chinese-first, English-switchable Web experience backed by
 authenticated cloud data. The UI distinguishes user-private Work State from
 published team state and never infers visibility from upload or storage.
 
-The existing Electron UI and its local daemon bridge are historical
-implementation evidence. The Desktop App may reuse the Web product's view
-models and localization as an optional client, but browser and Coding Agent
-flows must remain complete when it is absent.
+The Desktop App reuses the Web product's view models and localization as an
+optional client. Browser and Coding Agent flows remain complete when it is
+absent.
 
 ## Problem Frame
 
-The earlier vertical slice made the desktop renderer depend on both a public API
-and local daemon IPC. Several labels, identities, dates, review states, and
-runtime facts were hardcoded. That prevented reviewers from distinguishing
-durable product state from sample content and coupled privacy settings to a
-required local runtime.
+Several early labels, identities, dates, review states, and runtime facts were
+hardcoded. That prevented reviewers from distinguishing durable product state
+from sample content.
 
 The cloud-first product needs:
 
@@ -90,7 +87,7 @@ The cloud-first product needs:
   Pulse header text has no citations, links, click-through, or state-setting.
 - Product chrome is complete in `zh-CN` and `en-US`.
 - Normal startup contains no sample Workstreams, Threads, or Specs.
-- Browser acceptance requires no Desktop App or local IPC.
+- Browser acceptance requires no Desktop App.
 
 ## Accepted post-Pilot UX sequence
 
@@ -176,12 +173,12 @@ no-Desktop dependency.
 ### Outside this product's identity
 
 - A UI that treats all cloud data as team-visible.
-- A browser that requires Electron, a daemon, or local IPC.
+- A browser that requires Electron or a device process.
 - Fake progress percentages, confidence-as-completion, or invented authority.
 - A Stand-in analysis styled as human approval.
 - A default Agent activity feed or raw transcript viewer.
 
-## Context and historical implementation
+## Context and existing implementation
 
 The repository already contains useful patterns:
 
@@ -192,10 +189,8 @@ The repository already contains useful patterns:
 - Team Pulse, Stand-in, Coordination, Spec, and Settings views;
 - optional demo fixtures and durable domain stores.
 
-The earlier plan's daemon settings source, Electron preload bridge, Local/Public
-runtime indicator, and daemon-enrollment acceptance path are superseded by
-ADR-0006. The canonical renderer/browser path now validates the Web-first
-target; retained local-runtime code and tests are historical evidence only.
+The canonical renderer/browser path validates the Web-first target described by
+ADR-0006.
 
 ## Key technical decisions
 
@@ -351,7 +346,8 @@ surfaces in an authenticated browser.
   safe collaboration summaries, opt out/pause, inspect audit, withdraw, and
   review a Spec.
 - Closing or uninstalling Desktop changes no core Web capability.
-- No browser state claims a daemon or local Stand-in is connected.
+- No browser state implies that a device process is required for cloud
+  collaboration.
 
 ### U4. Create the Chinese-first localization foundation
 
@@ -492,5 +488,3 @@ product entry points.
 - Architecture: [ARCHITECTURE.md](../ARCHITECTURE.md)
 - Cloud-first ADR:
   [ADR-0006](../adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md)
-- MVP plan:
-  [2026-07-24-intero-mvp-implementation-plan.md](2026-07-24-intero-mvp-implementation-plan.md)

@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import { OperationId, OrganizationId, PrincipalId, ProjectId } from "./ids.js";
 
+export const PreferredLanguage = z.enum(["zh-CN", "en-US"]);
+export type PreferredLanguage = z.infer<typeof PreferredLanguage>;
+
 export const ActivityEvent = z
   .object({
     sequence: z.number().int().positive(),

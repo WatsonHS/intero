@@ -163,6 +163,7 @@ export function getPilotProfile(signal?: AbortSignal) {
       email: string;
       organizationRole?: PilotOrganizationRole;
       avatarTone?: "accent" | "green" | "amber" | "cool";
+      preferredLanguage?: "zh-CN" | "en-US";
     };
   }>("/v1/pilot/profile", { ...(signal ? { signal } : {}) });
 }
@@ -170,11 +171,13 @@ export function getPilotProfile(signal?: AbortSignal) {
 export function updatePilotProfile(input: {
   displayName?: string;
   avatarTone?: "accent" | "green" | "amber" | "cool";
+  preferredLanguage?: "zh-CN" | "en-US";
 }) {
   return request<{
     profile: PrincipalSummary & {
       email: string;
       avatarTone?: "accent" | "green" | "amber" | "cool";
+      preferredLanguage?: "zh-CN" | "en-US";
     };
   }>("/v1/pilot/profile", {
     method: "PATCH",

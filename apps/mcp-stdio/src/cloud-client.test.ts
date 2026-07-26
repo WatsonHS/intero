@@ -90,6 +90,7 @@ describe("cloud MCP client", () => {
               client: "codex",
               name: "Codex · pilot",
               workspaceId: "019f9b01-2222-7222-8222-222222222222",
+              preferredLanguage: "zh-CN",
             },
           }),
         );
@@ -118,6 +119,7 @@ describe("cloud MCP client", () => {
 
       await client.reportConnectionCheck();
 
+      expect(client.context().preferredLanguage).toBe("zh-CN");
       expect(checkpoints).toHaveLength(1);
       expect(checkpoints[0]).toMatchObject({
         schemaVersion: 2,
@@ -172,6 +174,7 @@ describe("cloud MCP client", () => {
               client: "codex",
               name: "Codex · delivery",
               workspaceId: "019f9b01-2222-7222-8222-222222222222",
+              preferredLanguage: "en-US",
             },
           }),
         );
@@ -181,8 +184,7 @@ describe("cloud MCP client", () => {
         url: request.url ?? "",
         authorization: request.headers.authorization,
         idempotencyKey: request.headers["idempotency-key"] as
-          | string
-          | undefined,
+          string | undefined,
         body,
       });
       response.end(

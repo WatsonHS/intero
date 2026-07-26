@@ -258,7 +258,6 @@ export async function buildApp(
     pilotStore,
     pilotJobs,
   );
-  let localRuntimeHeartbeatAt: number | undefined;
   app.decorate("interoStore", store);
   await app.register(cors, {
     origin: [
@@ -938,29 +937,6 @@ export async function buildApp(
     return {
       entries,
       principals: await store.listPrincipals(principalIds as PrincipalId[]),
-    };
-  });
-
-  app.post("/v1/runtime/heartbeat", async (_request, reply) => {
-    localRuntimeHeartbeatAt = Date.now();
-    return reply.status(202).send({ accepted: true });
-  });
-
-  app.get("/v1/offline-status", async () => {
-    const latest = await store.latestProjectionFreshness();
-    const localRuntimeOnline =
-      localRuntimeHeartbeatAt !== undefined &&
-      Date.now() - localRuntimeHeartbeatAt < 15_000;
-    return {
-      localRuntime: localRuntimeOnline ? "online" : "offline",
-      fallback: localRuntimeOnline ? "local" : "public",
-      freshnessAt: latest ?? null,
-      stale: latest ? Date.now() - Date.parse(latest) > 300_000 : true,
-      disclosure: localRuntimeOnline
-        ? "Local Stand-in is connected."
-        : latest
-          ? "Answering from the latest synchronized public Work State."
-          : "No synchronized Work State is available.",
     };
   });
 

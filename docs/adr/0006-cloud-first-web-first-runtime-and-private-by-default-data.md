@@ -4,25 +4,17 @@ Status: accepted
 
 Date: 2026-07-25
 
-Supersedes: ADR-0001, ADR-0002, ADR-0003
-
 Updated by: ADR-0007 for per-recipient invitation onboarding and the Phase 4–5
 product model
 
 ## Context
 
-Intero's first implementation coupled private Work State to a required local
-daemon, a Local Stand-in sidecar, and an Electron distribution. That
-topology made deployment location stand in for disclosure: local data was
-private, while synchronized cloud data was treated as public.
-
-The product no longer uses that coupling. Intero must be useful from the Web and
-from Coding Agents without requiring a desktop application or persistent local
-runtime. At the same time, uploading data for durable storage or model
-processing must not make that data visible to a team. For the pilot, cloud-first
-describes the service topology rather than a single vendor-hosted origin: a team
-may use an Intero-operated or self-hosted cloud deployment without changing the
-privacy or runtime model.
+Intero must be useful from the Web and from Coding Agents without requiring a
+desktop application or persistent device process. Uploading data for durable
+storage or model processing must not make that data visible to a team. For the
+pilot, cloud-first describes the service topology rather than a single
+vendor-hosted origin: a team may use an Intero-operated or self-hosted cloud
+deployment without changing the privacy or runtime model.
 
 ## Decision
 
@@ -218,14 +210,11 @@ Intero is cloud-first and Web-first.
   them by default. Remote and repository metadata are minimized to what binding
   and audit require.
 - The Web application is the primary product client. The Desktop App is
-  optional. While open in the foreground, it may collect additional context and
-  produce better work summaries only after explicit opt-in. As a separately
-  authorized packaging enhancement, it may provide local Git awareness for
-  user-selected repositories and emit only compact permitted branch, commit,
-  and Git-state signals to cloud ingress. It is never required for collection,
-  MCP, management, access, or Stand-in runtime infrastructure, and does not
-  restore a local Stand-in, Work State, IPC service, long-lived daemon, or local
-  persistent-state database.
+  optional. As a separately authorized packaging enhancement, it may provide
+  Git awareness for user-selected repositories and emit only compact permitted
+  branch, commit, and staged-state signals to cloud ingress. It is never
+  required for collection, MCP, management, access, or Stand-in runtime
+  infrastructure, and it stores no Work State.
 - Git and Coding Agent lifecycle hooks may send compact, content-safe events to
   a separate authenticated cloud event endpoint. MCP failures return a visible,
   non-blocking failure. The MCP client, Hook client, or explicit CLI may write an
@@ -298,10 +287,8 @@ Negative:
 - Offline delivery is best-effort and bounded; Intero does not promise
   continuously running local processing or offline private Work State while the
   cloud service is unreachable.
-- Repository identity and Workspace authorization can no longer rely on a local
-  daemon as the sole authority.
-- Existing local-runtime implementation evidence does not validate this
-  architecture and must remain labeled as historical.
+- Repository identity and Workspace authorization are cloud-enforced rather
+  than inferred from a device path.
 - Self-hosted pilot teams require provisioned infrastructure followed by
   administrator entry and connectivity validation of the Intero deployment base
   URL in `/setup` before team activation and invitations.

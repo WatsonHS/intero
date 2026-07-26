@@ -26,14 +26,15 @@ export interface StandInModelInput {
   organizationId: OrganizationId;
   project: Pick<PilotProject, "id" | "name" | "posture">;
   ownerId: PrincipalId;
-  binding: Pick<PilotAgentBinding, "id" | "client" | "name">;
+  binding: Pick<
+    PilotAgentBinding,
+    "id" | "client" | "name" | "preferredLanguage"
+  >;
   checkpoint: PilotCheckpointInput;
 }
 
 export interface ModelGateway {
-  generateStandInOutput(
-    input: StandInModelInput,
-  ): Promise<PilotStandInOutput>;
+  generateStandInOutput(input: StandInModelInput): Promise<PilotStandInOutput>;
   answerStandInQuestion(
     input: StandInQuestionInput,
   ): Promise<PilotStandInAnswer>;
@@ -43,6 +44,7 @@ export interface StandInQuestionInput {
   organizationId: OrganizationId;
   project: Pick<PilotProject, "id" | "name" | "posture">;
   principalId: PrincipalId;
+  preferredLanguage: PilotAgentBinding["preferredLanguage"];
   question: string;
   sources: PilotPulseEntry[];
 }
@@ -104,10 +106,9 @@ export interface PilotStandInJobPayload {
   receivedAt: string;
 }
 
-export type PilotStandInJob =
-  JobEnvelope<PilotStandInJobPayload> & {
-    kind: "pilot.stand_in.project";
-  };
+export type PilotStandInJob = JobEnvelope<PilotStandInJobPayload> & {
+  kind: "pilot.stand_in.project";
+};
 
 export interface CoordinationSuggestion {
   project: PilotProject;

@@ -222,6 +222,44 @@ export interface Governance {
   pending: boolean;
 }
 
+export function resolveGovernance(input: {
+  identityId: PrincipalId | undefined;
+  selectedTeamId: string | undefined;
+  organizationRole: "admin" | "member" | undefined;
+  teams: Array<{
+    id: string;
+    members: Array<{
+      id: PrincipalId;
+      teamRole: "member" | "leader";
+      organizationRole?: "admin" | "member";
+    }>;
+  }>;
+  pending: boolean;
+}): Governance {
+  const memberships = input.teams.flatMap((team) =>
+    team.members
+      .filter((member) => member.id === input.identityId)
+      .map((member) => ({ teamId: team.id, ...member })),
+  );
+  const isOrgAdmin =
+    input.organizationRole === "admin" ||
+    memberships.some((member) => member.organizationRole === "admin");
+  const isAnyTeamLead = memberships.some(
+    (member) => member.teamRole === "leader",
+  );
+  const isTeamLead = memberships.some(
+    (member) =>
+      member.teamId === input.selectedTeamId && member.teamRole === "leader",
+  );
+  return {
+    isOrgAdmin,
+    isTeamLead,
+    isAnyTeamLead,
+    canGovern: isOrgAdmin || isTeamLead,
+    pending: input.pending,
+  };
+}
+
 /**
  * Who you are allowed to govern, resolved from team memberships rather than the
  * bootstrap payload — `organizationRole` is only present there in session auth,
@@ -230,27 +268,11 @@ export interface Governance {
 export function useGovernance(): Governance {
   const pilot = usePilotOptional();
   const teams = pilot?.teams.data?.teams ?? [];
-  const identityId = pilot?.identityId;
-  const memberships = teams.flatMap((team) =>
-    team.members
-      .filter((member) => member.id === identityId)
-      .map((member) => ({ teamId: team.id, ...member })),
-  );
-  const isOrgAdmin =
-    pilot?.bootstrap.data?.organizationRole === "admin" ||
-    memberships.some((member) => member.organizationRole === "admin");
-  const isAnyTeamLead = memberships.some(
-    (member) => member.teamRole === "leader",
-  );
-  const isTeamLead = memberships.some(
-    (member) =>
-      member.teamId === pilot?.selectedTeamId && member.teamRole === "leader",
-  );
-  return {
-    isOrgAdmin,
-    isTeamLead,
-    isAnyTeamLead,
-    canGovern: isOrgAdmin || isAnyTeamLead,
+  return resolveGovernance({
+    identityId: pilot?.identityId,
+    selectedTeamId: pilot?.selectedTeamId,
+    organizationRole: pilot?.bootstrap.data?.organizationRole,
+    teams,
     pending: Boolean(pilot?.enabled) && pilot!.teams.isPending,
-  };
+  });
 }

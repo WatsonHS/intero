@@ -2,7 +2,7 @@ import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { deviceAuthorization } from "better-auth/plugins";
-import type { PrincipalId } from "@intero/domain";
+import type { PreferredLanguage, PrincipalId } from "@intero/domain";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
@@ -101,6 +101,7 @@ export interface AuthenticatedPrincipal extends PrincipalSummary {
   email: string;
   authUserId?: string;
   avatarTone?: "accent" | "green" | "amber" | "cool";
+  preferredLanguage?: PreferredLanguage;
 }
 
 export interface PrincipalDirectory {
@@ -111,6 +112,7 @@ export interface PrincipalDirectory {
     input: {
       displayName?: string;
       avatarTone?: AuthenticatedPrincipal["avatarTone"];
+      preferredLanguage?: PreferredLanguage;
     },
   ): Promise<AuthenticatedPrincipal>;
 }
@@ -131,10 +133,12 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
       display_name: string;
       kind: PrincipalSummary["kind"];
       avatar_tone: "accent" | "green" | "amber" | "cool";
+      preferred_language: PreferredLanguage | null;
       email: string | null;
       auth_user_id: string | null;
     }>(
-      `SELECT p.id, p.display_name, p.kind, p.avatar_tone, u.email,
+      `SELECT p.id, p.display_name, p.kind, p.avatar_tone,
+              p.preferred_language, u.email,
               ap.auth_user_id
        FROM principals p
        LEFT JOIN auth_principals ap ON ap.principal_id = p.id
@@ -148,6 +152,9 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
       displayName: row.display_name,
       kind: row.kind,
       avatarTone: row.avatar_tone,
+      ...(row.preferred_language
+        ? { preferredLanguage: row.preferred_language }
+        : {}),
       email: row.email ?? "",
       ...(row.auth_user_id ? { authUserId: row.auth_user_id } : {}),
     }));
@@ -158,6 +165,7 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
     input: {
       displayName?: string;
       avatarTone?: AuthenticatedPrincipal["avatarTone"];
+      preferredLanguage?: PreferredLanguage;
     },
   ): Promise<AuthenticatedPrincipal> {
     const normalized = input.displayName?.trim();
@@ -165,9 +173,10 @@ export class DatabasePrincipalDirectory implements PrincipalDirectory {
       `UPDATE principals
        SET display_name = COALESCE($2, display_name),
            avatar_tone = COALESCE($3, avatar_tone),
+           preferred_language = COALESCE($4, preferred_language),
            updated_at = now()
        WHERE id = $1`,
-      [principalId, normalized, input.avatarTone],
+      [principalId, normalized, input.avatarTone, input.preferredLanguage],
     );
     const principal = await this.get(principalId);
     if (!principal) {
@@ -189,6 +198,9 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
       this.principals.set(identity.id, {
         ...identity,
         avatarTone: "accent",
+        ...(identity.preferredLanguage
+          ? { preferredLanguage: identity.preferredLanguage }
+          : {}),
         email: `${identity.displayName
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, ".")
@@ -216,6 +228,7 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
     input: {
       displayName?: string;
       avatarTone?: AuthenticatedPrincipal["avatarTone"];
+      preferredLanguage?: PreferredLanguage;
     },
   ): Promise<AuthenticatedPrincipal> {
     const principal = this.principals.get(principalId);
@@ -230,6 +243,9 @@ export class InMemoryPrincipalDirectory implements PrincipalDirectory {
       ...principal,
       ...(input.displayName ? { displayName: input.displayName.trim() } : {}),
       ...(input.avatarTone ? { avatarTone: input.avatarTone } : {}),
+      ...(input.preferredLanguage
+        ? { preferredLanguage: input.preferredLanguage }
+        : {}),
     };
     this.principals.set(principalId, updated);
     return structuredClone(updated);
@@ -282,8 +298,13 @@ export function createRequestAuth(input: {
           )) as PrincipalId;
           const principal = await input.directory.get(principalId);
           if (principal) {
+            const localizedPrincipal = principal.preferredLanguage
+              ? principal
+              : await input.directory.updateProfile(principal.id, {
+                  preferredLanguage: preferredLanguageFromRequest(request),
+                });
             return {
-              ...principal,
+              ...localizedPrincipal,
               email: normalizeEmail(session.user.email),
               authUserId: session.user.id,
             };
@@ -297,7 +318,13 @@ export function createRequestAuth(input: {
           PrincipalId | undefined;
         if (id) {
           const principal = await input.directory.get(id);
-          if (principal) return principal;
+          if (principal) {
+            return principal.preferredLanguage
+              ? principal
+              : input.directory.updateProfile(principal.id, {
+                  preferredLanguage: preferredLanguageFromRequest(request),
+                });
+          }
         }
       }
 
@@ -311,6 +338,14 @@ export function createRequestAuth(input: {
       );
     },
   };
+}
+
+export function preferredLanguageFromRequest(
+  request: Pick<FastifyRequest, "headers">,
+): PreferredLanguage {
+  const raw = request.headers["accept-language"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value?.toLowerCase().includes("zh") ? "zh-CN" : "en-US";
 }
 
 export async function resolvePrincipalForAuthUser(

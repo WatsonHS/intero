@@ -14,6 +14,7 @@ import {
   type PilotTeamInvitation,
   PilotTeamRole,
   PilotOrganizationRole,
+  PreferredLanguage,
   type PrincipalId,
   ProjectId,
   uuidv7,
@@ -228,6 +229,7 @@ export async function registerPilotRoutes(
         displayName: principal.displayName,
         email: principal.email,
         avatarTone: principal.avatarTone,
+        preferredLanguage: principal.preferredLanguage,
         organizationRole: await options.store.getOrganizationRole(principal.id),
       },
     };
@@ -239,11 +241,14 @@ export async function registerPilotRoutes(
       .object({
         displayName: z.string().trim().min(1).max(160).optional(),
         avatarTone: z.enum(["accent", "green", "amber", "cool"]).optional(),
+        preferredLanguage: PreferredLanguage.optional(),
       })
       .strict()
       .refine(
         (value) =>
-          value.displayName !== undefined || value.avatarTone !== undefined,
+          value.displayName !== undefined ||
+          value.avatarTone !== undefined ||
+          value.preferredLanguage !== undefined,
         "At least one profile field must be provided.",
       )
       .parse(request.body);
@@ -254,6 +259,9 @@ export async function registerPilotRoutes(
           : {}),
         ...(input.avatarTone !== undefined
           ? { avatarTone: input.avatarTone }
+          : {}),
+        ...(input.preferredLanguage !== undefined
+          ? { preferredLanguage: input.preferredLanguage }
           : {}),
       }),
     };
@@ -843,6 +851,7 @@ export async function registerPilotRoutes(
           posture: project.posture,
         },
         principalId: principal.id,
+        preferredLanguage: principal.preferredLanguage ?? "en-US",
         question: input.question,
         sources: pulse,
       });
@@ -908,6 +917,7 @@ export async function registerPilotRoutes(
         projectId: ProjectId.parse(request.params.projectId),
         ownerId: principal.id,
         client: input.client,
+        preferredLanguage: principal.preferredLanguage ?? "en-US",
         ticketHash: sha256(rawTicket),
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
@@ -931,6 +941,7 @@ export async function registerPilotRoutes(
           input.client,
           organization.deploymentBaseUrl,
           rawTicket,
+          ticket.preferredLanguage,
         ),
       });
     },
@@ -1109,6 +1120,7 @@ async function findTicketContext(
     client,
     name,
     workspaceId,
+    preferredLanguage: ticket.preferredLanguage,
     credentialHash: sha256(credential),
     createdAt: now,
   };
@@ -1305,13 +1317,27 @@ function buildConnectPrompt(
   client: PilotAgentBinding["client"],
   deploymentBaseUrl: string,
   ticket: string,
+  preferredLanguage: PilotAgentBinding["preferredLanguage"],
 ): string {
-  return [
-    `Connect ${client} to this Intero project.`,
-    `Run once: intero-mcp cloud connect --client ${client} --cloud-url ${deploymentBaseUrl} --connect-ticket ${ticket}`,
-    "The connect command automatically sends one validation_completed checkpoint to verify the project binding.",
-    `Then configure the Agent MCP command: intero-mcp --mcp-source ${client} --cloud`,
-    "The ticket is project-scoped, expires in 10 minutes, and can be used once.",
-    "Call stand_in.report_checkpoint only with one of the ten structured safe-summary event types.",
-  ].join("\n");
+  const command = `intero-mcp cloud connect --client ${client} --cloud-url ${deploymentBaseUrl} --connect-ticket ${ticket}`;
+  const mcpCommand = `intero-mcp --mcp-source ${client} --cloud`;
+  return preferredLanguage === "zh-CN"
+    ? [
+        `将 ${client} 连接到此 Intero 项目。`,
+        `运行一次：${command}`,
+        "连接命令会自动发送一条 validation_completed 检查点以验证项目绑定。",
+        `然后配置 Agent MCP 命令：${mcpCommand}`,
+        "此票据仅限当前项目，10 分钟后过期且只能使用一次。",
+        "仅使用十种结构化安全摘要事件调用 stand_in.report_checkpoint。",
+        "所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN；不要上报原始 prompt、文件、diff、终端或工具日志。",
+      ].join("\n")
+    : [
+        `Connect ${client} to this Intero project.`,
+        `Run once: ${command}`,
+        "The connect command automatically sends one validation_completed checkpoint to verify the project binding.",
+        `Then configure the Agent MCP command: ${mcpCommand}`,
+        "The ticket is project-scoped, expires in 10 minutes, and can be used once.",
+        "Call stand_in.report_checkpoint only with one of the ten structured safe-summary event types.",
+        "Write every narrative field, collaboration request, and human-readable evidence item in the owner's preferred language, en-US; never report raw prompts, files, diffs, terminal output, or tool logs.",
+      ].join("\n");
 }

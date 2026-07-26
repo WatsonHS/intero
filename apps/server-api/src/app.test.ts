@@ -256,33 +256,6 @@ describe("Intero API vertical slice", () => {
     ).toBe(true);
   });
 
-  it("reports the Local Stand-in online only after a fresh heartbeat", async () => {
-    const before = await app.inject({
-      method: "GET",
-      url: "/v1/offline-status",
-    });
-    expect(before.json()).toMatchObject({
-      localRuntime: "offline",
-      fallback: "public",
-    });
-
-    const heartbeat = await app.inject({
-      method: "POST",
-      url: "/v1/runtime/heartbeat",
-    });
-    expect(heartbeat.statusCode).toBe(202);
-
-    const after = await app.inject({
-      method: "GET",
-      url: "/v1/offline-status",
-    });
-    expect(after.json()).toMatchObject({
-      localRuntime: "online",
-      fallback: "local",
-      disclosure: "Local Stand-in is connected.",
-    });
-  });
-
   it("keeps Kanban cards independent while allowing optional Workstream links", async () => {
     const workstream = await createWorkstream(app);
     const projectId = "019b5ac0-7600-7000-8000-000000000011";

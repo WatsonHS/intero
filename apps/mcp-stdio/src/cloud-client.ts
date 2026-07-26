@@ -2,6 +2,7 @@ import type {
   PilotAgentClient,
   PilotCheckpointEventType,
   PilotWorkNarrative,
+  PreferredLanguage,
   WorkstreamPhase,
 } from "@intero/domain";
 import {
@@ -35,6 +36,7 @@ interface CloudConnection {
     client: PilotAgentClient;
     name: string;
     workspaceId: string;
+    preferredLanguage: PreferredLanguage;
   };
 }
 
@@ -150,22 +152,37 @@ export class CloudPilotClient {
       bindingId: this.connection.binding.id,
       client: this.connection.binding.client,
       workspaceId: this.connection.binding.workspaceId,
+      preferredLanguage: this.connection.binding.preferredLanguage,
       deploymentBaseUrl: this.connection.baseUrl,
     };
   }
 
   async reportConnectionCheck(): Promise<unknown> {
+    const language = this.connection.binding.preferredLanguage;
+    const chinese = language === "zh-CN";
     return this.reportCheckpoint({
       eventType: "validation_completed",
       clientEventId: `connection-check-${this.connection.binding.id}`,
       workstreamKey: "intero-agent-connection-check",
-      workstreamTitle: "Agent 连接验证",
+      workstreamTitle: chinese
+        ? "Agent 连接验证"
+        : "Agent connection validation",
       phase: "validating",
       narrative: {
-        currentFocus: "验证 Coding Agent 与当前 Intero 项目的连接。",
-        completedOutcome: `${clientLabel(this.connection.binding.client)} 已完成项目绑定。`,
-        evidence: ["结构化测试动态已通过当前 Agent 连接发送。"],
-        nextStep: "开始工作后，由 Agent 在有意义的节点更新实际工作状态。",
+        currentFocus: chinese
+          ? "验证 Coding Agent 与当前 Intero 项目的连接。"
+          : "Validate the Coding Agent connection to the current Intero project.",
+        completedOutcome: chinese
+          ? `${clientLabel(this.connection.binding.client)} 已完成项目绑定。`
+          : `${clientLabel(this.connection.binding.client)} is now bound to the project.`,
+        evidence: [
+          chinese
+            ? "结构化测试动态已通过当前 Agent 连接发送。"
+            : "A structured validation update was sent through the current Agent connection.",
+        ],
+        nextStep: chinese
+          ? "开始工作后，由 Agent 在有意义的节点更新实际工作状态。"
+          : "Once work starts, report actual work state at meaningful checkpoints.",
         collaboration: {
           needed: false,
           request: "",
@@ -190,7 +207,9 @@ export class CloudPilotClient {
         title:
           input.workstreamTitle ??
           process.env.INTERO_WORKSTREAM_TITLE ??
-          `Work in ${basename(process.cwd())}`,
+          (this.connection.binding.preferredLanguage === "zh-CN"
+            ? `${basename(process.cwd())} 中的工作`
+            : `Work in ${basename(process.cwd())}`),
         phase: input.phase ?? phaseForEvent(input.eventType),
       },
       narrative: input.narrative,
@@ -234,9 +253,10 @@ export class CloudPilotClient {
         signal: AbortSignal.timeout(5_000),
       },
     );
-    const body = response.status === 204
-      ? {}
-      : ((await response.json()) as { message?: string });
+    const body =
+      response.status === 204
+        ? {}
+        : ((await response.json()) as { message?: string });
     if (!response.ok) {
       throw new Error(
         body.message ?? `Project content request failed (${response.status}).`,

@@ -25,6 +25,8 @@ describe("canonical settings view", () => {
     );
 
     expect(output).toContain("外观");
+    expect(output).toContain("界面与协作语言");
+    expect(output).toContain("Coding Agent 工作动态和替身回复");
     expect(output).toContain("Personal");
     expect(output).toContain("Project");
     expect(output).toContain("Coding Agent");

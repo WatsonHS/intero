@@ -136,6 +136,7 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       projectId,
       ownerId: adminId,
       client: "codex",
+      preferredLanguage: "en-US",
       ticketHash: "a".repeat(64),
       expiresAt: "2026-07-27T00:00:00.000Z",
       createdAt: "2026-07-26T01:10:00.000Z",
@@ -388,6 +389,7 @@ function binding(
     client: "codex",
     name: "Codex validation",
     workspaceId: uuidv7(),
+    preferredLanguage: "en-US",
     credentialHash,
     createdAt: "2026-07-26T01:10:01.000Z",
   };

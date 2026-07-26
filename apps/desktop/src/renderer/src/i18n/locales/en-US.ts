@@ -464,8 +464,9 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.motionTitle": "Reduce motion",
   "settings.motionDetail":
     "Turns off entrance, stagger, and ambience animations, keeping only color and state transitions. Applies automatically when the system prefers reduced motion.",
-  "settings.language": "Language",
-  "settings.languageDetail": "The language preference stays on this device.",
+  "settings.language": "Interface and collaboration language",
+  "settings.languageDetail":
+    "Used for the interface, Coding Agent updates, and Stand-in replies; shared records keep their producer's language.",
   "settings.chinese": "简体中文",
   "settings.english": "English",
   "settings.rerunSetup": "Re-run first-run setup",

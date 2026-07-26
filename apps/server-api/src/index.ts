@@ -44,13 +44,12 @@ const currentPrincipal = {
   displayName: process.env.INTERO_PRINCIPAL_NAME ?? "Intero User",
   kind: "human" as const,
 };
-const localStandInId = PrincipalId.parse(
-  process.env.INTERO_LOCAL_STAND_IN_ID ??
-    "019b5ac0-7600-7000-8000-000000000003",
+const standInId = PrincipalId.parse(
+  process.env.INTERO_STAND_IN_ID ?? "019b5ac0-7600-7000-8000-000000000003",
 );
 const standInPrincipal = {
-  id: localStandInId,
-  displayName: process.env.INTERO_LOCAL_STAND_IN_NAME ?? "Intero Stand-in",
+  id: standInId,
+  displayName: process.env.INTERO_STAND_IN_NAME ?? "Intero Stand-in",
   kind: "stand_in" as const,
 };
 let authDatabase: Pool | undefined;

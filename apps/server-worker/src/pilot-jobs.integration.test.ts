@@ -522,6 +522,7 @@ async function seedPilot(
     projectId: fixture.projectId,
     ownerId: fixture.adminId,
     client: "codex",
+    preferredLanguage: "en-US",
     ticketHash: "d".repeat(64),
     expiresAt: "2026-07-27T00:00:00.000Z",
     createdAt: "2026-07-26T01:50:04.000Z",
@@ -534,6 +535,7 @@ async function seedPilot(
     client: "codex",
     name: "Durable Codex",
     workspaceId: uuidv7(),
+    preferredLanguage: "en-US",
     credentialHash: "e".repeat(64),
     createdAt: "2026-07-26T01:50:05.000Z",
   };

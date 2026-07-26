@@ -450,8 +450,9 @@ export const zhCN = {
   "settings.motionTitle": "减少动态效果",
   "settings.motionDetail":
     "关掉进场、递延与氛围动画，只保留颜色与状态过渡。系统开了「减弱动态效果」时自动生效。",
-  "settings.language": "界面语言",
-  "settings.languageDetail": "语言偏好只保存在这台设备上。",
+  "settings.language": "界面与协作语言",
+  "settings.languageDetail":
+    "用于界面、Coding Agent 工作动态和替身回复；共享记录保留产生者语言。",
   "settings.chinese": "简体中文",
   "settings.english": "English",
   "settings.rerunSetup": "重新运行首次引导",

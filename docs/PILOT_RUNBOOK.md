@@ -336,6 +336,36 @@ then retries the retained outbox row and asserts that two independent WebSocket
 clients receive the same project-scoped event; it also checks retained history
 for cursor repair.
 
+## Optional Desktop Git-awareness smoke
+
+This path is optional and never substitutes for the direct-cloud MCP/browser
+acceptance above.
+
+1. Build `@intero/mcp-stdio`, then start the canonical Desktop App.
+2. Open **Settings → Coding Agent** and connect or select an existing Codex,
+   Claude Code, or OpenCode binding for the current Project.
+3. Under **桌面 Git 感知**, choose one disposable repository and explicitly
+   enable it. The repository path is shown only in the local Desktop UI.
+4. Edit an ordinary working-tree file without staging it. Verify no checkpoint
+   is emitted.
+5. Stage the file, switch branch, or create a commit. Verify one debounced
+   checkpoint reaches private Work State through direct-cloud MCP and that the
+   bounded outbox keeps the action non-blocking during service failure.
+6. Inspect the checkpoint and confirm it contains only repository name, branch,
+   short commit, and staged-state text—never an absolute path, file name, diff,
+   source content, or local Work State.
+7. Pause or remove the repository and verify later Git metadata changes emit
+   nothing. Quit the Desktop App and verify no watcher or background process
+   remains.
+
+The focused automated check is:
+
+```bash
+pnpm vitest run \
+  apps/desktop/src/main/git-awareness.test.ts \
+  apps/desktop/src/renderer/src/views/settings/GitAwarenessSettings.test.tsx
+```
+
 ## Validation boundary
 
 Updated evidence belongs under `output/playwright/pilot-e2e/` and must be
@@ -365,4 +395,4 @@ the exact real provider endpoint/model class (never its API key). Do not claim
 scenario 2 passed when using the bundled fixture. Phase 2 validates local
 SpiceDB authorization and two-client Centrifugo fanout in addition to the Pilot
 flows. MinIO/object storage, production deployment operations, generic A2A
-federation, and a Rust/local runtime remain outside this phase.
+federation, and any local product runtime remain outside this phase.

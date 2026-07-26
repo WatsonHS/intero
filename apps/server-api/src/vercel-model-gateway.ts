@@ -16,11 +16,11 @@ import { ModelGatewayUnavailableError } from "./pilot-ports.js";
 import type { PilotStoredProvider } from "./pilot-store.js";
 import type { ProviderSecretCipher } from "./provider-secrets.js";
 
-const SYSTEM_INSTRUCTIONS = [
+const BASE_SYSTEM_INSTRUCTIONS = [
   "You are Intero's bounded Digital Stand-in.",
   "Transform one already-structured semantic coding checkpoint into a concise, human-readable collaboration update.",
   "Use only facts present in the structured input. Do not infer secrets, raw prompts, file contents, diffs, terminal output, tool logs, or personal data.",
-  "Preserve the checkpoint language. Keep concrete outcomes and evidence; remove implementation chatter and unsupported confidence or progress claims.",
+  "Keep concrete outcomes and evidence; remove implementation chatter and unsupported confidence or progress claims.",
   "The narrative must answer: current focus, completed outcome, concrete evidence, next step, and needed collaboration.",
   "Never make commitments, change priorities, act externally, or finalize a decision.",
   "For dependency, blocker, review, or coordination events, suggest at most three reversible candidate next steps that require responsible participant confirmation.",
@@ -29,18 +29,37 @@ const SYSTEM_INSTRUCTIONS = [
   "All fields are required. If collaboration.needed is false, request and requestedFrom must be empty strings.",
 ].join(" ");
 
-const QUESTION_SYSTEM_INSTRUCTIONS = [
+const BASE_QUESTION_SYSTEM_INSTRUCTIONS = [
   "You are Intero's bounded Digital Stand-in answering a project participant.",
   "Answer only from the supplied safe structured project summaries.",
   "Do not infer missing facts, secrets, raw prompts, file contents, diffs, terminal output, tool logs, personal data, priorities, or commitments.",
   "If the supplied summaries do not support the question, say that the current structured Work State does not contain enough information.",
-  "Use the same language as the participant's question.",
   "Give a direct conclusion first, then a grounded current status, completed outcome, concrete evidence, next step, and needed collaboration.",
   "Do not repeat IDs, clients, timestamps, schema versions, or other provenance metadata in the prose answer.",
   "Return the workStateId of every summary that directly supports the answer and no unsupported source IDs.",
   "Keep every field concise and make uncertainty explicit.",
   'Return exactly one JSON object with all required fields at these exact paths: {"answer":"concise direct conclusion","currentStatus":"string","completedOutcome":"string or empty","evidence":["concrete safe evidence"],"nextStep":"string or empty","neededCollaboration":"string or empty","sourceWorkStateIds":["supplied-work-state-id"]}.',
 ].join(" ");
+
+export function standInSystemInstructions(
+  preferredLanguage: "zh-CN" | "en-US",
+): string {
+  const languageInstruction =
+    preferredLanguage === "zh-CN"
+      ? "Write every human-readable output field, including the summary, narrative, collaboration request, safe coordination context, evidence, and candidate next steps, in Simplified Chinese (zh-CN). Keep code identifiers and proper nouns unchanged when necessary."
+      : "Write every human-readable output field, including the summary, narrative, collaboration request, safe coordination context, evidence, and candidate next steps, in English (en-US).";
+  return `${BASE_SYSTEM_INSTRUCTIONS} ${languageInstruction}`;
+}
+
+export function standInQuestionSystemInstructions(
+  preferredLanguage: "zh-CN" | "en-US",
+): string {
+  const languageInstruction =
+    preferredLanguage === "zh-CN"
+      ? "Answer every human-readable output field in Simplified Chinese (zh-CN), regardless of the language used in individual source records. Keep code identifiers and proper nouns unchanged when necessary."
+      : "Answer every human-readable output field in English (en-US), regardless of the language used in individual source records.";
+  return `${BASE_QUESTION_SYSTEM_INSTRUCTIONS} ${languageInstruction}`;
+}
 
 function usePortableJsonObjectMode(
   args: Record<string, unknown>,
@@ -101,7 +120,7 @@ export class VercelAiModelGateway implements ModelGateway {
     try {
       const result = await generateText({
         model: provider.chatModel(configuration.defaultModel),
-        system: SYSTEM_INSTRUCTIONS,
+        system: standInSystemInstructions(input.binding.preferredLanguage),
         prompt: JSON.stringify({
           project: input.project,
           ownerId: input.ownerId,
@@ -109,6 +128,7 @@ export class VercelAiModelGateway implements ModelGateway {
             bindingId: input.binding.id,
             client: input.binding.client,
             connectionName: input.binding.name,
+            preferredLanguage: input.binding.preferredLanguage,
           },
           checkpoint: input.checkpoint,
         }),
@@ -151,10 +171,11 @@ export class VercelAiModelGateway implements ModelGateway {
     try {
       const result = await generateText({
         model: provider.chatModel(configuration.defaultModel),
-        system: QUESTION_SYSTEM_INSTRUCTIONS,
+        system: standInQuestionSystemInstructions(input.preferredLanguage),
         prompt: JSON.stringify({
           project: input.project,
           participantId: input.principalId,
+          preferredLanguage: input.preferredLanguage,
           question: input.question,
           safeStructuredSources: input.sources.map((source) => ({
             workStateId: source.workStateId,

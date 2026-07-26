@@ -8,16 +8,11 @@ Current decisions:
 - [ADR-0007: Post-Pilot product model and delivery sequence](0007-post-pilot-product-model-and-delivery-sequence.md)
 - [ADR-0008: Phase 7 bounded Stand-in and Agent automation](0008-phase-7-bounded-stand-in-and-agent-automation.md)
 
-Superseded decisions retained as historical implementation context:
-
-- [ADR-0001: Separate local private and public planes](0001-separate-local-private-and-public-planes.md)
-- [ADR-0002: Shared Representative core with event-driven runtimes](0002-shared-representative-core-and-event-driven-runtimes.md)
-- [ADR-0003: TypeScript modular monolith with a Rust privacy daemon](0003-typescript-modular-monolith-and-rust-privacy-daemon.md)
-
 ADRs record architectural commitments and their consequences. Product behavior
 remains authoritative in
 `docs/brainstorms/2026-07-24-intero-product-requirements.md`.
 
 Current canonical terminology is **Stand-in** in English and **替身** in
 Chinese, with `stand_in` for identifiers and `stand-in` for paths/slugs.
-Superseded ADR titles and text retain literal historical terminology.
+Superseded runtime experiments remain available in Git history rather than the
+active architecture record.

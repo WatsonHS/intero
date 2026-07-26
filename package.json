@@ -9,11 +9,11 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker --filter=@intero/local-stand-in",
+    "dev": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker",
     "dev:pilot": "turbo run dev:pilot --filter=@intero/desktop --filter=@intero/server-api",
     "generate": "turbo run generate",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "pnpm test:ts && cargo test --workspace",
+    "test": "pnpm test:ts",
     "test:ts": "vitest run",
     "test:watch": "vitest",
     "test:e2e:phase6": "playwright test tests/e2e/phase6.spec.ts",

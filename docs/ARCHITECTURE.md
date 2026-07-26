@@ -9,9 +9,9 @@ Date: 2026-07-25
 
 Canonical product/domain terminology is **Stand-in** in English and **替身** in
 Chinese. Contract identifiers use `stand_in`; paths and slugs use `stand-in`.
-Literal older terminology is confined to explicitly superseded historical ADRs.
 The active application, domain, MCP, schema, tests, and configuration implement
-the renamed contract.
+the renamed contract. Superseded runtime experiments remain in Git history, not
+in the active source or architecture record.
 
 Intero separates technical execution from team coordination.
 
@@ -31,8 +31,6 @@ and their provenance.
 
 The architecture follows
 [ADR-0006](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md).
-The earlier daemon, Local Stand-in, and Electron-required topology is
-historical and does not define the target product.
 
 ### 1.1 Thin vertical slice with durable ports
 
@@ -269,9 +267,8 @@ revocable if added later.
 ### 3.4 Client-local data
 
 Clients may keep device-local preferences, caches, drafts, and the bounded
-delivery outbox. Such state is not authoritative Work State and does not create
-a required local runtime. A general non-uploaded/client-only work mode is
-outside the MVP and is not promised.
+delivery outbox. Such state is not authoritative Work State. A general
+non-uploaded/client-only work mode is outside the MVP and is not promised.
 
 ### 3.5 Data lifecycle
 
@@ -393,22 +390,22 @@ not require the Desktop App to connect, interpret Work State, or coordinate.
 
 ### 4.2 Optional Desktop App
 
-While open in the foreground and after explicit opt-in, the Desktop App may
+While open and after explicit opt-in, the Desktop App may
 provide:
 
-- richer context collection with explicit user authorization;
-- device-local work summaries and drafts;
 - an optional local Git-awareness enhancement for user-selected repositories;
 - future native/external notifications after the in-app Phase 6 scope;
 - a native rendering of the same collaboration surfaces.
 
 Desktop absence, shutdown, or update failure must not interrupt the Web product,
 cloud Stand-in, collection, management, access, or direct cloud MCP path.
-The Git enhancement may inspect only schema-permitted branch, commit, and Git
-state signals for repositories the user explicitly selects, then send compact
-events to cloud ingress. It is not the historical local runtime and must not
-reintroduce a local Stand-in, Work State, IPC service, long-lived daemon, or
-local persistent-state database.
+The Git enhancement listens to Git metadata events (`HEAD`, index, packed refs,
+and the active branch ref), debounces event bursts, and then reads one bounded
+snapshot containing only repository name, branch, short commit, and whether the
+staging index changed. It never polls the worktree, reads file names or diffs,
+or stores Work State. Checkpoints use the selected connected Coding Agent and
+the existing direct-cloud MCP outbox. The watcher exists only inside the
+Desktop App process.
 
 ### 4.3 Client security
 
@@ -503,8 +500,8 @@ not grant Stand-in coordination tools.
 
 The optional Desktop Git-awareness enhancement is one such client. When
 packaged, it is limited to explicitly selected repositories and schema-permitted
-branch, commit, and Git state signals; it never becomes a local Stand-in or a
-required relay for cloud MCP.
+branch, commit, and staged-state signals; it is never a required relay for cloud
+MCP.
 
 The target event set may include session lifecycle, repository identity changes,
 Git state changes, validation state, and artifact metadata. Hook credentials use
@@ -593,8 +590,7 @@ disclosure. They are not separate Local and Public Stand-in processes.
   execution, Agent Work State projection, automated Team Pulse, Agent binding,
   and other AI-derived coordination while basic human collaboration remains
   available with explicit readiness status.
-- Cloud unavailability is disclosed as unavailable; the product does not imply
-  that a hidden local Stand-in continues working.
+- Cloud unavailability is disclosed as unavailable.
 
 Model execution uses explicit stop conditions, tool and token budgets, and
 idempotent output commands.
@@ -1046,9 +1042,8 @@ docs/
   plans/
 ```
 
-This is a target boundary, not a claim that the current repository has already
-removed its historical `interod`, local sidecar, or Electron-required
-implementation.
+This tree is the active cloud/Web implementation; superseded runtime
+experiments are available in Git history.
 
 ## 16. Verification strategy
 
@@ -1116,9 +1111,9 @@ implementation.
   capacity, seven-day TTL, encryption boundary, secure discard, gap marker,
   stable-ID idempotency, FIFO three-retry flush, and realtime-gap tests.
 
-Historical tests through `interod`, the Local Stand-in, SQLCipher, and
-Electron remain evidence for that historical runtime only. Phases 1–6 acceptance
-uses the cloud API/MCP and canonical renderer/browser path.
+All active acceptance uses the cloud API/MCP and canonical renderer/browser
+path. Desktop Git-awareness tests cover explicit authorization, metadata-event
+debouncing, bounded snapshots, direct-cloud delivery, and shutdown cleanup.
 
 ## 17. Decision records
 

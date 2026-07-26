@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectId,
   PublicWorkProjection,
+  PreferredLanguage,
 } from "@intero/domain";
 
 import type { InMemoryPlatformStore, KanbanCardUpdate } from "./store.js";
@@ -64,4 +65,5 @@ export interface PrincipalSummary {
   id: PrincipalId;
   displayName: string;
   kind: "human" | "stand_in" | "service";
+  preferredLanguage?: PreferredLanguage;
 }

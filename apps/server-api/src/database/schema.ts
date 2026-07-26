@@ -31,6 +31,9 @@ export const principals = pgTable("principals", {
   })
     .notNull()
     .default("accent"),
+  preferredLanguage: text("preferred_language", {
+    enum: ["zh-CN", "en-US"],
+  }),
   kind: text("kind", {
     enum: ["human", "stand_in", "service"],
   }).notNull(),

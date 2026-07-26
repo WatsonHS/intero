@@ -35,10 +35,10 @@ historical ADR evidence.
 - Team Pulse and Action Inbox organize shared attention.
 - Coordination Threads, reviewable Specs, and Decisions keep collaboration
   visible, attributable, and correctable.
-- The Desktop App is optional and foreground-only. While open, it may enhance
-  context collection and summaries after explicit opt-in. It performs no silent
-  background observation and is never required for collection, MCP, management,
-  access, or Stand-in runtime infrastructure.
+- The Desktop App is optional. While open, its explicitly enabled Git-awareness
+  control may observe bounded metadata for user-selected repositories. It
+  performs no silent system-wide observation and is never required for
+  collection, MCP, management, access, or Stand-in runtime infrastructure.
 - Git and Coding Agent lifecycle hooks may report compact, content-safe events
   to a separate authenticated cloud event endpoint. Its protocol is a follow-up
   decision and is not defined by the current product baseline.
@@ -355,10 +355,15 @@ The connection must not require a daemon, desktop process, local socket, or
 Electron launcher. Intero does not require or expose absolute local paths by
 default and minimizes remote or repository metadata.
 
-Automatic Git or lifecycle observation is a separate, optional integration path
-with a separately scoped credential. It remains content-safe and fails open
-after bounded in-process retries. MCP returns a visible, non-blocking failure.
-Neither path may block coding or Git commits.
+Desktop Git awareness is a separate, optional integration path. In **Settings →
+Coding Agent**, the user selects a repository, chooses one already connected
+Coding Agent, and explicitly enables or pauses observation. The Desktop process
+listens to `HEAD`, index, and ref metadata events with debounce; it does not run
+a timer, enumerate files, read diffs, or store local Work State. A change emits
+one branch/short-commit/staged-state checkpoint through the selected Agent's
+existing direct-cloud MCP configuration and bounded outbox. Failures are
+non-blocking and visible beside the repository. Neither path may block coding or
+Git commits.
 
 When cloud ingress is unavailable, the MCP client, Hook client, or explicit CLI
 may place the already-permitted event payload in a lightweight client-owned,
@@ -387,15 +392,14 @@ The Web application provides the complete collaboration experience: sign-in,
 Team Pulse, Stand-in conversations, Coordination, Action Inbox, Spec
 Review, Decisions, privacy controls, and integration management.
 
-An optional Desktop App may add explicitly authorized device-local context,
-richer work summaries, and a lightweight local Git-awareness enhancement. The
-Git enhancement observes only user-selected repositories and only the compact
-Git state, branch, and commit signals permitted by the event schema before
-sending them to Intero Cloud. It is an optional packaging enhancement, not a
-local product core: browser, management, access, and Coding Agent paths remain
-complete when the Desktop App is absent or closed.
+An optional Desktop App may add a lightweight Git-awareness enhancement. It
+observes only user-selected repositories and only compact repository-name,
+branch, short-commit, and staged-state signals before sending them to Intero
+Cloud. It is an optional packaging enhancement, not a local product core:
+browser, management, access, and Coding Agent paths remain complete when the
+Desktop App is absent or closed.
 
-## Repository and historical implementation
+## Repository implementation
 
 The active implementation on `main` is cloud-first and Web-first, with the
 canonical `apps/desktop` renderer also serving the browser product. Direct cloud
@@ -403,12 +407,12 @@ MCP, private Work State, Stand-in processing, collaboration, authentication,
 administration, Project work, and Spec Review are implemented and covered by
 contract, integration, and browser tests.
 
-The repository still retains historical local-runtime artifacts including
-Electron packaging, `interod`, a Local Stand-in sidecar, SQLCipher, and local MCP
-bridging. The historical local core is not a requirement for the active cloud
-path and must not be restored merely to provide Git awareness. The future
-optional Desktop Git enhancement is deliberately narrower: no local Stand-in,
-local Work State, IPC, long-lived daemon, or local persistent-state database.
+The active repository contains no local product runtime or local Work State
+implementation. The optional Desktop Git enhancement is deliberately narrow:
+while the Desktop App is open, an explicitly enabled repository is observed
+through debounced Git metadata events and a bounded branch/commit/staged-state
+checkpoint is sent through the existing direct-cloud MCP outbox. It does not
+run a daemon, inspect file names or diffs, or persist Work State locally.
 
 Current local development commands remain:
 

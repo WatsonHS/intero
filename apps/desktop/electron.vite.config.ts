@@ -8,11 +8,7 @@ export default defineConfig({
   main: {
     plugins: [
       externalizeDepsPlugin({
-        exclude: [
-          "@intero/domain",
-          "@intero/integrations",
-          "@intero/local-ipc",
-        ],
+        exclude: ["@intero/domain", "@intero/integrations"],
       }),
     ],
   },

@@ -19,12 +19,14 @@ import {
   createPilotAgentTicket,
   disconnectPilotAgent,
   getPilotOverview,
+  updatePilotProfile,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
 import { NotificationSettings } from "./settings/NotificationSettings.js";
 import { AccountSecuritySettings } from "./settings/AccountSecuritySettings.js";
 import { ProjectAutomationSettings } from "./settings/ProjectAutomationSettings.js";
+import { GitAwarenessSettings } from "./settings/GitAwarenessSettings.js";
 
 // Team members, deployment and model service moved to 团队管理 — they are
 // governance settings for a whole team or organization, not personal ones.
@@ -111,9 +113,27 @@ export function SettingsView({
       setAgentPrompt({ client, prompt: result.connectPrompt });
     },
   });
+  const updatePreferredLanguage = useMutation({
+    mutationFn: (preferredLanguage: Locale) =>
+      updatePilotProfile({ preferredLanguage }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pilot", "profile"] });
+      await queryClient.invalidateQueries({ queryKey: ["pilot", "bootstrap"] });
+    },
+  });
 
   const currentAccent = ACCENTS.find((a) => a.hex === accent) ?? ACCENTS[0]!;
   const pilotOrganization = pilot?.bootstrap.data?.organization;
+  const connectedAgentClients = Array.from(
+    new Set(
+      (pilotOverview.data?.bindings ?? [])
+        .filter(
+          (binding) =>
+            binding.ownerId === pilot?.identityId && !binding.disconnectedAt,
+        )
+        .map((binding) => binding.client),
+    ),
+  );
   const activeCategoryMeta =
     SETTINGS_CATEGORIES.find((category) => category.id === activeCategory) ??
     SETTINGS_CATEGORIES[0]!;
@@ -130,6 +150,13 @@ export function SettingsView({
   function selectCategory(category: SettingsCategory) {
     setActiveCategory(category);
     onCategoryChange?.(category);
+  }
+
+  function selectLanguage(next: Locale) {
+    setLocale(next);
+    if (pilot?.enabled && pilot.identityId) {
+      updatePreferredLanguage.mutate(next);
+    }
   }
 
   return (
@@ -335,13 +362,13 @@ export function SettingsView({
                     value="zh-CN"
                     current={locale}
                     label={t("settings.chinese")}
-                    onSelect={setLocale}
+                    onSelect={selectLanguage}
                   />
                   <LanguageOption
                     value="en-US"
                     current={locale}
                     label={t("settings.english")}
-                    onSelect={setLocale}
+                    onSelect={selectLanguage}
                   />
                 </div>
               </div>
@@ -490,6 +517,16 @@ export function SettingsView({
                 ) : null}
               </div>
             </div>
+          ) : null}
+
+          {activeCategory === "agent" ? (
+            <GitAwarenessSettings
+              {...(pilotProject?.name
+                ? { projectName: pilotProject.name }
+                : {})}
+              connectedClients={connectedAgentClients}
+              onBindAgent={onOpenSetup}
+            />
           ) : null}
 
           {/* Re-running first-run setup re-walks deployment, org, model,

@@ -207,22 +207,22 @@ describe("pilot adapter contracts", () => {
 
   it("uses the Vercel AI SDK through the model-neutral gateway contract", async () => {
     const output = {
-      safeSummary: "Checkpoint is ready for team review.",
+      safeSummary: "检查点已准备好供团队评审。",
       narrative: {
-        currentFocus: "Preparing the checkpoint for team review.",
-        completedOutcome: "The checkpoint is ready for team review.",
-        evidence: ["The contract suite passed."],
-        nextStep: "Assign a responsible reviewer.",
+        currentFocus: "正在准备检查点供团队评审。",
+        completedOutcome: "检查点已准备好供团队评审。",
+        evidence: ["契约测试已通过。"],
+        nextStep: "指定负责评审人。",
         collaboration: {
           needed: true,
-          request: "Confirm a responsible reviewer.",
-          requestedFrom: "Project owner",
+          request: "请确认负责评审人。",
+          requestedFrom: "项目负责人",
         },
       },
       coordination: {
         shouldOpen: true,
-        safeContext: "Review ownership needs confirmation.",
-        candidateNextSteps: ["Confirm a responsible reviewer"],
+        safeContext: "需要确认评审责任人。",
+        candidateNextSteps: ["确认负责评审人"],
       },
     };
     const sourceWorkStateId = uuidv7();
@@ -312,6 +312,7 @@ describe("pilot adapter contracts", () => {
           id: uuidv7(),
           client: "codex",
           name: "Codex Pilot",
+          preferredLanguage: "zh-CN",
         },
         checkpoint: checkpointFor(
           ProjectId.parse("019b5ac0-7600-7000-8000-000000000011"),
@@ -328,6 +329,7 @@ describe("pilot adapter contracts", () => {
           posture: "collaborative",
         },
         principalId: MEMBER,
+        preferredLanguage: "en-US",
         question: "What is the current status?",
         sources: [
           {
@@ -372,6 +374,14 @@ describe("pilot adapter contracts", () => {
         "Return exactly one JSON object",
       );
     }
+    const summarySystem = (
+      requestBodies[0]!.messages as Array<{ role: string; content: string }>
+    ).find((message) => message.role === "system");
+    expect(summarySystem?.content).toContain("Simplified Chinese (zh-CN)");
+    const answerSystem = (
+      requestBodies[1]!.messages as Array<{ role: string; content: string }>
+    ).find((message) => message.role === "system");
+    expect(answerSystem?.content).toContain("English (en-US)");
   });
 
   it("encrypts and decrypts provider credentials only through the server cipher", () => {
@@ -451,6 +461,7 @@ async function seededCheckpoint() {
     client: "codex",
     name: "Codex Pilot",
     workspaceId: uuidv7(),
+    preferredLanguage: "en-US",
     credentialHash: "b".repeat(64),
     createdAt: "2026-07-25T08:00:00.000Z",
   };
@@ -460,6 +471,7 @@ async function seededCheckpoint() {
     projectId: fixture.project.id,
     ownerId: ADMIN,
     client: "codex",
+    preferredLanguage: "en-US",
     ticketHash,
     expiresAt: "2026-07-25T09:00:00.000Z",
     createdAt: "2026-07-25T08:00:00.000Z",
@@ -523,6 +535,7 @@ function standInJob(): PilotStandInJob {
         client: "codex",
         name: "Codex Pilot",
         workspaceId: uuidv7(),
+        preferredLanguage: "en-US",
         credentialHash: "d".repeat(64),
         createdAt: "2026-07-25T08:00:00.000Z",
       },

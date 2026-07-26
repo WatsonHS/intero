@@ -71,12 +71,8 @@ describe("IntegrationAdapter conformance", () => {
 
   it("generates auto-loaded instructions and source-bound MCP commands", () => {
     const home = "/Users/example";
-    const connections = {
-      hook: "/tmp/intero/connection-hook.json",
-      mcp: "/tmp/intero/connection-mcp.json",
-    };
     const plans = integrationAdapters.map((adapter) =>
-      adapter.installPlan(home, "/opt/intero-mcp", connections),
+      adapter.installPlan(home, "/opt/intero-mcp"),
     );
     expect(
       plans[0]!.files.some((file) => file.path.endsWith("AGENTS.md")),
@@ -86,7 +82,7 @@ describe("IntegrationAdapter conformance", () => {
     ).toBe(true);
     expect(
       plans.every((plan) =>
-        plan.files.some((file) => file.content.includes("connection-mcp.json")),
+        plan.files.some((file) => file.content.includes("--cloud")),
       ),
     ).toBe(true);
     expect(plans[2]!.files.at(-1)?.content).toContain("event_id: randomUUID()");
@@ -122,15 +118,7 @@ describe("IntegrationAdapter conformance", () => {
       "C:\\Program Files\\Intero\\intero-mcp.cmd",
     ];
     const plans = integrationAdapters.map((adapter) =>
-      adapter.installPlan(
-        "C:\\Users\\example",
-        "cmd.exe",
-        {
-          hook: "C:\\Users\\example\\.intero\\connection-hook.json",
-          mcp: "C:\\Users\\example\\.intero\\connection-mcp.json",
-        },
-        prefix,
-      ),
+      adapter.installPlan("C:\\Users\\example", "cmd.exe", prefix),
     );
     for (const plan of plans) {
       expect(

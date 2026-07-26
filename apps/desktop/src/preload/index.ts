@@ -3,9 +3,6 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("interoDesktop", {
   platform: process.platform,
   runtimeVersion: process.versions.electron,
-  getLocalStatus: () => ipcRenderer.invoke("intero:local-status"),
-  setModelEgress: (mode: "managed_api" | "user_provided_api" | "disabled") =>
-    ipcRenderer.invoke("intero:set-model-egress", mode),
   getIntegrationStatus: () => ipcRenderer.invoke("intero:integration-status"),
   previewIntegration: (
     adapter: "codex" | "claude-code" | "opencode",
@@ -15,4 +12,17 @@ contextBridge.exposeInMainWorld("interoDesktop", {
     ipcRenderer.invoke("intero:integration-preview", adapter, action, locale),
   manageIntegration: (token: string) =>
     ipcRenderer.invoke("intero:integration-action", token),
+  getGitAwarenessStatus: () =>
+    ipcRenderer.invoke("intero:git-awareness-status"),
+  getGitAwarenessClients: () =>
+    ipcRenderer.invoke("intero:git-awareness-clients"),
+  chooseGitRepository: () =>
+    ipcRenderer.invoke("intero:git-awareness-choose-repository"),
+  configureGitAwareness: (input: {
+    repositoryPath: string;
+    client: "codex" | "claude-code" | "opencode";
+    enabled: boolean;
+  }) => ipcRenderer.invoke("intero:git-awareness-configure", input),
+  removeGitAwareness: (repositoryPath: string) =>
+    ipcRenderer.invoke("intero:git-awareness-remove", repositoryPath),
 });

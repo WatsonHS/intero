@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -15,7 +16,6 @@ import {
   uninstallManagedIntegration,
   type IntegrationKind,
 } from "@intero/integrations";
-import { SocketDaemonClient, loadConnectionSettings } from "@intero/local-ipc";
 import {
   BrowserWindow,
   app,
@@ -25,12 +25,34 @@ import {
   shell,
 } from "electron";
 
-type ModelEgressMode = "managed_api" | "user_provided_api" | "disabled";
+import {
+  buildGitAwarenessCheckpoint,
+  readGitAwarenessSnapshot,
+  watchGitMetadata,
+  type GitAwarenessSnapshot,
+  type GitMetadataSubscription,
+} from "./git-awareness.js";
+
 type IntegrationAction = "install" | "repair" | "uninstall";
+type GitAwarenessClient = "codex" | "claude-code" | "opencode";
+
+interface GitAwarenessEntry {
+  repositoryPath: string;
+  client: GitAwarenessClient;
+  enabled: boolean;
+  lastFingerprint?: string;
+  lastSnapshot?: GitAwarenessSnapshot;
+  lastDeliveredAt?: string;
+  lastError?: string;
+}
 
 let integrationMutation = Promise.resolve();
 let trustedRendererId: number | undefined;
 let trustedRendererUrl: string | undefined;
+let gitAwarenessEntries: GitAwarenessEntry[] = [];
+let gitAwarenessMutation = Promise.resolve();
+const gitAwarenessSubscriptions = new Map<string, GitMetadataSubscription>();
+const gitAwarenessDeliveries = new Map<string, Promise<void>>();
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const integrationPreviews = new Map<
   string,
@@ -43,95 +65,15 @@ const integrationPreviews = new Map<
   }
 >();
 
-async function daemonClient(): Promise<SocketDaemonClient> {
-  const connection = await loadConnectionSettings();
-  return new SocketDaemonClient(connection.socketPath, connection.authToken);
-}
-
-async function localRuntimeStatus() {
-  try {
-    const daemon = await daemonClient();
-    const [health, workspaceState, settings] = await Promise.all([
-      daemon.call("system.health", {}),
-      daemon.call("workspace.list", {}),
-      daemon.call("settings.get", {}),
-    ]);
-    if (
-      !isRecord(health) ||
-      health.status !== "ok" ||
-      typeof health.version !== "string" ||
-      typeof health.protocolVersion !== "number" ||
-      typeof health.encryptedStorage !== "boolean" ||
-      !isRecord(workspaceState) ||
-      !Array.isArray(workspaceState.workspaces) ||
-      !isRecord(settings) ||
-      !isModelEgressMode(settings.modelEgress)
-    ) {
-      throw new Error("interod returned an invalid local status.");
-    }
-    const workspaces = workspaceState.workspaces.filter(
-      (
-        workspace,
-      ): workspace is {
-        id: string;
-        root: string;
-        repositoryIdentity: string;
-        revoked: boolean;
-      } =>
-        isRecord(workspace) &&
-        typeof workspace.id === "string" &&
-        typeof workspace.root === "string" &&
-        typeof workspace.repositoryIdentity === "string" &&
-        typeof workspace.revoked === "boolean",
-    );
-    return {
-      available: true as const,
-      health: {
-        status: "ok" as const,
-        version: health.version,
-        protocolVersion: health.protocolVersion,
-        encryptedStorage: health.encryptedStorage,
-      },
-      workspaces,
-      modelEgress: settings.modelEgress,
-    };
-  } catch {
-    return {
-      available: false as const,
-      reason: "daemon_unavailable" as const,
-    };
-  }
-}
-
-function registerLocalRuntimeBridge() {
-  ipcMain.removeHandler("intero:local-status");
-  ipcMain.removeHandler("intero:set-model-egress");
+function registerDesktopIntegrationBridge() {
   ipcMain.removeHandler("intero:integration-status");
   ipcMain.removeHandler("intero:integration-preview");
   ipcMain.removeHandler("intero:integration-action");
-  ipcMain.handle("intero:local-status", (event) => {
-    assertTrustedRenderer(event);
-    return localRuntimeStatus();
-  });
-  ipcMain.handle(
-    "intero:set-model-egress",
-    async (event, mode: ModelEgressMode) => {
-      assertTrustedRenderer(event);
-      if (
-        mode !== "managed_api" &&
-        mode !== "user_provided_api" &&
-        mode !== "disabled"
-      ) {
-        throw new Error("Unsupported model egress mode.");
-      }
-      const daemon = await daemonClient();
-      const result = await daemon.call("settings.set_model_egress", { mode });
-      if (!isRecord(result) || !isModelEgressMode(result.modelEgress)) {
-        throw new Error("interod did not confirm the model egress policy.");
-      }
-      return { modelEgress: result.modelEgress };
-    },
-  );
+  ipcMain.removeHandler("intero:git-awareness-status");
+  ipcMain.removeHandler("intero:git-awareness-clients");
+  ipcMain.removeHandler("intero:git-awareness-choose-repository");
+  ipcMain.removeHandler("intero:git-awareness-configure");
+  ipcMain.removeHandler("intero:git-awareness-remove");
   ipcMain.handle("intero:integration-status", (event) => {
     assertTrustedRenderer(event);
     return integrationStatus();
@@ -219,6 +161,373 @@ function registerLocalRuntimeBridge() {
     );
     return operation;
   });
+  ipcMain.handle("intero:git-awareness-status", async (event) => {
+    assertTrustedRenderer(event);
+    return presentGitAwareness();
+  });
+  ipcMain.handle("intero:git-awareness-clients", async (event) => {
+    assertTrustedRenderer(event);
+    return connectedGitAwarenessClients();
+  });
+  ipcMain.handle("intero:git-awareness-choose-repository", async (event) => {
+    assertTrustedRenderer(event);
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throw new Error("The trusted Intero window is unavailable.");
+    const selection = await dialog.showOpenDialog(parent, {
+      title: "选择授权给 Intero 的 Git 仓库",
+      properties: ["openDirectory"],
+    });
+    if (selection.canceled || !selection.filePaths[0]) return null;
+    const snapshot = await readGitAwarenessSnapshot(selection.filePaths[0]);
+    if (!snapshot) throw new Error("所选目录不是可读取的 Git 仓库。");
+    return { repositoryPath: selection.filePaths[0], snapshot };
+  });
+  ipcMain.handle(
+    "intero:git-awareness-configure",
+    async (
+      event,
+      input: {
+        repositoryPath: string;
+        client: GitAwarenessClient;
+        enabled: boolean;
+      },
+    ) => {
+      assertTrustedRenderer(event);
+      if (
+        !input ||
+        typeof input.repositoryPath !== "string" ||
+        input.repositoryPath.length > 4_096 ||
+        !isAbsolute(input.repositoryPath) ||
+        !isGitAwarenessClient(input.client) ||
+        typeof input.enabled !== "boolean"
+      ) {
+        throw new Error("Git 感知配置无效。");
+      }
+      if (
+        input.enabled &&
+        !connectedGitAwarenessClients().includes(input.client)
+      ) {
+        throw new Error("请先为当前项目绑定该 Coding Agent。");
+      }
+      const existing = gitAwarenessEntries.find(
+        (entry) => entry.repositoryPath === input.repositoryPath,
+      );
+      const snapshot = input.enabled
+        ? await readGitAwarenessSnapshot(input.repositoryPath)
+        : existing?.lastSnapshot;
+      if (input.enabled && !snapshot) {
+        throw new Error("所选目录不是可读取的 Git 仓库。");
+      }
+      await mutateGitAwareness((entries) => {
+        const next = entries.filter(
+          (entry) => entry.repositoryPath !== input.repositoryPath,
+        );
+        next.push({
+          repositoryPath: input.repositoryPath,
+          client: input.client,
+          enabled: input.enabled,
+          ...(snapshot
+            ? {
+                lastFingerprint: snapshot.fingerprint,
+                lastSnapshot: snapshot,
+              }
+            : {}),
+          ...(existing?.lastDeliveredAt
+            ? { lastDeliveredAt: existing.lastDeliveredAt }
+            : {}),
+        });
+        return next;
+      });
+      await reconcileGitAwarenessSubscriptions();
+      return presentGitAwareness();
+    },
+  );
+  ipcMain.handle(
+    "intero:git-awareness-remove",
+    async (event, repositoryPath) => {
+      assertTrustedRenderer(event);
+      if (typeof repositoryPath !== "string") {
+        throw new Error("Repository path is required.");
+      }
+      await mutateGitAwareness((entries) =>
+        entries.filter((entry) => entry.repositoryPath !== repositoryPath),
+      );
+      await reconcileGitAwarenessSubscriptions();
+      return presentGitAwareness();
+    },
+  );
+}
+
+function gitAwarenessConfigPath(): string {
+  return join(app.getPath("userData"), "git-awareness.json");
+}
+
+async function loadGitAwareness(): Promise<void> {
+  try {
+    const raw = await readFile(gitAwarenessConfigPath(), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    gitAwarenessEntries = parsed.flatMap((value) =>
+      isGitAwarenessEntry(value) ? [value] : [],
+    );
+  } catch {
+    gitAwarenessEntries = [];
+  }
+}
+
+async function mutateGitAwareness(
+  mutate: (entries: GitAwarenessEntry[]) => GitAwarenessEntry[],
+): Promise<void> {
+  const operation = gitAwarenessMutation.then(async () => {
+    gitAwarenessEntries = mutate(gitAwarenessEntries);
+    await mkdir(dirname(gitAwarenessConfigPath()), { recursive: true });
+    await writeFile(
+      gitAwarenessConfigPath(),
+      `${JSON.stringify(gitAwarenessEntries, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await chmod(gitAwarenessConfigPath(), 0o600);
+  });
+  gitAwarenessMutation = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  await operation;
+}
+
+function presentGitAwareness() {
+  return gitAwarenessEntries.map((entry) => ({
+    repositoryPath: entry.repositoryPath,
+    repositoryName:
+      entry.lastSnapshot?.repository ?? basename(entry.repositoryPath),
+    client: entry.client,
+    enabled: entry.enabled,
+    ...(entry.lastSnapshot ? { snapshot: entry.lastSnapshot } : {}),
+    ...(entry.lastDeliveredAt
+      ? { lastDeliveredAt: entry.lastDeliveredAt }
+      : {}),
+    ...(entry.lastError ? { lastError: entry.lastError } : {}),
+  }));
+}
+
+function connectedGitAwarenessClients(): GitAwarenessClient[] {
+  let executable: ReturnType<typeof mcpExecutableSpec>;
+  try {
+    executable = mcpExecutableSpec();
+  } catch {
+    return [];
+  }
+  return (["codex", "claude-code", "opencode"] as const).filter((client) => {
+    try {
+      execFileSync(
+        executable.command,
+        [...executable.prefixArgs, "cloud", "status", "--mcp-source", client],
+        {
+          stdio: "ignore",
+          timeout: 2_000,
+          windowsHide: true,
+        },
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function reconcileGitAwarenessSubscriptions(): Promise<void> {
+  const enabledPaths = new Set(
+    gitAwarenessEntries
+      .filter((entry) => entry.enabled)
+      .map((entry) => entry.repositoryPath),
+  );
+  for (const [repositoryPath, subscription] of gitAwarenessSubscriptions) {
+    if (!enabledPaths.has(repositoryPath)) {
+      subscription.close();
+      gitAwarenessSubscriptions.delete(repositoryPath);
+    }
+  }
+  for (const repositoryPath of enabledPaths) {
+    if (gitAwarenessSubscriptions.has(repositoryPath)) continue;
+    try {
+      const subscription = await watchGitMetadata({
+        repositoryPath,
+        onChange: () => queueGitAwarenessDelivery(repositoryPath),
+      });
+      gitAwarenessSubscriptions.set(repositoryPath, subscription);
+    } catch {
+      await setGitAwarenessError(
+        repositoryPath,
+        "无法监听该仓库的 Git 元数据。",
+      );
+    }
+  }
+}
+
+function stopGitAwarenessSubscriptions(): void {
+  for (const subscription of gitAwarenessSubscriptions.values()) {
+    subscription.close();
+  }
+  gitAwarenessSubscriptions.clear();
+}
+
+function queueGitAwarenessDelivery(repositoryPath: string): Promise<void> {
+  const previous =
+    gitAwarenessDeliveries.get(repositoryPath) ?? Promise.resolve();
+  const operation = previous
+    .then(() => deliverGitAwarenessChange(repositoryPath))
+    .finally(() => {
+      if (gitAwarenessDeliveries.get(repositoryPath) === operation) {
+        gitAwarenessDeliveries.delete(repositoryPath);
+      }
+    });
+  gitAwarenessDeliveries.set(repositoryPath, operation);
+  return operation;
+}
+
+async function deliverGitAwarenessChange(
+  repositoryPath: string,
+): Promise<void> {
+  const entry = gitAwarenessEntries.find(
+    (candidate) =>
+      candidate.repositoryPath === repositoryPath && candidate.enabled,
+  );
+  if (!entry) return;
+  // Exactly one bounded snapshot is read for one debounced metadata change.
+  const snapshot = await readGitAwarenessSnapshot(repositoryPath);
+  if (!snapshot || snapshot.fingerprint === entry.lastFingerprint) return;
+  try {
+    await sendGitAwareness(entry, snapshot);
+    await mutateGitAwareness((entries) =>
+      entries.map((candidate) =>
+        candidate.repositoryPath === repositoryPath
+          ? withoutGitAwarenessError({
+              ...candidate,
+              lastFingerprint: snapshot.fingerprint,
+              lastSnapshot: snapshot,
+              lastDeliveredAt: new Date().toISOString(),
+            })
+          : candidate,
+      ),
+    );
+  } catch {
+    await mutateGitAwareness((entries) =>
+      entries.map((candidate) =>
+        candidate.repositoryPath === repositoryPath
+          ? {
+              ...candidate,
+              lastSnapshot: snapshot,
+              lastError:
+                "Git 变化尚未交给 direct-cloud MCP；下次变化时会重试。",
+            }
+          : candidate,
+      ),
+    );
+  }
+}
+
+async function sendGitAwareness(
+  entry: GitAwarenessEntry,
+  snapshot: GitAwarenessSnapshot,
+): Promise<void> {
+  const executable = mcpExecutableSpec();
+  const checkpoint = buildGitAwarenessCheckpoint(
+    entry.repositoryPath,
+    snapshot,
+    entry.lastSnapshot,
+  );
+  const args = [
+    ...executable.prefixArgs,
+    "cloud",
+    "checkpoint",
+    "--mcp-source",
+    entry.client,
+    "--event-type",
+    checkpoint.eventType,
+    "--client-event-id",
+    checkpoint.clientEventId,
+    "--workstream-key",
+    checkpoint.workstreamKey,
+    "--workstream-title",
+    checkpoint.workstreamTitle,
+    "--current-focus",
+    checkpoint.currentFocus,
+    "--completed-outcome",
+    checkpoint.completedOutcome,
+    "--next-step",
+    checkpoint.nextStep,
+    ...checkpoint.evidence.flatMap((value) => ["--evidence", value]),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(executable.command, args, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const timeout = setTimeout(() => child.kill(), 5_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      code === 0
+        ? resolve()
+        : reject(new Error("Git awareness delivery failed."));
+    });
+  });
+}
+
+async function setGitAwarenessError(
+  repositoryPath: string,
+  lastError: string,
+): Promise<void> {
+  await mutateGitAwareness((entries) =>
+    entries.map((entry) =>
+      entry.repositoryPath === repositoryPath ? { ...entry, lastError } : entry,
+    ),
+  );
+}
+
+function withoutGitAwarenessError(entry: GitAwarenessEntry): GitAwarenessEntry {
+  const { lastError: _lastError, ...rest } = entry;
+  return rest;
+}
+
+function isGitAwarenessClient(value: unknown): value is GitAwarenessClient {
+  return value === "codex" || value === "claude-code" || value === "opencode";
+}
+
+function isGitAwarenessEntry(value: unknown): value is GitAwarenessEntry {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as GitAwarenessEntry).repositoryPath === "string" &&
+    isGitAwarenessClient((value as GitAwarenessEntry).client) &&
+    typeof (value as GitAwarenessEntry).enabled === "boolean" &&
+    ((value as GitAwarenessEntry).lastFingerprint === undefined ||
+      typeof (value as GitAwarenessEntry).lastFingerprint === "string") &&
+    ((value as GitAwarenessEntry).lastSnapshot === undefined ||
+      isGitAwarenessSnapshot((value as GitAwarenessEntry).lastSnapshot)) &&
+    ((value as GitAwarenessEntry).lastDeliveredAt === undefined ||
+      typeof (value as GitAwarenessEntry).lastDeliveredAt === "string") &&
+    ((value as GitAwarenessEntry).lastError === undefined ||
+      typeof (value as GitAwarenessEntry).lastError === "string")
+  );
+}
+
+function isGitAwarenessSnapshot(value: unknown): value is GitAwarenessSnapshot {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as GitAwarenessSnapshot).repository === "string" &&
+    ((value as GitAwarenessSnapshot).branch === undefined ||
+      typeof (value as GitAwarenessSnapshot).branch === "string") &&
+    ((value as GitAwarenessSnapshot).head === undefined ||
+      typeof (value as GitAwarenessSnapshot).head === "string") &&
+    ((value as GitAwarenessSnapshot).staged === "clean" ||
+      (value as GitAwarenessSnapshot).staged === "changed") &&
+    typeof (value as GitAwarenessSnapshot).fingerprint === "string"
+  );
 }
 
 function assertIntegrationAction(
@@ -359,20 +668,9 @@ function buildIntegrationPlan(adapter: IntegrationKind) {
   );
   if (!selected) throw new Error("Unknown integration adapter.");
   const executable = mcpExecutableSpec();
-  const connectionDirectory = dirname(
-    process.env.INTERO_CONNECTION_FILE ??
-      join(
-        process.env.INTERO_DATA_DIR ?? join(homedir(), ".intero"),
-        "connection.json",
-      ),
-  );
   return selected.installPlan(
     homedir(),
     executable.command,
-    {
-      hook: join(connectionDirectory, "connection-hook.json"),
-      mcp: join(connectionDirectory, "connection-mcp.json"),
-    },
     executable.prefixArgs,
   );
 }
@@ -496,18 +794,6 @@ function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isModelEgressMode(value: unknown): value is ModelEgressMode {
-  return (
-    value === "managed_api" ||
-    value === "user_provided_api" ||
-    value === "disabled"
-  );
-}
-
 function createWindow() {
   const window = new BrowserWindow({
     width: 1500,
@@ -554,12 +840,18 @@ function createWindow() {
   void window.loadURL(rendererUrl);
 }
 
-app.whenReady().then(() => {
-  registerLocalRuntimeBridge();
+app.whenReady().then(async () => {
+  await loadGitAwareness();
+  await reconcileGitAwarenessSubscriptions();
+  registerDesktopIntegrationBridge();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on("before-quit", () => {
+  stopGitAwarenessSubscriptions();
 });
 
 app.on("window-all-closed", () => {

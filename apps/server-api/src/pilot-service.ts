@@ -182,6 +182,7 @@ export class PilotStandInJobHandler {
           id: binding.id,
           client: binding.client,
           name: binding.name,
+          preferredLanguage: binding.preferredLanguage,
         },
         checkpoint,
       });
@@ -264,9 +265,7 @@ export class TransactionalOutboxJobRunner implements JobRunnerPort<PilotStandInJ
   }
 }
 
-function toStandInJob(
-  job: PilotStoredStandInJob,
-): PilotStandInJob {
+function toStandInJob(job: PilotStoredStandInJob): PilotStandInJob {
   return {
     id: job.id,
     kind: "pilot.stand_in.project",
@@ -288,8 +287,7 @@ function processingResult(result: PilotIngestResult): StandInProcessing {
     return {
       status: "unavailable",
       errorCode:
-        result.standInJob.lastErrorCode ??
-        "STAND_IN_JOB_DEAD_LETTERED",
+        result.standInJob.lastErrorCode ?? "STAND_IN_JOB_DEAD_LETTERED",
     };
   }
   return {

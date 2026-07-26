@@ -52,18 +52,6 @@ server URL. The link is not normal login. Passkey is primary login, email plus
 password is fallback, Magic Link is absent, password recovery is future, and
 SMTP is not required.
 
-## Historical evidence and migration boundary
-
-The existing repository implemented a local adapter kernel, daemon descriptors,
-local MCP bridge, local Stand-in, reversible installer, and Desktop
-Settings. Its content-safe parsing, managed-config ownership, secret hygiene,
-UUID-free tool schemas, and real-Agent acceptance lessons remain useful.
-
-The local ingress, shared daemon token, connection descriptor, Electron-bundled
-launcher, and Desktop-required installation path are superseded by ADR-0006.
-Historical tests do not validate cloud authentication or private-to-shared
-publication.
-
 ## Assumptions
 
 - Canonical Agent events, Work State, and domain policy are adapter-independent.
@@ -124,7 +112,7 @@ publication.
 
 ## Non-goals
 
-- A required daemon, Local Stand-in, Desktop App, or local MCP relay.
+- A required Desktop App or device relay.
 - Default transcript, prompt, response, tool payload, terminal log, file-content,
   or credential ingestion.
 - Treating cloud upload or model processing as team publication.
@@ -498,7 +486,7 @@ The accepted client contract is:
 
 ## Plan review record
 
-### Preserved from the local implementation
+### Required integration properties
 
 - Content-safe checkpoint schemas and forbidden-field canaries.
 - UUID-free Agent tools.
@@ -506,14 +494,3 @@ The accepted client contract is:
 - Native Agent trust decisions.
 - Explicit distinction between configuration, authentication, handshake,
   ingestion, private Work State, and publication.
-
-### Replaced by ADR-0006
-
-- Local daemon ingress and capability descriptors.
-- Local Stand-in and local/public synchronization.
-- Electron-bundled MCP launcher.
-- Desktop-only installation and Settings control.
-- Daemon enrollment as repository authority.
-- Team visibility as an automatic consequence of public/cloud synchronization.
-- A single canonical hosted-only endpoint assumption and member-entered server
-  URLs.
