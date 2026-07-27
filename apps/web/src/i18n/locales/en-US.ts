@@ -80,13 +80,19 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.empty.title": "No team-visible Work State yet",
   "pulse.empty.body":
     "Team Pulse only shows structured work state allowed for a bound team project. Connect a coding agent and report one semantic checkpoint, and progress appears here automatically.",
+  "pulse.empty.recentTitle": "No work updates in the last 72 hours",
+  "pulse.empty.recentBody":
+    "Older work is archived in person detail; a new semantic checkpoint automatically resurfaces it.",
   "pulse.error.title": "Can't read Team Pulse",
   "pulse.error.body":
     "The Intero cloud service is temporarily unavailable. Retry shortly; saved Work State is unaffected.",
   "pulse.card.role": "maintained by their Stand-in",
   "pulse.card.collapse": "Collapse",
-  "pulse.card.more": "{count} more",
+  "pulse.card.more": "Show {count} more",
+  "pulse.card.inDetail": "View the other {count} in Detail",
+  "pulse.card.projectUnbound": "No Project linked",
   "pulse.card.withdraw": "Withdraw the team summary for “{title}”",
+  "pulse.card.withdrawAction": "Withdraw",
   "pulse.card.withdrawing": "Withdrawing…",
   "pulse.parallel": "In flight at once",
   "pulse.load.all": "{total} in parallel",
@@ -134,6 +140,15 @@ export const enUS: Record<TranslationKey, string> = {
   "person.parallel": "In flight at once",
   "person.parallelLede":
     "Ordered by how much attention each one needs — blocked work first. Their Stand-in decides the order; it is not a priority ranking.",
+  "person.recentWork": "Last 72 hours",
+  "person.recentWorkLede":
+    "All work with a semantic update in the last 72 hours appears here; items needing attention lead.",
+  "person.recentWorkEmpty": "No new work updates in the last 72 hours.",
+  "person.archive": "Archive",
+  "person.archiveCount": "{count} items",
+  "person.archiveOpen": "Open archive",
+  "person.archiveLede":
+    "Work whose latest semantic update is older than 72 hours. A new checkpoint automatically returns it to recent work.",
   "person.checkpoints": "Recent checkpoints",
   "person.checkpointsLede":
     "These are structured updates their Stand-in shared within the authorized team scope — not raw agent sessions.",
@@ -192,6 +207,7 @@ export const enUS: Record<TranslationKey, string> = {
 
   "coord.eyebrow": "COORDINATION BRANCH",
   "coord.branches": "Coordination",
+  "coord.projectUnbound": "No Project linked",
   "coord.branchesLede":
     "Project members, Stand-ins, and Agents coordinate here. Pick one to inspect its context and pending conclusion.",
   "coord.noneInFilter": "No coordination items match this filter.",

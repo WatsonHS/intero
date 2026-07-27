@@ -42,6 +42,7 @@ import {
   workLineFromProjection,
   type WorkLine,
 } from "./work-lines.js";
+import { isInDetailWindow } from "./work-visibility.js";
 
 /**
  * One person's detail page. It is the expanded form of their Team Pulse card:
@@ -115,6 +116,18 @@ export function PersonView({
   const entryByProjectionId = new Map<string, PilotPulseEntry>(
     pilotEntries.map((entry) => [entry.workStateId, entry]),
   );
+  const projectNames = new Map<string, string>(
+    pilot?.projects.data?.projects.map((project) => [
+      project.id,
+      project.name,
+    ]) ?? [],
+  );
+  if (projectWork.data) {
+    projectNames.set(
+      projectWork.data.project.id,
+      projectWork.data.project.name,
+    );
+  }
   const principalName =
     pilotOverview.data?.principals.find((principal) => principal.id === ownerId)
       ?.displayName ??
@@ -147,8 +160,17 @@ export function PersonView({
   }
 
   const staleAfterSeconds = pulse.data?.staleAfterSeconds;
-  const ordered = orderByAttention(workstreams);
-  const load = loadSummary(workstreams);
+  const recentWorkstreams = workstreams.filter((workstream) =>
+    isInDetailWindow(workstream.freshnessAt),
+  );
+  const archivedWorkstreams = workstreams
+    .filter((workstream) => !isInDetailWindow(workstream.freshnessAt))
+    .toSorted(
+      (left, right) =>
+        Date.parse(right.freshnessAt) - Date.parse(left.freshnessAt),
+    );
+  const ordered = orderByAttention(recentWorkstreams);
+  const load = loadSummary(recentWorkstreams);
   const lead = freshest(workstreams) ?? ordered[0]!;
   const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
   const loadLabel =
@@ -157,8 +179,12 @@ export function PersonView({
       : load.live < load.total
         ? t("pulse.load.partial", { total: load.total, live: load.live })
         : t("pulse.load.all", { total: load.total });
-  const summaryText =
-    lead.decisions[0] ?? lead.blockers[0] ?? lead.dependencies[0];
+  const recentLead = freshest(recentWorkstreams);
+  const summaryText = recentLead
+    ? (recentLead.decisions[0] ??
+      recentLead.blockers[0] ??
+      recentLead.dependencies[0])
+    : undefined;
 
   const workstreamIds = new Set<string>(workstreams.map((item) => item.id));
   const checkpoints = (activity.data?.items ?? [])
@@ -172,14 +198,14 @@ export function PersonView({
   // A dependency is something this person is waiting on; a blocker is what is
   // holding a workstream still. Both are bounded strings from the public
   // contract — nothing here is inferred.
-  const dependencies = workstreams.flatMap((workstream) =>
+  const dependencies = recentWorkstreams.flatMap((workstream) =>
     workstream.dependencies.map((text) => ({
       workstreamId: workstream.id,
       title: workstream.title,
       text,
     })),
   );
-  const blockers = workstreams.flatMap((workstream) =>
+  const blockers = recentWorkstreams.flatMap((workstream) =>
     workstream.blockers.map((text) => ({
       workstreamId: workstream.id,
       title: workstream.title,
@@ -254,27 +280,72 @@ export function PersonView({
 
         <div className="mt-[30px] flex items-center gap-2.5">
           <strong className="text-[14px] font-[620]">
-            {t("person.parallel")}
+            {t("person.recentWork")}
           </strong>
           <Meta tone={load.blocked > 0 ? "danger" : "faint"}>{loadLabel}</Meta>
         </div>
         <p className="mt-[9px] max-w-[620px] text-[11.5px] leading-[1.65] text-faint [text-wrap:pretty]">
-          {t("person.parallelLede")}
+          {t("person.recentWorkLede")}
         </p>
         <div className="mt-3.5 flex flex-col gap-2.5">
-          {ordered.map((workstream) => (
-            <WorkstreamCard
-              key={workstream.id}
-              workstream={workstream}
-              line={lineFor(
-                workstream,
-                entryByProjectionId,
-                projectPulse.contexts,
-              )}
-              stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
-            />
-          ))}
+          {ordered.length > 0 ? (
+            ordered.map((workstream) => (
+              <WorkstreamCard
+                key={workstream.id}
+                workstream={workstream}
+                line={lineFor(
+                  workstream,
+                  entryByProjectionId,
+                  projectPulse.contexts,
+                )}
+                projectName={projectNameFor(workstream, projectNames, t)}
+                stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
+              />
+            ))
+          ) : (
+            <p className="rounded-card border border-dashed border-line2 px-5 py-6 text-[12px] text-ink-muted">
+              {t("person.recentWorkEmpty")}
+            </p>
+          )}
         </div>
+
+        {archivedWorkstreams.length > 0 ? (
+          <details className="group mt-[26px] rounded-card border border-line bg-panel2">
+            <summary className="flex cursor-pointer list-none items-center gap-2.5 px-[18px] py-[15px]">
+              <strong className="text-[13px] font-[620]">
+                {t("person.archive")}
+              </strong>
+              <Meta>
+                {t("person.archiveCount", {
+                  count: archivedWorkstreams.length,
+                })}
+              </Meta>
+              <span className="ml-auto text-[10.5px] text-faint group-open:hidden">
+                {t("person.archiveOpen")}
+              </span>
+            </summary>
+            <div className="border-t border-line px-[14px] pb-[14px] pt-3">
+              <p className="mb-3 px-1 text-[11px] leading-[1.6] text-faint">
+                {t("person.archiveLede")}
+              </p>
+              <div className="flex flex-col gap-2.5">
+                {archivedWorkstreams.map((workstream) => (
+                  <WorkstreamCard
+                    key={workstream.id}
+                    workstream={workstream}
+                    line={lineFor(
+                      workstream,
+                      entryByProjectionId,
+                      projectPulse.contexts,
+                    )}
+                    projectName={projectNameFor(workstream, projectNames, t)}
+                    stale
+                  />
+                ))}
+              </div>
+            </div>
+          </details>
+        ) : null}
 
         <div className="mt-[30px]">
           <strong className="text-[14px] font-[620]">
@@ -449,10 +520,12 @@ function lineFor(
 function WorkstreamCard({
   workstream,
   line,
+  projectName,
   stale,
 }: {
   workstream: PublicWorkProjection;
   line: WorkLine;
+  projectName: string;
   stale: boolean;
 }) {
   const { t, formatRelative } = useI18n();
@@ -489,6 +562,12 @@ function WorkstreamCard({
     >
       <div className="flex items-center gap-2.5">
         <PhaseChip phase={workstream.phase} size="sm" />
+        <Meta
+          tone="muted"
+          className="max-w-[160px] truncate rounded-pill bg-raise px-2 py-1 text-[9.5px]"
+        >
+          {projectName}
+        </Meta>
         <Meta>{workstream.id.slice(0, 8)}</Meta>
         {workstream.artifactIds.length > 0 ? (
           <span className="inline-flex items-center gap-1 font-mono text-[10px] text-faint">
@@ -514,6 +593,18 @@ function WorkstreamCard({
         className="mt-3.5 border-t border-line pt-3.5"
       />
     </article>
+  );
+}
+
+function projectNameFor(
+  workstream: PublicWorkProjection,
+  projectNames: Map<string, string>,
+  t: Translate,
+): string {
+  if (!workstream.projectId) return t("pulse.card.projectUnbound");
+  return (
+    projectNames.get(workstream.projectId) ??
+    `Project · ${workstream.projectId.slice(0, 8)}`
   );
 }
 

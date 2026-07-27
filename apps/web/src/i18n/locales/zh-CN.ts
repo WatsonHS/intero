@@ -78,13 +78,19 @@ export const zhCN = {
   "pulse.empty.title": "还没有团队可见的 Work State",
   "pulse.empty.body":
     "Team Pulse 只显示已绑定团队项目中允许共享的结构化工作状态。连接 Coding Agent 并提交一次语义 checkpoint 后，这里会自动出现进展。",
+  "pulse.empty.recentTitle": "最近 72 小时没有工作更新",
+  "pulse.empty.recentBody":
+    "更早的工作项已经进入成员详情中的归档；新的语义 checkpoint 会让它们自动重新出现。",
   "pulse.error.title": "读不到 Team Pulse",
   "pulse.error.body":
     "Intero 云服务暂时不可达，请稍后重试。已经保存的 Work State 不受影响。",
   "pulse.card.role": "由替身维护",
   "pulse.card.collapse": "收起",
-  "pulse.card.more": "还有 {count} 条",
+  "pulse.card.more": "再显示 {count} 条",
+  "pulse.card.inDetail": "其余 {count} 条在 Detail 中查看",
+  "pulse.card.projectUnbound": "未关联 Project",
   "pulse.card.withdraw": "撤回「{title}」的团队摘要",
+  "pulse.card.withdrawAction": "撤回",
   "pulse.card.withdrawing": "撤回中…",
   "pulse.parallel": "同时在推进",
   "pulse.load.all": "{total} 条并行",
@@ -130,6 +136,15 @@ export const zhCN = {
   "person.parallel": "同时在推进的",
   "person.parallelLede":
     "按需要注意的程度排，卡住的在最前面。顺序由 TA 的替身判断，不代表优先级。",
+  "person.recentWork": "最近 72 小时",
+  "person.recentWorkLede":
+    "这里显示最近 72 小时内有语义更新的全部工作项；需要关注的项目优先排列。",
+  "person.recentWorkEmpty": "最近 72 小时没有新的工作更新。",
+  "person.archive": "归档",
+  "person.archiveCount": "{count} 条",
+  "person.archiveOpen": "展开查看",
+  "person.archiveLede":
+    "最后一次语义更新超过 72 小时的工作项。收到新 checkpoint 后会自动回到最近区域。",
   "person.checkpoints": "最近的 checkpoint",
   "person.checkpointsLede":
     "这些是 TA 的替身在授权团队范围内发布的结构化更新，不是原始 Agent 会话。",
@@ -185,6 +200,7 @@ export const zhCN = {
 
   "coord.eyebrow": "COORDINATION BRANCH",
   "coord.branches": "协调事项",
+  "coord.projectUnbound": "未关联 Project",
   "coord.branchesLede":
     "项目成员、替身和 Agent 发起的协调都在这里。选择一条查看上下文与待确认结论。",
   "coord.noneInFilter": "这个筛选下没有协调事项。",

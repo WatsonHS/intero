@@ -61,6 +61,12 @@ import {
   type WorkLine,
 } from "./work-lines.js";
 import {
+  PULSE_MAX_ITEMS,
+  PULSE_PAGE_SIZE,
+  isInDetailWindow,
+  pulseDetailOnlyCount,
+} from "./work-visibility.js";
+import {
   ProjectAgentConnectionBadge,
   summarizeProjectAgentConnections,
 } from "./agent/connection-state.js";
@@ -157,8 +163,13 @@ function CanonicalTeamPulseView({
     onSuccess: invalidatePilot,
   });
   const withdraw = useMutation({
-    mutationFn: (workStateId: string) =>
-      withdrawPilotPulse(pilot!.identityId!, pilotProject!.id, workStateId),
+    mutationFn: ({
+      projectId,
+      workStateId,
+    }: {
+      projectId: string;
+      workStateId: string;
+    }) => withdrawPilotPulse(pilot!.identityId!, projectId, workStateId),
     onSuccess: invalidatePilot,
   });
 
@@ -173,10 +184,13 @@ function CanonicalTeamPulseView({
   const projectPulse = projectWork.data
     ? projectWorkToPulse(projectWork.data)
     : { projections: [], contexts: new Map<string, ProjectPulseContext>() };
-  const projections = mergeProjections(
+  const allProjections = mergeProjections(
     pulse.data?.projections ?? [],
     pilotEntries.map(pilotPulseEntryToProjection),
     projectPulse.projections,
+  );
+  const projections = allProjections.filter((projection) =>
+    isInDetailWindow(projection.freshnessAt),
   );
   const staleAfterSeconds = pulse.data?.staleAfterSeconds;
   const principalNames = new Map(
@@ -187,6 +201,18 @@ function CanonicalTeamPulseView({
   );
   for (const principal of pilotOverview.data?.principals ?? []) {
     principalNames.set(principal.id, principal.displayName);
+  }
+  const projectNames = new Map<string, string>(
+    pilot?.projects.data?.projects.map((project) => [
+      project.id,
+      project.name,
+    ]) ?? [],
+  );
+  if (projectWork.data) {
+    projectNames.set(
+      projectWork.data.project.id,
+      projectWork.data.project.name,
+    );
   }
   const people = groupByOwner(projections);
   const specsInReview =
@@ -344,14 +370,18 @@ function CanonicalTeamPulseView({
               <PlantIcon size={19} />
             </span>
             <h2 className="mt-[18px] text-[19px] font-semibold tracking-[-0.025em]">
-              {agentConnections.connected.length > 0
-                ? "Coding Agent 已连接，等待第一条工作更新"
-                : t("pulse.empty.title")}
+              {allProjections.length > 0
+                ? t("pulse.empty.recentTitle")
+                : agentConnections.connected.length > 0
+                  ? "Coding Agent 已连接，等待第一条工作更新"
+                  : t("pulse.empty.title")}
             </h2>
             <p className="mt-2.5 max-w-[480px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
-              {agentConnections.connected.length > 0
-                ? `已验证的 Agent 会把 ${pilotProject?.name ?? "当前 Project"} 中允许共享的结构化 checkpoint 显示在这里。`
-                : t("pulse.empty.body")}
+              {allProjections.length > 0
+                ? t("pulse.empty.recentBody")
+                : agentConnections.connected.length > 0
+                  ? `已验证的 Agent 会把 ${pilotProject?.name ?? "当前 Project"} 中允许共享的结构化 checkpoint 显示在这里。`
+                  : t("pulse.empty.body")}
             </p>
             <div className="mt-5 flex gap-[9px]">
               <button
@@ -413,9 +443,17 @@ function CanonicalTeamPulseView({
                 pilotEntryByProjectionId={pilotEntryByProjectionId}
                 pilotIdentityId={pilot?.identityId}
                 withdrawingWorkStateId={
-                  withdraw.isPending ? withdraw.variables : undefined
+                  withdraw.isPending
+                    ? withdraw.variables.workStateId
+                    : undefined
                 }
-                onWithdraw={(workStateId) => withdraw.mutate(workStateId)}
+                onWithdraw={(entry) =>
+                  withdraw.mutate({
+                    projectId: entry.projectId,
+                    workStateId: entry.workStateId,
+                  })
+                }
+                projectNames={projectNames}
                 projectContextByProjectionId={projectPulse.contexts}
               />
             )}
@@ -552,6 +590,7 @@ function PersonCard({
   pilotIdentityId,
   withdrawingWorkStateId,
   onWithdraw,
+  projectNames,
   projectContextByProjectionId,
 }: {
   ownerId: string;
@@ -565,7 +604,8 @@ function PersonCard({
   pilotEntryByProjectionId: Map<string, PilotPulseEntry>;
   pilotIdentityId: string | undefined;
   withdrawingWorkStateId: string | undefined;
-  onWithdraw: (workStateId: string) => void;
+  onWithdraw: (entry: PilotPulseEntry) => void;
+  projectNames: Map<string, string>;
   projectContextByProjectionId: Map<string, ProjectPulseContext>;
 }) {
   const { t, formatRelative } = useI18n();
@@ -573,8 +613,12 @@ function PersonCard({
   const load = loadSummary(workstreams);
   const lead = freshest(workstreams) ?? ordered[0]!;
   const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
-  const visible = open ? ordered : ordered.slice(0, VISIBLE_TASKS);
-  const hidden = ordered.length - visible.length;
+  const visible = ordered.slice(0, open ? PULSE_MAX_ITEMS : PULSE_PAGE_SIZE);
+  const nextCount = Math.min(
+    PULSE_PAGE_SIZE,
+    Math.max(ordered.length - PULSE_PAGE_SIZE, 0),
+  );
+  const detailOnlyCount = pulseDetailOnlyCount(ordered.length);
 
   const loadLabel =
     load.blocked > 0
@@ -636,22 +680,36 @@ function PersonCard({
       </div>
 
       <div className="relative mt-2.5 flex flex-col gap-2">
-        {visible.map((workstream) => (
-          <ParallelTaskRow
-            key={workstream.id}
-            workstream={workstream}
-            line={lineFor(
-              workstream,
-              pilotEntryByProjectionId,
-              projectContextByProjectionId,
-            )}
-            stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
-            onOpen={onOpen}
-          />
-        ))}
+        {visible.map((workstream) => {
+          const entry = pilotEntryByProjectionId.get(workstream.id);
+          const withdrawable =
+            entry && entry.ownerId === pilotIdentityId ? entry : undefined;
+          return (
+            <ParallelTaskRow
+              key={workstream.id}
+              workstream={workstream}
+              line={lineFor(
+                workstream,
+                pilotEntryByProjectionId,
+                projectContextByProjectionId,
+              )}
+              projectName={
+                workstream.projectId
+                  ? (projectNames.get(workstream.projectId) ??
+                    `Project · ${workstream.projectId.slice(0, 8)}`)
+                  : t("pulse.card.projectUnbound")
+              }
+              stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
+              withdrawableEntry={withdrawable}
+              withdrawing={withdrawingWorkStateId === withdrawable?.workStateId}
+              onWithdraw={onWithdraw}
+              onOpen={onOpen}
+            />
+          );
+        })}
       </div>
 
-      {ordered.length > VISIBLE_TASKS ? (
+      {ordered.length > PULSE_PAGE_SIZE ? (
         <button
           type="button"
           onClick={onToggle}
@@ -661,28 +719,18 @@ function PersonCard({
           {open ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
           {open
             ? t("pulse.card.collapse")
-            : t("pulse.card.more", { count: hidden })}
+            : t("pulse.card.more", { count: nextCount })}
         </button>
       ) : null}
-
-      {ownWithdrawableEntry(
-        visible,
-        pilotEntryByProjectionId,
-        pilotIdentityId,
-      ).map((entry) => (
+      {open && detailOnlyCount > 0 ? (
         <button
-          key={entry.workStateId}
           type="button"
-          data-testid={`pilot-withdraw-${entry.workStateId}`}
-          disabled={withdrawingWorkStateId === entry.workStateId}
-          onClick={() => onWithdraw(entry.workStateId)}
-          className="relative mt-2 cursor-pointer self-start border-0 bg-transparent p-0 font-mono text-[9px] text-faint hover:text-danger"
+          onClick={onOpen}
+          className="relative mt-2 block cursor-pointer border-0 bg-transparent p-0 text-[10.5px] text-faint hover:text-accent-strong"
         >
-          {withdrawingWorkStateId === entry.workStateId
-            ? t("pulse.card.withdrawing")
-            : t("pulse.card.withdraw", { title: entry.title })}
+          {t("pulse.card.inDetail", { count: detailOnlyCount })}
         </button>
-      ))}
+      ) : null}
     </section>
   );
 }
@@ -695,12 +743,20 @@ function PersonCard({
 function ParallelTaskRow({
   workstream,
   line,
+  projectName,
   stale,
+  withdrawableEntry,
+  withdrawing,
+  onWithdraw,
   onOpen,
 }: {
   workstream: PublicWorkProjection;
   line: WorkLine;
+  projectName: string;
   stale: boolean;
+  withdrawableEntry: PilotPulseEntry | undefined;
+  withdrawing: boolean;
+  onWithdraw: (entry: PilotPulseEntry) => void;
   onOpen: () => void;
 }) {
   const { t, formatRelative } = useI18n();
@@ -710,79 +766,103 @@ function ParallelTaskRow({
   const next = line.next ?? line.collaboration;
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      data-testid={`peer-work-card-${workstream.id}`}
+    <div
       className={cn(
-        "grid w-full cursor-pointer grid-cols-[7px_minmax(0,1fr)] items-start gap-2.5 rounded-[11px] border px-[11px] py-2.5 text-left text-ink",
+        "relative w-full rounded-[11px] border text-left text-ink",
         blocked
           ? "border-danger-soft bg-danger-soft"
           : "border-line bg-raise hover:border-line2",
       )}
     >
-      <span
-        className={cn(
-          "mt-[5px] h-[7px] w-[7px] rounded-full",
-          tone.dot,
-          blocked ? "animate-dot-pulse" : undefined,
-        )}
-      />
-      <span className="grid min-w-0 gap-[7px]">
+      <button
+        type="button"
+        onClick={onOpen}
+        data-testid={`peer-work-card-${workstream.id}`}
+        className="grid w-full cursor-pointer grid-cols-[7px_minmax(0,1fr)] items-start gap-2.5 border-0 bg-transparent px-[11px] py-2.5 text-left text-ink"
+      >
         <span
           className={cn(
-            "text-[12.5px] font-[540] leading-[1.45] tracking-[-0.008em] [text-wrap:pretty]",
-            meta.tone === "faint" ? "text-faint" : "text-ink",
+            "mt-[5px] h-[7px] w-[7px] rounded-full",
+            tone.dot,
+            blocked ? "animate-dot-pulse" : undefined,
           )}
-        >
-          {workstream.title}
-        </span>
-        <span className="flex min-w-0 items-center gap-2">
-          <span className={cn("shrink-0 text-[9.5px] font-[650]", tone.text)}>
-            {t(`phase.${workstream.phase}` as TranslationKey)}
+        />
+        <span className="grid min-w-0 gap-[7px]">
+          <span
+            className={cn(
+              "pr-12 text-[12.5px] font-[540] leading-[1.45] tracking-[-0.008em] [text-wrap:pretty]",
+              meta.tone === "faint" ? "text-faint" : "text-ink",
+            )}
+          >
+            {workstream.title}
           </span>
-          {line.evidence ? (
-            <span className="min-w-0 truncate font-mono text-[9px] text-faint">
-              {line.evidence}
+          <span className="flex min-w-0 items-center gap-2">
+            <Meta
+              tone="muted"
+              className="max-w-[120px] shrink-0 truncate rounded-pill bg-panel px-1.5 py-0.5 text-[9px]"
+            >
+              {projectName}
+            </Meta>
+            <span className={cn("shrink-0 text-[9.5px] font-[650]", tone.text)}>
+              {t(`phase.${workstream.phase}` as TranslationKey)}
             </span>
-          ) : null}
-          <Meta
-            tone={stale ? "amber" : "faint"}
-            className="ml-auto shrink-0 text-[9.5px]"
-          >
-            {formatRelative(workstream.freshnessAt)}
-          </Meta>
+            {line.evidence ? (
+              <span className="min-w-0 truncate font-mono text-[9px] text-faint">
+                {line.evidence}
+              </span>
+            ) : null}
+            <Meta
+              tone={stale ? "amber" : "faint"}
+              className="ml-auto shrink-0 text-[9.5px]"
+            >
+              {formatRelative(workstream.freshnessAt)}
+            </Meta>
+          </span>
+          <span className="mt-px grid grid-cols-[34px_minmax(0,1fr)] gap-x-[9px] gap-y-2">
+            <span className="pt-px text-[9px] font-[650] tracking-[0.04em] text-faint">
+              {t("work.done")}
+            </span>
+            <span className="text-[11px] leading-[1.5] text-ink-muted [text-wrap:pretty]">
+              {line.done ?? line.focus ?? t("work.noneReported")}
+            </span>
+            <span
+              className={cn(
+                "pt-px text-[9px] font-[650] tracking-[0.04em]",
+                blocked ? "text-danger" : "text-faint",
+              )}
+            >
+              {t("work.next")}
+            </span>
+            <span
+              className={cn(
+                "text-[11px] leading-[1.5] [text-wrap:pretty]",
+                blocked ? "text-danger" : "text-ink-muted",
+              )}
+            >
+              {next ?? t("work.noneReported")}
+            </span>
+          </span>
         </span>
-        <span className="mt-px grid grid-cols-[34px_minmax(0,1fr)] gap-x-[9px] gap-y-2">
-          <span className="pt-px text-[9px] font-[650] tracking-[0.04em] text-faint">
-            {t("work.done")}
-          </span>
-          <span className="text-[11px] leading-[1.5] text-ink-muted [text-wrap:pretty]">
-            {line.done ?? line.focus ?? t("work.noneReported")}
-          </span>
-          <span
-            className={cn(
-              "pt-px text-[9px] font-[650] tracking-[0.04em]",
-              blocked ? "text-danger" : "text-faint",
-            )}
-          >
-            {t("work.next")}
-          </span>
-          <span
-            className={cn(
-              "text-[11px] leading-[1.5] [text-wrap:pretty]",
-              blocked ? "text-danger" : "text-ink-muted",
-            )}
-          >
-            {next ?? t("work.noneReported")}
-          </span>
-        </span>
-      </span>
-    </button>
+      </button>
+      {withdrawableEntry ? (
+        <button
+          type="button"
+          data-testid={`pilot-withdraw-${withdrawableEntry.workStateId}`}
+          disabled={withdrawing}
+          title={t("pulse.card.withdraw", {
+            title: withdrawableEntry.title,
+          })}
+          onClick={() => onWithdraw(withdrawableEntry)}
+          className="absolute top-2 right-2 cursor-pointer rounded-pill border border-line2 bg-panel px-2 py-1 text-[9px] font-[620] text-ink-muted hover:border-danger-soft hover:bg-danger-soft hover:text-danger disabled:cursor-wait disabled:opacity-60"
+        >
+          {withdrawing
+            ? t("pulse.card.withdrawing")
+            : t("pulse.card.withdrawAction")}
+        </button>
+      ) : null}
+    </div>
   );
 }
-
-const VISIBLE_TASKS = 3;
 
 /** Narrative for a workstream, whichever source published it. */
 function lineFor(
@@ -797,19 +877,6 @@ function lineFor(
     narrative ? workLineFromNarrative(narrative) : undefined,
     context ? workLineFromProjectContext(context) : undefined,
   );
-}
-
-/** Pulse entries this person published themselves, so they can retract them. */
-function ownWithdrawableEntry(
-  workstreams: PublicWorkProjection[],
-  pilotEntries: Map<string, PilotPulseEntry>,
-  identityId: string | undefined,
-): PilotPulseEntry[] {
-  if (!identityId) return [];
-  return workstreams.flatMap((workstream) => {
-    const entry = pilotEntries.get(workstream.id);
-    return entry && entry.ownerId === identityId ? [entry] : [];
-  });
 }
 
 function personSummary(

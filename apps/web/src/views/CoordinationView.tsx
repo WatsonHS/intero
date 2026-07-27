@@ -115,6 +115,19 @@ export function CoordinationView({
   const pilotThreadById = new Map(
     pilotThreads.map((thread) => [thread.id, thread]),
   );
+  const projectNames = new Map(
+    pilot?.projects.data?.projects.map((project) => [
+      project.id,
+      project.name,
+    ]) ?? [],
+  );
+  function projectNameOf(thread: PilotCoordinationThread | undefined): string {
+    if (!thread) return t("coord.projectUnbound");
+    return (
+      projectNames.get(thread.projectId) ??
+      `Project · ${thread.projectId.slice(0, 8)}`
+    );
+  }
   const pilotItems = pilotThreads.map((thread) =>
     pilotCoordinationToThreadPayload(
       thread,
@@ -373,6 +386,12 @@ export function CoordinationView({
                 {item.thread.title}
               </span>
               <span className="flex min-w-0 items-center gap-2">
+                <Meta
+                  tone={pilotThread ? "muted" : "faint"}
+                  className="max-w-[112px] shrink-0 truncate rounded-pill bg-raise px-1.5 py-0.5 text-[9px]"
+                >
+                  {projectNameOf(pilotThread)}
+                </Meta>
                 {first && second ? (
                   <AvatarPair
                     left={{ id: first, name: nameOf(first) }}
@@ -382,7 +401,6 @@ export function CoordinationView({
                   <Avatar id={first} name={nameOf(first)} size="xs" />
                 ) : null}
                 <span className="min-w-0 truncate text-[10px] text-faint">
-                  {pilotProject?.name ?? "Intero"} ·{" "}
                   {item.thread.participantIds.map(nameOf).join(", ")}
                 </span>
               </span>
@@ -399,6 +417,12 @@ export function CoordinationView({
       <div className="h-full overflow-auto px-[34px] pb-[60px] pt-[30px]">
         <div className="flex items-center gap-2.5">
           <Meta className="text-[10.5px]">{current.thread.id.slice(0, 8)}</Meta>
+          <Meta
+            tone={currentPilotThread ? "muted" : "faint"}
+            className="max-w-[180px] truncate rounded-pill bg-raise px-2 py-1 text-[9.5px]"
+          >
+            {projectNameOf(currentPilotThread)}
+          </Meta>
           <StatusPill tone={STATE_TONE[currentState]}>
             {t(`coord.state.${currentState}` as TranslationKey)}
           </StatusPill>
