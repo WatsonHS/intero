@@ -22,8 +22,8 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   await page.getByTitle("设置").click();
   await page.getByTestId("settings-category-agent").click();
   await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
+  await expect(page.getByTestId("agent-connections-settings")).toBeVisible();
   await expect(page.getByText("桌面 Git 感知")).toHaveCount(0);
-  await page.getByTestId("open-agent-connections").click();
   await expect(page.getByTestId("agent-connection-project")).toHaveValue(
     project.id,
   );
@@ -33,11 +33,11 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
   const promptText = (await prompt.textContent()) ?? "";
-  expect(promptText).toContain('"transport": "streamable-http"');
+  expect(promptText).toMatch(/"transport":\s*"streamable-http"/);
   expect(promptText).toContain(".codex/config.toml");
   expect(promptText).toContain("AGENTS.md");
-  expect(promptText).toContain(
-    '"authorization": "Bearer credential returned by setup exchange"',
+  expect(promptText).toMatch(
+    /"authorization":\s*"Bearer credential returned by setup exchange"/,
   );
   expect(promptText).toContain("pending_gui_validation");
   expect(promptText).not.toContain("required = false");
@@ -88,8 +88,6 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
     "连接 Codex",
   );
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByTestId("agent-connections-panel")).not.toBeVisible();
   await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
 });
 

@@ -12,7 +12,7 @@ const databaseUrl = process.env.DATABASE_URL;
 const databaseAppUrl = process.env.DATABASE_APP_URL;
 const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 
-databaseSuite("Codex one-time ticket and Bearer MCP connection", () => {
+databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
   const pool = new Pool({ connectionString: databaseAppUrl });
   const authSecret = "intero-bearer-integration-secret-at-least-32-bytes";
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -57,7 +57,7 @@ databaseSuite("Codex one-time ticket and Bearer MCP connection", () => {
     await pool.end();
   });
 
-  it("consumes a Better Auth ticket once, validates the Project credential, and starts safely after disconnect", async () => {
+  it("retries an opaque ticket until validation, then starts safely after disconnect", async () => {
     const signup = await fetch(`${baseUrl}/api/auth/sign-up/email`, {
       method: "POST",
       headers: {
@@ -132,22 +132,25 @@ databaseSuite("Codex one-time ticket and Bearer MCP connection", () => {
     expect(connectionResult.body.mcpUrl).toBe(`${baseUrl}/v1/pilot/mcp`);
     const ticketId = connectionResult.body.ticket.id as string;
     const rawTicket = (connectionResult.body.connectPrompt as string).match(
-      /"ticket":\s*"(ott_[A-Za-z0-9_-]+)"/,
+      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
     )?.[1];
     expect(rawTicket).toBeTruthy();
-    const stored = await pool.query<{ identifier: string }>(
-      `SELECT identifier FROM verification
-       WHERE identifier LIKE 'one-time-token:%'
-       ORDER BY "createdAt" DESC
-       LIMIT 1`,
-    );
-    expect(stored.rows[0]?.identifier).not.toContain(rawTicket);
 
     const workspaceId = "019d0000-0000-7000-8000-000000000001";
+    const firstExchange = await jsonRequest(
+      `${baseUrl}/v1/pilot/agent/connect`,
+      {
+        ticket: rawTicket,
+        client: "codex",
+        name: "Codex bearer integration",
+        workspaceId,
+      },
+    );
+    expect(firstExchange.response.status).toBe(201);
     const connected = await jsonRequest(`${baseUrl}/v1/pilot/agent/connect`, {
       ticket: rawTicket,
       client: "codex",
-      name: "Codex bearer integration",
+      name: "Codex bearer integration retry",
       workspaceId,
     });
     expect(connected.response.status).toBe(201);
@@ -160,15 +163,14 @@ databaseSuite("Codex one-time ticket and Bearer MCP connection", () => {
     expect(connected.body.binding).not.toHaveProperty("credentialHash");
     const credential = connected.body.credential as string;
     const verificationCode = connected.body.verification.code as string;
+    expect(credential).not.toBe(firstExchange.body.credential);
 
-    const replay = await jsonRequest(`${baseUrl}/v1/pilot/agent/connect`, {
-      ticket: rawTicket,
-      client: "codex",
-      name: "Codex replay",
-      workspaceId,
-    });
-    expect(replay.response.status).toBe(401);
-    expect(replay.body.code).toBe("AGENT_TICKET_INVALID");
+    const supersededCredential = await mcpRequest(
+      `${baseUrl}/v1/pilot/mcp`,
+      initializeRequest(),
+      firstExchange.body.credential as string,
+    );
+    expect(supersededCredential.response.status).toBe(401);
 
     const initialized = await mcpRequest(
       `${baseUrl}/v1/pilot/mcp`,
@@ -200,6 +202,15 @@ databaseSuite("Codex one-time ticket and Bearer MCP connection", () => {
       bindingId: ticketId,
       projectId,
     });
+
+    const replay = await jsonRequest(`${baseUrl}/v1/pilot/agent/connect`, {
+      ticket: rawTicket,
+      client: "codex",
+      name: "Codex replay after validation",
+      workspaceId,
+    });
+    expect(replay.response.status).toBe(401);
+    expect(replay.body.code).toBe("AGENT_TICKET_INVALID");
 
     const disconnected = await jsonRequest(
       `${baseUrl}/v1/pilot/agent-bindings/${ticketId}/disconnect`,

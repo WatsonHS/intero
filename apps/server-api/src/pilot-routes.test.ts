@@ -187,30 +187,39 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain("/v1/pilot/mcp");
     expect(chineseConnectPrompt).toContain('"reuseProbeUrl"');
     expect(chineseConnectPrompt).toContain(
-      "现有本地文件只提供候选 workspaceId",
+      '"retryableUntil":"connected_or_expired"',
     );
     expect(chineseConnectPrompt).toContain(
-      "intero.connection_status 返回 disconnected",
-    );
-    expect(chineseConnectPrompt).toContain('"expectedAuthenticatedTools": [');
-    expect(chineseConnectPrompt).toContain(
-      "intero.connection_status 读到 mcp_initialized",
+      '"exchangeRequest":{"method":"POST","headers":{"content-type":"application/json"},"body":',
     );
     expect(chineseConnectPrompt).toContain(
-      "stand_in.report_checkpoint 从 connected 状态开始",
+      '"client":"codex","name":"Codex · <repository-name>","workspaceId":"<stable-workspace-uuid>"',
     );
     expect(chineseConnectPrompt).toContain(
-      "配置任务本身以 pending_gui_validation 结束",
+      "JSON body 精确使用 ticket、client、name、workspaceId 四个键",
     );
-    expect(chineseConnectPrompt).toContain("删除本地 verification 字段");
-    expect(chineseConnectPrompt).not.toContain("先复用并验证");
-    expect(chineseConnectPrompt).not.toContain("完整 Intero 工具目录");
+    expect(chineseConnectPrompt).toContain("connected 或 expiresAt 前");
+    expect(chineseConnectPrompt).toContain("intero.connection_status");
+    expect(chineseConnectPrompt).toContain("intero.validate_connection");
+    expect(chineseConnectPrompt).toContain("stand_in.report_checkpoint");
+    expect(chineseConnectPrompt).toContain(
+      "本配置任务报告 pending_gui_validation",
+    );
+    expect(chineseConnectPrompt).toContain(
+      "直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话",
+    );
+    expect(chineseConnectPrompt).toContain("新对话报告 MCP 验证结果");
+    expect(chineseConnectPrompt).not.toContain("codex://threads/new");
+    expect(chineseConnectPrompt).toContain("移除本地 verification 字段");
+    expect(chineseConnectPrompt).not.toContain("以下 JSON 是声明式期望状态");
     expect(chineseConnectPrompt).not.toContain("intero-mcp");
     expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
+    expect(chineseConnectPrompt.length).toBeLessThan(3_500);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
     expect(chineseRawTicket).toBeDefined();
+    const chineseWorkspaceId = uuidv7();
     const chineseBinding = await app.inject({
       method: "POST",
       url: "/v1/pilot/agent/connect",
@@ -218,11 +227,34 @@ describe("pilot cloud-first vertical slice", () => {
         ticket: chineseRawTicket,
         client: "codex",
         name: "Codex 中文连接",
-        workspaceId: uuidv7(),
+        workspaceId: chineseWorkspaceId,
       },
     });
     expect(chineseBinding.statusCode).toBe(201);
     expect(chineseBinding.json().binding.preferredLanguage).toBe("zh-CN");
+    const chineseRetry = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket: chineseRawTicket,
+        client: "codex",
+        name: "Codex 中文连接重试",
+        workspaceId: chineseWorkspaceId,
+      },
+    });
+    expect(chineseRetry.statusCode).toBe(201);
+    expect(chineseRetry.json().binding.id).toBe(
+      chineseBinding.json().binding.id,
+    );
+    expect(chineseRetry.json().credential).not.toBe(
+      chineseBinding.json().credential,
+    );
+    expect(
+      (await overview(app, project.id, A)).bindings.filter(
+        (binding: { id: string }) =>
+          binding.id === chineseBinding.json().binding.id,
+      ),
+    ).toHaveLength(1);
 
     await app.inject({
       method: "PATCH",
@@ -249,6 +281,15 @@ describe("pilot cloud-first vertical slice", () => {
       ".claude/settings.json",
     );
     expect(englishTicket.json().connectPrompt).toContain("CLAUDE.md");
+    expect(englishTicket.json().connectPrompt).toContain(
+      "The same ticket is retryable until connected or expiresAt",
+    );
+    expect(englishTicket.json().connectPrompt).toContain(
+      "exactly four JSON keys: ticket, client, name, workspaceId",
+    );
+    expect((englishTicket.json().connectPrompt as string).length).toBeLessThan(
+      3_600,
+    );
     expect(englishTicket.json().connectPrompt).not.toContain("intero-mcp");
 
     const openCodeTicket = await app.inject({
@@ -266,7 +307,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
   });
 
-  it("creates a project-scoped one-time Bearer connection task", async () => {
+  it("creates a project-scoped retryable Bearer connection task", async () => {
     const { project } = await readyProject(app);
     await app.inject({
       method: "PATCH",
@@ -289,9 +330,16 @@ describe("pilot cloud-first vertical slice", () => {
     expect(response.json().ticket).not.toHaveProperty("ticketHash");
     expect(response.json().mcpUrl).toBe("http://127.0.0.1:4310/v1/pilot/mcp");
     expect(response.json().connectPrompt).toContain(
-      '"authorization": "Bearer credential returned by setup exchange"',
+      '"authorization":"Bearer credential returned by setup exchange"',
     );
-    expect(response.json().connectPrompt).toContain('"singleUse": true');
+    expect(response.json().connectPrompt).toContain(
+      '"retryableUntil":"connected_or_expired"',
+    );
+    expect(response.json().connectPrompt).toContain(
+      '"body":{"ticket":"ticket_',
+    );
+    expect(response.json().connectPrompt).not.toContain('"clientId"');
+    expect(response.json().connectPrompt).not.toContain('"repositoryName"');
     expect(response.json().connectPrompt).toContain("pending_gui_validation");
     expect(response.json().connectPrompt).not.toContain("required = false");
     expect(response.json().connectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
@@ -1157,6 +1205,19 @@ describe("pilot cloud-first vertical slice", () => {
       validatedAt: firstValidatedAt,
     });
     await mcpClient.close();
+
+    const retryAfterValidation = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket,
+        client: "codex",
+        name: "Codex · remote-mcp-test retry",
+        workspaceId: connected.json().binding.workspaceId,
+      },
+    });
+    expect(retryAfterValidation.statusCode).toBe(401);
+    expect(retryAfterValidation.json().code).toBe("AGENT_TICKET_INVALID");
 
     const after = await overview(app, fixture.project.id, A);
     expect(after.bindings[0]).toMatchObject({

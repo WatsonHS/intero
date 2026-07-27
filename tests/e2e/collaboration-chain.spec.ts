@@ -770,7 +770,7 @@ async function connectThroughSettings(
   await navigate(page, "设置");
   await page.getByTestId("settings-category-agent").click();
   await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
-  await page.getByTestId("open-agent-connections").click();
+  await expect(page.getByTestId("agent-connections-settings")).toBeVisible();
   const clients: AgentClient[] = ["claude-code", "opencode", "codex"];
   let client: AgentClient | undefined;
   for (const candidate of clients) {
@@ -789,8 +789,6 @@ async function connectThroughSettings(
   )?.[1];
   expect(ticket).toBeTruthy();
 
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByTestId("agent-connections-panel")).not.toBeVisible();
   await navigate(page, "Team Pulse");
   const connected = await runCloudClient(
     [

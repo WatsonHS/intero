@@ -155,7 +155,7 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     await restarted.close();
   });
 
-  it("redeems an Agent ticket exactly once under concurrency", async () => {
+  it("rotates one pending Agent binding until validation consumes its ticket", async () => {
     const ticket: PilotAgentTicket = {
       id: uuidv7(),
       projectId,
@@ -167,28 +167,21 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       createdAt: "2026-07-26T01:10:00.000Z",
     };
     await store.createAgentTicket(ticket);
-    const attempts = await Promise.allSettled([
-      store.exchangeAgentTicket(
-        ticket.ticketHash,
-        binding(projectId, adminId, "b".repeat(64)),
-        "2026-07-26T01:10:01.000Z",
-      ),
-      store.exchangeAgentTicket(
-        ticket.ticketHash,
-        binding(projectId, adminId, "c".repeat(64)),
-        "2026-07-26T01:10:01.000Z",
-      ),
-    ]);
-    expect(
-      attempts.filter((attempt) => attempt.status === "fulfilled"),
-    ).toHaveLength(1);
-    expect(
-      attempts.filter((attempt) => attempt.status === "rejected"),
-    ).toHaveLength(1);
-    const connected = attempts.find(
-      (attempt): attempt is PromiseFulfilledResult<PilotAgentBinding> =>
-        attempt.status === "fulfilled",
-    )!.value;
+    const first = await store.exchangeAgentTicket(
+      ticket.ticketHash,
+      binding(ticket.id, projectId, adminId, "b".repeat(64)),
+      "2026-07-26T01:10:01.000Z",
+    );
+    const connected = await store.exchangeAgentTicket(
+      ticket.ticketHash,
+      binding(ticket.id, projectId, adminId, "c".repeat(64)),
+      "2026-07-26T01:10:01.250Z",
+    );
+    expect(connected.id).toBe(first.id);
+    expect(connected.credentialHash).toBe("c".repeat(64));
+    await expect(
+      store.listAgentBindings(projectId, adminId),
+    ).resolves.toHaveLength(1);
     await store.initializeAgentBinding(
       connected.id,
       adminId,
@@ -206,6 +199,13 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       "2026-07-26T01:10:02.000Z",
     );
     expect(validated.validatedAt).toBe("2026-07-26T01:10:02.000Z");
+    await expect(
+      store.exchangeAgentTicket(
+        ticket.ticketHash,
+        binding(ticket.id, projectId, adminId, "d".repeat(64)),
+        "2026-07-26T01:10:03.000Z",
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_TICKET_INVALID" });
     const restarted = new NormalizedPostgresPilotStore(
       new Pool({ connectionString: databaseAppUrl }),
       organizationId,
@@ -469,12 +469,13 @@ type PilotJoinLinkWithHash = {
 };
 
 function binding(
+  id: string,
   projectId: ProjectId,
   adminId: PrincipalId,
   credentialHash: string,
 ): PilotAgentBinding {
   return {
-    id: uuidv7(),
+    id,
     projectId,
     ownerId: adminId,
     client: "codex",

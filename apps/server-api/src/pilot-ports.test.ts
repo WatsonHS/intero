@@ -455,8 +455,9 @@ async function seededCheckpoint() {
     defaultModel: "pilot-model",
     encryptedApiKey: secrets.encrypt("key"),
   });
+  const ticketId = uuidv7();
   const binding: PilotAgentBinding = {
-    id: uuidv7(),
+    id: ticketId,
     projectId: fixture.project.id,
     ownerId: ADMIN,
     client: "codex",
@@ -468,7 +469,7 @@ async function seededCheckpoint() {
   };
   const ticketHash = "c".repeat(64);
   await fixture.store.createAgentTicket({
-    id: uuidv7(),
+    id: ticketId,
     projectId: fixture.project.id,
     ownerId: ADMIN,
     client: "codex",

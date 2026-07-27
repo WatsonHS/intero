@@ -1655,6 +1655,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
           !ticket ||
           ticket.usedAt ||
           ticket.expiresAt <= now ||
+          ticket.id !== binding.id ||
           ticket.projectId !== binding.projectId ||
           ticket.ownerId !== binding.ownerId ||
           ticket.client !== binding.client
@@ -1665,7 +1666,25 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection ticket is invalid, expired, or already used.",
           );
         }
-        ticket.usedAt = now;
+        const existingIndex = snapshot.agentBindings.findIndex(
+          (item) => item.id === ticket.id,
+        );
+        if (existingIndex >= 0) {
+          const existing = snapshot.agentBindings[existingIndex]!;
+          if (existing.validatedAt || existing.disconnectedAt) {
+            throw new PilotStoreError(
+              "AGENT_TICKET_INVALID",
+              401,
+              "Agent connection ticket is invalid, expired, or already used.",
+            );
+          }
+          const replacement: PilotAgentBinding = {
+            ...binding,
+            createdAt: existing.createdAt,
+          };
+          snapshot.agentBindings[existingIndex] = replacement;
+          return replacement;
+        }
         snapshot.agentBindings.push(binding);
         return binding;
       },
@@ -1818,6 +1837,10 @@ export abstract class SnapshotPilotStore implements PilotStore {
         binding.verificationUsedAt ??= now;
         binding.validatedAt ??= now;
         binding.lastSeenAt = now;
+        const ticket = snapshot.agentTickets.find(
+          (item) => item.id === binding.id,
+        );
+        if (ticket) ticket.usedAt ??= now;
         return binding;
       },
       {

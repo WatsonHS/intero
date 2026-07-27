@@ -11,7 +11,7 @@ import {
   SidebarSimpleIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { getActionInbox, getBootstrap } from "./api.js";
 import { useI18n } from "./i18n/index.js";
@@ -29,7 +29,6 @@ import {
   NoTeamAccessView,
   SignInView,
 } from "./views/AccessView.js";
-import { AgentConnectionsPanel } from "./views/AgentConnectionsPanel.js";
 import { AdminView } from "./views/AdminView.js";
 import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
@@ -120,8 +119,6 @@ function InteroApp() {
   const [settingsCategory, setSettingsCategory] =
     useState<SettingsCategory>("personal");
   const [bootstrapActive, setBootstrapActive] = useState(false);
-  const [connectionProjectId, setConnectionProjectId] = useState<string>();
-  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [personId, setPersonId] = useState<string>();
   const [personReturnView, setPersonReturnView] = useState<"pulse" | "search">(
@@ -178,13 +175,11 @@ function InteroApp() {
     );
   }
 
-  const openAgentConnections = useCallback((projectId?: string) => {
-    setConnectionProjectId(projectId);
-    setConnectionsOpen(true);
-  }, []);
-  const closeAgentConnections = useCallback(() => {
-    setConnectionsOpen(false);
-  }, []);
+  function openAgentConnections(projectId?: string) {
+    if (projectId) pilot?.setSelectedProjectId(projectId);
+    setSettingsCategory("agent");
+    setView("settings");
+  }
 
   function openAction(sourceRef: string) {
     if (sourceRef.startsWith("spec:")) {
@@ -493,7 +488,6 @@ function InteroApp() {
           <SettingsView
             initialCategory={settingsCategory}
             onCategoryChange={setSettingsCategory}
-            onOpenAgentConnections={openAgentConnections}
           />
         ) : null}
         {/* AdminView owns its own permission state: gating here would blank the
@@ -524,12 +518,6 @@ function InteroApp() {
           />
         ) : null}
       </main>
-      {connectionsOpen ? (
-        <AgentConnectionsPanel
-          initialProjectId={connectionProjectId}
-          onClose={closeAgentConnections}
-        />
-      ) : null}
     </div>
   );
 }

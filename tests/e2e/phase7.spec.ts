@@ -85,7 +85,7 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
       admin.getByText("替身只识别已授权的结构化风险信号"),
     ).toBeVisible();
     await admin.getByTestId("settings-category-agent").click();
-    await admin.getByTestId("open-agent-connections").click();
+    await expect(admin.getByTestId("agent-connections-settings")).toBeVisible();
 
     const connectClients = ["claude-code", "opencode", "codex"] as const;
     let connectClient: (typeof connectClients)[number] | undefined;
@@ -157,10 +157,6 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
       path: "output/playwright/phase7/01-admin-agent-and-policy.png",
       fullPage: true,
     });
-    await admin.getByRole("button", { name: "关闭", exact: true }).click();
-    await expect(
-      admin.getByTestId("agent-connections-panel"),
-    ).not.toBeVisible();
 
     await leader.getByRole("button", { name: "通知" }).click();
     const targetedItem = leader

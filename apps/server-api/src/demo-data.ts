@@ -950,7 +950,6 @@ async function seedPilotWorkState(
     {
       ownerId: DEMO_IDS.principals.alex,
       bindingId: "019f9a00-0000-7000-8000-000000000601",
-      ticketId: "019f9a00-0000-7000-8000-000000000611",
       client: "codex" as const,
       occurredAt: offsetIso(now, -8 * 60_000),
       checkpoint: {
@@ -986,7 +985,6 @@ async function seedPilotWorkState(
     {
       ownerId: DEMO_IDS.principals.priya,
       bindingId: "019f9a00-0000-7000-8000-000000000602",
-      ticketId: "019f9a00-0000-7000-8000-000000000612",
       client: "claude-code" as const,
       occurredAt: offsetIso(now, -47 * 60_000),
       checkpoint: {
@@ -1031,7 +1029,6 @@ async function seedPilotWorkState(
     {
       ownerId: DEMO_IDS.principals.morgan,
       bindingId: "019f9a00-0000-7000-8000-000000000603",
-      ticketId: "019f9a00-0000-7000-8000-000000000613",
       client: "opencode" as const,
       occurredAt: offsetIso(now, -3 * 3_600_000),
       checkpoint: {
@@ -1070,7 +1067,7 @@ async function seedPilotWorkState(
   for (const input of inputs) {
     const ticketHash = sha256(`demo-ticket-${input.bindingId}`);
     const ticket = PilotAgentTicket.parse({
-      id: input.ticketId,
+      id: input.bindingId,
       projectId: DEMO_IDS.project,
       ownerId: input.ownerId,
       client: input.client,

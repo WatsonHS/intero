@@ -31,10 +31,7 @@ import type {
   RequestAuth,
 } from "./auth.js";
 import type { PostgresAutomationStore } from "./automation-store.js";
-import {
-  ACTIVATION_BOOTSTRAP_HEADER,
-  findPrincipalForAuthUser,
-} from "./auth.js";
+import { ACTIVATION_BOOTSTRAP_HEADER } from "./auth.js";
 import type { CoordinationTransport, ModelGateway } from "./pilot-ports.js";
 import type { PostgresInformationStore } from "./information-store.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
@@ -1195,7 +1192,6 @@ export async function registerPilotRoutes(
         .parse(request.body);
       const issued = await issueAgentTicket(
         options,
-        request,
         principal,
         ProjectId.parse(request.params.projectId),
         input.client,
@@ -1225,7 +1221,6 @@ export async function registerPilotRoutes(
         .parse(request.body);
       const issued = await issueAgentTicket(
         options,
-        request,
         principal,
         ProjectId.parse(request.params.projectId),
         input.client,
@@ -1255,10 +1250,6 @@ export async function registerPilotRoutes(
       .strict()
       .parse(request.body);
     const now = new Date().toISOString();
-    const authenticatedOwnerId = await consumeAgentTicketIdentity(
-      options,
-      input.ticket,
-    );
     const credential = `agent_${randomBytes(32).toString("base64url")}`;
     const verificationCode = `verify_${randomBytes(24).toString("base64url")}`;
     const verificationExpiresAt = new Date(
@@ -1274,7 +1265,6 @@ export async function registerPilotRoutes(
       verificationCode,
       verificationExpiresAt,
       now,
-      authenticatedOwnerId,
     );
     return reply.status(201).send({
       credential,
@@ -1439,17 +1429,9 @@ async function findTicketContext(
   verificationCode: string,
   verificationExpiresAt: string,
   now: string,
-  authenticatedOwnerId?: PrincipalId,
 ): Promise<PilotAgentBinding> {
   const ticketHash = sha256(rawTicket);
   const ticket = await store.resolveAgentTicket(ticketHash, now);
-  if (authenticatedOwnerId && ticket.ownerId !== authenticatedOwnerId) {
-    throw new PilotStoreError(
-      "AGENT_TICKET_INVALID",
-      401,
-      "Agent connection ticket is invalid, expired, or already used.",
-    );
-  }
   const binding: PilotAgentBinding = {
     id: ticket.id,
     projectId: ticket.projectId,
@@ -1469,7 +1451,6 @@ async function findTicketContext(
 
 async function issueAgentTicket(
   options: PilotRoutesOptions,
-  request: FastifyRequest,
   principal: AuthenticatedPrincipal,
   projectId: ProjectId,
   client: PilotAgentBinding["client"],
@@ -1499,7 +1480,7 @@ async function issueAgentTicket(
       "Project was not found.",
     );
   }
-  const rawTicket = await generateAgentTicketToken(options, request, principal);
+  const rawTicket = `ticket_${randomBytes(24).toString("base64url")}`;
   const now = new Date();
   const ticket: PilotAgentTicket = {
     id: uuidv7(),
@@ -1518,59 +1499,6 @@ async function issueAgentTicket(
     project,
     baseUrl: effectiveDeploymentBaseUrl(options, organization),
   };
-}
-
-async function generateAgentTicketToken(
-  options: PilotRoutesOptions,
-  request: FastifyRequest,
-  principal: AuthenticatedPrincipal,
-): Promise<string> {
-  if (!options.auth || !principal.authUserId) {
-    return `ticket_${randomBytes(24).toString("base64url")}`;
-  }
-  try {
-    const generated = await options.auth.api.generateOneTimeToken({
-      headers: authHeaders(request),
-    });
-    return generated.token;
-  } catch {
-    throw new PilotStoreError(
-      "AGENT_TICKET_IDENTITY_REQUIRED",
-      401,
-      "Sign in again before creating a Coding Agent connection.",
-    );
-  }
-}
-
-async function consumeAgentTicketIdentity(
-  options: PilotRoutesOptions,
-  rawTicket: string,
-): Promise<PrincipalId | undefined> {
-  if (!rawTicket.startsWith("ott_")) return undefined;
-  if (!options.auth || !options.authDatabase) {
-    throw new PilotStoreError(
-      "AGENT_TICKET_INVALID",
-      401,
-      "Agent connection ticket is invalid, expired, or already used.",
-    );
-  }
-  try {
-    const verified = await options.auth.api.verifyOneTimeToken({
-      body: { token: rawTicket },
-    });
-    const principalId = await findPrincipalForAuthUser(
-      options.authDatabase,
-      verified.user.id,
-    );
-    if (!principalId) throw new Error("Intero principal not found.");
-    return principalId;
-  } catch {
-    throw new PilotStoreError(
-      "AGENT_TICKET_INVALID",
-      401,
-      "Agent connection ticket is invalid, expired, or already used.",
-    );
-  }
 }
 
 function authHeaders(request: FastifyRequest): Headers {
@@ -1889,152 +1817,123 @@ function buildConnectPrompt(
   const nativeConfiguration =
     client === "codex"
       ? {
-          mcp: "Merge [mcp_servers.intero] with url, enabled = true, and an Authorization http_headers entry into .codex/config.toml.",
-          hooks:
-            "Merge SessionStart and SessionEnd command hooks that invoke the Project-local privacy filter into .codex/hooks.json.",
+          mcp: "Merge Intero url, enabled, and Authorization http_headers into [mcp_servers.intero].",
+          hooks: "Merge privacy-filtered SessionStart/SessionEnd hooks.",
         }
       : client === "claude-code"
         ? {
-            mcp: "Merge mcpServers.intero as a remote HTTP server with an Authorization header into .mcp.json.",
-            hooks:
-              "Merge SessionStart and SessionEnd command hooks that invoke the Project-local privacy filter into .claude/settings.json.",
+            mcp: "Merge remote HTTP mcpServers.intero with Authorization.",
+            hooks: "Merge privacy-filtered SessionStart/SessionEnd hooks.",
           }
         : {
-            mcp: "Merge mcp.intero as an enabled remote server with url and Authorization headers into opencode.json.",
-            hooks:
-              "Merge a privacy-filtering session.created/session.idle/session.deleted plugin into .opencode/plugins/intero.ts.",
+            mcp: "Merge enabled remote mcp.intero with url and Authorization.",
+            hooks: "Merge the privacy-filtered session lifecycle plugin.",
           };
-  const manifest = {
+  const setup = {
     protocol: "intero-agent-setup/v1",
-    desiredState: {
-      project: { id: project.id, name: project.name },
-      agent: { client, label: clientLabel },
-      setupAuthorization: {
-        exchangeUrl: `${baseUrl}/v1/pilot/agent/connect`,
-        reuseProbeUrl: `${baseUrl}/v1/pilot/agent/context`,
-        ticket,
-        expiresAt,
-        singleUse: true,
-        reusableWhen:
-          "The probe returns HTTP 200, the binding matches this Project and client, validatedAt is present, and intero.connection_status returns connected.",
-        reconnectWhen:
-          "The probe is unauthorized, validation is pending, or intero.connection_status reports disconnected.",
+    project: { id: project.id, name: project.name },
+    client: { id: client, label: clientLabel },
+    authorization: {
+      exchangeUrl: `${baseUrl}/v1/pilot/agent/connect`,
+      reuseProbeUrl: `${baseUrl}/v1/pilot/agent/context`,
+      ticket,
+      expiresAt,
+      retryableUntil: "connected_or_expired",
+      exchangeRequest: {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: {
+          ticket,
+          client,
+          name: `${clientLabel} · <repository-name>`,
+          workspaceId: "<stable-workspace-uuid>",
+        },
       },
-      mcp: {
-        name: "intero",
-        transport: "streamable-http",
-        url: `${baseUrl}/v1/pilot/mcp`,
-        authorization: "Bearer credential returned by setup exchange",
-        connectionEvidence: [
-          "authenticated MCP initialize",
-          "intero.validate_connection result",
-          "intero.connection_status result with status connected",
-        ],
-        connectionStatusTool: "intero.connection_status",
-        requiredValidationTool: "intero.validate_connection",
-        expectedAuthenticatedTools: [
-          "intero.connection_status",
-          "intero.validate_connection",
-          "stand_in.current_context",
-          "stand_in.report_checkpoint",
-        ],
-      },
-      validation: {
-        owner: "a fresh native GUI task after Project configuration is saved",
-        setupTaskTerminalStatus: "pending_gui_validation",
-        temporaryCodePath: ".intero/connection.json#verification.code",
-        removeTemporaryCodeAfterSuccess: true,
-        sequence: [
-          "intero.connection_status returns mcp_initialized",
-          "intero.validate_connection returns connected",
-          "intero.connection_status returns connected",
-          "remove the temporary verification field",
-        ],
-        connectedEvidence:
-          "intero.validate_connection and intero.connection_status both return connected as native tool calls in the fresh GUI task",
-      },
-      hooks: {
-        endpoint: `${baseUrl}/v1/pilot/agent/hooks`,
-        events:
-          client === "opencode"
-            ? ["session.created", "session.idle", "session.deleted"]
-            : ["SessionStart", "SessionEnd"],
-        allowedPayload: [
-          "clientEventId",
-          "lifecycle",
-          "occurredAt",
-          "workstreamKey",
-          "workstreamTitle",
-          "evidenceRefs",
-        ],
-        idempotency:
-          "Derive clientEventId deterministically from client, lifecycle event, and a local hash of the native event/session ID.",
-      },
-      projectInstructions: {
-        preferredLanguage,
-        checkpointTool: "stand_in.report_checkpoint",
-        semanticBranchPoints: [
-          "intent",
-          "decision",
-          "blocker",
-          "dependency",
-          "scope_change",
-          "artifact",
-          "validation",
-          "pause",
-          "completion",
-        ],
-      },
-      artifacts: {
-        ...artifacts,
-        localCredential: ".intero/connection.json",
-        credentialFileMode: "0600",
-        credentialGitVisibility: "excluded",
-        reportCredentialValuesAs: "redacted",
-      },
-      nativeConfiguration,
     },
+    mcp: {
+      name: "intero",
+      transport: "streamable-http",
+      url: `${baseUrl}/v1/pilot/mcp`,
+      authorization: "Bearer credential returned by setup exchange",
+    },
+    artifacts: {
+      ...artifacts,
+      localCredential: ".intero/connection.json",
+      credentialFileMode: "0600",
+      credentialGitVisibility: "excluded",
+    },
+    hooks: {
+      endpoint: `${baseUrl}/v1/pilot/agent/hooks`,
+      events:
+        client === "opencode"
+          ? ["session.created", "session.idle", "session.deleted"]
+          : ["SessionStart", "SessionEnd"],
+      allowedPayload: [
+        "clientEventId",
+        "lifecycle",
+        "occurredAt",
+        "workstreamKey",
+        "workstreamTitle",
+        "evidenceRefs",
+      ],
+    },
+    projectInstructions: {
+      preferredLanguage,
+      checkpointTool: "stand_in.report_checkpoint",
+      semanticBranchPoints: [
+        "intent",
+        "decision",
+        "blocker",
+        "dependency",
+        "scope_change",
+        "artifact",
+        "validation",
+        "pause",
+        "completion",
+      ],
+    },
+    nativeConfiguration,
   };
-  const serializedManifest = JSON.stringify(manifest, null, 2);
+  const serializedSetup = JSON.stringify(setup);
   return preferredLanguage === "zh-CN"
     ? [
-        `请在当前仓库中完成 ${clientLabel} 到 Intero 项目“${project.name}”的原生连接。检查并维护项目级配置，再交给新的原生 GUI 任务完成真实 MCP 验证。`,
+        `请在当前仓库中完成 ${clientLabel} 到 Intero 项目“${project.name}”的项目级原生连接。`,
         "",
-        "以下 JSON 是声明式期望状态。先检查现有配置并生成最小合并方案，只维护 Intero 项；保留所有无关配置。",
+        "连接参数：",
         "```json",
-        serializedManifest,
+        serializedSetup,
         "```",
         "",
-        "执行要求：",
-        "1. 找到仓库根目录。现有本地文件只提供候选 workspaceId，不能单独证明连接有效。用 manifest.setupAuthorization.reuseProbeUrl 检查候选 credential；仅当响应为 HTTP 200、binding 与当前项目及 client 匹配、validatedAt 已存在，并且 intero.connection_status 返回 connected 时复用。若 probe 未授权、验证尚未完成，或 intero.connection_status 返回 disconnected，立即使用本次 ticket 兑换新 credential；沿用已有稳定 workspaceId。",
-        "2. 按 manifest.artifacts 的权限、Git 可见性和脱敏规则保存 credential。新兑换的 verification.code 临时写入 manifest.validation.temporaryCodePath，供新的 GUI 验证任务使用。",
-        `3. 通过 ${clientLabel} 的原生项目配置合并 Streamable HTTP MCP。`,
-        "4. 用原生 Hook 配置和项目内隐私过滤器上报生命周期。按 manifest.allowedPayload 构造上报数据，在本地哈希原生 event/session ID 生成稳定 clientEventId，并让 Hook 采用 fail-open 行为。",
-        "5. 在项目 instructions 中添加带 intero-managed 标记的规则：仅在语义分支点调用 stand_in.report_checkpoint；依赖或定向协作必须提供当前项目成员的 collaboration.targetPrincipalId。",
-        `6. 校验配置语法和 ${clientLabel} 的原生 MCP 注册状态。`,
+        "按顺序执行：",
+        "1. 定位仓库根目录并保留现有非 Intero 配置；从 .intero/connection.json 读取候选 credential 与稳定 workspaceId。",
+        "2. 用候选 credential 请求 authorization.reuseProbeUrl；HTTP 200 且 projectId、client 匹配时复用，否则进入兑换。",
+        "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前可重试；每次 HTTP 201 以最新 credential、verification 为准，原子写入 artifacts.localCredential 并设置 0600。",
+        `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 Hook；Authorization 使用已保存 credential，Hook 仅发送 hooks.allowedPayload，以原生事件 ID 的本地哈希生成 clientEventId 并 fail-open。`,
+        "5. 在项目 instructions 维护 intero-managed 规则：在 projectInstructions.semanticBranchPoints 调用 stand_in.report_checkpoint；定向协作填写当前项目成员 ID。",
+        `6. 校验配置语法与 ${clientLabel} 原生 MCP 注册状态。`,
         client === "codex"
-          ? "7. 只要本次写入或修改了 credential 或原生配置，就生成一个 codex://threads/new 深链接，path 使用当前仓库根目录。新 Codex App 任务按 manifest.validation.sequence 执行：先由 intero.connection_status 读到 mcp_initialized，再从临时路径读取 verification.code 并调用 intero.validate_connection，随后由 intero.connection_status 回读 connected，最后删除本地 verification 字段。配置任务本身以 pending_gui_validation 结束；新任务的两次原生工具结果构成 connected 证据。"
-          : `7. 只要本次写入或修改了 credential 或原生配置，就在 ${clientLabel} GUI 中为当前本地项目启动新的验证会话。新会话按 manifest.validation.sequence 执行：先读到 mcp_initialized，再调用 intero.validate_connection，随后回读 connected，最后删除本地 verification 字段；配置会话以 pending_gui_validation 结束。`,
-        "8. 幂等地再次检查三类配置。只有未改配置且 intero.connection_status 已返回 connected，或新的 GUI 验证任务已依次获得 intero.validate_connection 与 intero.connection_status 的 connected 结果时，才能报告 connected；其他情况报告 pending_gui_validation。stand_in.report_checkpoint 从 connected 状态开始承担语义工作上报。最终只报告 changed、unchanged、preserved、conflicts、verification 和 connected project/agent，并对所有凭证做脱敏。",
+          ? "7. HTTP 201 的 credential 与 verification 落盘后，直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话并跟进结果。新对话依次调用 intero.connection_status、用本地 verification.code 调用 intero.validate_connection、再次调用 intero.connection_status；读到 connected 后移除本地 verification 字段。本配置任务报告 pending_gui_validation，新对话报告 MCP 验证结果。"
+          : `7. 配置变化时在 ${clientLabel} GUI 启动新验证会话：读取状态、用本地 verification.code 调用 intero.validate_connection、回读 connected 并移除 verification。本任务报告 pending_gui_validation。`,
+        "8. 报告 changed、unchanged、preserved、conflicts、verification、connected project/agent，凭证脱敏；验证前状态为 pending_gui_validation。",
       ].join("\n")
     : [
-        `Complete the native ${clientLabel} connection from this repository to the Intero Project "${project.name}". Inspect and maintain the Project-scoped configuration, then hand real MCP validation to a fresh native GUI task.`,
+        `Complete the Project-scoped native ${clientLabel} connection from this repository to the Intero Project "${project.name}".`,
         "",
-        "The JSON below is the declarative desired state. Inspect the existing configuration first and produce the smallest safe merge; own only Intero entries and preserve everything unrelated.",
+        "Connection parameters:",
         "```json",
-        serializedManifest,
+        serializedSetup,
         "```",
         "",
-        "Execution requirements:",
-        "1. Locate the repository root. An existing local file supplies only a candidate workspaceId; it does not prove that the connection is active. Probe the candidate credential with manifest.setupAuthorization.reuseProbeUrl. Reuse it only when the response is HTTP 200, the binding matches this Project and client, validatedAt is present, and intero.connection_status returns connected. If the probe is unauthorized, validation is pending, or intero.connection_status reports disconnected, immediately exchange this ticket for a new credential while preserving the stable workspaceId.",
-        "2. Store the credential according to manifest.artifacts file-mode, Git-visibility, and redaction rules. Store a newly exchanged verification.code temporarily at manifest.validation.temporaryCodePath for the fresh GUI validation task.",
-        `3. Merge the Streamable HTTP MCP server through ${clientLabel}'s native Project configuration.`,
-        "4. Configure native lifecycle hooks plus a Project-local privacy filter. Build reports from manifest.allowedPayload, derive a stable clientEventId from a local hash of the native event/session ID, and use fail-open hook behavior.",
-        "5. Add an intero-managed Project instruction: call stand_in.report_checkpoint only at semantic branch points. Dependencies and routed collaboration require a current Project member's collaboration.targetPrincipalId.",
-        `6. Validate configuration syntax and ${clientLabel}'s native MCP registration.`,
+        "Execute in order:",
+        "1. Locate the repository root and preserve non-Intero settings. Read the candidate credential and stable workspaceId from .intero/connection.json.",
+        "2. Probe authorization.reuseProbeUrl with the candidate credential. Reuse an HTTP 200 binding matching projectId and client; otherwise exchange.",
+        "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable until connected or expiresAt; each HTTP 201 makes its latest credential and verification authoritative. Atomically save them to artifacts.localCredential with mode 0600.",
+        `4. Minimally merge native ${clientLabel} MCP and hooks per nativeConfiguration. Use the saved credential for Authorization. Hooks send hooks.allowedPayload, hash the native event ID into clientEventId, and fail open.`,
+        "5. Maintain intero-managed Project instructions: report semantic branch points with stand_in.report_checkpoint and route collaboration to a current Project member.",
+        `6. Validate syntax and ${clientLabel} native MCP registration.`,
         client === "codex"
-          ? "7. Whenever this run writes or changes the credential or native configuration, generate a codex://threads/new deep link with path set to the current repository root. The fresh Codex App task follows manifest.validation.sequence: intero.connection_status first returns mcp_initialized, then it reads verification.code from the temporary path and calls intero.validate_connection, intero.connection_status then returns connected, and finally it removes the local verification field. This configuration task ends as pending_gui_validation; the two native tool results from the fresh task are connected evidence."
-          : `7. Whenever this run writes or changes the credential or native configuration, start a fresh ${clientLabel} GUI validation session for this local Project. It follows manifest.validation.sequence: read mcp_initialized, call intero.validate_connection, read connected, and then remove the local verification field. This configuration session ends as pending_gui_validation.`,
-        "8. Re-check all three artifact classes idempotently. Report connected only when no configuration changed and intero.connection_status already returned connected, or when the fresh GUI task received connected results from both intero.validate_connection and intero.connection_status in sequence. Otherwise report pending_gui_validation. stand_in.report_checkpoint begins semantic work reporting from the connected state. Report only changed, unchanged, preserved, conflicts, verification, and the connected Project/Agent, with all credentials redacted.",
+          ? "7. As soon as the HTTP 201 credential and verification are persisted, use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository and follow its result. The new conversation calls intero.connection_status, intero.validate_connection with local verification.code, then intero.connection_status again; on connected it removes the local verification field. This setup task reports pending_gui_validation, and the new conversation reports the MCP validation result."
+          : `7. After a config change, start a fresh ${clientLabel} GUI validation session: read status, call intero.validate_connection with local verification.code, read connected, then remove verification. This task reports pending_gui_validation.`,
+        "8. Report changed, unchanged, preserved, conflicts, verification, and connected Project/Agent with redacted credentials; validation starts as pending_gui_validation.",
       ].join("\n");
 }

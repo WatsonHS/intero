@@ -4,11 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "../design/theme.js";
 import { I18nProvider } from "../i18n/index.js";
-import {
-  agentConnectionState,
-  SettingsView,
-  shouldShowDesktopGitAwareness,
-} from "./SettingsView.js";
+import { SettingsView, shouldShowDesktopGitAwareness } from "./SettingsView.js";
 
 describe("canonical settings view", () => {
   it("keeps only the personal-scope categories; governance lives in 团队管理", () => {
@@ -19,7 +15,7 @@ describe("canonical settings view", () => {
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
           <ThemeProvider>
-            <SettingsView onOpenAgentConnections={() => undefined} />
+            <SettingsView />
           </ThemeProvider>
         </I18nProvider>
       </QueryClientProvider>,
@@ -41,7 +37,7 @@ describe("canonical settings view", () => {
     expect(output).not.toContain("Test Setup");
   });
 
-  it("routes connection management to the shared connection panel", () => {
+  it("keeps connection management inside Coding Agent settings", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -49,42 +45,18 @@ describe("canonical settings view", () => {
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
           <ThemeProvider>
-            <SettingsView
-              initialCategory="agent"
-              onOpenAgentConnections={() => undefined}
-            />
+            <SettingsView initialCategory="agent" />
           </ThemeProvider>
         </I18nProvider>
       </QueryClientProvider>,
     );
 
-    expect(output).toContain("连接面板");
+    expect(output).toContain("项目连接管理");
+    expect(output).not.toContain("连接面板");
     expect(output).not.toContain("Test Setup");
     expect(output).not.toContain("重新运行");
     expect(output).not.toContain("界面语言");
     expect(output).not.toContain("桌面 Git 感知");
-  });
-
-  it("derives cloud connection state only from the persisted server binding", () => {
-    expect(agentConnectionState({})).toBe("awaiting_initialization");
-    expect(
-      agentConnectionState({
-        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
-      }),
-    ).toBe("mcp_initialized");
-    expect(
-      agentConnectionState({
-        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
-        validatedAt: "2026-07-27T00:00:00.000Z",
-      }),
-    ).toBe("connected");
-    expect(
-      agentConnectionState({
-        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
-        validatedAt: "2026-07-27T00:00:00.000Z",
-        disconnectedAt: "2026-07-27T01:00:00.000Z",
-      }),
-    ).toBe("disconnected");
   });
 
   it("shows local Git awareness only when the Desktop bridge exists", () => {

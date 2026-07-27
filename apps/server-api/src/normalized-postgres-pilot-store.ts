@@ -693,6 +693,7 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
            disconnected_at, validated_at, last_seen_at, data, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
          ON CONFLICT (id) DO UPDATE SET
+           credential_hash = EXCLUDED.credential_hash,
            disconnected_at = EXCLUDED.disconnected_at,
            validated_at = EXCLUDED.validated_at,
            last_seen_at = EXCLUDED.last_seen_at,

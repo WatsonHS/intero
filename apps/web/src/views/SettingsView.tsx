@@ -8,14 +8,15 @@ import {
   SunIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
-import type { PilotAgentBinding } from "@intero/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PilotAgentClient } from "@intero/domain";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { ACCENTS, lum, useTheme } from "../design/theme.js";
 import { type Locale, useI18n } from "../i18n/index.js";
-import { getPilotOverview, updatePilotProfile } from "../pilot/api.js";
+import { updatePilotProfile } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { AgentConnectionsSettings } from "./AgentConnectionsSettings.js";
 import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
 import { NotificationSettings } from "./settings/NotificationSettings.js";
 import { AccountSecuritySettings } from "./settings/AccountSecuritySettings.js";
@@ -42,7 +43,7 @@ const SETTINGS_CATEGORIES = [
   {
     id: "agent",
     label: "Coding Agent",
-    detail: "项目连接摘要",
+    detail: "项目连接管理",
     icon: CodeIcon,
   },
 ] as const satisfies ReadonlyArray<{
@@ -52,20 +53,6 @@ const SETTINGS_CATEGORIES = [
   icon: typeof UserCircleIcon;
 }>;
 
-export function agentConnectionState(
-  binding: Pick<
-    PilotAgentBinding,
-    "mcpInitializedAt" | "validatedAt" | "disconnectedAt"
-  >,
-):
-  "awaiting_initialization" | "mcp_initialized" | "connected" | "disconnected" {
-  if (binding.disconnectedAt) return "disconnected";
-  if (binding.validatedAt) return "connected";
-  return binding.mcpInitializedAt
-    ? "mcp_initialized"
-    : "awaiting_initialization";
-}
-
 export function shouldShowDesktopGitAwareness(
   desktopBridge: Window["interoDesktop"] | undefined,
 ): boolean {
@@ -73,11 +60,9 @@ export function shouldShowDesktopGitAwareness(
 }
 
 export function SettingsView({
-  onOpenAgentConnections,
   initialCategory = "personal",
   onCategoryChange,
 }: {
-  onOpenAgentConnections?: (projectId?: string) => void;
   initialCategory?: SettingsCategory;
   onCategoryChange?: (category: SettingsCategory) => void;
 }) {
@@ -95,6 +80,9 @@ export function SettingsView({
   const pilot = usePilotOptional();
   const [activeCategory, setActiveCategory] =
     useState<SettingsCategory>(initialCategory);
+  const [connectedAgentClients, setConnectedAgentClients] = useState<
+    PilotAgentClient[]
+  >([]);
   const pilotProject = pilot?.projects.data?.projects.find(
     (project) => project.id === pilot.selectedProjectId,
   );
@@ -103,13 +91,6 @@ export function SettingsView({
       ? pilot.identityId
       : undefined;
 
-  const pilotOverview = useQuery({
-    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
-    queryFn: ({ signal }) =>
-      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
-    refetchInterval: 2_000,
-  });
   const updatePreferredLanguage = useMutation({
     mutationFn: (preferredLanguage: Locale) =>
       updatePilotProfile({ preferredLanguage }, developmentIdentityId),
@@ -121,33 +102,13 @@ export function SettingsView({
 
   const currentAccent = ACCENTS.find((a) => a.hex === accent) ?? ACCENTS[0]!;
   const pilotOrganization = pilot?.bootstrap.data?.organization;
-  const connectedAgentClients = Array.from(
-    new Set(
-      (pilotOverview.data?.bindings ?? [])
-        .filter(
-          (binding) =>
-            binding.ownerId === pilot?.identityId &&
-            Boolean(binding.validatedAt) &&
-            !binding.disconnectedAt,
-        )
-        .map((binding) => binding.client),
-    ),
-  );
-  const ownedActiveBindings = (pilotOverview.data?.bindings ?? []).filter(
-    (binding) =>
-      binding.ownerId === pilot?.identityId && !binding.disconnectedAt,
-  );
-  const connectedBindings = ownedActiveBindings.filter((binding) =>
-    Boolean(binding.validatedAt),
-  );
   const activeCategoryMeta =
     SETTINGS_CATEGORIES.find((category) => category.id === activeCategory) ??
     SETTINGS_CATEGORIES[0]!;
   const categoryLede: Record<SettingsCategory, string> = {
     personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
     project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
-    agent:
-      "查看当前项目的 Coding Agent 摘要；新增、重试和断开统一在连接面板完成。",
+    agent: "按 Project 管理 Coding Agent 的连接、验证状态和本地仓库配置。",
   };
 
   useEffect(() => {
@@ -403,37 +364,11 @@ export function SettingsView({
           ) : null}
 
           {pilot?.enabled && activeCategory === "agent" ? (
-            <div className="mt-8" data-testid="pilot-cloud-settings">
-              <strong className="text-[14px] font-[620]">
-                Coding Agent 连接
-              </strong>
-              <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
-                Coding Agent 按本地仓库和 Intero Project
-                连接。这里仅显示当前项目摘要，新增、重试和断开都在统一连接面板完成。
-              </p>
-              <div className="mt-4 flex items-center gap-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
-                <span className="grid">
-                  <strong className="text-[12.5px] font-[620]">
-                    {pilotProject?.name ?? "尚未选择 Project"}
-                  </strong>
-                  <small className="mt-1 text-[11px] text-ink-muted">
-                    {connectedBindings.length > 0
-                      ? `我的 ${connectedBindings.length} 个连接已通过真实 MCP 验证`
-                      : ownedActiveBindings.length > 0
-                        ? "我的连接正在等待 MCP 验证"
-                        : "我还没有为这个 Project 连接 Coding Agent"}
-                  </small>
-                </span>
-                <button
-                  type="button"
-                  data-testid="open-agent-connections"
-                  disabled={!pilotProject}
-                  onClick={() => onOpenAgentConnections?.(pilotProject?.id)}
-                  className="ml-auto h-9 rounded-btn border-0 bg-accent-strong px-4 text-[11.5px] font-[620] text-on-accent disabled:opacity-50"
-                >
-                  管理连接
-                </button>
-              </div>
+            <div data-testid="pilot-cloud-settings">
+              <AgentConnectionsSettings
+                initialProjectId={pilotProject?.id}
+                onConnectedClientsChange={setConnectedAgentClients}
+              />
             </div>
           ) : null}
 
@@ -445,7 +380,11 @@ export function SettingsView({
                 ? { projectName: pilotProject.name }
                 : {})}
               connectedClients={connectedAgentClients}
-              onBindAgent={() => onOpenAgentConnections?.(pilotProject?.id)}
+              onBindAgent={() =>
+                document
+                  .getElementById("agent-connections")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
             />
           ) : null}
 
