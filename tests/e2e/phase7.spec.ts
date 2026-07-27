@@ -157,6 +157,10 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
       path: "output/playwright/phase7/01-admin-agent-and-policy.png",
       fullPage: true,
     });
+    await admin.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(
+      admin.getByTestId("agent-connections-panel"),
+    ).not.toBeVisible();
 
     await leader.getByRole("button", { name: "通知" }).click();
     const targetedItem = leader

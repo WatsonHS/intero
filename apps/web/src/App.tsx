@@ -11,7 +11,7 @@ import {
   SidebarSimpleIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { getActionInbox, getBootstrap } from "./api.js";
 import { useI18n } from "./i18n/index.js";
@@ -29,7 +29,7 @@ import {
   NoTeamAccessView,
   SignInView,
 } from "./views/AccessView.js";
-import { AgentConnectionsView } from "./views/AgentConnectionsView.js";
+import { AgentConnectionsPanel } from "./views/AgentConnectionsPanel.js";
 import { AdminView } from "./views/AdminView.js";
 import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
@@ -56,8 +56,7 @@ type View =
   | "inbox"
   | "search"
   | "admin"
-  | "settings"
-  | "connections";
+  | "settings";
 
 // The primary group is the places work lives. Settings configures the app
 // rather than holding any work, so it sits below the spacer with the other
@@ -95,7 +94,6 @@ const TITLES: Record<View, TranslationKey> = {
   search: "app.search",
   admin: "nav.admin",
   settings: "nav.settings",
-  connections: "title.connections",
 };
 
 function navButtonClass(open: boolean, active: boolean): string {
@@ -123,8 +121,7 @@ function InteroApp() {
     useState<SettingsCategory>("personal");
   const [bootstrapActive, setBootstrapActive] = useState(false);
   const [connectionProjectId, setConnectionProjectId] = useState<string>();
-  const [connectionReturnView, setConnectionReturnView] =
-    useState<View>("pulse");
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [personId, setPersonId] = useState<string>();
   const [itemId, setItemId] = useState<string>();
@@ -176,11 +173,13 @@ function InteroApp() {
     );
   }
 
-  function openAgentConnections(from: View, projectId?: string) {
-    setConnectionReturnView(from);
+  const openAgentConnections = useCallback((projectId?: string) => {
     setConnectionProjectId(projectId);
-    setView("connections");
-  }
+    setConnectionsOpen(true);
+  }, []);
+  const closeAgentConnections = useCallback(() => {
+    setConnectionsOpen(false);
+  }, []);
 
   function openAction(sourceRef: string) {
     if (sourceRef.startsWith("spec:")) {
@@ -435,9 +434,7 @@ function InteroApp() {
               setView("person");
             }}
             onOpenAction={openAction}
-            onOpenAgentConnections={(projectId) =>
-              openAgentConnections("pulse", projectId)
-            }
+            onOpenAgentConnections={openAgentConnections}
             onOpenSpecs={() => setView("spec")}
           />
         ) : null}
@@ -456,11 +453,7 @@ function InteroApp() {
           />
         ) : null}
         {view === "spec" ? (
-          <SpecReviewView
-            onOpenAgentConnections={(projectId) =>
-              openAgentConnections("spec", projectId)
-            }
-          />
+          <SpecReviewView onOpenAgentConnections={openAgentConnections} />
         ) : null}
         {view === "project" ? (
           <ProjectView
@@ -468,9 +461,7 @@ function InteroApp() {
               setItemId(cardId);
               setView("item");
             }}
-            onOpenAgentConnections={(projectId) =>
-              openAgentConnections("project", projectId)
-            }
+            onOpenAgentConnections={openAgentConnections}
           />
         ) : null}
         {view === "item" && itemId ? (
@@ -480,9 +471,7 @@ function InteroApp() {
           <SettingsView
             initialCategory={settingsCategory}
             onCategoryChange={setSettingsCategory}
-            onOpenAgentConnections={(projectId) =>
-              openAgentConnections("settings", projectId)
-            }
+            onOpenAgentConnections={openAgentConnections}
           />
         ) : null}
         {/* AdminView owns its own permission state: gating here would blank the
@@ -507,13 +496,13 @@ function InteroApp() {
             }}
           />
         ) : null}
-        {view === "connections" ? (
-          <AgentConnectionsView
-            initialProjectId={connectionProjectId}
-            onBack={() => setView(connectionReturnView)}
-          />
-        ) : null}
       </main>
+      {connectionsOpen ? (
+        <AgentConnectionsPanel
+          initialProjectId={connectionProjectId}
+          onClose={closeAgentConnections}
+        />
+      ) : null}
     </div>
   );
 }

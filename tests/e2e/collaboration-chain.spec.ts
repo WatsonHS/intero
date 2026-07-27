@@ -789,6 +789,8 @@ async function connectThroughSettings(
   )?.[1];
   expect(ticket).toBeTruthy();
 
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByTestId("agent-connections-panel")).not.toBeVisible();
   await navigate(page, "Team Pulse");
   const connected = await runCloudClient(
     [

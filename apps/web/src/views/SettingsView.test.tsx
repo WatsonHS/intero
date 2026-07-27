@@ -41,7 +41,7 @@ describe("canonical settings view", () => {
     expect(output).not.toContain("Test Setup");
   });
 
-  it("routes connection management to the dedicated connection center", () => {
+  it("routes connection management to the shared connection panel", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -58,7 +58,7 @@ describe("canonical settings view", () => {
       </QueryClientProvider>,
     );
 
-    expect(output).toContain("连接中心");
+    expect(output).toContain("连接面板");
     expect(output).not.toContain("Test Setup");
     expect(output).not.toContain("重新运行");
     expect(output).not.toContain("界面语言");

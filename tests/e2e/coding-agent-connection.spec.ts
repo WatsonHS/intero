@@ -88,6 +88,9 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
     "连接 Codex",
   );
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByTestId("agent-connections-panel")).not.toBeVisible();
+  await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
 });
 
 async function signIn(page: Page) {

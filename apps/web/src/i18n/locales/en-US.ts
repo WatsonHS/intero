@@ -12,7 +12,6 @@ export const enUS: Record<TranslationKey, string> = {
   "nav.collapse": "Collapse sidebar",
   "nav.expand": "Expand sidebar",
   "title.person": "Team Pulse · Person",
-  "title.connections": "Coding Agent Connections",
   "title.setup": "First-run setup",
 
   "general.retry": "Retry",

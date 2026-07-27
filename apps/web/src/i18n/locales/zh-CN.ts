@@ -10,7 +10,6 @@ export const zhCN = {
   "nav.collapse": "收起侧边栏",
   "nav.expand": "展开侧边栏",
   "title.person": "Team Pulse · 个人",
-  "title.connections": "Coding Agent 连接",
   "title.setup": "首次设置",
 
   "general.retry": "重试",

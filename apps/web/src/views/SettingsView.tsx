@@ -147,7 +147,7 @@ export function SettingsView({
     personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
     project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
     agent:
-      "查看当前项目的 Coding Agent 摘要；新增、重试和断开统一在连接中心完成。",
+      "查看当前项目的 Coding Agent 摘要；新增、重试和断开统一在连接面板完成。",
   };
 
   useEffect(() => {
@@ -409,7 +409,7 @@ export function SettingsView({
               </strong>
               <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
                 Coding Agent 按本地仓库和 Intero Project
-                连接。这里仅显示当前项目摘要，新增、重试和断开都在统一连接中心完成。
+                连接。这里仅显示当前项目摘要，新增、重试和断开都在统一连接面板完成。
               </p>
               <div className="mt-4 flex items-center gap-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
                 <span className="grid">
