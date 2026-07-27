@@ -270,7 +270,7 @@ export async function buildApp(
   await app.register(cors, {
     origin: [
       ...(options.authCorsOrigins ?? []),
-      /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/,
+      /^http:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+$/,
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -401,6 +401,9 @@ export async function buildApp(
   await registerPilotMcpRoutes(app, {
     store: pilotStore,
     checkpointService: pilotCheckpointService,
+    ...(options.auth ? { auth: options.auth } : {}),
+    ...(options.authDatabase ? { authDatabase: options.authDatabase } : {}),
+    ...(options.authPublicUrl ? { authPublicUrl: options.authPublicUrl } : {}),
   });
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {

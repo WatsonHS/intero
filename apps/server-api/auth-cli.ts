@@ -1,6 +1,7 @@
 import { passkey } from "@better-auth/passkey";
+import { oauthProvider } from "@better-auth/oauth-provider";
 import { betterAuth } from "better-auth";
-import { deviceAuthorization } from "better-auth/plugins";
+import { deviceAuthorization, jwt } from "better-auth/plugins";
 import { Pool } from "pg";
 
 /**
@@ -21,6 +22,35 @@ export const auth = betterAuth({
     maxPasswordLength: 128,
   },
   plugins: [
+    jwt({
+      disableSettingJwtHeader: true,
+      jwt: {
+        issuer: "http://localhost:4310/api/auth",
+      },
+    }),
+    oauthProvider({
+      loginPage: "/",
+      consentPage: "/oauth/consent",
+      validAudiences: ["http://localhost:4310/v1/pilot/mcp"],
+      silenceWarnings: {
+        oauthAuthServerConfig: true,
+        openidConfig: true,
+      },
+      scopes: ["openid", "offline_access", "intero:mcp"],
+      grantTypes: ["authorization_code", "refresh_token"],
+      allowDynamicClientRegistration: true,
+      allowUnauthenticatedClientRegistration: true,
+      clientRegistrationDefaultScopes: [
+        "openid",
+        "offline_access",
+        "intero:mcp",
+      ],
+      clientRegistrationAllowedScopes: [
+        "openid",
+        "offline_access",
+        "intero:mcp",
+      ],
+    }),
     passkey({
       rpID: "localhost",
       rpName: "Intero",

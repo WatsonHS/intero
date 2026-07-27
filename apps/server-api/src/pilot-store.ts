@@ -29,6 +29,7 @@ import {
   type ProjectId,
   uuidv7,
 } from "@intero/domain";
+import { createHash } from "node:crypto";
 
 export class PilotStoreError extends Error {
   constructor(
@@ -183,6 +184,10 @@ export interface PilotStore {
     name: string;
     principalId: PrincipalId;
   }): Promise<PilotTeam>;
+  deleteTeam(input: {
+    teamId: string;
+    principalId: PrincipalId;
+  }): Promise<void>;
   addTeamMember(input: {
     teamId: string;
     memberId: PrincipalId;
@@ -265,6 +270,7 @@ export interface PilotStore {
     principalId: PrincipalId;
     now: string;
     name?: string;
+    ownerId?: PrincipalId;
     primaryTeamId?: string;
     participatingTeamIds?: string[];
     posture?: PilotCollaborationPosture;
@@ -297,13 +303,25 @@ export interface PilotStore {
     binding: PilotAgentBinding,
     now: string,
   ): Promise<PilotAgentBinding>;
+  createAgentBinding(binding: PilotAgentBinding): Promise<PilotAgentBinding>;
   listAgentBindings(
     projectId: ProjectId,
     principalId: PrincipalId,
   ): Promise<PilotAgentBinding[]>;
+  initializeAgentBinding(
+    bindingId: string,
+    ownerId: PrincipalId,
+    client: {
+      name?: string;
+      version?: string;
+      protocolVersion?: string;
+    },
+    now: string,
+  ): Promise<PilotAgentBinding>;
   validateAgentBinding(
     bindingId: string,
     ownerId: PrincipalId,
+    verificationCode: string | undefined,
     now: string,
   ): Promise<PilotAgentBinding>;
   disconnectAgentBinding(
@@ -313,6 +331,9 @@ export interface PilotStore {
   ): Promise<PilotAgentBinding>;
   findBindingByCredentialHash(
     credentialHash: string,
+  ): Promise<PilotAgentBinding | undefined>;
+  findAgentBindingById(
+    bindingId: string,
   ): Promise<PilotAgentBinding | undefined>;
   ingestCheckpoint(
     binding: PilotAgentBinding,
@@ -716,6 +737,65 @@ export abstract class SnapshotPilotStore implements PilotStore {
         visibility: "organization",
         get detail() {
           return { from: previousName ?? "", to: input.name };
+        },
+      },
+    );
+  }
+
+  async deleteTeam(input: {
+    teamId: string;
+    principalId: PrincipalId;
+  }): Promise<void> {
+    let deletedName = "";
+    return this.updateSnapshot(
+      (snapshot) => {
+        requireOrganizationAdministrator(snapshot, input.principalId);
+        const team = requireTeam(snapshot, input.teamId);
+        if (
+          snapshot.projects.some((project) =>
+            project.participatingTeamIds.includes(input.teamId),
+          )
+        ) {
+          throw new PilotStoreError(
+            "TEAM_HAS_PROJECTS",
+            409,
+            "Move or delete the team's projects before deleting the team.",
+          );
+        }
+
+        deletedName = team.name;
+        const threadIds = new Set(
+          snapshot.dmThreads
+            .filter((thread) => thread.teamId === input.teamId)
+            .map((thread) => thread.id),
+        );
+        snapshot.memberships = snapshot.memberships.filter(
+          (membership) => membership.teamId !== input.teamId,
+        );
+        snapshot.invitations = snapshot.invitations.filter(
+          (invitation) => invitation.teamId !== input.teamId,
+        );
+        snapshot.joinLinks = snapshot.joinLinks.filter(
+          (link) => link.teamId !== input.teamId,
+        );
+        snapshot.dmMessages = snapshot.dmMessages.filter(
+          (message) => !threadIds.has(message.threadId),
+        );
+        snapshot.dmThreads = snapshot.dmThreads.filter(
+          (thread) => thread.teamId !== input.teamId,
+        );
+        snapshot.teams = snapshot.teams.filter(
+          (candidate) => candidate.id !== input.teamId,
+        );
+      },
+      {
+        eventType: "pilot.team.deleted",
+        actorId: input.principalId,
+        aggregateType: "pilot_team",
+        aggregateId: input.teamId,
+        visibility: "organization",
+        get detail() {
+          return { name: deletedName };
         },
       },
     );
@@ -1290,7 +1370,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
   }
 
   /**
-   * Renames a project and re-scopes which teams take part in it.
+   * Renames a project, transfers ownership and re-scopes participating teams.
    *
    * Posture is accepted here too so an administrator can pause a project they
    * do not own; `updateProjectPosture` stays owner-only and is what the
@@ -1301,6 +1381,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
     principalId: PrincipalId;
     now: string;
     name?: string;
+    ownerId?: PrincipalId;
     primaryTeamId?: string;
     participatingTeamIds?: string[];
     posture?: PilotCollaborationPosture;
@@ -1310,6 +1391,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
       (snapshot) => {
         const project = requireProject(snapshot, input.projectId);
         requireProjectManager(snapshot, project, input.principalId);
+        const ownerId = input.ownerId ?? project.ownerId;
         const primaryTeamId = input.primaryTeamId ?? project.primaryTeamId;
         const participatingTeamIds = [
           ...new Set(
@@ -1327,11 +1409,12 @@ export abstract class SnapshotPilotStore implements PilotStore {
           );
         }
         if (
-          primaryTeamId !== project.primaryTeamId &&
+          (primaryTeamId !== project.primaryTeamId ||
+            ownerId !== project.ownerId) &&
           !snapshot.memberships.some(
             (membership) =>
               membership.teamId === primaryTeamId &&
-              membership.principalId === project.ownerId,
+              membership.principalId === ownerId,
           )
         ) {
           throw new PilotStoreError(
@@ -1344,6 +1427,10 @@ export abstract class SnapshotPilotStore implements PilotStore {
           changed.from = project.name;
           changed.to = input.name;
           project.name = input.name;
+        }
+        if (ownerId !== project.ownerId) {
+          changed.ownerId = ownerId;
+          project.ownerId = ownerId;
         }
         if (primaryTeamId !== project.primaryTeamId) {
           changed.primaryTeamId = primaryTeamId;
@@ -1584,6 +1671,35 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
   }
 
+  async createAgentBinding(
+    binding: PilotAgentBinding,
+  ): Promise<PilotAgentBinding> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        requireProvider(snapshot);
+        const project = requireProject(snapshot, binding.projectId);
+        requireParticipant(snapshot, project, binding.ownerId);
+        if (snapshot.agentBindings.some((item) => item.id === binding.id)) {
+          throw new PilotStoreError(
+            "AGENT_CONNECTION_EXISTS",
+            409,
+            "Agent connection already exists.",
+          );
+        }
+        snapshot.agentBindings.push(binding);
+        return binding;
+      },
+      {
+        eventType: "pilot.agent.connection_created",
+        actorId: binding.ownerId,
+        aggregateType: "pilot_agent_binding",
+        aggregateId: binding.id,
+        visibility: "private",
+        projectId: binding.projectId,
+      },
+    );
+  }
+
   async listAgentBindings(
     projectId: ProjectId,
     principalId: PrincipalId,
@@ -1599,9 +1715,14 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
   }
 
-  async validateAgentBinding(
+  async initializeAgentBinding(
     bindingId: string,
     ownerId: PrincipalId,
+    client: {
+      name?: string;
+      version?: string;
+      protocolVersion?: string;
+    },
     now: string,
   ): Promise<PilotAgentBinding> {
     return this.updateSnapshot(
@@ -1616,6 +1737,67 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection is not active.",
           );
         }
+        binding.mcpInitializedAt ??= now;
+        binding.lastSeenAt = now;
+        if (client.name) binding.mcpClientName = client.name;
+        if (client.version) binding.mcpClientVersion = client.version;
+        if (client.protocolVersion) {
+          binding.mcpProtocolVersion = client.protocolVersion;
+        }
+        if (binding.authMode === "oauth") {
+          binding.validatedAt ??= now;
+        }
+        return binding;
+      },
+      {
+        eventType: "pilot.agent.mcp_initialized",
+        actorId: ownerId,
+        aggregateType: "pilot_agent_binding",
+        aggregateId: bindingId,
+        visibility: "private",
+      },
+    );
+  }
+
+  async validateAgentBinding(
+    bindingId: string,
+    ownerId: PrincipalId,
+    verificationCode: string | undefined,
+    now: string,
+  ): Promise<PilotAgentBinding> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        const binding = snapshot.agentBindings.find(
+          (item) => item.id === bindingId && !item.disconnectedAt,
+        );
+        if (!binding || binding.ownerId !== ownerId) {
+          throw new PilotStoreError(
+            "AGENT_CONNECTION_INACTIVE",
+            401,
+            "Agent connection is not active.",
+          );
+        }
+        if (!binding.mcpInitializedAt) {
+          throw new PilotStoreError(
+            "AGENT_MCP_INITIALIZATION_REQUIRED",
+            409,
+            "Complete the native MCP initialization before validation.",
+          );
+        }
+        if (
+          !verificationCode ||
+          !binding.verificationCodeHash ||
+          !binding.verificationExpiresAt ||
+          createHash("sha256").update(verificationCode).digest("hex") !==
+            binding.verificationCodeHash ||
+          (!binding.verificationUsedAt && binding.verificationExpiresAt <= now)
+        ) {
+          throw new PilotStoreError(
+            "AGENT_VERIFICATION_INVALID",
+            401,
+            "Agent verification is invalid or expired.",
+          );
+        }
         for (const existing of snapshot.agentBindings) {
           if (
             existing.id !== binding.id &&
@@ -1627,6 +1809,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             existing.disconnectedAt = now;
           }
         }
+        binding.verificationUsedAt ??= now;
         binding.validatedAt ??= now;
         binding.lastSeenAt = now;
         return binding;
@@ -1678,6 +1861,14 @@ export abstract class SnapshotPilotStore implements PilotStore {
     return (await this.readSnapshot()).agentBindings.find(
       (binding) =>
         binding.credentialHash === credentialHash && !binding.disconnectedAt,
+    );
+  }
+
+  async findAgentBindingById(
+    bindingId: string,
+  ): Promise<PilotAgentBinding | undefined> {
+    return (await this.readSnapshot()).agentBindings.find(
+      (binding) => binding.id === bindingId && !binding.disconnectedAt,
     );
   }
 
@@ -2623,19 +2814,26 @@ function requireOrganizationAdministrator(
   snapshot: PilotSnapshot,
   principalId: PrincipalId,
 ): void {
-  if (
-    !snapshot.organizationMemberships.some(
-      (membership) =>
-        membership.principalId === principalId && membership.role === "admin",
-    ) &&
-    snapshot.administratorId !== principalId
-  ) {
+  if (!isOrganizationAdministrator(snapshot, principalId)) {
     throw new PilotStoreError(
       "ADMINISTRATOR_REQUIRED",
       403,
       "An organization administrator is required for this action.",
     );
   }
+}
+
+function isOrganizationAdministrator(
+  snapshot: PilotSnapshot,
+  principalId: PrincipalId,
+): boolean {
+  return (
+    snapshot.administratorId === principalId ||
+    snapshot.organizationMemberships.some(
+      (membership) =>
+        membership.principalId === principalId && membership.role === "admin",
+    )
+  );
 }
 
 function requireTeam(snapshot: PilotSnapshot, teamId: string): PilotTeam {

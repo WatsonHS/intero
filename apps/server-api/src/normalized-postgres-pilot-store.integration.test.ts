@@ -9,6 +9,7 @@ import {
   ProjectId,
   uuidv7,
 } from "@intero/domain";
+import { createHash } from "node:crypto";
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -95,6 +96,30 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     await restarted.close();
   });
 
+  it("persists team deletion across store instances", async () => {
+    const disposableTeamId = uuidv7();
+    await store.createTeam({
+      team: {
+        id: disposableTeamId,
+        organizationId,
+        name: "Disposable Team",
+        createdAt: "2026-07-26T00:30:00.000Z",
+      },
+      principalId: adminId,
+    });
+    await store.deleteTeam({
+      teamId: disposableTeamId,
+      principalId: adminId,
+    });
+
+    const restarted = new NormalizedPostgresPilotStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    await expect(restarted.getTeam(disposableTeamId)).resolves.toBeUndefined();
+    await restarted.close();
+  });
+
   it("allocates unique DM sequence values under concurrent sends", async () => {
     const thread = await store.getOrCreateDirectMessage({
       id: uuidv7(),
@@ -164,9 +189,20 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       (attempt): attempt is PromiseFulfilledResult<PilotAgentBinding> =>
         attempt.status === "fulfilled",
     )!.value;
+    await store.initializeAgentBinding(
+      connected.id,
+      adminId,
+      {
+        name: "codex",
+        version: "test",
+        protocolVersion: "2025-06-18",
+      },
+      "2026-07-26T01:10:01.500Z",
+    );
     const validated = await store.validateAgentBinding(
       connected.id,
       adminId,
+      "verify-normalized-store",
       "2026-07-26T01:10:02.000Z",
     );
     expect(validated.validatedAt).toBe("2026-07-26T01:10:02.000Z");
@@ -446,6 +482,10 @@ function binding(
     workspaceId: uuidv7(),
     preferredLanguage: "en-US",
     credentialHash,
+    verificationCodeHash: createHash("sha256")
+      .update("verify-normalized-store")
+      .digest("hex"),
+    verificationExpiresAt: "2026-07-26T01:20:01.000Z",
     createdAt: "2026-07-26T01:10:01.000Z",
   };
 }

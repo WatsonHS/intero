@@ -178,15 +178,27 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "codex" },
     });
     expect(chineseTicket.statusCode).toBe(201);
-    expect(chineseTicket.json().connectPrompt).toContain(
-      "最后必须实际调用 intero.validate_connection",
+    const chineseConnectPrompt = chineseTicket.json().connectPrompt as string;
+    expect(chineseConnectPrompt).not.toContain("required = false");
+    expect(chineseConnectPrompt).toContain("zh-CN");
+    expect(chineseConnectPrompt).toContain(".codex/config.toml");
+    expect(chineseConnectPrompt).toContain(".codex/hooks.json");
+    expect(chineseConnectPrompt).toContain("AGENTS.md");
+    expect(chineseConnectPrompt).toContain("/v1/pilot/mcp");
+    expect(chineseConnectPrompt).toContain('"reuseProbeUrl"');
+    expect(chineseConnectPrompt).toContain(
+      "现有本地文件只提供候选 workspaceId",
     );
-    expect(chineseTicket.json().connectPrompt).toContain("zh-CN");
-    expect(chineseTicket.json().connectPrompt).toContain(".codex/config.toml");
-    expect(chineseTicket.json().connectPrompt).toContain(".codex/hooks.json");
-    expect(chineseTicket.json().connectPrompt).toContain("AGENTS.md");
-    expect(chineseTicket.json().connectPrompt).toContain("/v1/pilot/mcp");
-    expect(chineseTicket.json().connectPrompt).not.toContain("intero-mcp");
+    expect(chineseConnectPrompt).toContain(
+      "intero.connection_status 返回 disconnected",
+    );
+    expect(chineseConnectPrompt).toContain(
+      "配置任务本身以 pending_gui_validation 结束",
+    );
+    expect(chineseConnectPrompt).toContain("删除 verification 字段");
+    expect(chineseConnectPrompt).not.toContain("先复用并验证");
+    expect(chineseConnectPrompt).not.toContain("intero-mcp");
+    expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
@@ -218,7 +230,10 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(englishTicket.statusCode).toBe(201);
     expect(englishTicket.json().connectPrompt).toContain(
-      "make one real intero.validate_connection tool call",
+      "fresh Claude Code GUI validation session",
+    );
+    expect(englishTicket.json().connectPrompt).toContain(
+      "pending_gui_validation",
     );
     expect(englishTicket.json().connectPrompt).toContain("en-US");
     expect(englishTicket.json().connectPrompt).toContain(".mcp.json");
@@ -241,6 +256,118 @@ describe("pilot cloud-first vertical slice", () => {
     );
     expect(openCodeTicket.json().connectPrompt).toContain("AGENTS.md");
     expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
+  });
+
+  it("creates a project-scoped OAuth connection without issuing Agent secrets", async () => {
+    const { project } = await readyProject(app);
+    await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/profile",
+      headers: identity(A),
+      payload: { preferredLanguage: "zh-CN" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: { client: "codex" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().connection).toMatchObject({
+      projectId: project.id,
+      ownerId: A,
+      client: "codex",
+      authMode: "oauth",
+    });
+    expect(response.json().connection).not.toHaveProperty("credentialHash");
+    expect(response.json()).not.toHaveProperty("ticket");
+    expect(response.json().mcpUrl).toBe(
+      `http://127.0.0.1:4310/v1/pilot/projects/${project.id}/agent-connections/${response.json().connection.id}/mcp`,
+    );
+    expect(response.json().connectPrompt).toContain("[mcp_servers.intero]");
+    expect(response.json().connectPrompt).toContain("enabled = true");
+    expect(response.json().connectPrompt).toContain(
+      "GUI 的 MCP 设置中对 Intero 执行 Authenticate",
+    );
+    expect(response.json().connectPrompt).not.toContain('auth = "oauth"');
+    expect(response.json().connectPrompt).not.toContain("required = false");
+    expect(response.json().connectPrompt).not.toMatch(
+      /ticket_|credential|verification|authorization http_headers|SDK|CLI/i,
+    );
+    expect(response.json().connectPrompt).not.toMatch(
+      /不要|不得|禁止|never|do not/i,
+    );
+  });
+
+  it("uses one configured public origin for bootstrap, invitations, and MCP links", async () => {
+    await app.close();
+    pilotStore = new InMemoryPilotStore();
+    app = await buildApp({
+      logger: false,
+      pilotStore,
+      pilotIdentities: [
+        { id: A, displayName: "Alex Rivera", kind: "human" },
+        { id: B, displayName: "Morgan Chen", kind: "human" },
+      ],
+      authPublicUrl: "https://10.20.30.40:4311",
+      deploymentProbe: async () => true,
+      providerEncryptionSecret: "test-provider-secret",
+      pilotModelGateway: modelGateway,
+    });
+
+    const { project, teamId } = await readyProject(app);
+    const bootstrap = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/bootstrap",
+      headers: identity(A),
+    });
+    expect(bootstrap.json()).toMatchObject({
+      publicUrl: "https://10.20.30.40:4311",
+      deploymentEndpointManaged: true,
+      organization: {
+        deploymentBaseUrl: "https://10.20.30.40:4311",
+      },
+    });
+
+    const invitation = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${teamId}/invitations`,
+      headers: identity(A),
+      payload: {
+        displayName: "Morgan Chen",
+        email: "morgan.chen@intero.test",
+      },
+    });
+    expect(invitation.statusCode).toBe(201);
+    expect(invitation.json().activationUrl).toBe(
+      `https://10.20.30.40:4311${invitation.json().activationPath}`,
+    );
+
+    const connection = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: { client: "codex" },
+    });
+    expect(connection.statusCode).toBe(201);
+    expect(connection.json().mcpUrl).toMatch(
+      new RegExp(
+        `^https://10\\.20\\.30\\.40:4311/v1/pilot/projects/${project.id}/agent-connections/`,
+      ),
+    );
+
+    const conflictingUpdate = await app.inject({
+      method: "PATCH",
+      url: "/v1/pilot/settings/deployment",
+      headers: identity(A),
+      payload: { deploymentBaseUrl: "https://other.internal.example" },
+    });
+    expect(conflictingUpdate.statusCode).toBe(409);
+    expect(conflictingUpdate.json().code).toBe(
+      "DEPLOYMENT_ENDPOINT_MANAGED",
+    );
   });
 
   it("requires a selected identity and keeps provider credentials server-only", async () => {
@@ -598,6 +725,48 @@ describe("pilot cloud-first vertical slice", () => {
     ).toContain(teamId);
   });
 
+  it("lets an administrator delete an unused team but protects project teams", async () => {
+    const { teamId } = await readyProject(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "Disposable Team" },
+    });
+    const disposableTeamId = created.json().team.id as string;
+
+    const denied = await app.inject({
+      method: "DELETE",
+      url: `/v1/pilot/teams/${disposableTeamId}`,
+      headers: identity(B),
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const blocked = await app.inject({
+      method: "DELETE",
+      url: `/v1/pilot/teams/${teamId}`,
+      headers: identity(A),
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().code).toBe("TEAM_HAS_PROJECTS");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/pilot/teams/${disposableTeamId}`,
+      headers: identity(A),
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    const visible = await app.inject({
+      method: "GET",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+    });
+    expect(
+      visible.json().teams.map((team: { id: string }) => team.id),
+    ).not.toContain(disposableTeamId);
+  });
+
   it("renames and re-scopes a project, keeping the owner inside its primary team", async () => {
     const { teamId, project } = await readyProject(app);
     const second = await app.inject({
@@ -679,6 +848,31 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(handover.statusCode).toBe(409);
     expect(handover.json().code).toBe("PROJECT_OWNER_NOT_IN_TEAM");
+
+    const invalidOwner = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: { ownerId: C },
+    });
+    expect(invalidOwner.statusCode).toBe(409);
+    expect(invalidOwner.json().code).toBe("PROJECT_OWNER_NOT_IN_TEAM");
+
+    const transferred = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${project.id}`,
+      headers: identity(A),
+      payload: {
+        ownerId: B,
+        primaryTeamId: secondTeamId,
+        participatingTeamIds: [teamId, secondTeamId],
+      },
+    });
+    expect(transferred.statusCode).toBe(200);
+    expect(transferred.json().project).toMatchObject({
+      ownerId: B,
+      primaryTeamId: secondTeamId,
+    });
   });
 
   it("serves the organization directory and org-wide roles to administrators only", async () => {
@@ -820,6 +1014,8 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(connected.statusCode).toBe(201);
     expect(connected.json().binding.validatedAt).toBeUndefined();
+    expect(connected.json().binding.verificationCodeHash).toBeUndefined();
+    expect(connected.json().verification.code).toMatch(/^verify_/);
 
     const before = await overview(app, fixture.project.id, A);
     expect(before.bindings[0]).toMatchObject({
@@ -827,6 +1023,7 @@ describe("pilot cloud-first vertical slice", () => {
       name: "Codex · remote-mcp-test",
     });
     expect(before.bindings[0].validatedAt).toBeUndefined();
+    expect(before.bindings[0].verificationCodeHash).toBeUndefined();
 
     const rejectedBeforeValidation = await sendCheckpoint(
       app,
@@ -836,6 +1033,32 @@ describe("pilot cloud-first vertical slice", () => {
     expect(rejectedBeforeValidation.statusCode).toBe(409);
     expect(rejectedBeforeValidation.json().code).toBe(
       "AGENT_VALIDATION_REQUIRED",
+    );
+
+    const prematureValidation = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/mcp",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: "premature-validation",
+        method: "tools/call",
+        params: {
+          name: "intero.validate_connection",
+          arguments: {
+            verificationCode: connected.json().verification.code,
+          },
+        },
+      },
+    });
+    expect(prematureValidation.statusCode).toBe(200);
+    expect(prematureValidation.json().result.isError).toBe(true);
+    expect(prematureValidation.json().result.content[0].text).toContain(
+      "native MCP initialization",
     );
 
     const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -854,6 +1077,16 @@ describe("pilot cloud-first vertical slice", () => {
       },
     );
     await mcpClient.connect(transport as unknown as Transport);
+    const initializedContext = (await mcpClient.callTool({
+      name: "stand_in.current_context",
+      arguments: {},
+    })) as { content: Array<{ type: string; text?: string }> };
+    const initializedText = initializedContext.content.find(
+      (item) => item.type === "text",
+    )?.text;
+    expect(
+      initializedText ? JSON.parse(initializedText).status : undefined,
+    ).toBe("mcp_initialized");
     const tools = await mcpClient.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
@@ -864,7 +1097,9 @@ describe("pilot cloud-first vertical slice", () => {
     );
     const validation = await mcpClient.callTool({
       name: "intero.validate_connection",
-      arguments: {},
+      arguments: {
+        verificationCode: connected.json().verification.code,
+      },
     });
     const validationContent = (
       validation as {
@@ -886,7 +1121,9 @@ describe("pilot cloud-first vertical slice", () => {
         : undefined;
     const repeatedValidation = (await mcpClient.callTool({
       name: "intero.validate_connection",
-      arguments: {},
+      arguments: {
+        verificationCode: connected.json().verification.code,
+      },
     })) as { content: Array<{ type: string; text?: string }> };
     const repeatedText = repeatedValidation.content.find(
       (item) => item.type === "text",
@@ -897,6 +1134,11 @@ describe("pilot cloud-first vertical slice", () => {
     await mcpClient.close();
 
     const after = await overview(app, fixture.project.id, A);
+    expect(after.bindings[0]).toMatchObject({
+      mcpClientName: "codex-native-connection-test",
+      mcpClientVersion: "1.0.0",
+      mcpInitializedAt: expect.any(String),
+    });
     expect(after.bindings[0].validatedAt).toEqual(expect.any(String));
     expect(after.bindings[0].lastSeenAt).toBe(after.bindings[0].validatedAt);
 
@@ -924,25 +1166,49 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(disconnected.statusCode).toBe(200);
 
-    const rejectedAfterDisconnect = await app.inject({
-      method: "POST",
-      url: "/v1/pilot/mcp",
-      headers: {
-        authorization: `Bearer ${connected.json().credential as string}`,
-        accept: "application/json, text/event-stream",
-        "content-type": "application/json",
-      },
-      payload: {
-        jsonrpc: "2.0",
-        id: "revalidate",
-        method: "tools/call",
-        params: {
-          name: "intero.validate_connection",
-          arguments: {},
+    const disconnectedClient = new Client({
+      name: "codex-disconnected-connection-test",
+      version: "1.0.0",
+    });
+    const disconnectedTransport = new StreamableHTTPClientTransport(
+      new URL("/v1/pilot/mcp", baseUrl),
+      {
+        requestInit: {
+          headers: {
+            authorization: `Bearer ${connected.json().credential as string}`,
+          },
         },
       },
-    });
-    expect(rejectedAfterDisconnect.statusCode).toBe(401);
+    );
+    await disconnectedClient.connect(
+      disconnectedTransport as unknown as Transport,
+    );
+    const disconnectedTools = await disconnectedClient.listTools();
+    expect(disconnectedTools.tools.map((tool) => tool.name)).toEqual([
+      "intero.connection_status",
+    ]);
+    const disconnectedStatus = (await disconnectedClient.callTool({
+      name: "intero.connection_status",
+      arguments: {},
+    })) as { content: Array<{ type: string; text?: string }> };
+    const disconnectedStatusText = disconnectedStatus.content.find(
+      (item) => item.type === "text",
+    )?.text;
+    expect(
+      disconnectedStatusText
+        ? JSON.parse(disconnectedStatusText).status
+        : undefined,
+    ).toBe("disconnected");
+    await disconnectedClient.close();
+
+    const rejectedCheckpointAfterDisconnect = await sendCheckpoint(
+      app,
+      connected.json().credential,
+      checkpoint(fixture.project.id, {
+        clientEventId: "checkpoint-after-disconnect",
+      }),
+    );
+    expect(rejectedCheckpointAfterDisconnect.statusCode).toBe(401);
   });
 
   it("accepts a scoped idempotent Agent checkpoint and separates private state from Team Pulse", async () => {
@@ -1499,6 +1765,29 @@ async function connectAgent(
     payload,
   });
   expect(connected.statusCode).toBe(201);
+  const initialization = await app.inject({
+    method: "POST",
+    url: "/v1/pilot/mcp",
+    headers: {
+      authorization: `Bearer ${connected.json().credential as string}`,
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    payload: {
+      jsonrpc: "2.0",
+      id: "initialize-agent-connection",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: {
+          name: client,
+          version: "test",
+        },
+      },
+    },
+  });
+  expect(initialization.statusCode).toBe(200);
   const validation = await app.inject({
     method: "POST",
     url: "/v1/pilot/mcp",
@@ -1513,7 +1802,9 @@ async function connectAgent(
       method: "tools/call",
       params: {
         name: "intero.validate_connection",
-        arguments: {},
+        arguments: {
+          verificationCode: connected.json().verification.code,
+        },
       },
     },
   });

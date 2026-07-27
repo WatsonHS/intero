@@ -553,6 +553,42 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
     await this.persistStandInJobs(client, snapshot);
     await this.persistCoordination(client, snapshot);
     await this.persistStandInExchanges(client, snapshot);
+
+    // SnapshotPilotStore owns the deletion policy. Remove rows that belonged
+    // to a deleted team after all surviving associations have been persisted,
+    // and in foreign-key order so the transaction stays atomic.
+    const teamIds = snapshot.teams.map((team) => team.id);
+    const dmThreadIds = snapshot.dmThreads.map((thread) => thread.id);
+    await client.query(
+      `DELETE FROM pilot_dm_messages
+       WHERE organization_id = $1
+         AND NOT (thread_id = ANY($2::uuid[]))`,
+      [this.organizationId, dmThreadIds],
+    );
+    await client.query(
+      `DELETE FROM pilot_dm_threads
+       WHERE organization_id = $1
+         AND NOT (team_id = ANY($2::uuid[]))`,
+      [this.organizationId, teamIds],
+    );
+    await client.query(
+      `DELETE FROM pilot_team_invitations
+       WHERE organization_id = $1
+         AND NOT (team_id = ANY($2::uuid[]))`,
+      [this.organizationId, teamIds],
+    );
+    await client.query(
+      `DELETE FROM pilot_team_join_links
+       WHERE organization_id = $1
+         AND NOT (team_id = ANY($2::uuid[]))`,
+      [this.organizationId, teamIds],
+    );
+    await client.query(
+      `DELETE FROM pilot_teams
+       WHERE organization_id = $1
+         AND NOT (id = ANY($2::uuid[]))`,
+      [this.organizationId, teamIds],
+    );
   }
 
   private async persistProvider(

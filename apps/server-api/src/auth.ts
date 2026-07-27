@@ -1,9 +1,10 @@
 import { passkey } from "@better-auth/passkey";
+import { oauthProvider } from "@better-auth/oauth-provider";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { deviceAuthorization } from "better-auth/plugins";
+import { deviceAuthorization, jwt } from "better-auth/plugins";
 import type { PreferredLanguage, PrincipalId } from "@intero/domain";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
 
@@ -69,6 +70,37 @@ export function createInteroAuth(config: AuthConfig) {
       }),
     },
     plugins: [
+      jwt({
+        disableSettingJwtHeader: true,
+        jwt: {
+          issuer: `${config.publicUrl.replace(/\/+$/, "")}/api/auth`,
+        },
+      }),
+      oauthProvider({
+        loginPage: "/",
+        consentPage: "/oauth/consent",
+        validAudiences: [
+          `${config.publicUrl.replace(/\/+$/, "")}/v1/pilot/mcp`,
+        ],
+        silenceWarnings: {
+          oauthAuthServerConfig: true,
+          openidConfig: true,
+        },
+        scopes: ["openid", "offline_access", "intero:mcp"],
+        grantTypes: ["authorization_code", "refresh_token"],
+        allowDynamicClientRegistration: true,
+        allowUnauthenticatedClientRegistration: true,
+        clientRegistrationDefaultScopes: [
+          "openid",
+          "offline_access",
+          "intero:mcp",
+        ],
+        clientRegistrationAllowedScopes: [
+          "openid",
+          "offline_access",
+          "intero:mcp",
+        ],
+      }),
       passkey({
         rpID: config.rpId,
         rpName: "Intero",
@@ -390,12 +422,30 @@ export async function resolvePrincipalForAuthUser(
   }
 }
 
+export async function findPrincipalForAuthUser(
+  database: Pool,
+  authUserId: string,
+): Promise<PrincipalId | undefined> {
+  const result = await database.query<{ principal_id: PrincipalId }>(
+    "SELECT principal_id FROM auth_principals WHERE auth_user_id = $1",
+    [authUserId],
+  );
+  return result.rows[0]?.principal_id;
+}
+
 export function mountAuth(
   app: FastifyInstance,
   auth: InteroAuth,
   corsOrigins: readonly string[] = [],
 ): void {
-  app.all("/api/auth/*", async (request, reply) => {
+  if (!app.hasContentTypeParser("application/x-www-form-urlencoded")) {
+    app.addContentTypeParser(
+      "application/x-www-form-urlencoded",
+      { parseAs: "string" },
+      (_request, body, done) => done(null, body),
+    );
+  }
+  const forward = async (request: FastifyRequest, reply: FastifyReply) => {
     const headers = toHeaders(request);
     headers.delete("content-length");
     const host = request.headers.host ?? "localhost";
@@ -429,7 +479,10 @@ export function mountAuth(
       .send(
         response.body ? Buffer.from(await response.arrayBuffer()) : undefined,
       );
-  });
+  };
+
+  app.all("/api/auth/*", forward);
+  app.get("/.well-known/oauth-authorization-server/api/auth", forward);
 }
 
 function serializeAuthBody(body: unknown): BodyInit | undefined {

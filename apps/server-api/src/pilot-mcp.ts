@@ -12,10 +12,13 @@ import {
   type StreamableHTTPServerTransportOptions,
 } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { verifyJwsAccessToken } from "better-auth/oauth2";
 import { createHash, randomUUID } from "node:crypto";
+import type { Pool } from "pg";
 import { z } from "zod";
 
+import { findPrincipalForAuthUser, type InteroAuth } from "./auth.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
@@ -23,6 +26,9 @@ import { PilotStoreError } from "./pilot-store.js";
 export interface PilotMcpRoutesOptions {
   store: PilotStore;
   checkpointService: PilotCheckpointService;
+  auth?: InteroAuth;
+  authDatabase?: Pool;
+  authPublicUrl?: string;
 }
 
 const lifecycleInput = z
@@ -36,36 +42,146 @@ const lifecycleInput = z
   })
   .strict();
 
+const initializeRequest = z
+  .object({
+    method: z.literal("initialize"),
+    params: z
+      .object({
+        protocolVersion: z.string().min(1).max(80),
+        clientInfo: z
+          .object({
+            name: z.string().min(1).max(120),
+            version: z.string().min(1).max(80),
+          })
+          .passthrough(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
 export async function registerPilotMcpRoutes(
   app: FastifyInstance,
   options: PilotMcpRoutesOptions,
 ): Promise<void> {
-  app.post("/v1/pilot/mcp", async (request, reply) => {
-    const binding = await requireAgentBinding(request, options.store);
-    const server = createPilotMcpServer(binding, options);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    } as unknown as StreamableHTTPServerTransportOptions);
-    await server.connect(transport as unknown as Transport);
-    reply.hijack();
-    try {
-      await transport.handleRequest(request.raw, reply.raw, request.body);
-    } catch {
-      if (!reply.raw.headersSent) {
-        reply.raw.writeHead(500, { "content-type": "application/json" });
-        reply.raw.end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            error: { code: -32603, message: "MCP request failed." },
-            id: null,
-          }),
-        );
+  app.get<{
+    Params: { projectId: string; bindingId: string };
+  }>(
+    "/.well-known/oauth-protected-resource/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
+    async (request, reply) => {
+      const endpoint = oauthMcpEndpointUrl(
+        options.authPublicUrl,
+        request.params.projectId,
+        request.params.bindingId,
+      );
+      const resource = oauthMcpAudience(options.authPublicUrl);
+      if (!endpoint || !resource) {
+        return reply.status(404).send({
+          code: "OAUTH_NOT_CONFIGURED",
+          message: "OAuth is not configured for this Intero deployment.",
+        });
       }
-    } finally {
-      await transport.close();
-      await server.close();
-    }
+      return reply
+        .header(
+          "cache-control",
+          "public, max-age=15, stale-while-revalidate=15",
+        )
+        .send({
+          resource,
+          resource_name: "Intero Project coding-agent connection",
+          authorization_servers: [
+            `${options.authPublicUrl!.replace(/\/+$/, "")}/api/auth`,
+          ],
+          scopes_supported: ["intero:mcp"],
+          bearer_methods_supported: ["header"],
+        });
+    },
+  );
+
+  app.post<{
+    Params: { projectId: string; bindingId: string };
+  }>(
+    "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
+    async (request, reply) => {
+      const activeBinding = await options.store.findAgentBindingById(
+        request.params.bindingId,
+      );
+      if (!activeBinding) {
+        return handleMcpRequest(request, reply, undefined, options);
+      }
+      const binding = await authenticateOAuthBinding(
+        request,
+        reply,
+        options,
+        activeBinding,
+      );
+      if (!binding) return;
+      return handleMcpRequest(request, reply, binding, options);
+    },
+  );
+
+  app.get<{
+    Params: { projectId: string; bindingId: string };
+  }>(
+    "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
+    async (request, reply) => {
+      const activeBinding = await options.store.findAgentBindingById(
+        request.params.bindingId,
+      );
+      if (!activeBinding) {
+        return reply.status(405).send({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Method not allowed." },
+          id: null,
+        });
+      }
+      const binding = await authenticateOAuthBinding(
+        request,
+        reply,
+        options,
+        activeBinding,
+      );
+      if (!binding) return;
+      return reply.status(405).send({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Method not allowed." },
+        id: null,
+      });
+    },
+  );
+
+  app.delete<{
+    Params: { projectId: string; bindingId: string };
+  }>(
+    "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
+    async (request, reply) => {
+      const activeBinding = await options.store.findAgentBindingById(
+        request.params.bindingId,
+      );
+      if (!activeBinding) {
+        return reply.status(405).send({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Method not allowed." },
+          id: null,
+        });
+      }
+      const binding = await authenticateOAuthBinding(
+        request,
+        reply,
+        options,
+        activeBinding,
+      );
+      if (!binding) return;
+      return reply.status(405).send({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Method not allowed." },
+        id: null,
+      });
+    },
+  );
+
+  app.post("/v1/pilot/mcp", async (request, reply) => {
+    const binding = await findActiveAgentBinding(request, options.store);
+    return handleMcpRequest(request, reply, binding, options);
   });
 
   app.get("/v1/pilot/mcp", async (_request, reply) =>
@@ -103,6 +219,170 @@ export async function registerPilotMcpRoutes(
   });
 }
 
+async function handleMcpRequest(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  binding: PilotAgentBinding | undefined,
+  options: PilotMcpRoutesOptions,
+): Promise<void> {
+  const initialization = initializeRequest.safeParse(request.body);
+  ensureDestroySoon(request.raw.socket);
+  const server = binding
+    ? createPilotMcpServer(binding, options)
+    : createUnavailablePilotMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  } as unknown as StreamableHTTPServerTransportOptions);
+  await server.connect(transport as unknown as Transport);
+  reply.hijack();
+  try {
+    await transport.handleRequest(request.raw, reply.raw, request.body);
+    if (binding && initialization.success) {
+      await options.store.initializeAgentBinding(
+        binding.id,
+        binding.ownerId,
+        {
+          name: initialization.data.params.clientInfo.name,
+          version: initialization.data.params.clientInfo.version,
+          protocolVersion: initialization.data.params.protocolVersion,
+        },
+        new Date().toISOString(),
+      );
+    }
+  } catch {
+    if (!reply.raw.headersSent) {
+      reply.raw.writeHead(500, { "content-type": "application/json" });
+      reply.raw.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "MCP request failed." },
+          id: null,
+        }),
+      );
+    }
+  } finally {
+    await transport.close();
+    await server.close();
+  }
+}
+
+async function authenticateOAuthBinding(
+  request: FastifyRequest<{
+    Params: { projectId: string; bindingId: string };
+  }>,
+  reply: FastifyReply,
+  options: PilotMcpRoutesOptions,
+  binding: PilotAgentBinding,
+): Promise<PilotAgentBinding | undefined> {
+  const resource = oauthMcpResourceUrl(options.authPublicUrl);
+  const endpoint = oauthMcpEndpointUrl(
+    options.authPublicUrl,
+    request.params.projectId,
+    request.params.bindingId,
+  );
+  const metadataUrl = endpoint
+    ? protectedResourceMetadataUrl(endpoint)
+    : undefined;
+  const unauthorized = () => {
+    if (metadataUrl) {
+      reply.header(
+        "www-authenticate",
+        `Bearer resource_metadata="${metadataUrl}", scope="intero:mcp"`,
+      );
+    }
+    reply.status(401).send({
+      code: "AGENT_AUTHENTICATION_REQUIRED",
+      message: "Authenticate this Intero connection with OAuth.",
+    });
+    return undefined;
+  };
+  if (
+    !resource ||
+    !options.auth ||
+    !options.authDatabase ||
+    !options.authPublicUrl
+  ) {
+    return unauthorized();
+  }
+  const authorization = request.headers.authorization;
+  const token = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : undefined;
+  let subject: string | undefined;
+  try {
+    if (!token) return unauthorized();
+    const jwt = await verifyJwsAccessToken(token, {
+      jwksFetch: () => options.auth!.api.getJwks(),
+      jwksCacheKey: options.auth,
+      verifyOptions: {
+        audience: resource,
+        issuer: `${options.authPublicUrl.replace(/\/+$/, "")}/api/auth`,
+      },
+    });
+    const scopes = typeof jwt.scope === "string" ? jwt.scope.split(/\s+/) : [];
+    if (!scopes.includes("intero:mcp")) return unauthorized();
+    subject = jwt.sub;
+  } catch {
+    return unauthorized();
+  }
+  if (!subject) return unauthorized();
+  const principalId = await findPrincipalForAuthUser(
+    options.authDatabase,
+    subject,
+  );
+  if (
+    !principalId ||
+    binding.authMode !== "oauth" ||
+    binding.projectId !== request.params.projectId ||
+    binding.ownerId !== principalId
+  ) {
+    return unauthorized();
+  }
+  const project = (await options.store.listProjects(principalId)).find(
+    (candidate) => candidate.id === binding.projectId,
+  );
+  if (!project) return unauthorized();
+  return binding;
+}
+
+function oauthMcpEndpointUrl(
+  publicUrl: string | undefined,
+  projectId: string,
+  bindingId: string,
+): string | undefined {
+  if (!publicUrl) return undefined;
+  return `${publicUrl.replace(/\/+$/, "")}/v1/pilot/projects/${projectId}/agent-connections/${bindingId}/mcp`;
+}
+
+function oauthMcpResourceUrl(
+  publicUrl: string | undefined,
+): string | undefined {
+  return oauthMcpAudience(publicUrl);
+}
+
+function oauthMcpAudience(publicUrl: string | undefined): string | undefined {
+  if (!publicUrl) return undefined;
+  return `${publicUrl.replace(/\/+$/, "")}/v1/pilot/mcp`;
+}
+
+function protectedResourceMetadataUrl(resource: string): string {
+  const url = new URL(resource);
+  return `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
+}
+
+function ensureDestroySoon(
+  socket: FastifyRequest["raw"]["socket"] & {
+    destroy?: () => void;
+    destroySoon?: () => void;
+  },
+): void {
+  if (typeof socket.destroySoon === "function") return;
+  socket.destroySoon = () => {
+    if (typeof socket.destroy === "function") socket.destroy();
+  };
+}
+
 function createPilotMcpServer(
   initialBinding: PilotAgentBinding,
   options: PilotMcpRoutesOptions,
@@ -116,18 +396,24 @@ function createPilotMcpServer(
     "intero.validate_connection",
     {
       description:
-        "Complete the real Intero MCP handshake for this Agent and Project. Call exactly once after native MCP, hook, and project-instruction configuration is in place.",
-      inputSchema: {},
+        "Complete Intero setup verification for this Agent and Project after the native MCP connection initializes.",
+      inputSchema: {
+        verificationCode: z.string().min(20).max(120).optional(),
+      },
     },
-    async () => {
+    async ({ verificationCode }) => {
       const binding =
-        initialBinding.validatedAt !== undefined
-          ? initialBinding
-          : await options.store.validateAgentBinding(
-              initialBinding.id,
-              initialBinding.ownerId,
-              new Date().toISOString(),
-            );
+        initialBinding.authMode === "oauth"
+          ? ((await options.store.findAgentBindingById(initialBinding.id)) ??
+            initialBinding)
+          : initialBinding.validatedAt !== undefined
+            ? initialBinding
+            : await options.store.validateAgentBinding(
+                initialBinding.id,
+                initialBinding.ownerId,
+                verificationCode,
+                new Date().toISOString(),
+              );
       return toolResult({
         status: "connected",
         bindingId: binding.id,
@@ -136,6 +422,7 @@ function createPilotMcpServer(
         client: binding.client,
         name: binding.name,
         workspaceId: binding.workspaceId,
+        mcpInitializedAt: binding.mcpInitializedAt,
         validatedAt: binding.validatedAt,
       });
     },
@@ -148,21 +435,28 @@ function createPilotMcpServer(
         "Show the authenticated, Project-scoped Intero connection without exposing credentials.",
       inputSchema: {},
     },
-    async () =>
-      toolResult({
-        status: initialBinding.validatedAt
+    async () => {
+      const binding =
+        (await options.store.findAgentBindingById(initialBinding.id)) ??
+        initialBinding;
+      return toolResult({
+        status: binding.validatedAt
           ? "connected"
-          : "awaiting_validation",
-        bindingId: initialBinding.id,
-        projectId: initialBinding.projectId,
-        ownerId: initialBinding.ownerId,
-        client: initialBinding.client,
-        name: initialBinding.name,
-        workspaceId: initialBinding.workspaceId,
-        preferredLanguage: initialBinding.preferredLanguage,
-        validatedAt: initialBinding.validatedAt,
-        lastSeenAt: initialBinding.lastSeenAt,
-      }),
+          : binding.mcpInitializedAt
+            ? "mcp_initialized"
+            : "awaiting_initialization",
+        bindingId: binding.id,
+        projectId: binding.projectId,
+        ownerId: binding.ownerId,
+        client: binding.client,
+        name: binding.name,
+        workspaceId: binding.workspaceId,
+        preferredLanguage: binding.preferredLanguage,
+        mcpInitializedAt: binding.mcpInitializedAt,
+        validatedAt: binding.validatedAt,
+        lastSeenAt: binding.lastSeenAt,
+      });
+    },
   );
 
   server.registerTool(
@@ -242,13 +536,36 @@ function createPilotMcpServer(
   return server;
 }
 
+function createUnavailablePilotMcpServer(): McpServer {
+  const server = new McpServer({
+    name: "intero-project-cloud",
+    version: "0.2.0",
+  });
+
+  server.registerTool(
+    "intero.connection_status",
+    {
+      description:
+        "Report that this local Intero connection is unavailable and needs to be reconnected.",
+      inputSchema: {},
+    },
+    async () =>
+      toolResult({
+        status: "disconnected",
+        connected: false,
+        action:
+          "Reconnect this repository from the Intero Project connection center.",
+      }),
+  );
+
+  return server;
+}
+
 async function requireValidatedBinding(
   binding: PilotAgentBinding,
   store: PilotStore,
 ): Promise<PilotAgentBinding> {
-  const current = await store.findBindingByCredentialHash(
-    binding.credentialHash,
-  );
+  const current = await store.findAgentBindingById(binding.id);
   if (!current?.validatedAt) {
     throw new PilotStoreError(
       "AGENT_VALIDATION_REQUIRED",
@@ -271,13 +588,7 @@ async function requireAgentBinding(
   request: FastifyRequest,
   store: PilotStore,
 ): Promise<PilotAgentBinding> {
-  const authorization = request.headers.authorization;
-  const credential = authorization?.startsWith("Bearer ")
-    ? authorization.slice("Bearer ".length).trim()
-    : undefined;
-  const binding = credential
-    ? await store.findBindingByCredentialHash(sha256(credential))
-    : undefined;
+  const binding = await findActiveAgentBinding(request, store);
   if (!binding) {
     throw new PilotStoreError(
       "AGENT_AUTHENTICATION_REQUIRED",
@@ -286,6 +597,19 @@ async function requireAgentBinding(
     );
   }
   return binding;
+}
+
+async function findActiveAgentBinding(
+  request: FastifyRequest,
+  store: PilotStore,
+): Promise<PilotAgentBinding | undefined> {
+  const authorization = request.headers.authorization;
+  const credential = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : undefined;
+  return credential
+    ? await store.findBindingByCredentialHash(sha256(credential))
+    : undefined;
 }
 
 function lifecycleCheckpoint(
