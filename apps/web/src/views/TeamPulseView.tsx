@@ -60,23 +60,27 @@ import {
   workLineFromProjection,
   type WorkLine,
 } from "./work-lines.js";
+import {
+  ProjectAgentConnectionBadge,
+  summarizeProjectAgentConnections,
+} from "./agent/connection-state.js";
 
 export function TeamPulseView({
   onOpenPerson,
   onOpenAction,
-  onOpenSetup,
+  onOpenAgentConnections,
   onOpenSpecs,
 }: {
   onOpenPerson: (ownerId: string) => void;
   onOpenAction: (sourceRef: string) => void;
-  onOpenSetup: () => void;
+  onOpenAgentConnections: (projectId?: string) => void;
   onOpenSpecs: () => void;
 }) {
   return (
     <CanonicalTeamPulseView
       onOpenPerson={onOpenPerson}
       onOpenAction={onOpenAction}
-      onOpenSetup={onOpenSetup}
+      onOpenAgentConnections={onOpenAgentConnections}
       onOpenSpecs={onOpenSpecs}
     />
   );
@@ -85,12 +89,12 @@ export function TeamPulseView({
 function CanonicalTeamPulseView({
   onOpenPerson,
   onOpenAction,
-  onOpenSetup,
+  onOpenAgentConnections,
   onOpenSpecs,
 }: {
   onOpenPerson: (ownerId: string) => void;
   onOpenAction: (sourceRef: string) => void;
-  onOpenSetup: () => void;
+  onOpenAgentConnections: (projectId?: string) => void;
   onOpenSpecs: () => void;
 }) {
   const { t, formatDate, formatRelative, formatTime } = useI18n();
@@ -159,6 +163,10 @@ function CanonicalTeamPulseView({
   });
 
   const pilotEntries = pilotOverview.data?.pulse ?? [];
+  const agentConnections = summarizeProjectAgentConnections(
+    pilotOverview.data?.bindings ?? [],
+    pilot?.identityId,
+  );
   const pilotEntryByProjectionId = new Map(
     pilotEntries.map((entry) => [entry.workStateId, entry]),
   );
@@ -235,6 +243,13 @@ function CanonicalTeamPulseView({
               {t("pulse.lede")}
             </p>
           </div>
+          {pilotProject && pilotOverview.data ? (
+            <ProjectAgentConnectionBadge
+              bindings={pilotOverview.data.bindings}
+              identityId={pilot?.identityId}
+              onOpen={() => onOpenAgentConnections(pilotProject.id)}
+            />
+          ) : null}
         </header>
 
         {showCards ? (
@@ -329,25 +344,24 @@ function CanonicalTeamPulseView({
               <PlantIcon size={19} />
             </span>
             <h2 className="mt-[18px] text-[19px] font-semibold tracking-[-0.025em]">
-              {t("pulse.empty.title")}
+              {agentConnections.connected.length > 0
+                ? "Coding Agent 已连接，等待第一条工作更新"
+                : t("pulse.empty.title")}
             </h2>
             <p className="mt-2.5 max-w-[480px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
-              {t("pulse.empty.body")}
+              {agentConnections.connected.length > 0
+                ? `已验证的 Agent 会把 ${pilotProject?.name ?? "当前 Project"} 中允许共享的结构化 checkpoint 显示在这里。`
+                : t("pulse.empty.body")}
             </p>
             <div className="mt-5 flex gap-[9px]">
               <button
                 type="button"
-                onClick={onOpenSetup}
+                onClick={() => onOpenAgentConnections(pilotProject?.id)}
                 className="h-[34px] cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent"
               >
-                {t("pulse.empty.register")}
-              </button>
-              <button
-                type="button"
-                onClick={onOpenSetup}
-                className="h-[34px] cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12.5px] text-ink hover:border-accent-strong"
-              >
-                {t("pulse.empty.connect")}
+                {agentConnections.connected.length > 0
+                  ? "查看连接状态"
+                  : `为 ${pilotProject?.name ?? "当前 Project"} 连接 Coding Agent`}
               </button>
             </div>
           </div>

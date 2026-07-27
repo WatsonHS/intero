@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "./App.js";
+import { NotificationProvider } from "./design/notifications.js";
 import { ThemeProvider } from "./design/theme.js";
 import { I18nProvider } from "./i18n/index.js";
 import { PilotProvider } from "./pilot/context.js";
@@ -24,7 +25,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <PilotProvider>
         <I18nProvider>
           <ThemeProvider>
-            <App />
+            <NotificationProvider>
+              <App />
+            </NotificationProvider>
           </ThemeProvider>
         </I18nProvider>
       </PilotProvider>

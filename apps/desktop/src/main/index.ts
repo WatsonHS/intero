@@ -818,7 +818,11 @@ function createWindow() {
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     const protocol = new URL(url).protocol;
-    if (protocol === "https:" || protocol === "http:") {
+    if (
+      protocol === "https:" ||
+      protocol === "http:" ||
+      protocol === "codex:"
+    ) {
       void shell.openExternal(url);
     }
     return { action: "deny" };

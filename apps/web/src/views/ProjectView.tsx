@@ -4,7 +4,11 @@ import {
   KanbanIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
-import type { KanbanCard, KanbanColumn, PublicWorkProjection } from "@intero/domain";
+import type {
+  KanbanCard,
+  KanbanColumn,
+  PublicWorkProjection,
+} from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -22,13 +26,14 @@ import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { ProjectWorkSurface } from "./project/ProjectWorkSurface.js";
 
-const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> = [
-  { id: "backlog", label: "project.column.backlog", tone: "faint" },
-  { id: "planned", label: "project.column.planned", tone: "faint" },
-  { id: "in_progress", label: "project.column.in_progress", tone: "green" },
-  { id: "review", label: "project.column.review", tone: "amber" },
-  { id: "done", label: "project.column.done", tone: "faint" },
-];
+const COLUMNS: Array<{ id: KanbanColumn; label: TranslationKey; tone: Tone }> =
+  [
+    { id: "backlog", label: "project.column.backlog", tone: "faint" },
+    { id: "planned", label: "project.column.planned", tone: "faint" },
+    { id: "in_progress", label: "project.column.in_progress", tone: "green" },
+    { id: "review", label: "project.column.review", tone: "amber" },
+    { id: "done", label: "project.column.done", tone: "faint" },
+  ];
 
 function columnMeta(column: KanbanColumn) {
   return COLUMNS.find((item) => item.id === column) ?? COLUMNS[0]!;
@@ -61,6 +66,7 @@ function firstLinkedWorkstream(
 
 export function ProjectView(props: {
   onOpenItem: (cardId: string) => void;
+  onOpenAgentConnections?: (projectId: string) => void;
 }) {
   const pilot = usePilotOptional();
   const projectId =
@@ -82,6 +88,7 @@ export function ProjectView(props: {
       projectId={projectId}
       canGovern={Boolean(isOrganizationAdmin || isPrimaryTeamLeader)}
       onOpenItem={props.onOpenItem}
+      onOpenAgentConnections={() => props.onOpenAgentConnections?.(projectId)}
     />
   ) : (
     <LegacyProjectView {...props} />
@@ -188,7 +195,8 @@ function LegacyProjectView({
   const donePoints = cards
     .filter((card) => card.column === "done")
     .reduce((sum, card) => sum + (card.estimatePoints ?? 0), 0);
-  const percent = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
+  const percent =
+    totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
 
   const selWorkstream = selected
     ? firstLinkedWorkstream(selected, workstreamById)
@@ -251,9 +259,7 @@ function LegacyProjectView({
               <button
                 type="button"
                 className={`h-7 cursor-pointer rounded-quiet px-[13px] text-[11.5px] font-semibold ${
-                  viewMode === "board"
-                    ? "bg-panel2 text-ink"
-                    : "text-ink-muted"
+                  viewMode === "board" ? "bg-panel2 text-ink" : "text-ink-muted"
                 }`}
                 onClick={() => setViewMode("board")}
               >
@@ -437,8 +443,7 @@ function LegacyProjectView({
             {cards.map((card) => {
               const workstream = firstLinkedWorkstream(card, workstreamById);
               const ownerName = card.ownerId
-                ? (principalNames.get(card.ownerId) ??
-                  card.ownerId.slice(0, 8))
+                ? (principalNames.get(card.ownerId) ?? card.ownerId.slice(0, 8))
                 : undefined;
               const col = columnMeta(card.column);
               const freshAt = workstream?.freshnessAt ?? card.updatedAt;

@@ -5,13 +5,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "../../design/theme.js";
+import { NotificationProvider } from "../../design/notifications.js";
 import { I18nProvider } from "../../i18n/index.js";
 import type {
   PilotOrganizationDirectoryPayload,
   PilotTeamPayload,
 } from "../../pilot/api.js";
 import { OrganizationTab } from "./OrganizationTab.js";
-import { ProjectsTab } from "./ProjectsTab.js";
+import { ownerForPrimaryTeam, ProjectsTab } from "./ProjectsTab.js";
 import { TeamPicker } from "./TeamPicker.js";
 import { TeamsTab } from "./TeamsTab.js";
 
@@ -27,7 +28,9 @@ function render(node: ReactNode): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
-        <ThemeProvider>{node}</ThemeProvider>
+        <ThemeProvider>
+          <NotificationProvider>{node}</NotificationProvider>
+        </ThemeProvider>
       </I18nProvider>
     </QueryClientProvider>,
   );
@@ -106,13 +109,12 @@ describe("governance tabs", () => {
       <TeamsTab
         teams={teams}
         projects={projects}
-        currentTeamId={PRODUCT}
         identityId={ALEX}
         canCreate
         canManage={() => true}
+        canDelete
         scopedToOwnTeams={false}
         onOpenMembers={() => undefined}
-        onOpenTeam={() => undefined}
         onChanged={() => undefined}
       />,
     );
@@ -124,6 +126,9 @@ describe("governance tabs", () => {
     expect(output).toContain("这个团队还没有指定 Lead");
     expect(output).toContain("新建团队");
     expect(output).toContain("1 个项目");
+    expect(output).toContain("删除团队 产品体验");
+    expect(output).not.toContain(">当前<");
+    expect(output).not.toContain("切换过去");
   });
 
   it("hides the team-creating affordances from a Team Lead", () => {
@@ -131,19 +136,19 @@ describe("governance tabs", () => {
       <TeamsTab
         teams={[teams[0]!]}
         projects={projects}
-        currentTeamId={PRODUCT}
         identityId={ALEX}
         canCreate={false}
         canManage={() => false}
+        canDelete={false}
         scopedToOwnTeams
         onOpenMembers={() => undefined}
-        onOpenTeam={() => undefined}
         onChanged={() => undefined}
       />,
     );
 
     expect(output).not.toContain("admin-create-team");
     expect(output).not.toContain(">重命名<");
+    expect(output).not.toContain("删除团队 产品体验");
     expect(output).toContain("你所在的团队");
     // Reaching a roster is not a privilege — it is how you read the team.
     expect(output).toContain(">成员<");
@@ -187,6 +192,12 @@ describe("governance tabs", () => {
     expect(output).toContain("已暂停");
     expect(output).toContain("Alex Rivera");
     expect(output).toContain("编辑");
+  });
+
+  it("keeps a valid owner when changing teams and otherwise prefers the new team lead", () => {
+    expect(ownerForPrimaryTeam(teams[0], ALEX)).toBe(ALEX);
+    expect(ownerForPrimaryTeam(teams[0], PRIYA)).toBe(ALEX);
+    expect(ownerForPrimaryTeam(teams[1], ALEX)).toBe(PRIYA);
   });
 
   it("keeps the project editor out of reach of someone who cannot govern it", () => {

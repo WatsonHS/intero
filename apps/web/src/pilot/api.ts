@@ -17,6 +17,7 @@ import type {
 } from "@intero/domain";
 
 import type { PrincipalSummary } from "../api.js";
+import { INTERO_API_URL } from "../api-url.js";
 import { handleAuthenticationFailure } from "./auth-state.js";
 
 export {
@@ -25,11 +26,12 @@ export {
   PILOT_TEAM_STORAGE_KEY,
 } from "./auth-state.js";
 
-export const PILOT_API_URL =
-  import.meta.env.VITE_INTERO_API_URL ?? "http://127.0.0.1:4310";
+export const PILOT_API_URL = INTERO_API_URL;
 
 export interface PilotBootstrapPayload {
   authMode: "session" | "development_identity" | "unavailable";
+  publicUrl?: string;
+  deploymentEndpointManaged: boolean;
   identityHeader?: string;
   identities: PrincipalSummary[];
   currentPrincipal?: PrincipalSummary & { email: string };
@@ -52,6 +54,11 @@ export interface PilotBootstrapPayload {
     projectWork: "postgres" | "unavailable";
   };
 }
+
+export type PilotSafeAgentBinding = Omit<
+  PilotAgentBinding,
+  "credentialHash" | "verificationCodeHash"
+>;
 
 export interface PilotTeamPayload extends PilotTeam {
   members: Array<
@@ -103,7 +110,7 @@ export interface PilotInvitationPayload {
 
 export interface PilotOverviewPayload {
   project: PilotProject;
-  bindings: Array<Omit<PilotAgentBinding, "credentialHash">>;
+  bindings: PilotSafeAgentBinding[];
   privateWorkState: PilotPrivateWorkState[];
   pulse: PilotPulseEntry[];
   coordination: PilotCoordinationThread[];
@@ -265,6 +272,13 @@ export function renamePilotTeam(
   });
 }
 
+export function deletePilotTeam(identityId: PrincipalId, teamId: string) {
+  return request<void>(`/v1/pilot/teams/${teamId}`, {
+    method: "DELETE",
+    identityId,
+  });
+}
+
 export function addPilotTeamMember(
   identityId: PrincipalId,
   teamId: string,
@@ -309,6 +323,7 @@ export function createPilotJoinLink(identityId: PrincipalId, teamId: string) {
     };
     code: string;
     joinPath: string;
+    joinUrl: string;
   }>(`/v1/pilot/teams/${teamId}/join-links`, {
     method: "POST",
     identityId,
@@ -342,6 +357,7 @@ export function createPilotInvitation(
     invitation: PilotInvitationPayload;
     token: string;
     activationPath: string;
+    activationUrl: string;
   }>(`/v1/pilot/teams/${teamId}/invitations`, {
     method: "POST",
     ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
@@ -358,6 +374,7 @@ export function regeneratePilotInvitation(
     invitation: PilotInvitationPayload;
     token: string;
     activationPath: string;
+    activationUrl: string;
   }>(`/v1/pilot/invitations/${invitationId}/regenerate`, {
     method: "POST",
     ...(developmentIdentityId ? { identityId: developmentIdentityId } : {}),
@@ -501,6 +518,7 @@ export function updatePilotProject(
   projectId: string,
   input: {
     name?: string;
+    ownerId?: PrincipalId;
     primaryTeamId?: string;
     participatingTeamIds?: string[];
     posture?: PilotCollaborationPosture;
@@ -607,15 +625,16 @@ export function askPilotStandIn(
   });
 }
 
-export function createPilotAgentTicket(
+export function createPilotAgentConnection(
   identityId: PrincipalId,
   projectId: string,
   client: PilotAgentClient,
 ) {
   return request<{
-    ticket: { id: string; client: PilotAgentClient; expiresAt: string };
+    connection: PilotSafeAgentBinding;
+    mcpUrl: string;
     connectPrompt: string;
-  }>(`/v1/pilot/projects/${projectId}/agent-tickets`, {
+  }>(`/v1/pilot/projects/${projectId}/agent-connections`, {
     method: "POST",
     identityId,
     body: { client },
@@ -626,7 +645,7 @@ export function disconnectPilotAgent(
   identityId: PrincipalId,
   bindingId: string,
 ) {
-  return request<{ binding: Omit<PilotAgentBinding, "credentialHash"> }>(
+  return request<{ binding: PilotSafeAgentBinding }>(
     `/v1/pilot/agent-bindings/${bindingId}/disconnect`,
     { method: "POST", identityId, body: {} },
   );

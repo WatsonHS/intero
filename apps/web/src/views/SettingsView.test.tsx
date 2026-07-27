@@ -19,10 +19,7 @@ describe("canonical settings view", () => {
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
           <ThemeProvider>
-            <SettingsView
-              onOpenSetup={() => undefined}
-              onOpenTestSetup={() => undefined}
-            />
+            <SettingsView onOpenAgentConnections={() => undefined} />
           </ThemeProvider>
         </I18nProvider>
       </QueryClientProvider>,
@@ -44,7 +41,7 @@ describe("canonical settings view", () => {
     expect(output).not.toContain("Test Setup");
   });
 
-  it("keeps the explicit test setup entry with the connection settings", () => {
+  it("routes connection management to the dedicated connection center", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -54,29 +51,36 @@ describe("canonical settings view", () => {
           <ThemeProvider>
             <SettingsView
               initialCategory="agent"
-              onOpenSetup={() => undefined}
-              onOpenTestSetup={() => undefined}
+              onOpenAgentConnections={() => undefined}
             />
           </ThemeProvider>
         </I18nProvider>
       </QueryClientProvider>,
     );
 
-    expect(output).toContain("Test Setup");
-    expect(output).toContain("仅开发环境可见");
+    expect(output).toContain("连接中心");
+    expect(output).not.toContain("Test Setup");
+    expect(output).not.toContain("重新运行");
     expect(output).not.toContain("界面语言");
     expect(output).not.toContain("桌面 Git 感知");
   });
 
   it("derives cloud connection state only from the persisted server binding", () => {
-    expect(agentConnectionState({})).toBe("awaiting_validation");
+    expect(agentConnectionState({})).toBe("awaiting_initialization");
     expect(
       agentConnectionState({
+        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
+      }),
+    ).toBe("mcp_initialized");
+    expect(
+      agentConnectionState({
+        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
         validatedAt: "2026-07-27T00:00:00.000Z",
       }),
     ).toBe("connected");
     expect(
       agentConnectionState({
+        mcpInitializedAt: "2026-07-27T00:00:00.000Z",
         validatedAt: "2026-07-27T00:00:00.000Z",
         disconnectedAt: "2026-07-27T01:00:00.000Z",
       }),

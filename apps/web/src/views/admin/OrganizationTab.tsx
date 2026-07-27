@@ -24,6 +24,7 @@ import {
   TableHead,
   cn,
 } from "../../design/primitives.js";
+import { useNotifications } from "../../design/notifications.js";
 import { useI18n } from "../../i18n/index.js";
 import {
   renamePilotOrganization,
@@ -64,6 +65,7 @@ export function OrganizationTab({
   onChanged: () => Promise<void> | void;
 }) {
   const { t } = useI18n();
+  const notifications = useNotifications();
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
   const rename = useMutation({
@@ -83,7 +85,32 @@ export function OrganizationTab({
         input.memberId,
         input.organizationRole,
       ),
-    onSuccess: onChanged,
+    onSuccess: async (_result, input) => {
+      notifications.success(
+        t("admin.members.roleChanged", {
+          scope: t("admin.members.colOrgRole"),
+          role: t(
+            input.organizationRole === "admin"
+              ? "admin.role.orgAdmin"
+              : "admin.role.orgMember",
+          ),
+        }),
+      );
+      await onChanged();
+    },
+    onError: (error) => {
+      notifications.error(
+        t(
+          (error as { code?: string })?.code === "LAST_ORGANIZATION_ADMIN"
+            ? "admin.org.lastAdmin"
+            : "admin.members.roleFailed",
+          {
+            scope: t("admin.members.colOrgRole"),
+            role: "",
+          },
+        ),
+      );
+    },
   });
 
   const admins = members.filter(
@@ -326,16 +353,6 @@ export function OrganizationTab({
             <EmptySlot>{t("admin.org.directoryEmpty")}</EmptySlot>
           ) : null}
         </div>
-        {changeRole.isError ? (
-          <p className="mt-3 text-[11px] text-danger" role="alert">
-            {t(
-              (changeRole.error as { code?: string })?.code ===
-                "LAST_ORGANIZATION_ADMIN"
-                ? "admin.org.lastAdmin"
-                : "admin.org.roleFailed",
-            )}
-          </p>
-        ) : null}
         <p className="mt-3 text-[11px] text-faint [text-wrap:pretty]">
           {t("admin.org.directoryFoot")}
         </p>

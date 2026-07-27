@@ -5,7 +5,6 @@ import {
   EyeSlashIcon,
   FingerprintIcon,
   KeyIcon,
-  PlugsIcon,
   SignOutIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
@@ -132,6 +131,39 @@ export function AuthenticationLoadingView() {
   );
 }
 
+export function NoTeamAccessView({
+  onSignOut,
+}: {
+  onSignOut: () => Promise<void>;
+}) {
+  const signOut = useMutation({
+    mutationFn: onSignOut,
+    onSuccess: () => window.location.reload(),
+  });
+  return (
+    <AccessShell eyebrow="INTERO · 访问范围" title="还没有可访问的团队">
+      <p className="text-[13px] leading-[1.75] text-ink-muted">
+        你的账号已经登录，但尚未加入任何
+        Team。请联系组织管理员发送邀请或授予团队访问权限；普通成员不需要运行组织
+        Setup。
+      </p>
+      <Notice tone="danger">
+        这不是本地配置问题。获得 Team 权限后重新打开 Intero 即可直接进入 Team
+        Pulse。
+      </Notice>
+      <button
+        type="button"
+        disabled={signOut.isPending}
+        onClick={() => signOut.mutate()}
+        className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] text-ink disabled:opacity-50"
+      >
+        <SignOutIcon size={15} />
+        退出登录
+      </button>
+    </AccessShell>
+  );
+}
+
 export function DevelopmentIdentityToolView({
   identities,
   onSelect,
@@ -181,11 +213,9 @@ export function DevelopmentIdentityToolView({
 export function AcceptInvitationView({
   token,
   onEnterPulse,
-  onConnectAgent,
 }: {
   token: string;
   onEnterPulse: (projectId?: string) => void;
-  onConnectAgent: (projectId?: string) => void;
 }) {
   const queryClient = useQueryClient();
   const pilot = usePilot();
@@ -293,22 +323,14 @@ export function AcceptInvitationView({
             已加入 {accepted.team.name}
             。你的姓名已写入个人设置，并已获得团队关联项目的访问权限。
           </Notice>
-          <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="mt-5">
             <button
               type="button"
               onClick={() => onEnterPulse(accepted.projects[0]?.id)}
-              className="flex h-10 items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent"
+              className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent"
             >
               进入 Team Pulse
               <ArrowRightIcon size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onConnectAgent(accepted.projects[0]?.id)}
-              className="flex h-10 items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12px] text-ink hover:border-accent-strong"
-            >
-              <PlugsIcon size={14} />
-              连接 Coding Agent（可选）
             </button>
           </div>
         </>

@@ -769,7 +769,8 @@ async function connectThroughSettings(
 ): Promise<{ client: AgentClient; bindingId: string }> {
   await navigate(page, "设置");
   await page.getByTestId("settings-category-agent").click();
-  await expect(page.getByTestId("agent-connection-settings")).toBeVisible();
+  await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
+  await page.getByTestId("open-agent-connections").click();
   const clients: AgentClient[] = ["claude-code", "opencode", "codex"];
   let client: AgentClient | undefined;
   for (const candidate of clients) {
@@ -780,15 +781,23 @@ async function connectThroughSettings(
   }
   expect(client).toBeDefined();
   await page.getByTestId(`connect-agent-${client!}`).click();
+  await page.getByText("其他方式：查看完整连接任务").click();
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
-  const ticket = (await prompt.inputValue()).match(
+  const projectId = ((await prompt.textContent()) ?? "").match(
+    /\/projects\/([^/]+)\/agent-connections\//,
+  )?.[1];
+  expect(projectId).toBeTruthy();
+  const legacyTicket = await page.request.post(
+    `${apiUrl}/v1/pilot/projects/${projectId}/agent-tickets`,
+    { data: { client } },
+  );
+  expect(legacyTicket.ok()).toBe(true);
+  const ticket = ((await legacyTicket.json()).connectPrompt as string).match(
     /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
   )?.[1];
   expect(ticket).toBeTruthy();
 
-  // Leave the one-time ticket surface before invoking the CLI so a failure
-  // screenshot cannot retain it.
   await navigate(page, "Team Pulse");
   const connected = await runCloudClient(
     [

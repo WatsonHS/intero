@@ -24,6 +24,8 @@ export function OrganizationServiceSettings({
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
   const organization = pilot?.bootstrap.data?.organization;
+  const deploymentEndpointManaged =
+    pilot?.bootstrap.data?.deploymentEndpointManaged ?? false;
   const developmentIdentityId =
     pilot?.bootstrap.data?.authMode === "development_identity"
       ? pilot.identityId
@@ -89,7 +91,7 @@ export function OrganizationServiceSettings({
                 {organization?.deploymentBaseUrl ?? "尚未配置 Intero 部署"}
               </small>
             </span>
-            {canManage ? (
+            {canManage && !deploymentEndpointManaged ? (
               <button
                 type="button"
                 data-testid="deployment-endpoint-edit"
@@ -103,7 +105,9 @@ export function OrganizationServiceSettings({
               </button>
             ) : (
               <StatusPill tone="faint" size="sm">
-                继承组织配置
+                {deploymentEndpointManaged
+                  ? "由部署配置管理"
+                  : "继承组织配置"}
               </StatusPill>
             )}
           </div>

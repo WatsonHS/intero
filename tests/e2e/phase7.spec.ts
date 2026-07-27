@@ -84,6 +84,8 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     await expect(
       admin.getByText("替身只识别已授权的结构化风险信号"),
     ).toBeVisible();
+    await admin.getByTestId("settings-category-agent").click();
+    await admin.getByTestId("open-agent-connections").click();
 
     const connectClients = ["claude-code", "opencode", "codex"] as const;
     let connectClient: (typeof connectClients)[number] | undefined;
@@ -96,10 +98,20 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     expect(connectClient).toBeTruthy();
     connectedClient = connectClient;
     await admin.getByTestId(`connect-agent-${connectClient}`).click();
+    await admin.getByText("其他方式：查看完整连接任务").click();
     const prompt = admin.getByTestId("agent-connect-prompt");
     await expect(prompt).toBeVisible();
-    const promptText = await prompt.inputValue();
-    const ticket = promptText.match(
+    const promptText = (await prompt.textContent()) ?? "";
+    const connectionProjectId = promptText.match(
+      /\/projects\/([^/]+)\/agent-connections\//,
+    )?.[1];
+    expect(connectionProjectId).toBeTruthy();
+    const legacyTicket = await admin.request.post(
+      `${apiUrl}/v1/pilot/projects/${connectionProjectId}/agent-tickets`,
+      { data: { client: connectClient } },
+    );
+    expect(legacyTicket.ok()).toBe(true);
+    const ticket = ((await legacyTicket.json()).connectPrompt as string).match(
       /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
     )?.[1];
     expect(ticket).toBeTruthy();

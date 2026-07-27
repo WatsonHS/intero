@@ -840,7 +840,7 @@ export function SelectMenu<T extends string>({
                 left: position.left,
                 minWidth: position.minWidth,
               }}
-              className="fixed z-50 max-h-[280px] overflow-auto rounded-inset border border-line2 bg-panel2 p-1 outline-none animate-message-enter"
+              className="fixed z-[70] max-h-[280px] overflow-auto rounded-inset border border-line2 bg-panel2 p-1 outline-none animate-message-enter"
             >
               {options.map((option, index) => (
                 <div

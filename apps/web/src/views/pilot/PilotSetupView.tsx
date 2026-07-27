@@ -5,29 +5,20 @@ import {
   CopyIcon,
   KeyIcon,
   LinkIcon,
-  PlugsConnectedIcon,
   ShieldCheckIcon,
-  TerminalWindowIcon,
   UserIcon,
   UsersThreeIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
-import type {
-  PilotAgentClient,
-  PilotCollaborationPosture,
-  PrincipalId,
-} from "@intero/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PilotCollaborationPosture, PrincipalId } from "@intero/domain";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { initials } from "../../design/utils.js";
 import {
   configurePilotProvider,
-  createPilotAgentTicket,
   createPilotJoinLink,
   createPilotProject,
-  disconnectPilotAgent,
-  getPilotOverview,
   joinPilotTeam,
   PILOT_API_URL,
   setupPilot,
@@ -39,14 +30,7 @@ const STEPS = [
   ["部署与团队", "连接部署并加入团队"],
   ["模型服务", "配置团队的 AI 服务"],
   ["项目", "创建或选择项目"],
-  ["接入 Agent", "自动验证并确认共享边界，也可跳过"],
 ] as const;
-
-const CLIENTS: Array<{ id: PilotAgentClient; label: string }> = [
-  { id: "codex", label: "Codex" },
-  { id: "claude-code", label: "Claude Code" },
-  { id: "opencode", label: "OpenCode" },
-];
 
 export function PilotTestSetupFlow({
   testMode = false,
@@ -74,9 +58,6 @@ export function PilotTestSetupFlow({
       : (new URL(window.location.href).searchParams.get("join") ?? ""),
   );
   const [joinUrl, setJoinUrl] = useState("");
-  const [client, setClient] = useState<PilotAgentClient>("codex");
-  const [connectPrompt, setConnectPrompt] = useState("");
-  const [copied, setCopied] = useState(false);
 
   const identity = pilot.bootstrap.data?.identities.find(
     (item) => item.id === pilot.identityId,
@@ -90,14 +71,6 @@ export function PilotTestSetupFlow({
     projects.find((item) => item.id === pilot.selectedProjectId) ?? projects[0];
   const selectedTeam = teams[0];
 
-  const overview = useQuery({
-    queryKey: ["pilot", "overview", pilot.identityId, selectedProject?.id],
-    queryFn: ({ signal }) =>
-      getPilotOverview(pilot.identityId!, selectedProject!.id, signal),
-    enabled: Boolean(pilot.identityId && selectedProject),
-    refetchInterval: 1_500,
-  });
-
   async function refreshPilot() {
     await queryClient.invalidateQueries({ queryKey: ["pilot"] });
   }
@@ -107,7 +80,8 @@ export function PilotTestSetupFlow({
       setupPilot(pilot.identityId!, {
         organizationName,
         teamName,
-        deploymentBaseUrl,
+        deploymentBaseUrl:
+          pilot.bootstrap.data?.publicUrl ?? deploymentBaseUrl,
       }),
     onSuccess: refreshPilot,
   });
@@ -130,12 +104,7 @@ export function PilotTestSetupFlow({
   });
   const createLink = useMutation({
     mutationFn: () => createPilotJoinLink(pilot.identityId!, selectedTeam!.id),
-    onSuccess: ({ code }) => {
-      const url = new URL(window.location.href);
-      url.search = "";
-      url.searchParams.set("join", code);
-      setJoinUrl(url.toString());
-    },
+    onSuccess: ({ joinUrl: nextJoinUrl }) => setJoinUrl(nextJoinUrl),
   });
   const createProject = useMutation({
     mutationFn: () =>
@@ -150,34 +119,6 @@ export function PilotTestSetupFlow({
       await refreshPilot();
     },
   });
-  const createTicket = useMutation({
-    mutationFn: () =>
-      createPilotAgentTicket(pilot.identityId!, selectedProject!.id, client),
-    onSuccess: ({ connectPrompt: nextPrompt }) => setConnectPrompt(nextPrompt),
-  });
-  const disconnect = useMutation({
-    mutationFn: (bindingId: string) =>
-      disconnectPilotAgent(pilot.identityId!, bindingId),
-    onSuccess: refreshPilot,
-  });
-
-  const ownBindings =
-    overview.data?.bindings.filter(
-      (binding) => binding.ownerId === pilot.identityId,
-    ) ?? [];
-  const activeOwnBindings = ownBindings.filter(
-    (binding) => binding.validatedAt && !binding.disconnectedAt,
-  );
-  const pendingOwnBindings = ownBindings.filter(
-    (binding) => !binding.validatedAt && !binding.disconnectedAt,
-  );
-  const selectedClientConnected = activeOwnBindings.some(
-    (binding) => binding.client === client,
-  );
-  const connectionCheck = overview.data?.privateWorkState.find(
-    (state) => state.workstreamKey === "intero-agent-connection-check",
-  );
-  const isProjectOwner = selectedProject?.ownerId === pilot.identityId;
   const canContinue =
     step === 1
       ? Boolean(identity)
@@ -194,9 +135,7 @@ export function PilotTestSetupFlow({
     configureProvider.error ??
     join.error ??
     createLink.error ??
-    createProject.error ??
-    createTicket.error ??
-    disconnect.error;
+    createProject.error;
 
   return (
     <div className="animate-view-enter grid h-full grid-cols-[300px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] bg-bg">
@@ -205,19 +144,21 @@ export function PilotTestSetupFlow({
           I
         </span>
         <h2 className="mt-[18px] text-[19px] font-[600] tracking-[-0.025em]">
-          {testMode ? "Intero Cloud Test Setup" : "Intero Cloud Setup"}
+          {testMode ? "Intero Admin Test Bootstrap" : "Intero Admin Bootstrap"}
         </h2>
         <p className="mt-2.5 text-[11.5px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
-          连接现有 Intero 部署，让团队成员和 Coding Agent 开始协作。
+          初始化组织、团队、模型服务与首个 Project。普通成员不会进入这个流程。
         </p>
-        <button
-          type="button"
-          data-testid="pilot-setup-exit"
-          onClick={onDone}
-          className="mt-4 h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-ink"
-        >
-          {testMode ? "退出测试流程" : "退出引导"}
-        </button>
+        {testMode ? (
+          <button
+            type="button"
+            data-testid="pilot-setup-exit"
+            onClick={onDone}
+            className="mt-4 h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-ink"
+          >
+            退出测试流程
+          </button>
+        ) : null}
 
         <div className="mt-[26px] flex flex-col gap-0.5">
           {STEPS.map(([label, sub], index) => {
@@ -350,12 +291,22 @@ export function PilotTestSetupFlow({
                       onChange={setTeamName}
                       testId="pilot-team-name"
                     />
-                    <Field
-                      label="Intero 部署地址"
-                      value={deploymentBaseUrl}
-                      onChange={setDeploymentBaseUrl}
-                      testId="pilot-deployment-url"
-                    />
+                    {pilot.bootstrap.data?.deploymentEndpointManaged ? (
+                      <ReadOnlyField
+                        label="Intero 部署地址"
+                        value={
+                          pilot.bootstrap.data.publicUrl ??
+                          "由服务端部署配置管理"
+                        }
+                      />
+                    ) : (
+                      <Field
+                        label="Intero 部署地址"
+                        value={deploymentBaseUrl}
+                        onChange={setDeploymentBaseUrl}
+                        testId="pilot-deployment-url"
+                      />
+                    )}
                     <button
                       type="button"
                       data-testid="pilot-setup-submit"
@@ -586,202 +537,6 @@ export function PilotTestSetupFlow({
               </div>
             ) : null}
 
-            {step === 5 ? (
-              <div className="mt-7 grid gap-3">
-                {CLIENTS.map((item) => {
-                  const binding = overview.data?.bindings.find(
-                    (candidate) =>
-                      candidate.client === item.id &&
-                      candidate.ownerId === pilot.identityId &&
-                      !candidate.disconnectedAt,
-                  );
-                  return (
-                    <article
-                      key={item.id}
-                      className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-card border border-line bg-panel2 p-[16px_18px]"
-                    >
-                      <span
-                        className={
-                          binding
-                            ? "grid h-9 w-9 place-items-center rounded-[10px] bg-raise text-green"
-                            : "grid h-9 w-9 place-items-center rounded-[10px] bg-raise text-ink-muted"
-                        }
-                      >
-                        <TerminalWindowIcon size={17} />
-                      </span>
-                      <span className="grid">
-                        <strong className="text-[13px] font-[620]">
-                          {item.label}
-                        </strong>
-                        <small className="mt-1 text-[11px] text-ink-muted">
-                          {binding
-                            ? `${binding.name} · ${binding.lastSeenAt ? "已收到工作动态" : "已连接"}`
-                            : "连接码 10 分钟内有效，仅可使用一次"}
-                        </small>
-                      </span>
-                      {binding ? (
-                        <button
-                          type="button"
-                          data-testid={`pilot-agent-disconnect-${item.id}`}
-                          disabled={disconnect.isPending}
-                          onClick={() => disconnect.mutate(binding.id)}
-                          className="h-8 rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] hover:border-danger"
-                        >
-                          断开
-                        </button>
-                      ) : isProjectOwner ? (
-                        <button
-                          type="button"
-                          data-testid={`pilot-agent-ticket-${item.id}`}
-                          disabled={
-                            !organization?.provider.configured ||
-                            createTicket.isPending
-                          }
-                          onClick={() => {
-                            setClient(item.id);
-                            createTicket.mutate();
-                          }}
-                          className="h-8 rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent disabled:opacity-45"
-                        >
-                          连接
-                        </button>
-                      ) : (
-                        <span className="rounded-pill bg-raise px-2.5 py-1 text-[10.5px] text-faint">
-                          可选
-                        </span>
-                      )}
-                    </article>
-                  );
-                })}
-                {connectPrompt && !selectedClientConnected ? (
-                  <section
-                    className="rounded-card border border-accent-soft bg-accent-soft p-5"
-                    data-testid="pilot-connect-prompt"
-                  >
-                    <div className="flex items-center gap-2">
-                      <PlugsConnectedIcon
-                        size={16}
-                        className="text-accent-strong"
-                      />
-                      <strong className="text-[12.5px] font-[620]">
-                        {CLIENTS.find((item) => item.id === client)?.label}{" "}
-                        连接说明
-                      </strong>
-                      <button
-                        type="button"
-                        className="ml-auto h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px]"
-                        onClick={async () => {
-                          await navigator.clipboard.writeText(connectPrompt);
-                          setCopied(true);
-                        }}
-                      >
-                        {copied ? "已复制" : "复制"}
-                      </button>
-                    </div>
-                    <pre className="mt-3 whitespace-pre-wrap rounded-inset bg-raise p-4 font-mono text-[10.5px] leading-[1.7] text-ink-muted">
-                      {connectPrompt}
-                    </pre>
-                  </section>
-                ) : null}
-                <section className="rounded-card border border-line bg-panel2 p-[22px]">
-                  <div className="flex items-center gap-[11px]">
-                    <span
-                      className={
-                        selectedClientConnected
-                          ? "h-[9px] w-[9px] animate-breathe rounded-full bg-green"
-                          : pendingOwnBindings.some(
-                                (binding) => binding.client === client,
-                              )
-                            ? "h-[9px] w-[9px] animate-breathe rounded-full bg-amber"
-                            : "h-[9px] w-[9px] rounded-full bg-faint"
-                      }
-                    />
-                    <strong className="text-[13px] font-[620]">
-                      {selectedClientConnected
-                        ? "真实 MCP 验证通过，Agent 已连接"
-                        : pendingOwnBindings.some(
-                              (binding) => binding.client === client,
-                            )
-                          ? "已兑换设置授权，等待 Agent 完成真实 MCP 验证"
-                          : isProjectOwner
-                            ? "配置完成后，Agent 会执行一次真实 MCP 验证"
-                            : "项目创建者可以连接 Agent"}
-                    </strong>
-                    <span className="ml-auto font-mono text-[10.5px] text-faint">
-                      {selectedProject?.name}
-                    </span>
-                  </div>
-                  {!selectedClientConnected &&
-                  !pendingOwnBindings.some(
-                    (binding) => binding.client === client,
-                  ) ? (
-                    <p className="mt-2.5 text-[11.5px] leading-[1.65] text-ink-muted">
-                      这一步可以跳过，稍后再从设置中连接。
-                    </p>
-                  ) : null}
-                </section>
-                {connectionCheck ? (
-                  <section
-                    className="flex items-center gap-3 rounded-card border border-green-soft bg-green-soft p-[16px_18px]"
-                    data-testid="pilot-first-work-state"
-                  >
-                    <CheckCircleIcon
-                      size={18}
-                      weight="fill"
-                      className="text-green"
-                    />
-                    <span className="grid">
-                      <strong className="text-[12.5px] font-[620]">
-                        {connectionCheck.title}
-                      </strong>
-                      <small className="mt-1 font-mono text-[10.5px] text-ink-muted">
-                        已验证 · Agent checkpoint ·{" "}
-                        {new Date(
-                          connectionCheck.freshnessAt,
-                        ).toLocaleTimeString()}
-                      </small>
-                    </span>
-                  </section>
-                ) : null}
-                <section className="rounded-card border border-accent-soft bg-accent-soft p-[22px]">
-                  <div className="flex items-center gap-3">
-                    <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px_14px_10px_10px] bg-accent-strong text-[11px] font-bold text-on-accent">
-                      IR
-                    </span>
-                    <span className="grid">
-                      <strong className="text-[13px] font-[620]">
-                        团队共享边界
-                      </strong>
-                      <small className="mt-1 text-[11px] text-ink-muted">
-                        Team Pulse 只会显示允许团队查看的工作摘要
-                      </small>
-                    </span>
-                  </div>
-                </section>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <BoundaryCard
-                    title="会与项目成员共享"
-                    items={[
-                      "状态与安全摘要",
-                      "依赖、阻塞与协调信号",
-                      "来源与更新时间",
-                      "可随时撤回的摘要",
-                    ]}
-                    positive
-                  />
-                  <BoundaryCard
-                    title="不会自动上传或使用"
-                    items={[
-                      "prompt 与完整会话",
-                      "文件、diff 与终端输出",
-                      "工具调用日志",
-                      "用户数据不会用于公共模型训练",
-                    ]}
-                  />
-                </div>
-              </div>
-            ) : null}
-
             {mutationError ? (
               <p
                 role="alert"
@@ -823,11 +578,7 @@ export function PilotTestSetupFlow({
             }
             className="h-9 rounded-btn border-0 bg-accent-strong px-[17px] text-[12.5px] font-[620] text-on-accent disabled:opacity-40"
           >
-            {step === STEPS.length
-              ? activeOwnBindings.length === 0
-                ? "跳过并进入 Intero"
-                : "进入 Intero"
-              : "下一步"}
+            {step === STEPS.length ? "完成初始化" : "下一步"}
           </button>
         </footer>
       </div>
@@ -861,6 +612,19 @@ function Field({
         className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[12.5px] text-ink outline-none placeholder:text-faint focus:border-accent-strong"
       />
     </label>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mt-3 grid gap-2 first:mt-0">
+      <span className="text-[10.5px] font-[620] tracking-[0.06em] text-faint">
+        {label}
+      </span>
+      <span className="rounded-btn border border-line bg-raise px-3 py-2.5 font-mono text-[11.5px] text-ink-muted">
+        {value}
+      </span>
+    </div>
   );
 }
 
@@ -905,45 +669,6 @@ function StatusCard({
   );
 }
 
-function BoundaryCard({
-  title,
-  items,
-  positive = false,
-}: {
-  title: string;
-  items: string[];
-  positive?: boolean;
-}) {
-  return (
-    <section className="rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
-      <div
-        className={
-          positive
-            ? "flex items-center gap-2 text-[11.5px] font-[620] text-green"
-            : "flex items-center gap-2 text-[11.5px] font-[620] text-faint"
-        }
-      >
-        {positive ? (
-          <CheckCircleIcon size={14} weight="fill" />
-        ) : (
-          <XCircleIcon size={14} />
-        )}
-        {title}
-      </div>
-      <div className="mt-3 grid gap-2">
-        {items.map((item) => (
-          <span
-            key={item}
-            className="text-[11.5px] leading-[1.6] text-ink-muted"
-          >
-            {item}
-          </span>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -971,7 +696,6 @@ function stepTitle(step: number): string {
     "连接 Intero 并加入团队",
     "配置 AI 模型服务",
     "选择要协作的项目",
-    "连接 Agent 并确认共享边界",
   ][step - 1]!;
 }
 
@@ -980,8 +704,7 @@ function stepBody(step: number): string {
     "请选择一个成员身份进入 Intero。每个浏览器会分别记住选择，便于使用不同身份体验团队协作。",
     "管理员可以创建组织和初始团队；团队成员则使用管理员分享的加入链接进入。",
     "AI 模型用于生成团队可见的安全摘要和协调建议。API 密钥仅保存在 Intero 服务端。",
-    "Agent 上报的工作动态会归属到所选项目，并与参与该项目的团队成员共享。",
-    "连接成功后，Agent 会自动发送测试 checkpoint；Intero 只共享结构化工作摘要。你也可以跳过，稍后再从设置中完成连接。",
+    "创建或选择首个 Project。Coding Agent 由成员稍后从 Team Pulse 或 Project 页面按需连接。",
   ][step - 1]!;
 }
 

@@ -4,8 +4,6 @@ import {
   CodeIcon,
   FolderSimpleIcon,
   MoonIcon,
-  PathIcon,
-  PlugsIcon,
   ShootingStarIcon,
   SunIcon,
   UserCircleIcon,
@@ -16,12 +14,7 @@ import { useEffect, useState } from "react";
 
 import { ACCENTS, lum, useTheme } from "../design/theme.js";
 import { type Locale, useI18n } from "../i18n/index.js";
-import {
-  createPilotAgentTicket,
-  disconnectPilotAgent,
-  getPilotOverview,
-  updatePilotProfile,
-} from "../pilot/api.js";
+import { getPilotOverview, updatePilotProfile } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
 import { NotificationSettings } from "./settings/NotificationSettings.js";
@@ -49,7 +42,7 @@ const SETTINGS_CATEGORIES = [
   {
     id: "agent",
     label: "Coding Agent",
-    detail: "连接状态与接入",
+    detail: "项目连接摘要",
     icon: CodeIcon,
   },
 ] as const satisfies ReadonlyArray<{
@@ -60,10 +53,17 @@ const SETTINGS_CATEGORIES = [
 }>;
 
 export function agentConnectionState(
-  binding: Pick<PilotAgentBinding, "validatedAt" | "disconnectedAt">,
-): "awaiting_validation" | "connected" | "disconnected" {
+  binding: Pick<
+    PilotAgentBinding,
+    "mcpInitializedAt" | "validatedAt" | "disconnectedAt"
+  >,
+):
+  "awaiting_initialization" | "mcp_initialized" | "connected" | "disconnected" {
   if (binding.disconnectedAt) return "disconnected";
-  return binding.validatedAt ? "connected" : "awaiting_validation";
+  if (binding.validatedAt) return "connected";
+  return binding.mcpInitializedAt
+    ? "mcp_initialized"
+    : "awaiting_initialization";
 }
 
 export function shouldShowDesktopGitAwareness(
@@ -73,13 +73,11 @@ export function shouldShowDesktopGitAwareness(
 }
 
 export function SettingsView({
-  onOpenSetup,
-  onOpenTestSetup,
+  onOpenAgentConnections,
   initialCategory = "personal",
   onCategoryChange,
 }: {
-  onOpenSetup: () => void;
-  onOpenTestSetup?: () => void;
+  onOpenAgentConnections?: (projectId?: string) => void;
   initialCategory?: SettingsCategory;
   onCategoryChange?: (category: SettingsCategory) => void;
 }) {
@@ -97,15 +95,9 @@ export function SettingsView({
   const pilot = usePilotOptional();
   const [activeCategory, setActiveCategory] =
     useState<SettingsCategory>(initialCategory);
-  const [agentPrompt, setAgentPrompt] = useState<{
-    client: "codex" | "claude-code" | "opencode";
-    prompt: string;
-    expiresAt: string;
-  }>();
-  const pilotProject =
-    pilot?.projects.data?.projects.find(
-      (project) => project.id === pilot.selectedProjectId,
-    ) ?? pilot?.projects.data?.projects[0];
+  const pilotProject = pilot?.projects.data?.projects.find(
+    (project) => project.id === pilot.selectedProjectId,
+  );
   const developmentIdentityId =
     pilot?.bootstrap.data?.authMode === "development_identity"
       ? pilot.identityId
@@ -117,24 +109,6 @@ export function SettingsView({
       getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
     enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
     refetchInterval: 2_000,
-  });
-  const disconnectAgent = useMutation({
-    mutationFn: (bindingId: string) =>
-      disconnectPilotAgent(pilot!.identityId!, bindingId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["pilot", "overview"] });
-    },
-  });
-  const connectAgent = useMutation({
-    mutationFn: (client: "codex" | "claude-code" | "opencode") =>
-      createPilotAgentTicket(pilot!.identityId!, pilotProject!.id, client),
-    onSuccess: (result, client) => {
-      setAgentPrompt({
-        client,
-        prompt: result.connectPrompt,
-        expiresAt: result.ticket.expiresAt,
-      });
-    },
   });
   const updatePreferredLanguage = useMutation({
     mutationFn: (preferredLanguage: Locale) =>
@@ -159,6 +133,13 @@ export function SettingsView({
         .map((binding) => binding.client),
     ),
   );
+  const ownedActiveBindings = (pilotOverview.data?.bindings ?? []).filter(
+    (binding) =>
+      binding.ownerId === pilot?.identityId && !binding.disconnectedAt,
+  );
+  const connectedBindings = ownedActiveBindings.filter((binding) =>
+    Boolean(binding.validatedAt),
+  );
   const activeCategoryMeta =
     SETTINGS_CATEGORIES.find((category) => category.id === activeCategory) ??
     SETTINGS_CATEGORIES[0]!;
@@ -166,7 +147,7 @@ export function SettingsView({
     personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
     project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
     agent:
-      "查看当前项目的云端 Coding Agent 状态，并生成由 Agent 自行执行的原生连接提示。",
+      "查看当前项目的 Coding Agent 摘要；新增、重试和断开统一在连接中心完成。",
   };
 
   useEffect(() => {
@@ -423,163 +404,35 @@ export function SettingsView({
 
           {pilot?.enabled && activeCategory === "agent" ? (
             <div className="mt-8" data-testid="pilot-cloud-settings">
-              <strong className="text-[14px] font-[620]">Coding Agent</strong>
+              <strong className="text-[14px] font-[620]">
+                Coding Agent 连接
+              </strong>
               <p className="mt-2 max-w-[560px] text-[12px] leading-[1.7] text-ink-muted">
-                Web 与 Desktop
-                共享服务器验证后的项目连接状态；复制一次提示后，由 Coding Agent
-                自己配置原生 MCP、Hook 与项目 instructions。
+                Coding Agent 按本地仓库和 Intero Project
+                连接。这里仅显示当前项目摘要，新增、重试和断开都在统一连接中心完成。
               </p>
-              <div className="mt-3.5 grid gap-3">
-                {activeCategory === "agent"
-                  ? (pilotOverview.data?.bindings ?? [])
-                      .filter((binding) => !binding.disconnectedAt)
-                      .map((binding) => (
-                        <div
-                          key={binding.id}
-                          className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-[13px] rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
-                        >
-                          <span className="grid h-[34px] w-[34px] place-items-center rounded-[10px] bg-raise text-green">
-                            <PlugsIcon size={16} />
-                          </span>
-                          <span className="grid">
-                            <strong className="text-[12.5px] font-[620]">
-                              {binding.name}
-                            </strong>
-                            <small className="mt-1 text-[11px] text-ink-muted">
-                              {binding.client} · {pilotProject?.name} ·{" "}
-                              {agentConnectionState(binding) === "connected"
-                                ? `已连接 · 验证 ${new Date(
-                                    binding.validatedAt!,
-                                  ).toLocaleString()}${
-                                    binding.lastSeenAt
-                                      ? ` · 最近活动 ${new Date(
-                                          binding.lastSeenAt,
-                                        ).toLocaleString()}`
-                                      : ""
-                                  }`
-                                : "等待 Agent 完成真实 MCP 验证"}
-                            </small>
-                          </span>
-                          {binding.ownerId === pilot?.identityId ? (
-                            <button
-                              type="button"
-                              data-testid={`pilot-agent-disconnect-${binding.client}`}
-                              disabled={disconnectAgent.isPending}
-                              onClick={() => disconnectAgent.mutate(binding.id)}
-                              className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-danger hover:text-danger"
-                            >
-                              断开
-                            </button>
-                          ) : null}
-                        </div>
-                      ))
-                  : null}
-                {activeCategory === "agent" && pilotProject ? (
-                  <div
-                    className="rounded-[13px] border border-line bg-panel2 p-[15px_16px]"
-                    data-testid="agent-connection-settings"
-                  >
-                    <strong className="text-[12.5px] font-[620]">
-                      连接 Coding Agent
-                    </strong>
-                    <p className="mt-1.5 text-[10.5px] leading-[1.6] text-ink-muted">
-                      生成一个 Agent
-                      专属、可检查且幂等的设置提示。无需手工放置配置，也不依赖
-                      Intero CLI。
-                    </p>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(
-                        [
-                          ["codex", "Codex"],
-                          ["claude-code", "Claude Code"],
-                          ["opencode", "OpenCode"],
-                        ] as const
-                      ).map(([client, label]) => {
-                        const active = pilotOverview.data?.bindings.some(
-                          (binding) =>
-                            binding.client === client &&
-                            binding.ownerId === pilot.identityId &&
-                            Boolean(binding.validatedAt) &&
-                            !binding.disconnectedAt,
-                        );
-                        const pending = pilotOverview.data?.bindings.some(
-                          (binding) =>
-                            binding.client === client &&
-                            binding.ownerId === pilot.identityId &&
-                            !binding.validatedAt &&
-                            !binding.disconnectedAt,
-                        );
-                        const reconnect = pilotOverview.data?.bindings.some(
-                          (binding) =>
-                            binding.client === client &&
-                            binding.ownerId === pilot.identityId &&
-                            Boolean(binding.disconnectedAt),
-                        );
-                        return (
-                          <button
-                            key={client}
-                            type="button"
-                            disabled={
-                              active ||
-                              pending ||
-                              connectAgent.isPending ||
-                              !pilotOrganization?.provider.configured
-                            }
-                            data-testid={`connect-agent-${client}`}
-                            onClick={() => connectAgent.mutate(client)}
-                            className="h-9 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong disabled:opacity-50"
-                          >
-                            {active
-                              ? `${label} 已连接`
-                              : pending
-                                ? `${label} 等待验证`
-                                : reconnect
-                                  ? `重新连接 ${label}`
-                                  : `连接 ${label}`}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {agentPrompt ? (
-                      <div className="mt-3 grid gap-2 border-t border-line pt-3">
-                        <span className="text-[10.5px] text-ink-muted">
-                          将以下提示粘贴到{" "}
-                          {agentPrompt.client === "claude-code"
-                            ? "Claude Code"
-                            : agentPrompt.client === "opencode"
-                              ? "OpenCode"
-                              : "Codex"}
-                          。一次性设置授权将在{" "}
-                          {new Date(agentPrompt.expiresAt).toLocaleTimeString()}
-                          到期：
-                        </span>
-                        <textarea
-                          readOnly
-                          rows={12}
-                          value={agentPrompt.prompt}
-                          data-testid="agent-connect-prompt"
-                          className="resize-none rounded-[9px] border border-line bg-bg p-3 font-mono text-[10px] leading-[1.55] text-ink-muted outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            navigator.clipboard.writeText(agentPrompt.prompt)
-                          }
-                          className="justify-self-start h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-accent-strong"
-                        >
-                          复制连接提示
-                        </button>
-                      </div>
-                    ) : null}
-                    {connectAgent.isError ? (
-                      <p className="mt-3 text-[11px] text-danger" role="alert">
-                        {connectAgent.error instanceof Error
-                          ? connectAgent.error.message
-                          : "无法生成连接提示。"}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
+              <div className="mt-4 flex items-center gap-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
+                <span className="grid">
+                  <strong className="text-[12.5px] font-[620]">
+                    {pilotProject?.name ?? "尚未选择 Project"}
+                  </strong>
+                  <small className="mt-1 text-[11px] text-ink-muted">
+                    {connectedBindings.length > 0
+                      ? `我的 ${connectedBindings.length} 个连接已通过真实 MCP 验证`
+                      : ownedActiveBindings.length > 0
+                        ? "我的连接正在等待 MCP 验证"
+                        : "我还没有为这个 Project 连接 Coding Agent"}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  data-testid="open-agent-connections"
+                  disabled={!pilotProject}
+                  onClick={() => onOpenAgentConnections?.(pilotProject?.id)}
+                  className="ml-auto h-9 rounded-btn border-0 bg-accent-strong px-4 text-[11.5px] font-[620] text-on-accent disabled:opacity-50"
+                >
+                  管理连接
+                </button>
               </div>
             </div>
           ) : null}
@@ -592,54 +445,8 @@ export function SettingsView({
                 ? { projectName: pilotProject.name }
                 : {})}
               connectedClients={connectedAgentClients}
-              onBindAgent={onOpenSetup}
+              onBindAgent={() => onOpenAgentConnections?.(pilotProject?.id)}
             />
-          ) : null}
-
-          {/* Re-running first-run setup re-walks deployment, org, model,
-              project and agent, so it sits with the connection category. */}
-          {activeCategory === "agent" ? (
-            <div className="mt-8 flex items-center gap-3 rounded-[13px] border border-dashed border-line2 p-[16px_18px]">
-              <PathIcon size={17} className="text-accent-strong" />
-              <span className="grid">
-                <strong className="text-[12.5px] font-[620]">
-                  {t("settings.rerunSetup")}
-                </strong>
-                <small className="mt-1 text-[11px] text-ink-muted">
-                  {t("settings.rerunSetupDetail")}
-                </small>
-              </span>
-              <button
-                type="button"
-                onClick={onOpenSetup}
-                className="ml-auto h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong"
-              >
-                {t("general.open")}
-              </button>
-            </div>
-          ) : null}
-
-          {activeCategory === "agent" && onOpenTestSetup ? (
-            <div
-              className="mt-3 flex items-center gap-3 rounded-[13px] border border-dashed border-accent-soft bg-accent-soft p-[16px_18px]"
-              data-testid="test-setup-entry"
-            >
-              <PathIcon size={17} className="text-accent-strong" />
-              <span className="grid">
-                <strong className="text-[12.5px] font-[620]">Test Setup</strong>
-                <small className="mt-1 text-[11px] text-ink-muted">
-                  仅开发环境可见，用于验证云部署、团队、Provider、项目与 Agent
-                  连接。
-                </small>
-              </span>
-              <button
-                type="button"
-                onClick={onOpenTestSetup}
-                className="ml-auto h-8 cursor-pointer rounded-btn border border-accent-strong bg-transparent px-3.5 text-[12px] text-accent-strong"
-              >
-                打开测试流程
-              </button>
-            </div>
           ) : null}
 
           <p className="mt-[26px] max-w-[620px] rounded-[13px] bg-raise p-[16px_18px] text-[11.5px] leading-[1.75] text-faint [text-wrap:pretty]">

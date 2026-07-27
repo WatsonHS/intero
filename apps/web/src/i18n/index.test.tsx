@@ -1,11 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { I18nProvider, useI18n } from "./index.js";
 import { enUS } from "./locales/en-US.js";
 import { zhCN } from "./locales/zh-CN.js";
 
 describe("desktop localization", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps Chinese and English dictionaries in exact key parity", () => {
     expect(Object.keys(enUS).sort()).toEqual(Object.keys(zhCN).sort());
   });
@@ -29,5 +33,24 @@ describe("desktop localization", () => {
     expect(output).toContain('data-locale="zh-CN"');
     expect(output).toContain("大家正在干什么");
     expect(output).toContain("界面与协作语言");
+  });
+
+  it("formats future deadlines without calling them just now", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T00:00:00.000Z"));
+
+    function Probe() {
+      const { formatRelative } = useI18n();
+      return <span>{formatRelative("2026-08-03T00:00:00.000Z")}过期</span>;
+    }
+
+    const output = renderToStaticMarkup(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>,
+    );
+
+    expect(output).toContain("7 天后过期");
+    expect(output).not.toContain("刚刚过期");
   });
 });

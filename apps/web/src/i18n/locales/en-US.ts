@@ -12,6 +12,7 @@ export const enUS: Record<TranslationKey, string> = {
   "nav.collapse": "Collapse sidebar",
   "nav.expand": "Expand sidebar",
   "title.person": "Team Pulse · Person",
+  "title.connections": "Coding Agent Connections",
   "title.setup": "First-run setup",
 
   "general.retry": "Retry",
@@ -45,6 +46,10 @@ export const enUS: Record<TranslationKey, string> = {
   "freshness.hoursAgo": "{count} h ago",
   "freshness.yesterday": "yesterday",
   "freshness.daysAgo": "{count} d ago",
+  "freshness.inMinutes": "in {count} min",
+  "freshness.inHours": "in {count} h",
+  "freshness.tomorrow": "tomorrow",
+  "freshness.inDays": "in {count} d",
   "confidence.label": "confidence {value}",
 
   "phase.exploring": "Exploring",
@@ -75,8 +80,6 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.empty.title": "No team-visible Work State yet",
   "pulse.empty.body":
     "Team Pulse only shows structured work state allowed for a bound team project. Connect a coding agent and report one semantic checkpoint, and progress appears here automatically.",
-  "pulse.empty.register": "Check project settings",
-  "pulse.empty.connect": "How to connect a coding agent",
   "pulse.error.title": "Can't read Team Pulse",
   "pulse.error.body":
     "The Intero cloud service is temporarily unavailable. Retry shortly; saved Work State is unaffected.",
@@ -469,9 +472,6 @@ export const enUS: Record<TranslationKey, string> = {
     "Used for the interface, Coding Agent updates, and Stand-in replies; shared records keep their producer's language.",
   "settings.chinese": "简体中文",
   "settings.english": "English",
-  "settings.rerunSetup": "Re-run first-run setup",
-  "settings.rerunSetupDetail":
-    "Deployment URL, organization and team, model provider, project, and coding agent",
   "settings.footer":
     "Intero processes structured Work State only within authorized organization, team, and project scopes. Revoking project collaboration or agent access stops future synchronization; raw prompts, files, diffs, and terminal output never become team-visible automatically.",
 
@@ -547,6 +547,8 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.members.colEmail": "Email",
   "admin.members.you": "you",
   "admin.members.remove": "Remove",
+  "admin.members.roleChanged": "{scope} changed to “{role}”.",
+  "admin.members.roleFailed": "{scope} did not change. Try again.",
   "admin.members.roleFoot":
     "Change a role from its dropdown. Changes take effect immediately and are written to the audit log. Demoting someone keeps the ownership calls they already made.",
   "admin.role.member": "Member",
@@ -558,6 +560,10 @@ export const enUS: Record<TranslationKey, string> = {
     "Until it is accepted, an invitee sees nothing in the team",
   "admin.invites.empty": "No invitations have been sent.",
   "admin.invites.expires": "expires {when}",
+  "admin.invites.copy": "Copy link",
+  "admin.invites.regenerateAndCopy": "Regenerate & copy",
+  "admin.invites.copied": "Copied",
+  "admin.invites.copyFailed": "Copy failed — retry",
   "admin.invites.revoke": "Revoke",
   "admin.invites.status.pending": "Awaiting acceptance",
   "admin.invites.status.accepted": "Joined",
@@ -617,7 +623,7 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.teams.title": "Teams",
   "admin.teams.count": "{count} teams",
   "admin.teams.ledeOrg":
-    "Every team in the organization. Create one, rename it, or open its roster.",
+    "Every team in the organization. Create, rename, manage members, or delete teams that are no longer used.",
   "admin.teams.ledeTeam":
     "The teams you belong to. You can rename the ones you lead; creating a team and adding people needs an organization admin.",
   "admin.teams.empty": "No teams yet.",
@@ -636,6 +642,15 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.teams.nameTaken": "Another team already uses this name.",
   "admin.teams.failed": "That did not save. Try again.",
   "admin.teams.members": "Members",
+  "admin.teams.deleteNamed": "Delete team {name}",
+  "admin.teams.deleteTitle": "Delete team",
+  "admin.teams.deleteSubmit": "Delete team",
+  "admin.teams.deleteConfirm": "Delete “{name}”? This action cannot be undone.",
+  "admin.teams.deleteHint":
+    "The team's {count} members will lose access; pending invitations and team direct messages will also be deleted.",
+  "admin.teams.deleteBlocked":
+    "This team is still associated with {count} projects. Move ownership or remove its participation in Projects first.",
+  "admin.teams.deleteFailed": "The team could not be deleted. Try again.",
   "admin.teams.addMemberTitle": "Add people to {team}",
   "admin.teams.addMemberHint":
     "Only people in the organization who are not in this team yet. Anyone without an account has to be invited by email.",
@@ -659,7 +674,10 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.projects.namePlaceholder": "For example: Collaboration chain rework",
   "admin.projects.primaryTeam": "Owning team",
   "admin.projects.primaryTeamHint":
-    "The owning team is whose project this is. A new project can only sit under a team you belong to — the project owner has to be a member of it.",
+    "The owning team is whose project this is. For a new project, choose any team you belong to.",
+  "admin.projects.owner": "Owner",
+  "admin.projects.ownerHint":
+    "The owner must belong to the owning team. After transfer, the new owner can manage the project.",
   "admin.projects.primaryOf": "Owned by {team}",
   "admin.projects.participating": "Participating teams",
   "admin.projects.participatingHint":
@@ -711,8 +729,6 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.org.ledBy": "Lead: {name}",
   "admin.org.memberCount": "{count} people",
   "admin.org.projectCount": "{count} projects",
-  "admin.org.current": "Current",
-  "admin.org.open": "Switch to",
   "spec.filterNeedsYou": "Needs you",
   "spec.yours": "Yours",
   "spec.yoursLong": "You started this",
@@ -796,15 +812,18 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.audit.event.pilot.team_invitation.revoked": "Invitation revoked",
   "admin.audit.event.pilot.team.created": "Team created",
   "admin.audit.event.pilot.team.renamed": "Team renamed",
+  "admin.audit.event.pilot.team.deleted": "Team deleted",
   "admin.audit.event.pilot.team_member.added": "Member added",
   "admin.audit.event.pilot.project.created": "Project created",
   "admin.audit.event.pilot.project.updated": "Project changed",
   "admin.audit.event.pilot.organization.renamed": "Organization renamed",
   "admin.audit.line.created": "Created \u201c{name}\u201d.",
+  "admin.audit.line.deleted": "Deleted \u201c{name}\u201d.",
   "admin.audit.line.renamed":
     "Renamed from \u201c{from}\u201d to \u201c{to}\u201d.",
   "admin.audit.line.added": "{name} was added to the team as {role}.",
   "admin.audit.line.primaryTeam": "The owning team changed.",
+  "admin.audit.line.owner": "The project owner changed.",
   "admin.audit.line.teams": "Now scoped to {count} teams.",
   "admin.audit.line.posture": "Collaboration posture set to {posture}.",
   "admin.audit.line.teamRole":

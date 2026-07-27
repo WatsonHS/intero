@@ -10,6 +10,7 @@ export const zhCN = {
   "nav.collapse": "收起侧边栏",
   "nav.expand": "展开侧边栏",
   "title.person": "Team Pulse · 个人",
+  "title.connections": "Coding Agent 连接",
   "title.setup": "首次设置",
 
   "general.retry": "重试",
@@ -43,6 +44,10 @@ export const zhCN = {
   "freshness.hoursAgo": "{count} 小时前",
   "freshness.yesterday": "昨天",
   "freshness.daysAgo": "{count} 天前",
+  "freshness.inMinutes": "{count} 分钟后",
+  "freshness.inHours": "{count} 小时后",
+  "freshness.tomorrow": "明天",
+  "freshness.inDays": "{count} 天后",
   "confidence.label": "置信度 {value}",
 
   "phase.exploring": "Exploring",
@@ -73,8 +78,6 @@ export const zhCN = {
   "pulse.empty.title": "还没有团队可见的 Work State",
   "pulse.empty.body":
     "Team Pulse 只显示已绑定团队项目中允许共享的结构化工作状态。连接 Coding Agent 并提交一次语义 checkpoint 后，这里会自动出现进展。",
-  "pulse.empty.register": "检查项目设置",
-  "pulse.empty.connect": "怎么接 Coding Agent",
   "pulse.error.title": "读不到 Team Pulse",
   "pulse.error.body":
     "Intero 云服务暂时不可达，请稍后重试。已经保存的 Work State 不受影响。",
@@ -455,9 +458,6 @@ export const zhCN = {
     "用于界面、Coding Agent 工作动态和替身回复；共享记录保留产生者语言。",
   "settings.chinese": "简体中文",
   "settings.english": "English",
-  "settings.rerunSetup": "重新运行首次引导",
-  "settings.rerunSetupDetail":
-    "部署地址、组织与团队、模型服务、项目和 Coding Agent",
   "settings.footer":
     "Intero 只在授权的组织、团队和项目范围内处理结构化 Work State。撤销项目协作或 Agent 授权后，后续同步会停止；原始 prompt、文件、diff 与终端输出不会自动进入团队可见范围。",
 
@@ -528,6 +528,8 @@ export const zhCN = {
   "admin.members.colEmail": "邮箱",
   "admin.members.you": "你",
   "admin.members.remove": "移出",
+  "admin.members.roleChanged": "{scope}已更新为「{role}」。",
+  "admin.members.roleFailed": "{scope}没有改成功，请稍后重试。",
   "admin.members.roleFoot":
     "从角色下拉里改权限，改动立即生效并写入审计日志。降级会保留他已经判定过的归属结论。",
   "admin.role.member": "成员",
@@ -538,6 +540,10 @@ export const zhCN = {
   "admin.invites.hint": "接受之前，被邀请的人看不到任何团队内容",
   "admin.invites.empty": "还没有发出过邀请。",
   "admin.invites.expires": "{when}过期",
+  "admin.invites.copy": "复制链接",
+  "admin.invites.regenerateAndCopy": "重新生成并复制",
+  "admin.invites.copied": "已复制",
+  "admin.invites.copyFailed": "复制失败，请重试",
   "admin.invites.revoke": "撤回",
   "admin.invites.status.pending": "等对方接受",
   "admin.invites.status.accepted": "已加入",
@@ -587,7 +593,7 @@ export const zhCN = {
   "admin.teams.title": "团队",
   "admin.teams.count": "{count} 个团队",
   "admin.teams.ledeOrg":
-    "组织里的全部团队。新建团队、改名，或者去看某个团队的成员。",
+    "组织里的全部团队。新建、改名、管理成员，或者删除不再使用的团队。",
   "admin.teams.ledeTeam":
     "你所在的团队。你带队的团队可以改名；新建团队和加人需要组织管理员。",
   "admin.teams.empty": "还没有团队。",
@@ -605,6 +611,15 @@ export const zhCN = {
   "admin.teams.nameTaken": "已经有同名团队了，换一个名字。",
   "admin.teams.failed": "没有保存成功，稍后重试。",
   "admin.teams.members": "成员",
+  "admin.teams.deleteNamed": "删除团队 {name}",
+  "admin.teams.deleteTitle": "删除团队",
+  "admin.teams.deleteSubmit": "删除团队",
+  "admin.teams.deleteConfirm": "确定删除「{name}」吗？此操作无法撤销。",
+  "admin.teams.deleteHint":
+    "团队中的 {count} 位成员会失去这个团队的访问权限；待处理邀请和团队私聊也会一并删除。",
+  "admin.teams.deleteBlocked":
+    "这个团队仍关联 {count} 个项目。请先在「项目」中转移归属或移除参与关系。",
+  "admin.teams.deleteFailed": "团队没有删除成功，稍后重试。",
   "admin.teams.addMemberTitle": "把成员加入 {team}",
   "admin.teams.addMemberHint":
     "只列出组织里还不在这个团队的人。还没有账号的人要走邮件邀请。",
@@ -627,7 +642,10 @@ export const zhCN = {
   "admin.projects.namePlaceholder": "例如：协作链路重构",
   "admin.projects.primaryTeam": "归属团队",
   "admin.projects.primaryTeamHint":
-    "归属团队决定项目算谁的。新建项目只能挂在你所在的团队下——项目负责人必须是归属团队的成员。",
+    "归属团队决定项目算谁的。新建项目可选择你已加入的任一团队。",
+  "admin.projects.owner": "负责人",
+  "admin.projects.ownerHint":
+    "负责人必须是归属团队的成员。转交后，新负责人将拥有项目管理权限。",
   "admin.projects.primaryOf": "归属 {team}",
   "admin.projects.participating": "参与团队",
   "admin.projects.participatingHint":
@@ -674,8 +692,6 @@ export const zhCN = {
   "admin.org.ledBy": "Lead：{name}",
   "admin.org.memberCount": "{count} 人",
   "admin.org.projectCount": "{count} 个项目",
-  "admin.org.current": "当前",
-  "admin.org.open": "切换过去",
   "spec.filterNeedsYou": "需要我表态",
   "spec.yours": "你发起",
   "spec.yoursLong": "你发起的",
@@ -756,14 +772,17 @@ export const zhCN = {
   "admin.audit.event.pilot.team_invitation.revoked": "撤回邀请",
   "admin.audit.event.pilot.team.created": "新建团队",
   "admin.audit.event.pilot.team.renamed": "团队改名",
+  "admin.audit.event.pilot.team.deleted": "删除团队",
   "admin.audit.event.pilot.team_member.added": "加入成员",
   "admin.audit.event.pilot.project.created": "新建项目",
   "admin.audit.event.pilot.project.updated": "改动项目",
   "admin.audit.event.pilot.organization.renamed": "组织改名",
   "admin.audit.line.created": "「{name}」已创建。",
+  "admin.audit.line.deleted": "「{name}」已删除。",
   "admin.audit.line.renamed": "从「{from}」改名为「{to}」。",
   "admin.audit.line.added": "{name} 被加入团队，角色为「{role}」。",
   "admin.audit.line.primaryTeam": "归属团队已调整。",
+  "admin.audit.line.owner": "项目负责人已调整。",
   "admin.audit.line.teams": "参与团队调整为 {count} 个。",
   "admin.audit.line.posture": "协作姿态改为「{posture}」。",
   "admin.audit.line.teamRole": "{name} 的团队角色从「{from}」改为「{to}」。",

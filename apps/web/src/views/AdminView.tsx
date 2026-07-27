@@ -45,6 +45,7 @@ import {
   Tabs,
   cn,
 } from "../design/primitives.js";
+import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
 import type { Tone } from "../design/utils.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
@@ -52,6 +53,7 @@ import {
   createPilotInvitation,
   getPilotInvitations,
   getPilotOrganizationDirectory,
+  regeneratePilotInvitation,
   removePilotMember,
   revokePilotInvitation,
   updatePilotMember,
@@ -66,12 +68,19 @@ import {
 import { AddMemberModal } from "./admin/AddMemberModal.js";
 import { OrganizationTab } from "./admin/OrganizationTab.js";
 import { ProjectsTab } from "./admin/ProjectsTab.js";
+import { refreshGovernanceMembers } from "./admin/query-cache.js";
 import { TeamPicker } from "./admin/TeamPicker.js";
 import { TeamsTab } from "./admin/TeamsTab.js";
 import { OrganizationServiceSettings } from "./settings/OrganizationServiceSettings.js";
 
 type Tab =
   "members" | "teams" | "projects" | "policy" | "org" | "service" | "audit";
+
+type MemberRoleChange = {
+  memberId: string;
+  teamRole?: PilotTeamRole;
+  organizationRole?: PilotOrganizationRole;
+};
 
 /** Escalation windows offered for the two automation SLAs. */
 const SLA_HOURS = [8, 24, 48, 72];
@@ -106,6 +115,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
   const { t, formatRelative } = useI18n();
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
+  const notifications = useNotifications();
   const [tab, setTab] = useState<Tab>("members");
   const [rosterTeamId, setRosterTeamId] = useState<string>();
 
@@ -163,11 +173,6 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
     enabled: canGovern,
   });
 
-  const refreshTeams = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["pilot", "teams"] });
-    // A role change is an audit event; the log must reflect it right away.
-    await queryClient.invalidateQueries({ queryKey: ["governance-audit"] });
-  };
   const refreshInvites = async () => {
     await queryClient.invalidateQueries({ queryKey: ["pilot", "invitations"] });
     await queryClient.invalidateQueries({ queryKey: ["governance-audit"] });
@@ -180,12 +185,33 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
     await queryClient.invalidateQueries({ queryKey: ["governance-audit"] });
   };
 
+  const showRoleNotice = (
+    tone: "success" | "danger",
+    input: MemberRoleChange,
+  ) => {
+    const teamRole = input.teamRole;
+    const scope = t(
+      teamRole ? "admin.members.colTeamRole" : "admin.members.colOrgRole",
+    );
+    const role = teamRole
+      ? t(teamRole === "leader" ? "admin.role.leader" : "admin.role.member")
+      : t(
+          input.organizationRole === "admin"
+            ? "admin.role.orgAdmin"
+            : "admin.role.orgMember",
+        );
+    const message = t(
+      tone === "success"
+        ? "admin.members.roleChanged"
+        : "admin.members.roleFailed",
+      { scope, role },
+    );
+    if (tone === "success") notifications.success(message);
+    else notifications.error(message);
+  };
+
   const changeMember = useMutation({
-    mutationFn: (input: {
-      memberId: string;
-      teamRole?: PilotTeamRole;
-      organizationRole?: PilotOrganizationRole;
-    }) =>
+    mutationFn: (input: MemberRoleChange) =>
       updatePilotMember(
         governedTeam!.id,
         input.memberId as never,
@@ -197,7 +223,11 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
         },
         developmentIdentityId,
       ),
-    onSuccess: refreshTeams,
+    onSuccess: async (_result, input) => {
+      showRoleNotice("success", input);
+      await refreshGovernanceMembers(queryClient);
+    },
+    onError: (_error, input) => showRoleNotice("danger", input),
   });
   const removeMember = useMutation({
     mutationFn: (memberId: string) =>
@@ -206,7 +236,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
         memberId as never,
         developmentIdentityId,
       ),
-    onSuccess: refreshTeams,
+    onSuccess: () => refreshGovernanceMembers(queryClient),
   });
   const revoke = useMutation({
     mutationFn: (invitationId: string) =>
@@ -439,7 +469,6 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
           <TeamsTab
             teams={governedTeams}
             projects={governedProjects}
-            currentTeamId={teamId}
             identityId={identityId}
             canCreate={Boolean(isOrgAdmin)}
             canManage={(candidateId) =>
@@ -453,12 +482,12 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
                   ),
               )
             }
+            canDelete={Boolean(isOrgAdmin)}
             scopedToOwnTeams={!isOrgAdmin}
             onOpenMembers={(nextTeamId) => {
               setRosterTeamId(nextTeamId);
               setTab("members");
             }}
-            onOpenTeam={(nextTeamId) => pilot.setSelectedTeamId(nextTeamId)}
             onChanged={refreshScope}
           />
         ) : null}
@@ -665,6 +694,10 @@ function governanceLine(
       return entry.detail.name
         ? t("admin.audit.line.created", { name: String(entry.detail.name) })
         : "";
+    case "pilot.team.deleted":
+      return entry.detail.name
+        ? t("admin.audit.line.deleted", { name: String(entry.detail.name) })
+        : "";
     case "pilot.team.renamed":
     case "pilot.organization.renamed":
       return renamed();
@@ -680,6 +713,7 @@ function governanceLine(
       const parts = [
         renamed(),
         entry.detail.primaryTeamId ? t("admin.audit.line.primaryTeam") : "",
+        entry.detail.ownerId ? t("admin.audit.line.owner") : "",
         entry.detail.teams
           ? t("admin.audit.line.teams", { count: String(entry.detail.teams) })
           : "",
@@ -776,14 +810,10 @@ function MembersTab({
     status: string;
     expiresAt: string;
   }>;
-  onChangeRole: (input: {
-    memberId: string;
-    teamRole?: PilotTeamRole;
-    organizationRole?: PilotOrganizationRole;
-  }) => void;
+  onChangeRole: (input: MemberRoleChange) => void;
   onRemove: (memberId: string) => void;
   onRevoke: (invitationId: string) => void;
-  onInvited: () => void;
+  onInvited: () => Promise<void> | void;
   onChanged: () => Promise<void> | void;
   developmentIdentityId: PrincipalId | undefined;
 }) {
@@ -792,6 +822,12 @@ function MembersTab({
   const [addOpen, setAddOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
+  const [invitationLinks, setInvitationLinks] = useState<
+    Record<string, string>
+  >({});
+  const [copiedInvitationId, setCopiedInvitationId] = useState<string>();
+  const [copyFailedInvitationId, setCopyFailedInvitationId] =
+    useState<string>();
   const invite = useMutation({
     mutationFn: () =>
       createPilotInvitation(
@@ -799,11 +835,59 @@ function MembersTab({
         { displayName: displayName.trim(), email: email.trim() },
         developmentIdentityId,
       ),
-    onSuccess: () => {
+    onSuccess: async (result) => {
+      const link = result.activationUrl;
+      setInvitationLinks((current) => ({
+        ...current,
+        [result.invitation.id]: link,
+      }));
       setDisplayName("");
       setEmail("");
       setInviteOpen(false);
-      onInvited();
+      try {
+        await copyTextToClipboard(link);
+        setCopiedInvitationId(result.invitation.id);
+        setCopyFailedInvitationId(undefined);
+      } catch {
+        setCopiedInvitationId(undefined);
+        setCopyFailedInvitationId(result.invitation.id);
+      }
+      await onInvited();
+    },
+  });
+  const copyInvitation = useMutation({
+    mutationFn: async (invitationId: string) => {
+      let link = invitationLinks[invitationId];
+      let regenerated = false;
+      if (!link) {
+        const result = await regeneratePilotInvitation(
+          invitationId,
+          7,
+          developmentIdentityId,
+        );
+        link = result.activationUrl;
+        regenerated = true;
+      }
+      return { invitationId, link, regenerated };
+    },
+    onMutate: () => {
+      setCopiedInvitationId(undefined);
+      setCopyFailedInvitationId(undefined);
+    },
+    onSuccess: async ({ invitationId, link, regenerated }) => {
+      setInvitationLinks((current) => ({ ...current, [invitationId]: link }));
+      try {
+        await copyTextToClipboard(link);
+        setCopiedInvitationId(invitationId);
+        setCopyFailedInvitationId(undefined);
+      } catch {
+        setCopiedInvitationId(undefined);
+        setCopyFailedInvitationId(invitationId);
+      }
+      if (regenerated) await onInvited();
+    },
+    onError: (_error, invitationId) => {
+      setCopyFailedInvitationId(invitationId);
     },
   });
 
@@ -1065,13 +1149,32 @@ function MembersTab({
                   )}
                 </StatusPill>
                 {invitation.status === "pending" ? (
-                  <button
-                    type="button"
-                    onClick={() => onRevoke(invitation.id)}
-                    className="h-7 cursor-pointer rounded-quiet border border-line2 bg-transparent px-[11px] text-[11.5px] text-ink-muted hover:border-danger hover:text-danger"
-                  >
-                    {t("admin.invites.revoke")}
-                  </button>
+                  <span className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={
+                        copyInvitation.isPending &&
+                        copyInvitation.variables === invitation.id
+                      }
+                      onClick={() => copyInvitation.mutate(invitation.id)}
+                      className="h-7 cursor-pointer rounded-quiet border border-line2 bg-transparent px-[11px] text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-ink disabled:cursor-wait disabled:opacity-45"
+                    >
+                      {copyFailedInvitationId === invitation.id
+                        ? t("admin.invites.copyFailed")
+                        : copiedInvitationId === invitation.id
+                          ? t("admin.invites.copied")
+                          : invitationLinks[invitation.id]
+                            ? t("admin.invites.copy")
+                            : t("admin.invites.regenerateAndCopy")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRevoke(invitation.id)}
+                      className="h-7 cursor-pointer rounded-quiet border border-line2 bg-transparent px-[11px] text-[11.5px] text-ink-muted hover:border-danger hover:text-danger"
+                    >
+                      {t("admin.invites.revoke")}
+                    </button>
+                  </span>
                 ) : (
                   <span />
                 )}
@@ -1097,6 +1200,33 @@ function MembersTab({
       ) : null}
     </div>
   );
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Browsers can deny the async API outside a secure context. The
+      // selection fallback below still works from the explicit copy action.
+    }
+  }
+
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.append(input);
+  input.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Clipboard copy was rejected.");
+    }
+  } finally {
+    input.remove();
+  }
 }
 
 /** Trigger face for a role <SelectMenu>: current role plus an open affordance. */

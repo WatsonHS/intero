@@ -2,7 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { DevelopmentIdentityToolView, SignInView } from "./AccessView.js";
+import {
+  DevelopmentIdentityToolView,
+  NoTeamAccessView,
+  SignInView,
+} from "./AccessView.js";
 
 describe("access view keyboard hierarchy", () => {
   it("places password sign-in before Passkey and exposes an accessible eye toggle", () => {
@@ -53,5 +57,20 @@ describe("access view keyboard hierarchy", () => {
     expect(output).toContain("Alex");
     expect(output).not.toContain("已登录");
     expect(output).not.toContain('data-testid="sign-in-password"');
+  });
+
+  it("does not route an authenticated member without a team into Setup", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const output = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <NoTeamAccessView onSignOut={async () => undefined} />
+      </QueryClientProvider>,
+    );
+
+    expect(output).toContain("还没有可访问的团队");
+    expect(output).toContain("普通成员不需要运行组织 Setup");
+    expect(output).toContain("联系组织管理员");
   });
 });

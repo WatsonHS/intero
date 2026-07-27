@@ -39,8 +39,9 @@ import {
   handleAuthenticationFailure,
   PILOT_IDENTITY_STORAGE_KEY,
 } from "./pilot/auth-state.js";
+import { INTERO_API_URL } from "./api-url.js";
 
-const API_URL = import.meta.env.VITE_INTERO_API_URL ?? "http://localhost:4310";
+const API_URL = INTERO_API_URL;
 
 export interface TeamPulsePayload {
   generatedAt: string;

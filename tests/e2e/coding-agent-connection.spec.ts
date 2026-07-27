@@ -1,13 +1,10 @@
-import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-
 import { expect, test, type Page } from "@playwright/test";
+import { createHash, randomBytes } from "node:crypto";
 
 const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://127.0.0.1:4310";
-const repositoryRoot = resolve(import.meta.dirname, "../..");
 const password = process.env.INTERO_E2E_PASSWORD ?? "Intero-demo-2026!";
 
-test("Codex natively configures a clean Project and Web reflects the real cloud binding", async ({
+test("Web reflects authenticated MCP initialization and functional validation", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -24,45 +21,45 @@ test("Codex natively configures a clean Project and Web reflects the real cloud 
 
   await page.getByTitle("设置").click();
   await page.getByTestId("settings-category-agent").click();
-  await expect(page.getByTestId("agent-connection-settings")).toBeVisible();
+  await expect(page.getByTestId("pilot-cloud-settings")).toBeVisible();
   await expect(page.getByText("桌面 Git 感知")).toHaveCount(0);
-
-  await page.getByTestId("connect-agent-codex").click();
-  const prompt = page.getByTestId("agent-connect-prompt");
-  await expect(prompt).toBeVisible();
-  const promptText = await prompt.inputValue();
-  expect(promptText).toContain('"protocol": "intero-agent-setup/v1"');
-  expect(promptText).toContain(".codex/config.toml");
-  expect(promptText).toContain(".codex/hooks.json");
-  expect(promptText).toContain("AGENTS.md");
-  expect(promptText).toContain("intero.validate_connection");
-  expect(promptText).not.toContain("intero-mcp");
-  await expect(page.getByTestId("pilot-agent-disconnect-codex")).toHaveCount(0);
-  await expect(page.getByTestId("connect-agent-codex")).not.toHaveText(
-    "Codex 已连接",
+  await page.getByTestId("open-agent-connections").click();
+  await expect(page.getByTestId("agent-connection-project")).toHaveValue(
+    project.id,
   );
 
-  const canary = await runCodexCanary(promptText);
-  expect(canary).toMatchObject({
-    status: "connected",
-    project: { id: project.id, name: project.name },
-    agent: { client: "codex" },
-    verification: {
-      codexConfigParsed: true,
-      realHandshake: true,
-      persistedContext: true,
-      safeLifecycleHook: true,
-    },
-  });
+  await page.getByTestId("connect-agent-codex").click();
+  await page.getByText("其他方式：查看完整连接任务").click();
+  const prompt = page.getByTestId("agent-connect-prompt");
+  await expect(prompt).toBeVisible();
+  const promptText = (await prompt.textContent()) ?? "";
+  expect(promptText).toContain("[mcp_servers.intero]");
+  expect(promptText).toContain(".codex/config.toml");
+  expect(promptText).toContain("AGENTS.md");
+  expect(promptText).toContain("enabled = true");
+  expect(promptText).toContain("configured_waiting_for_oauth");
+  expect(promptText).not.toContain('auth = "oauth"');
+  expect(promptText).not.toContain("required = false");
+  expect(promptText).not.toMatch(/ticket_|credential|verification|SDK|CLI/i);
+  await expect(
+    page.locator(
+      '[data-testid^="pilot-agent-disconnect-"][data-client="codex"]',
+    ),
+  ).toHaveCount(1);
+  await expect(page.getByText("等待 GUI OAuth 授权")).toBeVisible();
 
-  const status = page
-    .getByTestId("pilot-agent-disconnect-codex")
-    .locator("xpath=..");
-  await expect(status).toContainText("Codex · connection-e2e");
-  await expect(status).toContainText(project.name);
-  await expect(status).toContainText("已连接");
+  const connection = await authorizeConnection(page, promptText);
+  await initializeMcp(page, connection);
+
+  const disconnectButton = page.getByTestId(
+    `pilot-agent-disconnect-${connection.bindingId}`,
+  );
+  const status = disconnectButton.locator("xpath=..");
+  await expect(status).toContainText("Codex repository");
+  await expect(status).toContainText("OAuth 与原生 MCP 已验证");
+  await expect(page.getByTestId("agent-connection-success")).toBeVisible();
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
-    "Codex 已连接",
+    "连接另一个 Codex 仓库",
   );
 
   const overview = await page.request.get(
@@ -73,6 +70,7 @@ test("Codex natively configures a clean Project and Web reflects the real cloud 
     bindings: Array<{
       id: string;
       client: string;
+      mcpInitializedAt?: string;
       validatedAt?: string;
       disconnectedAt?: string;
     }>;
@@ -80,12 +78,13 @@ test("Codex natively configures a clean Project and Web reflects the real cloud 
   const binding = overviewBody.bindings.find(
     (candidate) => candidate.client === "codex" && !candidate.disconnectedAt,
   );
-  expect(binding?.id).toBe(canary.agent.bindingId);
+  expect(binding?.id).toBe(connection.bindingId);
+  expect(binding?.mcpInitializedAt).toBeTruthy();
   expect(binding?.validatedAt).toBeTruthy();
 
-  await page.getByTestId("pilot-agent-disconnect-codex").click();
+  await disconnectButton.click();
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
-    "重新连接 Codex",
+    "连接 Codex",
   );
 });
 
@@ -139,57 +138,155 @@ async function createCleanProject(page: Page) {
   return { project: body.project, team: team! };
 }
 
-async function runCodexCanary(prompt: string): Promise<{
-  status: string;
-  project: { id: string; name: string };
-  agent: { client: string; bindingId: string; name: string };
-  verification: {
-    codexConfigParsed: boolean;
-    realHandshake: boolean;
-    persistedContext: boolean;
-    safeLifecycleHook: boolean;
-  };
-}> {
-  return new Promise((resolveResult, reject) => {
-    const child = spawn(
-      "node",
-      ["apps/server-api/scripts/codex-native-connection-canary.mjs"],
-      {
-        cwd: repositoryRoot,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(
-            `Codex native connection canary failed (${code}): ${stderr}`,
-          ),
-        );
-        return;
-      }
-      try {
-        resolveResult(JSON.parse(stdout));
-      } catch {
-        reject(
-          new Error("Codex native connection canary returned invalid JSON."),
-        );
-      }
-    });
-    child.stdin.end(
-      JSON.stringify({
-        prompt,
-        repositoryName: "connection-e2e",
-      }),
-    );
+interface TestAgentConnection {
+  bindingId: string;
+  accessToken: string;
+  mcpUrl: string;
+}
+
+async function authorizeConnection(
+  page: Page,
+  prompt: string,
+): Promise<TestAgentConnection> {
+  const mcpUrl = prompt.match(/url = "([^"]+)"/)?.[1];
+  expect(mcpUrl).toBeTruthy();
+  const bindingId = new URL(mcpUrl!).pathname.match(
+    /agent-connections\/([^/]+)\/mcp$/,
+  )?.[1];
+  expect(bindingId).toBeTruthy();
+
+  const challenge = await page.request.post(mcpUrl!, {
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    data: initializePayload("oauth-challenge"),
   });
+  expect(challenge.status()).toBe(401);
+  const resourceMetadataUrl = challenge
+    .headers()
+    ["www-authenticate"]?.match(/resource_metadata="([^"]+)"/)?.[1];
+  expect(resourceMetadataUrl).toBeTruthy();
+  const metadata = await page.request.get(resourceMetadataUrl!);
+  expect(metadata.ok()).toBe(true);
+  const resource = (await metadata.json()) as {
+    resource: string;
+    authorization_servers: string[];
+  };
+
+  const registration = await page.request.post(
+    `${resource.authorization_servers[0]}/oauth2/register`,
+    {
+      data: {
+        client_name: "Codex E2E",
+        redirect_uris: ["http://127.0.0.1:1455/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        type: "native",
+        scope: "openid offline_access intero:mcp",
+      },
+    },
+  );
+  expect(registration.ok()).toBe(true);
+  const client = (await registration.json()) as {
+    client_id: string;
+  };
+
+  const verifier = randomBytes(48).toString("base64url");
+  const codeChallenge = createHash("sha256")
+    .update(verifier)
+    .digest("base64url");
+  const authorizeUrl = new URL(
+    `${resource.authorization_servers[0]}/oauth2/authorize`,
+  );
+  authorizeUrl.search = new URLSearchParams({
+    response_type: "code",
+    client_id: client.client_id,
+    redirect_uri: "http://127.0.0.1:1455/callback",
+    scope: "openid offline_access intero:mcp",
+    state: "codex-e2e",
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    prompt: "consent",
+  }).toString();
+  const authorize = await page.request.get(authorizeUrl.toString(), {
+    maxRedirects: 0,
+    headers: { accept: "application/json" },
+  });
+  const authorizeBody = (await authorize.json()) as { url: string };
+  const consentUrl = new URL(authorizeBody.url, apiUrl);
+  const consent = await page.request.post(
+    `${resource.authorization_servers[0]}/oauth2/consent`,
+    {
+      data: {
+        accept: true,
+        oauth_query: consentUrl.search.slice(1),
+      },
+      headers: { origin: apiUrl, accept: "application/json" },
+    },
+  );
+  expect(consent.ok()).toBe(true);
+  const consentBody = (await consent.json()) as {
+    url?: string;
+    redirect_uri?: string;
+  };
+  const callback = new URL(consentBody.url ?? consentBody.redirect_uri!);
+  const code = callback.searchParams.get("code");
+  expect(code).toBeTruthy();
+
+  const token = await page.request.post(
+    `${resource.authorization_servers[0]}/oauth2/token`,
+    {
+      form: {
+        grant_type: "authorization_code",
+        client_id: client.client_id,
+        code: code!,
+        code_verifier: verifier,
+        redirect_uri: "http://127.0.0.1:1455/callback",
+        resource: resource.resource,
+      },
+    },
+  );
+  const tokenText = await token.text();
+  expect(token.ok(), tokenText).toBe(true);
+  const tokenBody = JSON.parse(tokenText) as { access_token: string };
+  return {
+    bindingId: bindingId!,
+    accessToken: tokenBody.access_token,
+    mcpUrl: mcpUrl!,
+  };
+}
+
+async function initializeMcp(
+  page: Page,
+  connection: TestAgentConnection,
+): Promise<void> {
+  const response = await page.request.post(connection.mcpUrl, {
+    headers: mcpHeaders(connection.accessToken),
+    data: initializePayload("initialize-e2e"),
+  });
+  const responseText = await response.text();
+  expect(response.ok(), responseText).toBe(true);
+}
+
+function mcpHeaders(accessToken: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${accessToken}`,
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+  };
+}
+
+function initializePayload(id: string) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "codex", version: "e2e" },
+    },
+  };
 }

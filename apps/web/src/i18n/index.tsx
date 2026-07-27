@@ -79,10 +79,22 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         }).format(new Date(input));
       },
       formatRelative(input) {
-        const minutes = Math.max(
-          0,
-          Math.round((Date.now() - new Date(input).getTime()) / 60_000),
+        const minutes = Math.round(
+          (Date.now() - new Date(input).getTime()) / 60_000,
         );
+        if (minutes < 0) {
+          const futureMinutes = Math.abs(minutes);
+          if (futureMinutes < 60) {
+            return t("freshness.inMinutes", { count: futureMinutes });
+          }
+          const futureHours = Math.floor(futureMinutes / 60);
+          if (futureHours < 24) {
+            return t("freshness.inHours", { count: futureHours });
+          }
+          const futureDays = Math.floor(futureHours / 24);
+          if (futureDays === 1) return t("freshness.tomorrow");
+          return t("freshness.inDays", { count: futureDays });
+        }
         if (minutes === 0) return t("freshness.now");
         if (minutes < 60) return t("freshness.minutesAgo", { count: minutes });
         const hours = Math.floor(minutes / 60);

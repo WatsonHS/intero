@@ -47,6 +47,7 @@ import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { getPilotOverview } from "../../pilot/api.js";
 import { usePilotOptional } from "../../pilot/context.js";
+import { ProjectAgentConnectionBadge } from "../agent/connection-state.js";
 
 type ProjectPane = "board" | "list" | "epic" | "backlog";
 
@@ -92,10 +93,12 @@ export function ProjectWorkSurface({
   projectId,
   canGovern,
   onOpenItem,
+  onOpenAgentConnections,
 }: {
   projectId: string;
   canGovern: boolean;
   onOpenItem: (id: string) => void;
+  onOpenAgentConnections?: () => void;
 }) {
   const queryClient = useQueryClient();
   const { t, formatRelative } = useI18n();
@@ -315,6 +318,13 @@ export function ProjectWorkSurface({
           <h1 className="text-[22px] font-[570] tracking-[-0.03em]">
             {work.project.name}
           </h1>
+          {overview.data && onOpenAgentConnections ? (
+            <ProjectAgentConnectionBadge
+              bindings={overview.data.bindings}
+              identityId={pilot?.identityId}
+              onOpen={onOpenAgentConnections}
+            />
+          ) : null}
           {/* The sprint, its dates, and its burn-down are one fact about the
               selection, so they share a pill instead of sitting at opposite
               ends of the header. */}

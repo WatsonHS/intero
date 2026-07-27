@@ -45,6 +45,7 @@ import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { getPilotOverview } from "../../pilot/api.js";
 import { usePilotOptional } from "../../pilot/context.js";
+import { ProjectAgentConnectionBadge } from "../agent/connection-state.js";
 import { AnnotatableSpecBody, type Annotation } from "./AnnotatableSpecBody.js";
 
 const STATUS_TONE: Record<Spec["status"], Tone> = {
@@ -72,10 +73,12 @@ export function ProjectSpecReviewSurface({
   projectId,
   projects,
   onProjectChange,
+  onOpenAgentConnections,
 }: {
   projectId: string;
   projects: Array<{ id: string; name: string }>;
   onProjectChange: (projectId: string) => void;
+  onOpenAgentConnections?: () => void;
 }) {
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
@@ -530,6 +533,13 @@ export function ProjectSpecReviewSurface({
                 time: formatRelative(current.createdAt),
               })}
             </span>
+          ) : null}
+          {overview.data && onOpenAgentConnections ? (
+            <ProjectAgentConnectionBadge
+              bindings={overview.data.bindings}
+              identityId={pilot?.identityId}
+              onOpen={onOpenAgentConnections}
+            />
           ) : null}
           <SegmentedControl
             className="ml-auto"

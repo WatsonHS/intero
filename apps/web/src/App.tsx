@@ -11,7 +11,7 @@ import {
   SidebarSimpleIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { getActionInbox, getBootstrap } from "./api.js";
 import { useI18n } from "./i18n/index.js";
@@ -21,17 +21,21 @@ import {
   resolveAuthenticationSurface,
 } from "./pilot/auth-state.js";
 import { useGovernance, usePilotOptional } from "./pilot/context.js";
+import { resolvePilotEntryGate } from "./pilot/entry-gate.js";
 import {
   AcceptInvitationView,
   AuthenticationLoadingView,
   DevelopmentIdentityToolView,
+  NoTeamAccessView,
   SignInView,
 } from "./views/AccessView.js";
+import { AgentConnectionsView } from "./views/AgentConnectionsView.js";
 import { AdminView } from "./views/AdminView.js";
 import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
 import { CoordinationView } from "./views/CoordinationView.js";
 import { PersonView } from "./views/PersonView.js";
+import { OAuthConsentView } from "./views/OAuthConsentView.js";
 import { ProjectView } from "./views/ProjectView.js";
 import { SettingsView, type SettingsCategory } from "./views/SettingsView.js";
 import { ProfileMenu } from "./views/ProfileMenu.js";
@@ -54,9 +58,7 @@ type View =
   | "search"
   | "admin"
   | "settings"
-  | "setup";
-
-type SetupMode = "canonical" | "pilot-test";
+  | "connections";
 
 // The primary group is the places work lives. Settings configures the app
 // rather than holding any work, so it sits below the spacer with the other
@@ -94,7 +96,7 @@ const TITLES: Record<View, TranslationKey> = {
   search: "app.search",
   admin: "nav.admin",
   settings: "nav.settings",
-  setup: "title.setup",
+  connections: "title.connections",
 };
 
 function navButtonClass(open: boolean, active: boolean): string {
@@ -111,12 +113,25 @@ function navButtonClass(open: boolean, active: boolean): string {
 }
 
 export function App() {
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname === "/oauth/consent"
+  ) {
+    return <OAuthConsentView />;
+  }
+  return <InteroApp />;
+}
+
+function InteroApp() {
   const { t } = useI18n();
   const pilot = usePilotOptional();
   const [view, setView] = useState<View>("pulse");
   const [settingsCategory, setSettingsCategory] =
     useState<SettingsCategory>("personal");
-  const [setupMode, setSetupMode] = useState<SetupMode>("canonical");
+  const [bootstrapActive, setBootstrapActive] = useState(false);
+  const [connectionProjectId, setConnectionProjectId] = useState<string>();
+  const [connectionReturnView, setConnectionReturnView] =
+    useState<View>("pulse");
   const [navOpen, setNavOpen] = useState(false);
   const [personId, setPersonId] = useState<string>();
   const [itemId, setItemId] = useState<string>();
@@ -146,7 +161,6 @@ export function App() {
     : bootstrap.data?.currentPrincipal;
   const organization =
     pilot?.bootstrap.data?.organization ?? bootstrap.data?.organization;
-  const isSetup = view === "setup";
   const isMacDesktop =
     typeof window !== "undefined" &&
     window.interoDesktop?.platform === "darwin";
@@ -169,9 +183,10 @@ export function App() {
     );
   }
 
-  function openSetup(mode: SetupMode) {
-    setSetupMode(mode);
-    setView("setup");
+  function openAgentConnections(from: View, projectId?: string) {
+    setConnectionReturnView(from);
+    setConnectionProjectId(projectId);
+    setView("connections");
   }
 
   function openAction(sourceRef: string) {
@@ -187,7 +202,7 @@ export function App() {
     setView("pulse");
   }
 
-  function leaveInvitation(nextView: "pulse" | "settings", projectId?: string) {
+  function leaveInvitation(nextView: "pulse", projectId?: string) {
     const url = new URL(window.location.href);
     url.searchParams.delete("token");
     window.history.replaceState({}, "", `${url.pathname}${url.search}`);
@@ -196,12 +211,25 @@ export function App() {
     setView(nextView);
   }
 
+  useEffect(() => {
+    if (
+      pilot?.enabled &&
+      pilot.bootstrap.isSuccess &&
+      !pilot.bootstrap.data?.organization
+    ) {
+      setBootstrapActive(true);
+    }
+  }, [
+    pilot?.bootstrap.data?.organization,
+    pilot?.bootstrap.isSuccess,
+    pilot?.enabled,
+  ]);
+
   if (pilot?.enabled && invitationToken) {
     return (
       <AcceptInvitationView
         token={invitationToken}
         onEnterPulse={(projectId) => leaveInvitation("pulse", projectId)}
-        onConnectAgent={(projectId) => leaveInvitation("settings", projectId)}
       />
     );
   }
@@ -237,17 +265,38 @@ export function App() {
   if (authenticationSurface === "login") {
     return <SignInView />;
   }
+  const entryGate = resolvePilotEntryGate({
+    pilotEnabled: Boolean(pilot?.enabled),
+    bootstrapActive,
+    bootstrapLoaded: Boolean(pilot?.bootstrap.isSuccess),
+    organizationConfigured: Boolean(pilot?.bootstrap.data?.organization),
+    teamsLoaded: Boolean(pilot?.teams.isSuccess),
+    teamCount: pilot?.teams.data?.teams.length ?? 0,
+    canGovern,
+  });
+  if (entryGate === "admin_bootstrap" && pilot?.enabled) {
+    return (
+      <SetupView
+        mode="canonical"
+        onDone={() => {
+          setBootstrapActive(false);
+          setView("pulse");
+        }}
+      />
+    );
+  }
+  if (entryGate === "no_team" && pilot?.enabled) {
+    return <NoTeamAccessView onSignOut={pilot.signOutCurrentIdentity} />;
+  }
 
   return (
     <div
       className={[
         "grid h-screen grid-rows-[38px_minmax(0,1fr)] bg-bg text-ink",
         "transition-[grid-template-columns,background-color,color] duration-300 ease-standard",
-        isSetup
-          ? "grid-cols-[0px_minmax(0,1fr)]"
-          : navOpen
-            ? "grid-cols-[212px_minmax(0,1fr)]"
-            : "grid-cols-[62px_minmax(0,1fr)]",
+        navOpen
+          ? "grid-cols-[212px_minmax(0,1fr)]"
+          : "grid-cols-[62px_minmax(0,1fr)]",
       ].join(" ")}
     >
       <div className="col-span-full flex items-center gap-3.5 border-b border-line bg-panel px-3.5 [-webkit-app-region:drag]">
@@ -262,9 +311,6 @@ export function App() {
           viewTitle={t(TITLES[view])}
           projectScoped={SCOPED_VIEWS.has(view)}
           pendingByProject={pendingByProject}
-          {...(pilot?.bootstrap.data?.authMode === "development_identity"
-            ? { onCreateProject: () => openSetup("pilot-test") }
-            : {})}
         />
         <span className="ml-auto flex items-center gap-2 [-webkit-app-region:no-drag]">
           <button
@@ -396,7 +442,9 @@ export function App() {
               setView("person");
             }}
             onOpenAction={openAction}
-            onOpenSetup={() => openSetup("canonical")}
+            onOpenAgentConnections={(projectId) =>
+              openAgentConnections("pulse", projectId)
+            }
             onOpenSpecs={() => setView("spec")}
           />
         ) : null}
@@ -414,13 +462,22 @@ export function App() {
             onOpenThread={() => setView("chat")}
           />
         ) : null}
-        {view === "spec" ? <SpecReviewView /> : null}
+        {view === "spec" ? (
+          <SpecReviewView
+            onOpenAgentConnections={(projectId) =>
+              openAgentConnections("spec", projectId)
+            }
+          />
+        ) : null}
         {view === "project" ? (
           <ProjectView
             onOpenItem={(cardId) => {
               setItemId(cardId);
               setView("item");
             }}
+            onOpenAgentConnections={(projectId) =>
+              openAgentConnections("project", projectId)
+            }
           />
         ) : null}
         {view === "item" && itemId ? (
@@ -430,12 +487,9 @@ export function App() {
           <SettingsView
             initialCategory={settingsCategory}
             onCategoryChange={setSettingsCategory}
-            onOpenSetup={() => openSetup("canonical")}
-            {...(pilot?.enabled
-              ? pilot.bootstrap.data?.authMode === "development_identity"
-                ? { onOpenTestSetup: () => openSetup("pilot-test") }
-                : {}
-              : {})}
+            onOpenAgentConnections={(projectId) =>
+              openAgentConnections("settings", projectId)
+            }
           />
         ) : null}
         {/* AdminView owns its own permission state: gating here would blank the
@@ -460,8 +514,11 @@ export function App() {
             }}
           />
         ) : null}
-        {view === "setup" ? (
-          <SetupView mode={setupMode} onDone={() => setView("pulse")} />
+        {view === "connections" ? (
+          <AgentConnectionsView
+            initialProjectId={connectionProjectId}
+            onBack={() => setView(connectionReturnView)}
+          />
         ) : null}
       </main>
     </div>

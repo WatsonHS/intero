@@ -1,4 +1,4 @@
-import { PlusIcon } from "@phosphor-icons/react";
+import { PlusIcon, TrashIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { PilotProject, PrincipalId } from "@intero/domain";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
@@ -14,12 +14,13 @@ import {
 import { useI18n } from "../../i18n/index.js";
 import {
   createPilotTeam,
+  deletePilotTeam,
   renamePilotTeam,
   type PilotTeamPayload,
 } from "../../pilot/api.js";
 import { projectInTeam } from "../../pilot/context.js";
 
-const TEAM_COLUMNS = "32px minmax(0,1fr) 84px 84px minmax(0,168px)";
+const TEAM_COLUMNS = "32px minmax(0,1fr) 84px 84px minmax(0,188px)";
 
 /**
  * 团队 — creating teams, naming them, and reaching each one's roster.
@@ -27,36 +28,38 @@ const TEAM_COLUMNS = "32px minmax(0,1fr) 84px 84px minmax(0,168px)";
  * An organization admin sees every team here, including the ones they are not
  * a member of; a Team Lead sees the teams they belong to and can rename the
  * ones they lead. Managing a roster happens on 成员与权限 for the team named
- * there, so a row's 成员 action opens that tab on this team rather than
- * quietly moving the shell's scope underneath the reader.
+ * there, so a row's 成员 action opens that tab on this team without moving the
+ * shell's working scope underneath the reader.
  */
 export function TeamsTab({
   teams,
   projects,
-  currentTeamId,
   identityId,
   canCreate,
   canManage,
+  canDelete,
   scopedToOwnTeams,
   onOpenMembers,
-  onOpenTeam,
   onChanged,
 }: {
   teams: PilotTeamPayload[];
   projects: PilotProject[];
-  currentTeamId: string | undefined;
   identityId: PrincipalId;
   canCreate: boolean;
   canManage: (teamId: string) => boolean;
+  canDelete: boolean;
   /** True when the list only holds the teams the viewer belongs to. */
   scopedToOwnTeams: boolean;
   onOpenMembers: (teamId: string) => void;
-  onOpenTeam: (teamId: string) => void;
   onChanged: () => Promise<void> | void;
 }) {
   const { t } = useI18n();
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<PilotTeamPayload>();
+  const [deleting, setDeleting] = useState<{
+    team: PilotTeamPayload;
+    projectCount: number;
+  }>();
 
   return (
     <div className="mt-[26px]">
@@ -144,18 +147,18 @@ export function TeamsTab({
                     {t("admin.teams.rename")}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={() => onOpenTeam(team.id)}
-                  disabled={team.id === currentTeamId}
-                  className="cursor-pointer border-0 bg-transparent p-0 text-[11px] text-ink-muted hover:text-accent-strong disabled:cursor-default disabled:text-faint"
-                >
-                  {t(
-                    team.id === currentTeamId
-                      ? "admin.org.current"
-                      : "admin.org.open",
-                  )}
-                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    aria-label={t("admin.teams.deleteNamed", {
+                      name: team.name,
+                    })}
+                    onClick={() => setDeleting({ team, projectCount: owned })}
+                    className="grid h-6 w-6 cursor-pointer place-items-center rounded-quiet border-0 bg-transparent p-0 text-faint hover:bg-danger-soft hover:text-danger"
+                  >
+                    <TrashIcon size={12} />
+                  </button>
+                ) : null}
               </span>
             </div>
           );
@@ -194,7 +197,96 @@ export function TeamsTab({
           }}
         />
       ) : null}
+
+      {deleting ? (
+        <DeleteTeamModal
+          team={deleting.team}
+          projectCount={deleting.projectCount}
+          identityId={identityId}
+          onClose={() => setDeleting(undefined)}
+          onDone={async () => {
+            setDeleting(undefined);
+            await onChanged();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function DeleteTeamModal({
+  team,
+  projectCount,
+  identityId,
+  onClose,
+  onDone,
+}: {
+  team: PilotTeamPayload;
+  projectCount: number;
+  identityId: PrincipalId;
+  onClose: () => void;
+  onDone: () => Promise<void> | void;
+}) {
+  const { t } = useI18n();
+  const remove = useMutation({
+    mutationFn: () => deletePilotTeam(identityId, team.id),
+    onSuccess: onDone,
+  });
+  const blocked = projectCount > 0;
+  const errorCode = (remove.error as { code?: string } | null)?.code;
+
+  return (
+    <Modal
+      title={t("admin.teams.deleteTitle")}
+      width={430}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="flex-1 text-[11px] text-danger">
+            {remove.isError
+              ? t(
+                  errorCode === "TEAM_HAS_PROJECTS"
+                    ? "admin.teams.deleteBlocked"
+                    : "admin.teams.deleteFailed",
+                  { count: projectCount },
+                )
+              : null}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink-muted hover:border-accent-strong hover:text-ink"
+          >
+            {t("admin.form.cancel")}
+          </button>
+          <button
+            type="button"
+            disabled={blocked || remove.isPending}
+            onClick={() => remove.mutate()}
+            data-testid="admin-team-delete-submit"
+            className="h-8 cursor-pointer rounded-btn border-0 bg-danger px-3.5 text-[12px] font-[620] text-white disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {t("admin.teams.deleteSubmit")}
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-3 pt-1">
+        <p className="text-[12px] leading-[1.7] text-ink-muted [text-wrap:pretty]">
+          {t("admin.teams.deleteConfirm", { name: team.name })}
+        </p>
+        {blocked ? (
+          <p className="flex items-start gap-2 rounded-[11px] border border-danger-soft bg-danger-soft p-3 text-[11px] leading-[1.6] text-danger">
+            <WarningCircleIcon size={14} className="mt-0.5 shrink-0" />
+            {t("admin.teams.deleteBlocked", { count: projectCount })}
+          </p>
+        ) : (
+          <p className="text-[11px] leading-[1.7] text-faint [text-wrap:pretty]">
+            {t("admin.teams.deleteHint", { count: team.members.length })}
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

@@ -89,7 +89,11 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-export function SpecReviewView() {
+export function SpecReviewView({
+  onOpenAgentConnections,
+}: {
+  onOpenAgentConnections?: (projectId: string) => void;
+}) {
   const pilot = usePilotOptional();
   const projectId =
     pilot?.selectedProjectId ?? pilot?.projects.data?.projects[0]?.id;
@@ -102,6 +106,7 @@ export function SpecReviewView() {
         name: project.name,
       }))}
       onProjectChange={pilot.setSelectedProjectId}
+      onOpenAgentConnections={() => onOpenAgentConnections?.(projectId)}
     />
   ) : (
     <LegacySpecReviewView />

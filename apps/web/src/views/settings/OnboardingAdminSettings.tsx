@@ -7,7 +7,9 @@ import type { PrincipalId } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import { useNotifications } from "../../design/notifications.js";
 import { SelectMenu } from "../../design/primitives.js";
+import { useI18n } from "../../i18n/index.js";
 import {
   createPilotInvitation,
   getPilotInvitations,
@@ -27,6 +29,8 @@ export function OnboardingAdminSettings({
 }) {
   const pilot = usePilot();
   const queryClient = useQueryClient();
+  const notifications = useNotifications();
+  const { t } = useI18n();
   const team = pilot.teams.data?.teams[0];
   const project =
     pilot.projects.data?.projects.find(
@@ -79,7 +83,7 @@ export function OnboardingAdminSettings({
         developmentIdentityId,
       ),
     onSuccess: async (result) => {
-      const link = absoluteInvitationLink(result.activationPath);
+      const link = result.activationUrl;
       setCopiedLink(link);
       await navigator.clipboard.writeText(link);
       setInviteName("");
@@ -93,7 +97,7 @@ export function OnboardingAdminSettings({
     mutationFn: (invitationId: string) =>
       regeneratePilotInvitation(invitationId, 7, developmentIdentityId),
     onSuccess: async (result) => {
-      const link = absoluteInvitationLink(result.activationPath);
+      const link = result.activationUrl;
       setCopiedLink(link);
       await navigator.clipboard.writeText(link);
       await queryClient.invalidateQueries({
@@ -127,8 +131,32 @@ export function OnboardingAdminSettings({
         },
         developmentIdentityId,
       ),
-    onSuccess: async () => {
+    onSuccess: async (_result, input) => {
+      const teamRole = input.teamRole;
+      const scope = t(
+        teamRole ? "admin.members.colTeamRole" : "admin.members.colOrgRole",
+      );
+      const role = teamRole
+        ? t(teamRole === "leader" ? "admin.role.leader" : "admin.role.member")
+        : t(
+            input.organizationRole === "admin"
+              ? "admin.role.orgAdmin"
+              : "admin.role.orgMember",
+          );
+      notifications.success(t("admin.members.roleChanged", { scope, role }));
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+    },
+    onError: (_error, input) => {
+      notifications.error(
+        t("admin.members.roleFailed", {
+          scope: t(
+            input.teamRole
+              ? "admin.members.colTeamRole"
+              : "admin.members.colOrgRole",
+          ),
+          role: "",
+        }),
+      );
     },
   });
   const removeMember = useMutation({
@@ -243,8 +271,4 @@ function EffectiveValue({ label, value }: { label: string; value: string }) {
       <strong className="mt-1 text-[12px] font-[600]">{value}</strong>
     </span>
   );
-}
-
-function absoluteInvitationLink(path: string): string {
-  return new URL(path, window.location.origin).toString();
 }

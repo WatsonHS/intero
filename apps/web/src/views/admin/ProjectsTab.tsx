@@ -60,7 +60,7 @@ export function ProjectsTab({
   projects: PilotProject[];
   /** Every team the viewer may attach a project to. */
   teams: PilotTeamPayload[];
-  /** Teams the viewer is a member of — the only valid primary team on create. */
+  /** Teams the viewer is a member of — the valid primary teams on create. */
   ownTeamIds: string[];
   /** Display names by principal id, for the owner column. */
   names: Map<string, string>;
@@ -187,10 +187,12 @@ export function ProjectsTab({
           )}
           initial={{
             name: "",
+            ownerId: identityId,
             primaryTeamId: ownTeamIds[0]!,
             participatingTeamIds: [ownTeamIds[0]!],
             posture: "collaborative",
           }}
+          canChangeOwner={false}
           onClose={() => setCreating(false)}
           onSubmit={(value) =>
             createPilotProject(identityId, {
@@ -215,14 +217,17 @@ export function ProjectsTab({
           primaryTeamChoices={teams}
           initial={{
             name: editing.name,
+            ownerId: editing.ownerId,
             primaryTeamId: editing.primaryTeamId,
             participatingTeamIds: editing.participatingTeamIds,
             posture: editing.posture,
           }}
+          canChangeOwner
           onClose={() => setEditing(undefined)}
           onSubmit={(value) =>
             updatePilotProject(identityId, editing.id, {
               name: value.name,
+              ownerId: value.ownerId,
               primaryTeamId: value.primaryTeamId,
               participatingTeamIds: value.participatingTeamIds,
               posture: value.posture,
@@ -240,6 +245,7 @@ export function ProjectsTab({
 
 interface ProjectDraft {
   name: string;
+  ownerId: PrincipalId;
   primaryTeamId: string;
   participatingTeamIds: string[];
   posture: PilotCollaborationPosture;
@@ -256,6 +262,7 @@ function ProjectModal({
   teams,
   primaryTeamChoices,
   initial,
+  canChangeOwner,
   onClose,
   onSubmit,
   onDone,
@@ -265,6 +272,7 @@ function ProjectModal({
   teams: PilotTeamPayload[];
   primaryTeamChoices: PilotTeamPayload[];
   initial: ProjectDraft;
+  canChangeOwner: boolean;
   onClose: () => void;
   onSubmit: (value: ProjectDraft) => Promise<unknown>;
   onDone: () => Promise<void> | void;
@@ -278,15 +286,24 @@ function ProjectModal({
   const primaryName =
     teams.find((team) => team.id === draft.primaryTeamId)?.name ??
     t("general.unavailable");
+  const primaryTeam = teams.find((team) => team.id === draft.primaryTeamId);
+  const ownerChoices = primaryTeam?.members ?? [];
+  const owner = ownerChoices.find((member) => member.id === draft.ownerId);
+  const ownerValid = Boolean(owner);
 
   function selectPrimary(teamId: string) {
-    setDraft((current) => ({
-      ...current,
-      primaryTeamId: teamId,
-      participatingTeamIds: current.participatingTeamIds.includes(teamId)
-        ? current.participatingTeamIds
-        : [...current.participatingTeamIds, teamId],
-    }));
+    const nextTeam = teams.find((team) => team.id === teamId);
+    setDraft((current) => {
+      const nextOwnerId = ownerForPrimaryTeam(nextTeam, current.ownerId);
+      return {
+        ...current,
+        ...(nextOwnerId ? { ownerId: nextOwnerId } : {}),
+        primaryTeamId: teamId,
+        participatingTeamIds: current.participatingTeamIds.includes(teamId)
+          ? current.participatingTeamIds
+          : [...current.participatingTeamIds, teamId],
+      };
+    });
   }
 
   function toggleTeam(teamId: string, on: boolean) {
@@ -325,7 +342,7 @@ function ProjectModal({
           </button>
           <button
             type="button"
-            disabled={!draft.name.trim() || save.isPending}
+            disabled={!draft.name.trim() || !ownerValid || save.isPending}
             onClick={() => save.mutate()}
             data-testid="admin-project-submit"
             className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
@@ -375,6 +392,51 @@ function ProjectModal({
             {t("admin.projects.primaryTeamHint")}
           </span>
         </div>
+
+        {canChangeOwner ? (
+          <div className="grid gap-1.5">
+            <span className="text-[10.5px] tracking-[0.08em] text-faint">
+              {t("admin.projects.owner")}
+            </span>
+            <SelectMenu
+              label={t("admin.projects.owner")}
+              value={draft.ownerId}
+              onChange={(ownerId) =>
+                setDraft((current) => ({ ...current, ownerId }))
+              }
+              options={ownerChoices.map((member) => ({
+                id: member.id,
+                label: member.displayName,
+                leading: (
+                  <ScopeMark
+                    id={member.id}
+                    label={member.displayName}
+                    size="sm"
+                  />
+                ),
+              }))}
+              disabled={ownerChoices.length === 0}
+            >
+              <span className="inline-flex h-8 w-full items-center gap-2 rounded-btn border border-line bg-panel px-2.5 text-[12px] text-ink hover:border-accent-strong">
+                <ScopeMark
+                  id={draft.ownerId}
+                  label={owner?.displayName ?? t("general.unavailable")}
+                  size="sm"
+                />
+                <span className="truncate">
+                  {owner?.displayName ?? t("general.unavailable")}
+                </span>
+                <CaretDownIcon
+                  size={9}
+                  className="ml-auto shrink-0 opacity-70"
+                />
+              </span>
+            </SelectMenu>
+            <span className="text-[11px] leading-[1.6] text-faint [text-wrap:pretty]">
+              {t("admin.projects.ownerHint")}
+            </span>
+          </div>
+        ) : null}
 
         <div className="grid gap-2">
           <span className="text-[10.5px] tracking-[0.08em] text-faint">
@@ -434,5 +496,18 @@ function ProjectModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+export function ownerForPrimaryTeam(
+  team: PilotTeamPayload | undefined,
+  currentOwnerId: PrincipalId,
+): PrincipalId | undefined {
+  if (team?.members.some((member) => member.id === currentOwnerId)) {
+    return currentOwnerId;
+  }
+  return (
+    team?.members.find((member) => member.teamRole === "leader")?.id ??
+    team?.members[0]?.id
   );
 }
