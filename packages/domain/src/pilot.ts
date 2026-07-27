@@ -253,6 +253,8 @@ export const PilotAgentBinding = z
     mcpProtocolVersion: z.string().min(1).max(80).optional(),
     validatedAt: z.iso.datetime().optional(),
     lastSeenAt: z.iso.datetime().optional(),
+    activityStatus: z.enum(["active", "idle"]).optional(),
+    activityUpdatedAt: z.iso.datetime().optional(),
     disconnectedAt: z.iso.datetime().optional(),
   })
   .strict();

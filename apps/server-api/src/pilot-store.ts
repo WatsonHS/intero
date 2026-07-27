@@ -324,6 +324,15 @@ export interface PilotStore {
     verificationCode: string | undefined,
     now: string,
   ): Promise<PilotAgentBinding>;
+  recordAgentLifecycle(
+    bindingId: string,
+    ownerId: PrincipalId,
+    input: {
+      lifecycle: "session_started" | "session_ended";
+      occurredAt: string;
+      receivedAt: string;
+    },
+  ): Promise<PilotAgentBinding>;
   disconnectAgentBinding(
     bindingId: string,
     principalId: PrincipalId,
@@ -1845,6 +1854,48 @@ export abstract class SnapshotPilotStore implements PilotStore {
       {
         eventType: "pilot.agent.disconnected",
         actorId: principalId,
+        aggregateType: "pilot_agent_binding",
+        aggregateId: bindingId,
+        visibility: "private",
+      },
+    );
+  }
+
+  async recordAgentLifecycle(
+    bindingId: string,
+    ownerId: PrincipalId,
+    input: {
+      lifecycle: "session_started" | "session_ended";
+      occurredAt: string;
+      receivedAt: string;
+    },
+  ): Promise<PilotAgentBinding> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        const binding = snapshot.agentBindings.find(
+          (item) => item.id === bindingId && !item.disconnectedAt,
+        );
+        if (!binding || binding.ownerId !== ownerId || !binding.validatedAt) {
+          throw new PilotStoreError(
+            "AGENT_CONNECTION_INACTIVE",
+            401,
+            "Agent connection is not active.",
+          );
+        }
+        binding.lastSeenAt = input.receivedAt;
+        if (
+          !binding.activityUpdatedAt ||
+          input.occurredAt >= binding.activityUpdatedAt
+        ) {
+          binding.activityStatus =
+            input.lifecycle === "session_started" ? "active" : "idle";
+          binding.activityUpdatedAt = input.occurredAt;
+        }
+        return binding;
+      },
+      {
+        eventType: `pilot.agent.${input.lifecycle}`,
+        actorId: ownerId,
         aggregateType: "pilot_agent_binding",
         aggregateId: bindingId,
         visibility: "private",

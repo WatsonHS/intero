@@ -20,6 +20,7 @@ import {
 import { usePilot } from "../pilot/context.js";
 import { codexConnectionDeepLink } from "./agent/deep-link.js";
 import { summarizeProjectAgentConnections } from "./agent/connection-state.js";
+import { copyTextToClipboard } from "./agent/copy-text.js";
 
 const CLIENTS: Array<{
   id: PilotAgentClient;
@@ -67,7 +68,9 @@ export function AgentConnectionsView({
       : "";
   const [projectId, setProjectId] = useState(initialSelection);
   const [issued, setIssued] = useState<IssuedConnection>();
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const [launchPending, setLaunchPending] = useState(false);
   const [launchError, setLaunchError] = useState<string>();
 
@@ -116,7 +119,7 @@ export function AgentConnectionsView({
         prompt: result.connectPrompt,
         mcpUrl: result.mcpUrl,
       });
-      setCopied(false);
+      setCopyStatus("idle");
       pilot.setSelectedProjectId(projectId);
       await queryClient.invalidateQueries({
         queryKey: ["pilot", "overview", pilot.identityId, projectId],
@@ -468,15 +471,33 @@ export function AgentConnectionsView({
               <button
                 type="button"
                 onClick={async () => {
-                  await navigator.clipboard.writeText(issued.prompt);
-                  setCopied(true);
+                  setCopyStatus("idle");
+                  try {
+                    await copyTextToClipboard(issued.prompt);
+                    setCopyStatus("copied");
+                  } catch {
+                    setCopyStatus("failed");
+                  }
                 }}
                 className="inline-flex h-9 items-center gap-2 rounded-btn border border-line2 bg-transparent px-4 text-[11.5px] hover:border-accent-strong"
               >
                 <CopyIcon size={14} />
-                {copied ? "已复制连接任务" : "复制连接任务"}
+                {copyStatus === "copied"
+                  ? "已复制连接任务"
+                  : copyStatus === "failed"
+                    ? "复制失败"
+                    : "复制连接任务"}
               </button>
             </div>
+            {copyStatus === "failed" ? (
+              <p
+                className="mt-3 text-[10.5px] text-danger"
+                role="alert"
+                data-testid="agent-connect-copy-error"
+              >
+                无法访问剪贴板。请展开下方完整连接任务，选择文本后手动复制。
+              </p>
+            ) : null}
             {launchError ? (
               <p className="mt-3 text-[10.5px] text-danger">{launchError}</p>
             ) : null}

@@ -1916,7 +1916,7 @@ function buildConnectPrompt(
         expiresAt,
         singleUse: true,
         reusableWhen:
-          "The probe returns HTTP 200, the binding matches this Project and client, validatedAt is present, and the current native client can load the full Intero tool catalog.",
+          "The probe returns HTTP 200, the binding matches this Project and client, validatedAt is present, and intero.connection_status returns connected.",
         reconnectWhen:
           "The probe is unauthorized, validation is pending, or intero.connection_status reports disconnected.",
       },
@@ -1928,16 +1928,30 @@ function buildConnectPrompt(
         connectionEvidence: [
           "authenticated MCP initialize",
           "intero.validate_connection result",
+          "intero.connection_status result with status connected",
         ],
+        connectionStatusTool: "intero.connection_status",
         requiredValidationTool: "intero.validate_connection",
+        expectedAuthenticatedTools: [
+          "intero.connection_status",
+          "intero.validate_connection",
+          "stand_in.current_context",
+          "stand_in.report_checkpoint",
+        ],
       },
       validation: {
         owner: "a fresh native GUI task after Project configuration is saved",
         setupTaskTerminalStatus: "pending_gui_validation",
         temporaryCodePath: ".intero/connection.json#verification.code",
         removeTemporaryCodeAfterSuccess: true,
+        sequence: [
+          "intero.connection_status returns mcp_initialized",
+          "intero.validate_connection returns connected",
+          "intero.connection_status returns connected",
+          "remove the temporary verification field",
+        ],
         connectedEvidence:
-          "intero.validate_connection result returned as a native tool call in the fresh GUI task",
+          "intero.validate_connection and intero.connection_status both return connected as native tool calls in the fresh GUI task",
       },
       hooks: {
         endpoint: `${baseUrl}/v1/pilot/agent/hooks`,
@@ -1992,16 +2006,16 @@ function buildConnectPrompt(
         "```",
         "",
         "执行要求：",
-        "1. 找到仓库根目录。现有本地文件只提供候选 workspaceId，不能单独证明连接有效。用 manifest.setupAuthorization.reuseProbeUrl 检查候选 credential；仅当响应为 HTTP 200、binding 与当前项目及 client 匹配、validatedAt 已存在，并且当前原生客户端能加载完整 Intero 工具目录时复用。若 probe 未授权、验证尚未完成，或 intero.connection_status 返回 disconnected，立即使用本次 ticket 兑换新 credential；沿用已有稳定 workspaceId。",
+        "1. 找到仓库根目录。现有本地文件只提供候选 workspaceId，不能单独证明连接有效。用 manifest.setupAuthorization.reuseProbeUrl 检查候选 credential；仅当响应为 HTTP 200、binding 与当前项目及 client 匹配、validatedAt 已存在，并且 intero.connection_status 返回 connected 时复用。若 probe 未授权、验证尚未完成，或 intero.connection_status 返回 disconnected，立即使用本次 ticket 兑换新 credential；沿用已有稳定 workspaceId。",
         "2. 按 manifest.artifacts 的权限、Git 可见性和脱敏规则保存 credential。新兑换的 verification.code 临时写入 manifest.validation.temporaryCodePath，供新的 GUI 验证任务使用。",
         `3. 通过 ${clientLabel} 的原生项目配置合并 Streamable HTTP MCP。`,
         "4. 用原生 Hook 配置和项目内隐私过滤器上报生命周期。按 manifest.allowedPayload 构造上报数据，在本地哈希原生 event/session ID 生成稳定 clientEventId，并让 Hook 采用 fail-open 行为。",
         "5. 在项目 instructions 中添加带 intero-managed 标记的规则：仅在语义分支点调用 stand_in.report_checkpoint；依赖或定向协作必须提供当前项目成员的 collaboration.targetPrincipalId。",
         `6. 校验配置语法和 ${clientLabel} 的原生 MCP 注册状态。`,
         client === "codex"
-          ? "7. 只要本次写入或修改了 credential 或原生配置，就生成一个 codex://threads/new 深链接，path 使用当前仓库根目录，prompt 要求新的 Codex App 任务从临时路径读取 verification.code，通过已加载的原生 Intero 工具调用 intero.validate_connection，并在成功后从本地文件删除 verification 字段。配置任务本身以 pending_gui_validation 结束；新的原生任务返回的工具结果才是 connected 证据。"
-          : `7. 只要本次写入或修改了 credential 或原生配置，就在 ${clientLabel} GUI 中为当前本地项目启动新的验证会话。新会话从临时路径读取 verification.code，通过已加载的原生 Intero 工具调用 intero.validate_connection，并在成功后从本地文件删除 verification 字段；配置会话以 pending_gui_validation 结束。`,
-        "8. 幂等地再次检查三类配置。只有未改配置且当前原生工具已返回 connected，或新的 GUI 验证任务已返回 intero.validate_connection 成功结果时，才能报告 connected；其他情况报告 pending_gui_validation。最终只报告 changed、unchanged、preserved、conflicts、verification 和 connected project/agent，并对所有凭证做脱敏。",
+          ? "7. 只要本次写入或修改了 credential 或原生配置，就生成一个 codex://threads/new 深链接，path 使用当前仓库根目录。新 Codex App 任务按 manifest.validation.sequence 执行：先由 intero.connection_status 读到 mcp_initialized，再从临时路径读取 verification.code 并调用 intero.validate_connection，随后由 intero.connection_status 回读 connected，最后删除本地 verification 字段。配置任务本身以 pending_gui_validation 结束；新任务的两次原生工具结果构成 connected 证据。"
+          : `7. 只要本次写入或修改了 credential 或原生配置，就在 ${clientLabel} GUI 中为当前本地项目启动新的验证会话。新会话按 manifest.validation.sequence 执行：先读到 mcp_initialized，再调用 intero.validate_connection，随后回读 connected，最后删除本地 verification 字段；配置会话以 pending_gui_validation 结束。`,
+        "8. 幂等地再次检查三类配置。只有未改配置且 intero.connection_status 已返回 connected，或新的 GUI 验证任务已依次获得 intero.validate_connection 与 intero.connection_status 的 connected 结果时，才能报告 connected；其他情况报告 pending_gui_validation。stand_in.report_checkpoint 从 connected 状态开始承担语义工作上报。最终只报告 changed、unchanged、preserved、conflicts、verification 和 connected project/agent，并对所有凭证做脱敏。",
       ].join("\n")
     : [
         `Complete the native ${clientLabel} connection from this repository to the Intero Project "${project.name}". Inspect and maintain the Project-scoped configuration, then hand real MCP validation to a fresh native GUI task.`,
@@ -2012,15 +2026,15 @@ function buildConnectPrompt(
         "```",
         "",
         "Execution requirements:",
-        "1. Locate the repository root. An existing local file supplies only a candidate workspaceId; it does not prove that the connection is active. Probe the candidate credential with manifest.setupAuthorization.reuseProbeUrl. Reuse it only when the response is HTTP 200, the binding matches this Project and client, validatedAt is present, and the current native client loads the full Intero tool catalog. If the probe is unauthorized, validation is pending, or intero.connection_status reports disconnected, immediately exchange this ticket for a new credential while preserving the stable workspaceId.",
+        "1. Locate the repository root. An existing local file supplies only a candidate workspaceId; it does not prove that the connection is active. Probe the candidate credential with manifest.setupAuthorization.reuseProbeUrl. Reuse it only when the response is HTTP 200, the binding matches this Project and client, validatedAt is present, and intero.connection_status returns connected. If the probe is unauthorized, validation is pending, or intero.connection_status reports disconnected, immediately exchange this ticket for a new credential while preserving the stable workspaceId.",
         "2. Store the credential according to manifest.artifacts file-mode, Git-visibility, and redaction rules. Store a newly exchanged verification.code temporarily at manifest.validation.temporaryCodePath for the fresh GUI validation task.",
         `3. Merge the Streamable HTTP MCP server through ${clientLabel}'s native Project configuration.`,
         "4. Configure native lifecycle hooks plus a Project-local privacy filter. Build reports from manifest.allowedPayload, derive a stable clientEventId from a local hash of the native event/session ID, and use fail-open hook behavior.",
         "5. Add an intero-managed Project instruction: call stand_in.report_checkpoint only at semantic branch points. Dependencies and routed collaboration require a current Project member's collaboration.targetPrincipalId.",
         `6. Validate configuration syntax and ${clientLabel}'s native MCP registration.`,
         client === "codex"
-          ? "7. Whenever this run writes or changes the credential or native configuration, generate a codex://threads/new deep link with path set to the current repository root. Its prompt tells the fresh Codex App task to read verification.code from the temporary path, call intero.validate_connection through the natively loaded Intero tool, and remove the verification field from the local file after success. This configuration task ends as pending_gui_validation; only the fresh native task's tool result is connected evidence."
-          : `7. Whenever this run writes or changes the credential or native configuration, start a fresh ${clientLabel} GUI validation session for this local Project. It reads verification.code from the temporary path, calls intero.validate_connection through the natively loaded Intero tool, and removes the verification field after success. This configuration session ends as pending_gui_validation.`,
-        "8. Re-check all three artifact classes idempotently. Report connected only when no configuration changed and a current native tool already returned connected, or when the fresh GUI task returned a successful intero.validate_connection result. Otherwise report pending_gui_validation. Report only changed, unchanged, preserved, conflicts, verification, and the connected Project/Agent, with all credentials redacted.",
+          ? "7. Whenever this run writes or changes the credential or native configuration, generate a codex://threads/new deep link with path set to the current repository root. The fresh Codex App task follows manifest.validation.sequence: intero.connection_status first returns mcp_initialized, then it reads verification.code from the temporary path and calls intero.validate_connection, intero.connection_status then returns connected, and finally it removes the local verification field. This configuration task ends as pending_gui_validation; the two native tool results from the fresh task are connected evidence."
+          : `7. Whenever this run writes or changes the credential or native configuration, start a fresh ${clientLabel} GUI validation session for this local Project. It follows manifest.validation.sequence: read mcp_initialized, call intero.validate_connection, read connected, and then remove the local verification field. This configuration session ends as pending_gui_validation.`,
+        "8. Re-check all three artifact classes idempotently. Report connected only when no configuration changed and intero.connection_status already returned connected, or when the fresh GUI task received connected results from both intero.validate_connection and intero.connection_status in sequence. Otherwise report pending_gui_validation. stand_in.report_checkpoint begins semantic work reporting from the connected state. Report only changed, unchanged, preserved, conflicts, verification, and the connected Project/Agent, with all credentials redacted.",
       ].join("\n");
 }

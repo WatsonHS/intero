@@ -192,11 +192,19 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain(
       "intero.connection_status 返回 disconnected",
     );
+    expect(chineseConnectPrompt).toContain('"expectedAuthenticatedTools": [');
+    expect(chineseConnectPrompt).toContain(
+      "intero.connection_status 读到 mcp_initialized",
+    );
+    expect(chineseConnectPrompt).toContain(
+      "stand_in.report_checkpoint 从 connected 状态开始",
+    );
     expect(chineseConnectPrompt).toContain(
       "配置任务本身以 pending_gui_validation 结束",
     );
-    expect(chineseConnectPrompt).toContain("删除 verification 字段");
+    expect(chineseConnectPrompt).toContain("删除本地 verification 字段");
     expect(chineseConnectPrompt).not.toContain("先复用并验证");
+    expect(chineseConnectPrompt).not.toContain("完整 Intero 工具目录");
     expect(chineseConnectPrompt).not.toContain("intero-mcp");
     expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
     const chineseRawTicket = (
@@ -1077,11 +1085,26 @@ describe("pilot cloud-first vertical slice", () => {
     const tools = await mcpClient.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
+        "intero.connection_status",
         "intero.validate_connection",
         "stand_in.current_context",
         "stand_in.report_checkpoint",
       ]),
     );
+    const pendingStatus = (await mcpClient.callTool({
+      name: "intero.connection_status",
+      arguments: {},
+    })) as { content: Array<{ type: string; text?: string }> };
+    const pendingStatusText = pendingStatus.content.find(
+      (item) => item.type === "text",
+    )?.text;
+    expect(
+      pendingStatusText ? JSON.parse(pendingStatusText) : undefined,
+    ).toMatchObject({
+      status: "mcp_initialized",
+      connected: false,
+      projectId: fixture.project.id,
+    });
     const validation = await mcpClient.callTool({
       name: "intero.validate_connection",
       arguments: {
@@ -1118,6 +1141,21 @@ describe("pilot cloud-first vertical slice", () => {
     expect(
       repeatedText ? JSON.parse(repeatedText).validatedAt : undefined,
     ).toBe(firstValidatedAt);
+    const connectedStatus = (await mcpClient.callTool({
+      name: "intero.connection_status",
+      arguments: {},
+    })) as { content: Array<{ type: string; text?: string }> };
+    const connectedStatusText = connectedStatus.content.find(
+      (item) => item.type === "text",
+    )?.text;
+    expect(
+      connectedStatusText ? JSON.parse(connectedStatusText) : undefined,
+    ).toMatchObject({
+      status: "connected",
+      connected: true,
+      projectId: fixture.project.id,
+      validatedAt: firstValidatedAt,
+    });
     await mcpClient.close();
 
     const after = await overview(app, fixture.project.id, A);
@@ -1143,7 +1181,77 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     expect(hook.statusCode).toBe(202);
-    expect(hook.json().accepted).toBe(true);
+    expect(hook.json()).toMatchObject({
+      accepted: true,
+      published: false,
+      activity: {
+        status: "active",
+        updatedAt: expect.any(String),
+      },
+    });
+
+    const afterStarted = await overview(app, fixture.project.id, A);
+    expect(afterStarted.privateWorkState).toEqual(before.privateWorkState);
+    expect(afterStarted.pulse).toEqual(before.pulse);
+    expect(afterStarted.bindings[0]).toMatchObject({
+      activityStatus: "active",
+      activityUpdatedAt: expect.any(String),
+    });
+
+    const endedAt = new Date(
+      Date.parse(afterStarted.bindings[0].activityUpdatedAt) + 1_000,
+    ).toISOString();
+    const endedHook = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/hooks",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+      },
+      payload: {
+        clientEventId: "hook-session-end-0001",
+        lifecycle: "session_ended",
+        occurredAt: endedAt,
+        workstreamKey: "remote-mcp-test",
+        workstreamTitle: "Remote MCP test",
+      },
+    });
+    expect(endedHook.statusCode).toBe(202);
+    expect(endedHook.json()).toMatchObject({
+      accepted: true,
+      published: false,
+      activity: {
+        status: "idle",
+        updatedAt: endedAt,
+      },
+    });
+
+    const afterEnded = await overview(app, fixture.project.id, A);
+    expect(afterEnded.privateWorkState).toEqual(before.privateWorkState);
+    expect(afterEnded.pulse).toEqual(before.pulse);
+    expect(afterEnded.bindings[0]).toMatchObject({
+      activityStatus: "idle",
+      activityUpdatedAt: endedAt,
+    });
+
+    const delayedStartedHook = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/hooks",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+      },
+      payload: {
+        clientEventId: "hook-delayed-session-start-0001",
+        lifecycle: "session_started",
+        occurredAt: afterStarted.bindings[0].activityUpdatedAt,
+        workstreamKey: "remote-mcp-test",
+        workstreamTitle: "Remote MCP test",
+      },
+    });
+    expect(delayedStartedHook.statusCode).toBe(202);
+    expect(delayedStartedHook.json().activity).toEqual({
+      status: "idle",
+      updatedAt: endedAt,
+    });
 
     const disconnected = await app.inject({
       method: "POST",

@@ -90,17 +90,23 @@ export async function registerPilotMcpRoutes(
     const binding = await requireValidatedAgentBinding(request, options.store);
     const input = lifecycleInput.parse(request.body);
     const now = new Date().toISOString();
-    const checkpoint = lifecycleCheckpoint(binding, input, now);
-    const result = await options.checkpointService.submit(
-      binding,
-      checkpoint,
-      now,
+    const updated = await options.store.recordAgentLifecycle(
+      binding.id,
+      binding.ownerId,
+      {
+        lifecycle: input.lifecycle,
+        occurredAt: input.occurredAt ?? now,
+        receivedAt: now,
+      },
     );
     return reply.status(202).send({
-      accepted: result.accepted,
-      duplicate: result.duplicate,
-      published: result.published,
-      workStateId: result.workState.id,
+      accepted: true,
+      duplicate: false,
+      published: false,
+      activity: {
+        status: updated.activityStatus,
+        updatedAt: updated.activityUpdatedAt,
+      },
     });
   });
 }
@@ -173,6 +179,48 @@ function createPilotMcpServer(
     name: "intero-project-cloud",
     version: "0.2.0",
   });
+
+  server.registerTool(
+    "intero.connection_status",
+    {
+      description:
+        "Return the current Intero connection state for this Agent and Project.",
+      inputSchema: {},
+    },
+    async () => {
+      const binding = await options.store.findAgentBindingById(
+        initialBinding.id,
+      );
+      if (!binding) {
+        return toolResult({
+          status: "disconnected",
+          connected: false,
+          action:
+            "Reconnect this repository from the Intero Project connection center.",
+        });
+      }
+      const status = binding.validatedAt
+        ? "connected"
+        : binding.mcpInitializedAt
+          ? "mcp_initialized"
+          : "awaiting_initialization";
+      return toolResult({
+        status,
+        connected: status === "connected",
+        bindingId: binding.id,
+        projectId: binding.projectId,
+        client: binding.client,
+        name: binding.name,
+        workspaceId: binding.workspaceId,
+        mcpInitializedAt: binding.mcpInitializedAt,
+        validatedAt: binding.validatedAt,
+        action:
+          status === "connected"
+            ? "Use Project-scoped Intero tools."
+            : "Call intero.validate_connection with the temporary verification code.",
+      });
+    },
+  );
 
   server.registerTool(
     "intero.validate_connection",
@@ -389,49 +437,6 @@ async function findActiveAgentBinding(
   return credential
     ? await store.findBindingByCredentialHash(sha256(credential))
     : undefined;
-}
-
-function lifecycleCheckpoint(
-  binding: PilotAgentBinding,
-  input: z.infer<typeof lifecycleInput>,
-  now: string,
-): PilotCheckpointInput {
-  const chinese = binding.preferredLanguage === "zh-CN";
-  const ended = input.lifecycle === "session_ended";
-  return {
-    schemaVersion: 2,
-    clientEventId: input.clientEventId,
-    projectId: binding.projectId,
-    occurredAt: input.occurredAt ?? now,
-    eventType: ended ? "work_progressed" : "work_started",
-    workstream: {
-      key: input.workstreamKey,
-      title: input.workstreamTitle,
-      phase: "implementing",
-    },
-    narrative: {
-      currentFocus: ended
-        ? chinese
-          ? "Coding Agent 会话已结束，等待下一次语义工作更新。"
-          : "The Coding Agent session ended and is waiting for the next semantic work update."
-        : chinese
-          ? "Coding Agent 已开始当前项目的工作会话。"
-          : "The Coding Agent started a work session for this Project.",
-      completedOutcome: ended
-        ? chinese
-          ? "会话生命周期已安全记录；实际成果以语义检查点为准。"
-          : "The session lifecycle was recorded safely; semantic checkpoints remain the source of actual outcomes."
-        : chinese
-          ? "当前项目工作上下文已建立。"
-          : "The Project work context is established.",
-      evidence: [],
-      nextStep: chinese
-        ? "在进展、产出、验证、阻塞或依赖发生时上报语义检查点。"
-        : "Report a semantic checkpoint for progress, outcomes, validation, blockers, or dependencies.",
-      collaboration: { needed: false, request: "", requestedFrom: "" },
-    },
-    evidenceRefs: input.evidenceRefs ?? [],
-  };
 }
 
 function phaseForEvent(
