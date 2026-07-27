@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { searchAuthorizedContent } from "../api.js";
+import { Avatar } from "../design/primitives.js";
+import type { PilotTeamPayload } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 
 const FILTERS: Array<{
@@ -19,10 +21,49 @@ const FILTERS: Array<{
   { id: "stand_in_activity", label: "替身活动" },
 ];
 
+export function searchTeamContacts(
+  teams: PilotTeamPayload[],
+  currentIdentityId: string | undefined,
+  query: string,
+) {
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle.length < 2) return [];
+  return [
+    ...new Map(
+      teams.flatMap((team) =>
+        team.members
+          .filter(
+            (member) =>
+              member.kind === "human" && member.id !== currentIdentityId,
+          )
+          .map(
+            (member) =>
+              [
+                member.id,
+                {
+                  id: member.id,
+                  displayName: member.displayName,
+                  email: member.email,
+                  teamName: team.name,
+                },
+              ] as const,
+          ),
+      ),
+    ).values(),
+  ].filter(
+    (contact) =>
+      contact.displayName.toLocaleLowerCase().includes(needle) ||
+      contact.email.toLocaleLowerCase().includes(needle) ||
+      contact.teamName.toLocaleLowerCase().includes(needle),
+  );
+}
+
 export function SearchView({
   onOpenResult,
+  onOpenPerson,
 }: {
   onOpenResult: (result: AuthorizedSearchResult) => void;
+  onOpenPerson: (ownerId: string) => void;
 }) {
   const pilot = usePilotOptional();
   const [query, setQuery] = useState("");
@@ -42,6 +83,11 @@ export function SearchView({
     enabled: query.trim().length >= 2,
     staleTime: 5_000,
   });
+  const contacts = searchTeamContacts(
+    pilot?.teams.data?.teams ?? [],
+    pilot?.identityId,
+    query,
+  );
 
   return (
     <div className="h-full overflow-y-auto px-[clamp(24px,4vw,64px)] py-8">
@@ -50,10 +96,10 @@ export function SearchView({
           SEARCH
         </p>
         <h1 className="mt-2 text-[25px] font-[560] tracking-[-0.035em]">
-          搜索你有权限看到的内容
+          搜索联系人和你有权限看到的内容
         </h1>
         <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted">
-          搜索工作项、Spec、评论、显式代码引用、协调和你的替身活动。私有原始内容不会进入结果。
+          搜索联系人、工作项、Spec、评论、显式代码引用、协调和你的替身活动。私有原始内容不会进入结果。
         </p>
       </header>
 
@@ -111,37 +157,80 @@ export function SearchView({
       <section className="mt-6 grid gap-2.5">
         {query.trim().length < 2 ? (
           <SearchEmpty text="输入关键词开始搜索" />
-        ) : results.isLoading ? (
-          <SearchEmpty text="正在搜索…" />
-        ) : results.data?.items.length ? (
-          results.data.items.map((result) => (
-            <button
-              key={`${result.type}:${result.id}`}
-              type="button"
-              onClick={() => onOpenResult(result)}
-              className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-[13px] border border-line bg-panel2 p-[14px_16px] text-left hover:border-line2 hover:bg-raise"
-            >
-              <span className="min-w-0">
-                <span className="text-[9.5px] font-[650] tracking-[0.07em] text-accent-strong">
-                  {FILTERS.find((item) => item.id === result.type)?.label ??
-                    result.type}
-                  {" · "}
-                  {result.projectName}
-                </span>
-                <strong className="mt-1.5 block truncate text-[12.5px] font-[620]">
-                  {result.title}
-                </strong>
-                <span className="mt-1 block line-clamp-2 text-[11px] leading-[1.6] text-ink-muted">
-                  {result.snippet}
-                </span>
-              </span>
-              <time className="text-[9.5px] text-faint">
-                {new Date(result.updatedAt).toLocaleDateString()}
-              </time>
-            </button>
-          ))
         ) : (
-          <SearchEmpty text="没有匹配的授权内容" />
+          <>
+            {contacts.length > 0 ? (
+              <div className="mb-3 grid gap-2.5">
+                <strong className="text-[11px] font-[650] tracking-[0.08em] text-faint">
+                  联系人
+                </strong>
+                {contacts.map((contact) => (
+                  <button
+                    key={contact.id}
+                    type="button"
+                    data-testid={`contact-search-result-${contact.id}`}
+                    onClick={() => onOpenPerson(contact.id)}
+                    className="grid grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-3 rounded-[13px] border border-line bg-panel2 p-[12px_16px] text-left hover:border-line2 hover:bg-raise"
+                  >
+                    <Avatar
+                      id={contact.id}
+                      name={contact.displayName}
+                      size="lg"
+                    />
+                    <span className="min-w-0">
+                      <strong className="block truncate text-[12.5px] font-[620]">
+                        {contact.displayName}
+                      </strong>
+                      <span className="mt-1 block truncate text-[10.5px] text-ink-muted">
+                        {contact.email}
+                      </span>
+                    </span>
+                    <span className="text-[10px] text-faint">
+                      {contact.teamName}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {contacts.length > 0 ? (
+              <strong className="text-[11px] font-[650] tracking-[0.08em] text-faint">
+                内容
+              </strong>
+            ) : null}
+            {results.isLoading ? (
+              <SearchEmpty text="正在搜索…" />
+            ) : results.data?.items.length ? (
+              results.data.items.map((result) => (
+                <button
+                  key={`${result.type}:${result.id}`}
+                  type="button"
+                  onClick={() => onOpenResult(result)}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-[13px] border border-line bg-panel2 p-[14px_16px] text-left hover:border-line2 hover:bg-raise"
+                >
+                  <span className="min-w-0">
+                    <span className="text-[9.5px] font-[650] tracking-[0.07em] text-accent-strong">
+                      {FILTERS.find((item) => item.id === result.type)?.label ??
+                        result.type}
+                      {" · "}
+                      {result.projectName}
+                    </span>
+                    <strong className="mt-1.5 block truncate text-[12.5px] font-[620]">
+                      {result.title}
+                    </strong>
+                    <span className="mt-1 block line-clamp-2 text-[11px] leading-[1.6] text-ink-muted">
+                      {result.snippet}
+                    </span>
+                  </span>
+                  <time className="text-[9.5px] text-faint">
+                    {new Date(result.updatedAt).toLocaleDateString()}
+                  </time>
+                </button>
+              ))
+            ) : contacts.length === 0 ? (
+              <SearchEmpty text="没有匹配的联系人或授权内容" />
+            ) : null}
+          </>
         )}
       </section>
     </div>

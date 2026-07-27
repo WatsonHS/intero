@@ -124,6 +124,11 @@ function InteroApp() {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [personId, setPersonId] = useState<string>();
+  const [personReturnView, setPersonReturnView] = useState<"pulse" | "search">(
+    "pulse",
+  );
+  const [chatThreadId, setChatThreadId] = useState<string>();
+  const [chatStandInOwnerId, setChatStandInOwnerId] = useState<string>();
   const [itemId, setItemId] = useState<string>();
   const [coordinationThreadId, setCoordinationThreadId] = useState<string>();
   const [invitationToken, setInvitationToken] = useState<string | undefined>(
@@ -431,6 +436,7 @@ function InteroApp() {
           <TeamPulseView
             onOpenPerson={(ownerId) => {
               setPersonId(ownerId);
+              setPersonReturnView("pulse");
               setView("person");
             }}
             onOpenAction={openAction}
@@ -441,11 +447,27 @@ function InteroApp() {
         {view === "person" && personId ? (
           <PersonView
             ownerId={personId}
-            onBack={() => setView("pulse")}
-            onOpenChat={() => setView("chat")}
+            onBack={() => setView(personReturnView)}
+            onOpenChat={(threadId) => {
+              setChatThreadId(threadId);
+              setChatStandInOwnerId(undefined);
+              setView("chat");
+            }}
+            onOpenStandIn={(ownerId) => {
+              setChatThreadId(undefined);
+              setChatStandInOwnerId(ownerId);
+              setView("chat");
+            }}
           />
         ) : null}
-        {view === "chat" ? <CommunicationsView /> : null}
+        {view === "chat" ? (
+          <CommunicationsView
+            {...(chatThreadId ? { initialThreadId: chatThreadId } : {})}
+            {...(chatStandInOwnerId
+              ? { initialStandInOwnerId: chatStandInOwnerId }
+              : {})}
+          />
+        ) : null}
         {view === "coord" ? (
           <CoordinationView
             initialThreadId={coordinationThreadId}
@@ -482,6 +504,11 @@ function InteroApp() {
         {view === "inbox" ? <AttentionView onOpenAction={openAction} /> : null}
         {view === "search" ? (
           <SearchView
+            onOpenPerson={(ownerId) => {
+              setPersonId(ownerId);
+              setPersonReturnView("search");
+              setView("person");
+            }}
             onOpenResult={(result) => {
               if (result.sourceRef.startsWith("work-item:")) {
                 setItemId(result.sourceRef.slice("work-item:".length));

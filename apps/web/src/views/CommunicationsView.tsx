@@ -29,6 +29,7 @@ import {
   getTeamPulse,
   getThreads,
   sendThreadMessage,
+  type BootstrapPayload,
   type PrincipalSummary,
   type ThreadPayload,
 } from "../api.js";
@@ -43,7 +44,6 @@ import {
 import {
   addPilotStandIn,
   askPilotStandIn,
-  createPilotDm,
   getPilotDms,
   getPilotStandIn,
   sendPilotDm,
@@ -62,18 +62,49 @@ const THREAD_GROUPS: Array<{
   { kind: "human_direct", label: "chat.group.direct" },
 ];
 const RELEVANT_KINDS = new Set(THREAD_GROUPS.map((group) => group.kind));
+const CHAT_REFRESH_INTERVAL_MS = 10_000;
+const DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
 
-export function CommunicationsView() {
+export function buildGroupChatThreadInput(input: {
+  currentPrincipalId: PrincipalId;
+  standInPrincipalId: PrincipalId;
+  title: string;
+  memberIds: string[];
+  teamId?: string;
+}) {
+  return {
+    kind: "room" as const,
+    ...(input.teamId ? { teamId: input.teamId } : {}),
+    title: input.title,
+    participantIds: [
+      input.currentPrincipalId,
+      input.standInPrincipalId,
+      ...input.memberIds.filter((id) => id !== input.currentPrincipalId),
+    ],
+    standInIds: [input.standInPrincipalId],
+  };
+}
+
+export function CommunicationsView({
+  initialThreadId,
+  initialStandInOwnerId,
+}: {
+  initialThreadId?: string;
+  initialStandInOwnerId?: string;
+} = {}) {
   const { formatRelative, formatTime, t } = useI18n();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
-  const [selectedThreadId, setSelectedThreadId] = useState<string>();
+  const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
+    initialThreadId,
+  );
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState("");
-  const [selectedStandInOwnerId, setSelectedStandInOwnerId] =
-    useState<PrincipalId>();
+  const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
+    PrincipalId | undefined
+  >(initialStandInOwnerId as PrincipalId | undefined);
   const [concluding, setConcluding] = useState(false);
   const [conclusion, setConclusion] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -81,7 +112,8 @@ export function CommunicationsView() {
   const threads = useQuery({
     queryKey: ["threads"],
     queryFn: ({ signal }) => getThreads(undefined, signal),
-    refetchInterval: 3_000,
+    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -90,13 +122,15 @@ export function CommunicationsView() {
   const pulse = useQuery({
     queryKey: ["team-pulse"],
     queryFn: ({ signal }) => getTeamPulse(signal),
-    refetchInterval: 30_000,
+    refetchInterval: DIRECTORY_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
   const pilotDms = useQuery({
     queryKey: ["pilot", "dms", pilot?.identityId],
     queryFn: ({ signal }) => getPilotDms(pilot!.identityId!, signal),
     enabled: Boolean(pilot?.enabled && pilot.identityId),
-    refetchInterval: 1_500,
+    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
   const pilotProject = pilot?.projects.data?.projects.find(
     (project) => project.id === pilot.selectedProjectId,
@@ -104,6 +138,10 @@ export function CommunicationsView() {
   const pilotPrincipal = resolvePilotCommunicationPrincipal(
     pilot?.identityId,
     pilot?.bootstrap.data,
+  );
+  const conversationIdentity = resolveConversationIdentity(
+    bootstrap.data,
+    pilot?.identityId,
   );
   const activeStandInOwnerId =
     selectedStandInOwnerId ?? (pilotPrincipal?.id as PrincipalId | undefined);
@@ -124,11 +162,12 @@ export function CommunicationsView() {
       ),
     enabled: Boolean(
       pilot?.enabled &&
-        pilot.identityId &&
-        pilot.selectedProjectId &&
-        activeStandInOwnerId,
+      pilot.identityId &&
+      pilot.selectedProjectId &&
+      activeStandInOwnerId,
     ),
-    refetchInterval: 1_500,
+    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
   });
   const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
     pilotDmToThreadPayload(
@@ -144,15 +183,12 @@ export function CommunicationsView() {
       : (pilot?.teams.data?.teams
           .flatMap((team) => team.members)
           .find((member) => member.id === activeStandInOwnerId) as
-          | PrincipalSummary
-          | undefined));
+          PrincipalSummary | undefined));
   const activeStandInPrincipal =
     pilotStandIn.data?.standIn ??
     (activeStandInOwner
       ? {
-          id: personalStandInPrincipalId(
-            activeStandInOwner.id as PrincipalId,
-          ),
+          id: personalStandInPrincipalId(activeStandInOwner.id as PrincipalId),
           displayName: `${activeStandInOwner.displayName} 的替身`,
           kind: "stand_in" as const,
         }
@@ -256,29 +292,33 @@ export function CommunicationsView() {
     : currentIsPilot || currentIsPilotStandIn
       ? pilot?.identityId
       : current.thread.participantIds.some(
-            (id) => id === bootstrap.data?.currentPrincipal.id,
+            (id) => id === conversationIdentity?.currentPrincipalId,
           )
-        ? bootstrap.data?.currentPrincipal.id
+        ? conversationIdentity?.currentPrincipalId
         : current.thread.participantIds.find(
             (id) => !current.thread.standInIds.includes(id),
           );
 
   const markRead = useMutation({
     mutationFn: (input: { threadId: string; sequence: number }) =>
-      markThreadRead({
-        threadId: input.threadId,
-        principalId: bootstrap.data!.currentPrincipal.id,
-        sequence: input.sequence,
-      }),
+      conversationIdentity
+        ? markThreadRead({
+            threadId: input.threadId,
+            principalId: conversationIdentity.currentPrincipalId,
+            sequence: input.sequence,
+          })
+        : Promise.reject(new Error(t("chat.identityUnavailable"))),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
   });
   const conclude = useMutation({
     mutationFn: (input: { threadId: string; conclusion: string }) =>
-      concludeThread({
-        threadId: input.threadId,
-        actorId: bootstrap.data!.currentPrincipal.id,
-        conclusion: input.conclusion,
-      }),
+      conversationIdentity
+        ? concludeThread({
+            threadId: input.threadId,
+            actorId: conversationIdentity.currentPrincipalId,
+            conclusion: input.conclusion,
+          })
+        : Promise.reject(new Error(t("chat.identityUnavailable"))),
     onSuccess: async ({ thread }) => {
       setConcluding(false);
       setConclusion("");
@@ -291,8 +331,20 @@ export function CommunicationsView() {
   const currentUnread = current?.unreadCount ?? 0;
   const currentLastSequence = current?.messages.at(-1)?.sequence ?? 0;
   useEffect(() => {
-    setSelectedStandInOwnerId(undefined);
-  }, [pilot?.identityId, pilot?.selectedProjectId]);
+    setSelectedStandInOwnerId(initialStandInOwnerId as PrincipalId | undefined);
+    if (initialStandInOwnerId && pilotProject) {
+      setSelectedThreadId(pilotProject.id);
+    }
+  }, [
+    initialStandInOwnerId,
+    pilot?.identityId,
+    pilot?.selectedProjectId,
+    pilotProject?.id,
+  ]);
+
+  useEffect(() => {
+    if (initialThreadId) setSelectedThreadId(initialThreadId);
+  }, [initialThreadId]);
 
   useEffect(() => {
     if (
@@ -300,7 +352,7 @@ export function CommunicationsView() {
       currentIsPilot ||
       currentIsPilotStandIn ||
       currentUnread === 0 ||
-      !bootstrap.data?.currentPrincipal.id ||
+      !conversationIdentity?.currentPrincipalId ||
       markRead.isPending
     ) {
       return;
@@ -354,46 +406,20 @@ export function CommunicationsView() {
   });
   const create = useMutation({
     mutationFn: async (input: {
-      kind: "human_group" | "room" | "human_direct";
       title: string;
       memberIds: string[];
       teamId?: string;
     }) => {
-      if (input.kind === "human_direct") {
-        const peerId = input.memberIds[0] as PrincipalId | undefined;
-        // Direct messages are created inside the team the peer is actually in,
-        // not whichever team happens to sort first.
-        const teamId = pilot?.teams.data?.teams.find((team) =>
-          team.members.some((member) => member.id === peerId),
-        )?.id;
-        if (!pilot?.identityId || !teamId || !peerId) {
-          throw new Error("Choose a team member.");
-        }
-        const result = await createPilotDm(pilot.identityId, {
-          teamId,
-          peerId,
-        });
-        return { threadId: result.thread.id };
-      }
-      const identity = bootstrap.data;
-      if (!identity) throw new Error("Identity is unavailable.");
-      const thread = await createConversationThread({
-        kind: input.kind,
-        ...(input.teamId ? { teamId: input.teamId } : {}),
-        title:
-          input.title ||
-          (input.kind === "room"
-            ? t("chat.defaultRoomTitle")
-            : t("chat.defaultGroupTitle")),
-        participantIds: [
-          identity.currentPrincipal.id,
-          identity.standInPrincipal.id,
-          ...input.memberIds.filter(
-            (id) => id !== identity.currentPrincipal.id,
-          ),
-        ],
-        standInIds: [identity.standInPrincipal.id],
-      });
+      const identity = conversationIdentity;
+      if (!identity) throw new Error(t("chat.identityUnavailable"));
+      const thread = await createConversationThread(
+        buildGroupChatThreadInput({
+          ...identity,
+          title: input.title || t("chat.defaultRoomTitle"),
+          memberIds: input.memberIds,
+          ...(input.teamId ? { teamId: input.teamId } : {}),
+        }),
+      );
       return { threadId: thread.id };
     },
     onSuccess: async ({ threadId }) => {
@@ -414,16 +440,16 @@ export function CommunicationsView() {
   });
   const createStandIn = useMutation({
     mutationFn: async () => {
-      const identity = bootstrap.data;
-      if (!identity) throw new Error("Identity is unavailable.");
+      const identity = conversationIdentity;
+      if (!identity) throw new Error(t("chat.identityUnavailable"));
       return createConversationThread({
         kind: "stand_in",
         title: t("chat.group.standIn"),
         participantIds: [
-          identity.currentPrincipal.id,
-          identity.standInPrincipal.id,
+          identity.currentPrincipalId,
+          identity.standInPrincipalId,
         ],
-        standInIds: [identity.standInPrincipal.id],
+        standInIds: [identity.standInPrincipalId],
       });
     },
     onSuccess: async (thread) => {
@@ -690,14 +716,15 @@ export function CommunicationsView() {
 
         {showCreate ? (
           <NewConversationModal
-            kinds={
-              pilot?.enabled && pilot.identityId
-                ? ["human_group", "room", "human_direct"]
-                : ["human_group", "room"]
-            }
             candidates={conversationCandidates}
             busy={create.isPending}
-            error={create.isError}
+            error={
+              create.error instanceof Error
+                ? create.error.message
+                : create.isError
+                  ? t("chat.createFailed")
+                  : undefined
+            }
             onClose={() => setShowCreate(false)}
             onCreate={(input) => create.mutate(input)}
           />
@@ -981,10 +1008,7 @@ export function CommunicationsView() {
                         }}
                         className="flex cursor-pointer items-center gap-2 rounded-btn border-0 bg-transparent px-2.5 py-2 text-left hover:bg-raise"
                       >
-                        <RobotIcon
-                          size={14}
-                          className="text-accent-strong"
-                        />
+                        <RobotIcon size={14} className="text-accent-strong" />
                         <span className="grid">
                           <strong className="text-[11.5px] font-[620] text-ink">
                             {candidate.displayName} 的替身
@@ -1061,7 +1085,7 @@ export function CommunicationsView() {
             </p>
             <button
               type="button"
-              disabled={!bootstrap.data || createStandIn.isPending}
+              disabled={!conversationIdentity || createStandIn.isPending}
               onClick={() => createStandIn.mutate()}
               className="mt-1 inline-flex h-[34px] cursor-pointer items-center justify-center gap-1.5 rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent disabled:opacity-55"
             >
@@ -1090,6 +1114,29 @@ export function resolvePilotCommunicationPrincipal(
   return bootstrap.currentPrincipal?.id === identityId
     ? bootstrap.currentPrincipal
     : bootstrap.identities.find((principal) => principal.id === identityId);
+}
+
+export function resolveConversationIdentity(
+  bootstrap: BootstrapPayload | undefined,
+  pilotIdentityId: PrincipalId | undefined,
+):
+  | {
+      currentPrincipalId: PrincipalId;
+      standInPrincipalId: PrincipalId;
+    }
+  | undefined {
+  const currentPrincipalId = pilotIdentityId ?? bootstrap?.currentPrincipal?.id;
+  if (!currentPrincipalId) return undefined;
+  const bootstrapMatchesCurrent =
+    bootstrap?.currentPrincipal?.id === currentPrincipalId;
+  return {
+    currentPrincipalId: currentPrincipalId as PrincipalId,
+    standInPrincipalId:
+      (bootstrapMatchesCurrent
+        ? (bootstrap?.standInPrincipal?.id as PrincipalId | undefined)
+        : undefined) ??
+      personalStandInPrincipalId(currentPrincipalId as PrincipalId),
+  };
 }
 
 export function canRenderCommunicationItems(input: {
@@ -1173,9 +1220,7 @@ export function applyPersonalStandInMention(
   return `${draft.slice(0, mention.start)}@${candidate.displayName} 的替身 ${draft.slice(mention.end)}`;
 }
 
-export function personalStandInPrincipalId(
-  ownerId: PrincipalId,
-): PrincipalId {
+export function personalStandInPrincipalId(ownerId: PrincipalId): PrincipalId {
   return `${ownerId.slice(0, 14)}5${ownerId.slice(15)}` as PrincipalId;
 }
 

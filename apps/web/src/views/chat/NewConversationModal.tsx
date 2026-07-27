@@ -14,8 +14,6 @@ import {
 } from "../../design/primitives.js";
 import { useI18n } from "../../i18n/index.js";
 
-export type NewConversationKind = "human_group" | "room" | "human_direct";
-
 export interface ConversationCandidate {
   id: string;
   displayName: string;
@@ -24,43 +22,33 @@ export interface ConversationCandidate {
 }
 
 /**
- * Starting a conversation, with the people in it chosen up front.
- *
- * The team chips narrow who is offered, not who the thread belongs to — a
- * conversation thread has no team of its own, so claiming one would be a lie.
+ * Creates a durable group chat. Discussion groups are created automatically
+ * from a focused branch, while direct messages start from a person's profile.
  */
 export function NewConversationModal({
-  kinds,
   candidates,
   busy,
   error,
   onClose,
   onCreate,
 }: {
-  kinds: NewConversationKind[];
   candidates: ConversationCandidate[];
   busy: boolean;
-  error: boolean;
+  error: string | undefined;
   onClose: () => void;
   onCreate: (input: {
-    kind: NewConversationKind;
     title: string;
     memberIds: string[];
     teamId?: string;
   }) => void;
 }) {
   const { t } = useI18n();
-  const [kind, setKind] = useState<NewConversationKind>(
-    kinds[0] ?? "human_group",
-  );
   const [title, setTitle] = useState("");
-  // One control, two meanings by design: the team owns the conversation and
-  // narrows the member list. Leaving it unset is a real choice, not a default.
+  // The optional owning team also narrows the member list.
   const [teamId, setTeamId] = useState<string>();
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
 
-  const single = kind === "human_direct";
   const teams = [
     ...new Map(
       candidates.map((candidate) => [
@@ -79,17 +67,13 @@ export function NewConversationModal({
         candidate.teamName.toLocaleLowerCase().includes(needle),
     );
 
-  const ready = single ? picked.length === 1 : Boolean(title.trim());
+  const ready = Boolean(title.trim()) && picked.length > 0;
 
   function toggle(id: string) {
     setPicked((current) =>
-      single
-        ? current[0] === id
-          ? []
-          : [id]
-        : current.includes(id)
-          ? current.filter((entry) => entry !== id)
-          : [...current, id],
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : [...current, id],
     );
   }
 
@@ -99,52 +83,24 @@ export function NewConversationModal({
       onClose={onClose}
       head={
         <>
-          {kinds.length > 1 ? (
-            <div className="mt-4 flex flex-wrap gap-1.5">
-              {kinds.map((option) => (
-                <FilterChip
-                  key={option}
-                  active={kind === option}
-                  {...(option === "human_direct"
-                    ? { testId: "pilot-new-direct-message" }
-                    : {})}
-                  onClick={() => {
-                    setKind(option);
-                    setPicked([]);
-                  }}
-                >
-                  {t(
-                    option === "room"
-                      ? "chat.room"
-                      : option === "human_direct"
-                        ? "chat.direct"
-                        : "chat.temporaryGroup",
-                  )}
-                </FilterChip>
-              ))}
-            </div>
-          ) : null}
-
-          {single ? null : (
-            <div className="mt-[18px] flex h-10 items-center gap-[9px] rounded-[11px] border border-line2 bg-raise px-3">
-              <span className="font-mono text-[14px] text-faint">#</span>
-              <input
-                autoFocus
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder={t("chat.namePlaceholder")}
-                aria-label={t("chat.namePlaceholder")}
-                className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-faint"
-              />
-            </div>
-          )}
+          <div className="mt-[18px] flex h-10 items-center gap-[9px] rounded-[11px] border border-line2 bg-raise px-3">
+            <span className="font-mono text-[14px] text-faint">#</span>
+            <input
+              autoFocus
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder={t("chat.namePlaceholder")}
+              aria-label={t("chat.namePlaceholder")}
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-faint"
+            />
+          </div>
 
           {teams.length > 1 ? (
             <>
               <div className="mt-[18px] flex items-baseline gap-2">
                 <SectionLabel>{t("chat.owningTeam")}</SectionLabel>
                 <span className="text-[10.5px] text-faint">
-                  {t(single ? "chat.filterByTeamHint" : "chat.owningTeamHint")}
+                  {t("chat.owningTeamHint")}
                 </span>
               </div>
               <div className="mt-[9px] flex flex-wrap gap-1.5">
@@ -168,9 +124,7 @@ export function NewConversationModal({
           <div className="mt-[18px] flex items-baseline gap-2">
             <SectionLabel>{t("chat.members")}</SectionLabel>
             <span className="text-[10.5px] text-faint">
-              {single
-                ? t("chat.pickOne")
-                : t("chat.picked", { count: picked.length })}
+              {t("chat.picked", { count: picked.length })}
             </span>
           </div>
           <div className="mt-[9px] flex h-[34px] items-center gap-2 rounded-inset border border-line bg-raise px-[11px]">
@@ -190,18 +144,16 @@ export function NewConversationModal({
           <button
             type="button"
             disabled={!ready || busy}
-            {...(single ? { "data-testid": "pilot-create-dm" } : {})}
             onClick={() =>
               onCreate({
-                kind,
                 title: title.trim(),
                 memberIds: picked,
-                ...(teamId && !single ? { teamId } : {}),
+                ...(teamId ? { teamId } : {}),
               })
             }
             className="h-8 cursor-pointer rounded-inset border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
           >
-            {t(single ? "chat.startDirect" : "chat.create")}
+            {t("chat.create")}
           </button>
           <button
             type="button"
@@ -211,11 +163,7 @@ export function NewConversationModal({
             {t("general.close")}
           </button>
           <span className="ml-auto text-[10.5px] text-faint">
-            {error
-              ? t("chat.createFailed")
-              : single
-                ? t("chat.directHint")
-                : t("chat.groupHint")}
+            {error ? error : t("chat.roomHint")}
           </span>
         </>
       }

@@ -1,7 +1,11 @@
 import { PrincipalId } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
-import { resolvePilotCommunicationPrincipal } from "./CommunicationsView.js";
+import {
+  buildGroupChatThreadInput,
+  resolveConversationIdentity,
+  resolvePilotCommunicationPrincipal,
+} from "./CommunicationsView.js";
 
 const sessionPrincipal = {
   id: PrincipalId.parse("019f9ba4-3108-7000-8000-000000000001"),
@@ -15,34 +19,116 @@ const sessionPrincipal = {
 describe("CommunicationsView Pilot principal discovery", () => {
   it("uses the authenticated current principal when dev identities are absent", () => {
     expect(
-      resolvePilotCommunicationPrincipal(
-        sessionPrincipal.id,
-        { currentPrincipal: sessionPrincipal, identities: [] },
-      ),
+      resolvePilotCommunicationPrincipal(sessionPrincipal.id, {
+        currentPrincipal: sessionPrincipal,
+        identities: [],
+      }),
     ).toEqual(sessionPrincipal);
   });
 
   it("keeps development identity discovery as an explicit fallback", () => {
     expect(
-      resolvePilotCommunicationPrincipal(
-        sessionPrincipal.id,
-        { identities: [sessionPrincipal] },
-      ),
+      resolvePilotCommunicationPrincipal(sessionPrincipal.id, {
+        identities: [sessionPrincipal],
+      }),
     ).toEqual(sessionPrincipal);
   });
 
   it("does not substitute a different session principal", () => {
     expect(
-      resolvePilotCommunicationPrincipal(
-        sessionPrincipal.id,
-        {
-          currentPrincipal: {
-            ...sessionPrincipal,
-            id: PrincipalId.parse("019f9ba4-3108-7000-8000-000000000002"),
-          },
-          identities: [],
+      resolvePilotCommunicationPrincipal(sessionPrincipal.id, {
+        currentPrincipal: {
+          ...sessionPrincipal,
+          id: PrincipalId.parse("019f9ba4-3108-7000-8000-000000000002"),
         },
-      ),
+        identities: [],
+      }),
     ).toBeUndefined();
+  });
+});
+
+describe("CommunicationsView conversation identity", () => {
+  it("uses the canonical bootstrap identity when it is available", () => {
+    const standInId = PrincipalId.parse("019f9ba4-3108-5000-8000-000000000001");
+    expect(
+      resolveConversationIdentity(
+        {
+          organization: { id: crypto.randomUUID(), name: "Intero" },
+          currentPrincipal: sessionPrincipal,
+          standInPrincipal: {
+            id: standInId,
+            displayName: "会话用户的替身",
+            kind: "stand_in",
+          },
+        },
+        undefined,
+      ),
+    ).toEqual({
+      currentPrincipalId: sessionPrincipal.id,
+      standInPrincipalId: standInId,
+    });
+  });
+
+  it("derives the personal Stand-in from the authenticated Pilot identity", () => {
+    expect(resolveConversationIdentity(undefined, sessionPrincipal.id)).toEqual(
+      {
+        currentPrincipalId: sessionPrincipal.id,
+        standInPrincipalId: PrincipalId.parse(
+          "019f9ba4-3108-5000-8000-000000000001",
+        ),
+      },
+    );
+  });
+
+  it("does not reuse a stale bootstrap identity for a different Pilot user", () => {
+    const pilotIdentityId = PrincipalId.parse(
+      "019f9ba4-3108-7000-8000-000000000002",
+    );
+    expect(
+      resolveConversationIdentity(
+        {
+          organization: { id: crypto.randomUUID(), name: "Intero" },
+          currentPrincipal: sessionPrincipal,
+          standInPrincipal: {
+            id: PrincipalId.parse("019f9ba4-3108-5000-8000-000000000001"),
+            displayName: "旧会话用户的替身",
+            kind: "stand_in",
+          },
+        },
+        pilotIdentityId,
+      ),
+    ).toEqual({
+      currentPrincipalId: pilotIdentityId,
+      standInPrincipalId: PrincipalId.parse(
+        "019f9ba4-3108-5000-8000-000000000002",
+      ),
+    });
+  });
+
+  it("does not attempt to create a conversation without any identity", () => {
+    expect(resolveConversationIdentity(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("manual group chat creation", () => {
+  it("always creates a durable room instead of a direct or discussion thread", () => {
+    const peerId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000003");
+    const standInId = PrincipalId.parse("019f9ba4-3108-5000-8000-000000000001");
+
+    expect(
+      buildGroupChatThreadInput({
+        currentPrincipalId: sessionPrincipal.id,
+        standInPrincipalId: standInId,
+        title: "产品群",
+        memberIds: [peerId],
+        teamId: "019f9ba4-3108-7000-8000-000000000099",
+      }),
+    ).toEqual({
+      kind: "room",
+      title: "产品群",
+      teamId: "019f9ba4-3108-7000-8000-000000000099",
+      participantIds: [sessionPrincipal.id, standInId, peerId],
+      standInIds: [standInId],
+    });
   });
 });

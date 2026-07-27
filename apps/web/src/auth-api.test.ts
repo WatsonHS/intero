@@ -110,6 +110,29 @@ describe("authenticated API requests", () => {
     expect(events).toBe(1);
   });
 
+  it("preserves the API error message instead of replacing it with a status", async () => {
+    installBrowser(new MemoryStorage());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            code: "INVALID_REQUEST",
+            message: "A group chat needs a valid signed-in participant.",
+          }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    await expect(getActionInbox()).rejects.toThrow(
+      "A group chat needs a valid signed-in participant.",
+    );
+  });
+
   it("centrally requests login for pilot API 401s", async () => {
     const storage = new MemoryStorage();
     storage.setItem(PILOT_IDENTITY_STORAGE_KEY, "principal");

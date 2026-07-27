@@ -1,6 +1,10 @@
 import { ArrowLeftIcon, GitPullRequestIcon } from "@phosphor-icons/react";
-import type { PilotPulseEntry, PublicWorkProjection } from "@intero/domain";
-import { useQuery } from "@tanstack/react-query";
+import type {
+  PilotPulseEntry,
+  PrincipalId,
+  PublicWorkProjection,
+} from "@intero/domain";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import {
   getActivity,
@@ -29,7 +33,11 @@ import {
 import { useI18n } from "../i18n/index.js";
 import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import { pilotPulseEntryToProjection } from "../pilot/adapters.js";
-import { getPilotOverview } from "../pilot/api.js";
+import {
+  createPilotDm,
+  getPilotOverview,
+  type PilotTeamPayload,
+} from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import {
   projectWorkToPulse,
@@ -49,14 +57,25 @@ import { isInDetailWindow } from "./work-visibility.js";
  * the same parallel workstreams, ordered the same way, with the full narrative
  * each Stand-in published instead of the two-line summary.
  */
+export function findContactTeam(
+  teams: PilotTeamPayload[],
+  ownerId: string,
+): PilotTeamPayload | undefined {
+  return teams.find((team) =>
+    team.members.some((member) => member.id === ownerId),
+  );
+}
+
 export function PersonView({
   ownerId,
   onBack,
   onOpenChat,
+  onOpenStandIn,
 }: {
   ownerId: string;
   onBack: () => void;
-  onOpenChat: () => void;
+  onOpenChat: (threadId: string) => void;
+  onOpenStandIn: (ownerId: string) => void;
 }) {
   const { t, formatRelative, formatTime } = useI18n();
   const pilot = usePilotOptional();
@@ -83,7 +102,8 @@ export function PersonView({
     queryFn: ({ signal }) =>
       getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
     enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
-    refetchInterval: 1_500,
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
   });
   const projectWork = useQuery({
     queryKey: ["project-work", pilotProject?.id],
@@ -92,7 +112,24 @@ export function PersonView({
       pilotProject &&
       pilot?.bootstrap.data?.adapters.projectWork === "postgres",
     ),
-    refetchInterval: 4_000,
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const teams = pilot?.teams.data?.teams ?? [];
+  const team = findContactTeam(teams, ownerId);
+  const teamMember = team?.members.find((member) => member.id === ownerId);
+  const startDirectMessage = useMutation({
+    mutationFn: async () => {
+      if (!pilot?.identityId || !team || ownerId === pilot.identityId) {
+        throw new Error(t("person.dmUnavailable"));
+      }
+      const result = await createPilotDm(pilot.identityId, {
+        teamId: team.id,
+        peerId: ownerId as PrincipalId,
+      });
+      return result.thread.id;
+    },
+    onSuccess: onOpenChat,
   });
 
   // Same three sources Team Pulse merges. Dropping one here would show fewer
@@ -129,14 +166,22 @@ export function PersonView({
     );
   }
   const principalName =
+    teamMember?.displayName ??
     pilotOverview.data?.principals.find((principal) => principal.id === ownerId)
       ?.displayName ??
     pulse.data?.principals.find((principal) => principal.id === ownerId)
       ?.displayName ??
     ownerId.slice(0, 8);
+  const profileKnown = Boolean(
+    teamMember ??
+    pilotOverview.data?.principals.find(
+      (principal) => principal.id === ownerId,
+    ) ??
+    pulse.data?.principals.find((principal) => principal.id === ownerId),
+  );
   const pulseReady = pulse.isSuccess || pilotOverview.isSuccess;
   const pulsePending = pulse.isPending && pilotOverview.isPending;
-  if (!pulseReady || workstreams.length === 0) {
+  if (!profileKnown && (!pulseReady || workstreams.length === 0)) {
     return (
       <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
         <div className="grid h-full place-items-center overflow-auto px-[32px] pb-[60px] pt-[26px]">
@@ -155,6 +200,73 @@ export function PersonView({
           </div>
         </div>
         <aside className="h-full overflow-auto border-l border-line bg-panel px-[24px] pb-[50px] pt-[26px]" />
+      </div>
+    );
+  }
+  if (workstreams.length === 0) {
+    return (
+      <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
+        <div className="h-full overflow-auto px-[32px] pb-[60px] pt-[26px]">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex cursor-pointer items-center gap-[7px] border-0 bg-transparent p-0 text-[11.5px] text-ink-muted hover:text-accent-strong"
+          >
+            <ArrowLeftIcon size={13} />
+            {t("person.back")}
+          </button>
+          <div className="mt-5 grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-4">
+            <Avatar id={ownerId} name={principalName} size="xl" />
+            <span className="grid min-w-0">
+              <h1 className="m-0 text-[26px] font-[560] tracking-[-0.035em]">
+                {principalName}
+              </h1>
+              <span className="mt-[7px] text-[12px] text-faint">
+                {team?.name ?? t("pulse.card.role")}
+              </span>
+            </span>
+            <span className="flex gap-2">
+              <button
+                type="button"
+                data-testid="person-start-dm"
+                disabled={startDirectMessage.isPending}
+                onClick={() => startDirectMessage.mutate()}
+                className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong hover:text-accent-strong disabled:cursor-wait disabled:opacity-50"
+              >
+                {startDirectMessage.isPending
+                  ? t("person.dmStarting")
+                  : t("person.dm")}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenStandIn(ownerId)}
+                className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent"
+              >
+                {t("person.atStandIn")}
+              </button>
+            </span>
+          </div>
+          {startDirectMessage.isError ? (
+            <p className="mt-3 text-[11.5px] text-danger">
+              {startDirectMessage.error instanceof Error
+                ? startDirectMessage.error.message
+                : t("person.dmFailed")}
+            </p>
+          ) : null}
+          <div className="mt-[30px]">
+            <strong className="text-[14px] font-[620]">
+              {t("person.recentWork")}
+            </strong>
+            <p className="mt-3 rounded-card border border-dashed border-line2 px-5 py-6 text-[12px] text-ink-muted">
+              {t("person.recentWorkEmpty")}
+            </p>
+          </div>
+        </div>
+        <aside className="h-full overflow-auto border-l border-line bg-panel px-[24px] pb-[50px] pt-[26px]">
+          <p className="rounded-[11px] bg-raise px-[15px] py-[14px] text-[11px] leading-[1.7] text-faint [text-wrap:pretty]">
+            {t("person.footer")}
+          </p>
+        </aside>
       </div>
     );
   }
@@ -256,20 +368,31 @@ export function PersonView({
           <span className="flex gap-2">
             <button
               type="button"
-              onClick={onOpenChat}
-              className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong hover:text-accent-strong"
+              data-testid="person-start-dm"
+              disabled={startDirectMessage.isPending}
+              onClick={() => startDirectMessage.mutate()}
+              className="h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3.5 text-[12px] text-ink hover:border-accent-strong hover:text-accent-strong disabled:cursor-wait disabled:opacity-50"
             >
-              {t("person.dm")}
+              {startDirectMessage.isPending
+                ? t("person.dmStarting")
+                : t("person.dm")}
             </button>
             <button
               type="button"
-              onClick={onOpenChat}
+              onClick={() => onOpenStandIn(ownerId)}
               className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent"
             >
               {t("person.atStandIn")}
             </button>
           </span>
         </div>
+        {startDirectMessage.isError ? (
+          <p className="mt-3 text-[11.5px] text-danger">
+            {startDirectMessage.error instanceof Error
+              ? startDirectMessage.error.message
+              : t("person.dmFailed")}
+          </p>
+        ) : null}
 
         {summaryText ? (
           <p className="mt-[22px] max-w-[660px] rounded-[13px] border border-accent-soft bg-accent-soft px-[18px] py-[16px] text-[13px] leading-[1.75] text-ink [text-wrap:pretty]">
@@ -423,7 +546,7 @@ export function PersonView({
                 <button
                   key={item.thread.id}
                   type="button"
-                  onClick={onOpenChat}
+                  onClick={() => onOpenChat(item.thread.id)}
                   className="grid w-full cursor-pointer gap-1.5 rounded-[11px] border border-dashed border-line2 bg-transparent px-[13px] py-3 text-left text-ink hover:border-accent-strong"
                 >
                   <span className="text-[12px] font-[600]">

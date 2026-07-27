@@ -659,7 +659,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     credentials: "include",
     headers: developmentIdentityHeaders(),
   });
-  ensureResponseOk(response);
+  await ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -673,7 +673,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  ensureResponseOk(response);
+  await ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -687,7 +687,7 @@ async function patchJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  ensureResponseOk(response);
+  await ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -701,7 +701,7 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  ensureResponseOk(response);
+  await ensureResponseOk(response);
   return (await response.json()) as T;
 }
 
@@ -711,13 +711,24 @@ async function deleteJson(path: string): Promise<void> {
     credentials: "include",
     headers: developmentIdentityHeaders(),
   });
-  ensureResponseOk(response);
+  await ensureResponseOk(response);
 }
 
-function ensureResponseOk(response: Response): void {
+async function ensureResponseOk(response: Response): Promise<void> {
   if (response.ok) return;
   handleAuthenticationFailure(response.status);
-  throw new Error(`Intero API returned ${response.status}.`);
+  const fallback = `Intero API returned ${response.status}.`;
+  let body: { message?: unknown } | undefined;
+  try {
+    body = (await response.json()) as { message?: unknown };
+  } catch {
+    // Some proxies return an empty or non-JSON error response.
+  }
+  throw new Error(
+    typeof body?.message === "string" && body.message.trim()
+      ? body.message
+      : fallback,
+  );
 }
 
 function developmentIdentityHeaders(): Record<string, string> {
