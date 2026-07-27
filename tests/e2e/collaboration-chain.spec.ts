@@ -958,9 +958,7 @@ async function askStandInThroughUi(
   await personalStandInConversation.click();
   const composer = page.getByTestId("communications-composer");
   await composer.fill(`@${standInOwner.name.slice(0, 4)}`);
-  await page
-    .getByTestId(`personal-stand-in-option-${standInOwner.id}`)
-    .click();
+  await page.getByTestId(`personal-stand-in-option-${standInOwner.id}`).click();
   await expect(
     page.getByTestId("personal-stand-in-conversation").getByText("的替身"),
   ).toBeVisible();
@@ -977,9 +975,7 @@ async function askStandInThroughUi(
     .toBeTruthy();
   const exchange = (
     await getStandInExchanges(page, project.id, standInOwner.id)
-  ).find(
-    (candidate) => candidate.question === question,
-  )!;
+  ).find((candidate) => candidate.question === question)!;
   expect(exchange.principalId).toBe(standInOwner.id);
   const answer = page.getByTestId(
     `pilot-stand-in-answer-${exchange.answerMessageId}`,
