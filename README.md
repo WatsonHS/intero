@@ -402,10 +402,12 @@ Desktop App is absent or closed.
 ## Repository implementation
 
 The active implementation on `main` is cloud-first and Web-first, with the
-canonical `apps/desktop` renderer also serving the browser product. Direct cloud
-MCP, private Work State, Stand-in processing, collaboration, authentication,
-administration, Project work, and Spec Review are implemented and covered by
-contract, integration, and browser tests.
+canonical React product in `apps/web`. The optional Electron app loads that same
+Web application and keeps only its shell, preload bridge, packaging, integration
+configuration, and explicitly enabled local Git-awareness under `apps/desktop`.
+Direct cloud MCP, private Work State, Stand-in processing, collaboration,
+authentication, administration, Project work, and Spec Review are implemented
+and covered by contract, integration, and browser tests.
 
 The active repository contains no local product runtime or local Work State
 implementation. The optional Desktop Git enhancement is deliberately narrow:
@@ -419,6 +421,8 @@ Current local development commands remain:
 ```bash
 corepack pnpm install
 just up
+pnpm dev:pilot
+pnpm dev:desktop # optional Electron client plus cloud services
 just check
 just backup-restore-smoke
 ```

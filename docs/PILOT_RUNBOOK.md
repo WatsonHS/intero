@@ -1,8 +1,8 @@
 # Intero cloud-first pilot runbook
 
-This pilot uses the existing `apps/desktop` renderer in a browser. The desktop
-binary is optional. The separate prototype under `apps/web` is retired and is
-not a product entry point.
+This pilot uses the canonical `apps/web` product in a browser. The desktop
+binary is optional and loads the same Web application through its Electron
+shell; it has no separate product renderer.
 
 ## Start locally
 
@@ -15,7 +15,7 @@ pnpm dev:pilot
 ```
 
 `pnpm dev:pilot` starts the Fastify API at `http://127.0.0.1:4310` and the
-existing Intero renderer at `http://127.0.0.1:5173`.
+canonical Intero Web application at `http://127.0.0.1:5173`.
 
 For a persistent PostgreSQL pilot, migrate with an administrator connection,
 then run the API with the RLS-constrained application connection and a
@@ -341,7 +341,14 @@ for cursor repair.
 This path is optional and never substitutes for the direct-cloud MCP/browser
 acceptance above.
 
-1. Build `@intero/mcp-stdio`, then start the canonical Desktop App.
+1. Build `@intero/mcp-stdio`, then start the canonical Web application inside
+   the optional Desktop shell:
+
+   ```bash
+   pnpm --filter @intero/mcp-stdio build
+   pnpm dev:desktop
+   ```
+
 2. Open **Settings → Coding Agent** and connect or select an existing Codex,
    Claude Code, or OpenCode binding for the current Project.
 3. Under **桌面 Git 感知**, choose one disposable repository and explicitly
@@ -363,7 +370,7 @@ The focused automated check is:
 ```bash
 pnpm vitest run \
   apps/desktop/src/main/git-awareness.test.ts \
-  apps/desktop/src/renderer/src/views/settings/GitAwarenessSettings.test.tsx
+  apps/web/src/views/settings/GitAwarenessSettings.test.tsx
 ```
 
 ## Validation boundary

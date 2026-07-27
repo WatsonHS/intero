@@ -215,6 +215,11 @@ Intero is cloud-first and Web-first.
   branch, commit, and staged-state signals to cloud ingress. It is never
   required for collection, MCP, management, access, or Stand-in runtime
   infrastructure, and it stores no Work State.
+- The canonical React product, design system integration, and frontend tests
+  live under `apps/web`. The optional Electron package loads that same
+  application and owns only its main/preload shell, packaging, integration
+  configuration, and explicitly enabled local Git-awareness; it has no separate
+  product renderer.
 - Git and Coding Agent lifecycle hooks may send compact, content-safe events to
   a separate authenticated cloud event endpoint. MCP failures return a visible,
   non-blocking failure. The MCP client, Hook client, or explicit CLI may write an

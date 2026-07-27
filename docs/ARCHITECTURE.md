@@ -387,6 +387,8 @@ hierarchy.
 
 The Web client uses authenticated product APIs and realtime delivery. It must
 not require the Desktop App to connect, interpret Work State, or coordinate.
+Its canonical React implementation, design system integration, browser entry,
+and frontend tests live in `apps/web`.
 
 ### 4.2 Optional Desktop App
 
@@ -396,6 +398,11 @@ provide:
 - an optional local Git-awareness enhancement for user-selected repositories;
 - future native/external notifications after the in-app Phase 6 scope;
 - a native rendering of the same collaboration surfaces.
+
+The Electron shell loads the canonical `apps/web` application directly. The
+desktop package owns only Electron main/preload code, packaging/resources,
+integration configuration, and optional local Git-awareness; it does not own or
+fork the product renderer.
 
 Desktop absence, shutdown, or update failure must not interrupt the Web product,
 cloud Stand-in, collection, management, access, or direct cloud MCP path.
@@ -409,10 +416,11 @@ Desktop App process.
 
 ### 4.3 Client security
 
-Web and Desktop renderers receive only authorized API view models. They never
-receive unrestricted service credentials, cross-tenant data, or generic policy
-bypass primitives. Client-local storage must be treated as convenience state,
-not as the only enforcement point for cloud privacy.
+The canonical Web application receives only authorized API view models whether
+it runs in a browser or inside Electron. It never receives unrestricted service
+credentials, cross-tenant data, or generic policy bypass primitives.
+Client-local storage must be treated as convenience state, not as the only
+enforcement point for cloud privacy.
 
 ## 5. Coding Agent integrations
 
@@ -1016,23 +1024,24 @@ product and is not the deferred A2A Gateway.
 Automatic bounded Stand-in coordination inside one Project is part of the
 internal protocol and does not expand this external A2A boundary.
 
-## 15. Proposed target repository layout
+## 15. Active repository layout
 
 ```text
 apps/
   web/
-  optional-desktop/
+  desktop/
+  mcp-stdio/
   server-api/
   server-worker/
 
 packages/
   api-contracts/
-  mcp-contracts/
   stand-in-core/
   domain/
-  privacy-policy/
   project-management/
   ui/
+  integrations/
+  attachments/
   config/
   test-support/
 
@@ -1042,8 +1051,9 @@ docs/
   plans/
 ```
 
-This tree is the active cloud/Web implementation; superseded runtime
-experiments are available in Git history.
+`apps/web` is the canonical product frontend. `apps/desktop` is the optional
+Electron shell and loads that same frontend without a renderer fork. Superseded
+runtime experiments are available in Git history.
 
 ## 16. Verification strategy
 
@@ -1111,8 +1121,9 @@ experiments are available in Git history.
   capacity, seven-day TTL, encryption boundary, secure discard, gap marker,
   stable-ID idempotency, FIFO three-retry flush, and realtime-gap tests.
 
-All active acceptance uses the cloud API/MCP and canonical renderer/browser
-path. Desktop Git-awareness tests cover explicit authorization, metadata-event
+All active acceptance uses the cloud API/MCP and canonical `apps/web` browser
+path. Electron build and Desktop Git-awareness tests additionally cover the same
+frontend inside the optional shell, explicit authorization, metadata-event
 debouncing, bounded snapshots, direct-cloud delivery, and shutdown cleanup.
 
 ## 17. Decision records

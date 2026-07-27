@@ -10,10 +10,11 @@ remain complete without the Desktop App.
 ```bash
 pnpm vitest run \
   apps/desktop/src/main/git-awareness.test.ts \
-  apps/desktop/src/renderer/src/views/settings/GitAwarenessSettings.test.tsx
+  apps/web/src/views/settings/GitAwarenessSettings.test.tsx
 
 pnpm lint
 pnpm --filter @intero/mcp-stdio build
+pnpm --filter @intero/web build
 pnpm --filter @intero/desktop build
 ```
 
@@ -30,9 +31,9 @@ The focused tests prove:
 
 ## Actual Desktop smoke
 
-The canonical Electron renderer was launched with an isolated direct-cloud
-Codex binding and a disposable Git repository. The Desktop-only preload bridge
-was present.
+The canonical Web application was launched inside Electron with an isolated
+direct-cloud Codex binding and a disposable Git repository. The Desktop-only
+preload bridge was present.
 
 Observed sequence:
 

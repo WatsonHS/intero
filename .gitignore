@@ -11,7 +11,7 @@ test-results/
 target/
 apps/desktop/out/
 apps/desktop/release/
-apps/desktop/dist-web/
+apps/web/dist/
 .playwright-cli/
 output/**/cloud-client/
 output/**/readable-cloud-client/
