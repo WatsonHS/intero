@@ -143,7 +143,21 @@ export class VercelAiModelGateway implements ModelGateway {
         maxRetries: 1,
         timeout: 6_000,
       });
-      return PilotStandInOutput.parse(result.output);
+      const output = PilotStandInOutput.parse(result.output);
+      const targetPrincipalId =
+        input.checkpoint.narrative.collaboration.targetPrincipalId;
+      return targetPrincipalId
+        ? {
+            ...output,
+            narrative: {
+              ...output.narrative,
+              collaboration: {
+                ...output.narrative.collaboration,
+                targetPrincipalId,
+              },
+            },
+          }
+        : output;
     } catch {
       throw new ModelGatewayUnavailableError(
         "The configured AI provider did not return a valid safe Stand-in output.",

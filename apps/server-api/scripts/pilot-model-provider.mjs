@@ -19,6 +19,9 @@ createServer(async (request, response) => {
     typeof prompt === "string" ? JSON.parse(prompt) : { checkpoint: {} };
   const sources = parsed.safeStructuredSources ?? [];
   const checkpoint = parsed.checkpoint ?? {};
+  const narrative = checkpoint.narrative ?? {};
+  const firstSource = sources[0] ?? {};
+  const sourceNarrative = firstSource.narrative ?? {};
   const coordination = [
     "dependency_declared",
     "blocker_raised",
@@ -36,6 +39,15 @@ createServer(async (request, response) => {
                   .join(" ")
                   .slice(0, 1_800)}`
               : "The structured Work State does not contain enough information.",
+          currentStatus:
+            sourceNarrative.currentFocus ??
+            "The structured Work State contains a current project update.",
+          completedOutcome: sourceNarrative.completedOutcome ?? "",
+          evidence: Array.isArray(sourceNarrative.evidence)
+            ? sourceNarrative.evidence.slice(0, 5)
+            : [],
+          nextStep: sourceNarrative.nextStep ?? "",
+          neededCollaboration: sourceNarrative.collaboration?.request ?? "",
           sourceWorkStateIds: sources
             .map((source) => source.workStateId)
             .filter(Boolean)
@@ -43,6 +55,26 @@ createServer(async (request, response) => {
         }
       : {
           safeSummary,
+          narrative: {
+            currentFocus:
+              narrative.currentFocus ?? "Structured work checkpoint received.",
+            completedOutcome: narrative.completedOutcome ?? "",
+            evidence: Array.isArray(narrative.evidence)
+              ? narrative.evidence.slice(0, 5)
+              : [],
+            nextStep: narrative.nextStep ?? "",
+            collaboration: {
+              needed: Boolean(narrative.collaboration?.needed),
+              request: narrative.collaboration?.request ?? "",
+              requestedFrom: narrative.collaboration?.requestedFrom ?? "",
+              ...(narrative.collaboration?.targetPrincipalId
+                ? {
+                    targetPrincipalId:
+                      narrative.collaboration.targetPrincipalId,
+                  }
+                : {}),
+            },
+          },
           coordination: {
             shouldOpen: coordination,
             safeContext: coordination ? safeSummary : "",
