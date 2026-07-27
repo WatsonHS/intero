@@ -120,8 +120,9 @@ The recipient uses a short **Accept Invitation** flow, confirms the
 Organization/Team/name/email, accepts with the exact invited email, and uses the
 link only to bootstrap first credential setup. It is not a normal login link.
 Passkey is the primary normal login; email plus password is the fallback.
-After joining, the recipient sees accessible Projects and may enter a Project
-or Team Pulse, with an optional skippable **Connect Coding Agent** step.
+After joining, the recipient enters Team Pulse directly. Coding Agent
+connection remains an optional, contextual action on Team Pulse, Project, and
+Spec Review surfaces rather than an onboarding step.
 Deployment endpoint, model keys, governance, invitations, and admin Settings
 are not shown. The pre-set name becomes the initial display name and remains
 editable in Personal Settings.
@@ -193,11 +194,11 @@ compaction.
 
 ## Pilot deployment and member setup
 
-The pilot assumes an already-running Intero deployment. In product Setup, a team
-administrator enters its base URL and validates connectivity before creating or
-joining the team context, creating the first project, and enabling invitations.
-Setup shows actionable validation errors without assuming a particular
-transport protocol.
+The pilot assumes an already-running Intero deployment. An uninitialized
+deployment presents a one-time Admin Bootstrap for Organization, initial Team,
+Provider, and first Project creation. Once initialized, these capabilities live
+in Admin and Setup is no longer a normal destination. Ordinary members never
+enter Bootstrap.
 
 In **Team Settings → Member Management**, an Organization administrator creates
 a one-time, expiring, revocable email-bound account-activation link for a
@@ -210,8 +211,8 @@ not type the server URL. Reusable Pilot join links are historical and are not
 the current onboarding path. Bulk email or CSV invitations, SCIM provisioning,
 and domain-based automatic join remain deferred.
 
-Organization is the structural tenant boundary and owns Projects. First Setup
-creates one Organization implicitly or with a simple name. Teams contain
+Organization is the structural tenant boundary and owns Projects. Admin
+Bootstrap creates one Organization implicitly or with a simple name. Teams contain
 members; Team and Project are many-to-many. A Project may name one
 primary/display Team and include additional participating Teams. Membership in
 any associated Team grants V1 participation in that Project.
@@ -237,11 +238,12 @@ test the connection, rotate or replace the key, or disable the provider.
 
 If no provider is configured or it is unavailable, identity, team/project
 membership, invitations, and basic human collaboration and chat remain usable.
-AI Stand-in, automated summaries, Agent Work State projection, automated
-Team Pulse, Agent binding, and other AI-derived coordination features remain
-disabled. Setup visibly distinguishes **Basic collaboration ready** from
-**Stand-in needs administrator model configuration** and shows actionable
-administrator status; provider setup does not block invitations or basic chat.
+AI Stand-in, automated summaries, and other model-derived coordination features
+remain disabled. Project-scoped Agent binding and structured checkpoint ingress
+remain available because they do not invoke the configured model provider.
+Admin visibly distinguishes **Basic collaboration ready** from **Stand-in needs
+administrator model configuration** and shows actionable administrator status;
+provider setup does not block invitations, basic chat, or Agent connection.
 
 Productized self-deployment is outside the pilot: no deployment package,
 Docker/install wizard, infrastructure workflow, DNS/TLS guidance, automated
@@ -331,32 +333,51 @@ stand_in.check_scope
 stand_in.report_checkpoint
 ```
 
-From a bound project page, **Connect Agent** provides a copy-ready one-time
-prompt tailored to Codex, Claude Code, or OpenCode. The user pastes it into the
-Agent; the Agent configures its own MCP connection and project binding, uses the
-administrator-approved Intero deployment endpoint inherited from team context,
-and reports connection success to Intero. Users do not generate, copy, or manage
-personal API keys.
+Team Pulse, Project, Spec Review, and Settings all route to one Project-scoped
+Coding Agent connection center. It requires an explicit Project selection and
+provides a Codex App deep link as the primary path, with a copy-ready
+configuration task for Codex, Claude Code, or OpenCode as fallback. The Agent
+adds a unique Project connection URL to its native MCP configuration, uses the
+canonical `INTERO_PUBLIC_URL`, then completes OAuth in the native client's GUI.
+The same origin is used for invitation links, team join links, OAuth discovery,
+and MCP protected-resource URLs. Users do not generate, copy, or manage personal
+API keys.
 
-Internally, the prompt bootstraps authentication through a short-lived,
-single-use, project-scoped connection ticket that is not surfaced as a
-user-managed key. The project UI shows connection status and offers disconnect
-and reconnect. Revocation invalidates the Intero connection without blocking
-local coding. Generic MCP clients are outside the pilot.
+Intero uses Better Auth's OAuth 2.1 Provider with authorization code + PKCE,
+dynamic client registration, refresh tokens, JWT/JWKS verification, and
+standards-based authorization/protected-resource discovery. The connection
+center creates a non-secret pending binding whose URL contains both the selected
+Project and a unique connection ID. Intero marks it connected only after the
+OAuth subject maps to the same Intero member, current Project membership passes,
+the token audience and `intero:mcp` scope verify, and the native MCP
+`initialize` request succeeds. Codex registrations use its standard `url` and
+`enabled` fields; OAuth starts from the MCP protected-resource challenge.
+Disconnecting removes every Project tool from that connection immediately while
+leaving an unprivileged `intero.connection_status` MCP surface available, so a
+configured repository can continue starting coding tasks. Existing bearer
+bindings remain accepted temporarily for migration and use the same disconnected
+surface after revocation.
+
+Product runtime requires `INTERO_PUBLIC_URL`. A non-loopback address must use
+HTTPS; for an internal deployment this can be a LAN DNS/mDNS name with a trusted
+internal certificate. Moving to a real domain only requires changing
+`INTERO_PUBLIC_URL` and the reverse-proxy listener/certificate, then restarting
+the deployment. Organization settings display this effective origin but cannot
+override it independently of the OAuth issuer.
 
 As an optional acceleration, the Desktop App can configure MCP in one click for
-the same three supported clients. It uses the same approved Intero endpoint and
-short-lived project ticket, writes the selected client's MCP configuration, and
-shows success, failure, and disconnect status. Web prompts remain the complete
-Desktop-independent path; Desktop adds no required daemon or runtime dependency
-and is never required for team operation.
+the same three supported clients. It opens the selected repository in the
+native client with the same non-secret OAuth configuration task and shows
+pending, connected, and disconnected status. Web prompts remain the complete
+Desktop-independent path; Desktop adds no required daemon or runtime dependency.
 
 The connection must not require a daemon, desktop process, local socket, or
 Electron launcher. Intero does not require or expose absolute local paths by
 default and minimizes remote or repository metadata.
 
-Desktop Git awareness is a separate, optional integration path. In **Settings →
-Coding Agent**, the user selects a repository, chooses one already connected
+Desktop Git awareness is a separate, optional integration path. From **Settings
+→ Coding Agent**, the user follows the shared connection center, selects a
+repository, chooses one already connected
 Coding Agent, and explicitly enables or pauses observation. The Desktop process
 listens to `HEAD`, index, and ref metadata events with debounce; it does not run
 a timer, enumerate files, read diffs, or store local Work State. A change emits

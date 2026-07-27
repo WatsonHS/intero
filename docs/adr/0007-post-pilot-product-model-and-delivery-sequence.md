@@ -73,8 +73,9 @@ irreversible decisions or final human commitments.
      email, and explicit Accept action.
   2. Use the matching invited email to accept and bootstrap first credential
      setup; mismatch is denied. The activation link is not normal login.
-  3. See the joined Team and accessible Projects, then enter a Project or Team
-     Pulse, with a skippable **Connect Coding Agent** entry.
+  3. See the joined Team and accessible Projects, then enter Team Pulse
+     directly. Coding Agent connection remains an optional, contextual action
+     on Team Pulse, Project, and Spec Review surfaces.
 - The recipient surface does not expose deployment endpoint, model-provider
   secrets, governance, invitation management, or administrator Settings. The
   pre-set name becomes the initial personal display name and is editable later

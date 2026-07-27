@@ -98,11 +98,9 @@ Enable Better Auth and start the existing canonical browser renderer:
 ```sh
 export INTERO_AUTH_SECRET='replace-with-at-least-32-development-characters'
 export INTERO_RUNTIME_MODE='product'
-export INTERO_PUBLIC_URL='http://localhost:4310'
-export VITE_INTERO_API_URL='http://localhost:4310'
-export INTERO_AUTH_TRUSTED_ORIGINS='http://localhost:5173,http://localhost:4310'
-export INTERO_PASSKEY_RP_ID='localhost'
+export INTERO_PUBLIC_URL='http://localhost:4311'
 
+pnpm dev:proxy
 pnpm dev:demo
 ```
 
@@ -111,8 +109,11 @@ without `INTERO_AUTH_SECRET`, disables development identity simulation, and
 uses Better Auth sessions. Seeded demo records do not create a third or more
 permissive auth mode.
 
-Use `localhost` consistently for the API public URL, renderer URL, trusted
-origins, and Passkey relying-party ID. Browsers treat `localhost` and
+Local aliases on ports `4310`, `4311`, and `5173` are trusted automatically.
+Use `localhost` consistently for the API public URL and Passkey relying-party
+ID when creating Passkeys. `INTERO_PASSKEY_RP_ID` defaults to the hostname from
+`INTERO_PUBLIC_URL`; set it explicitly only when the deployment requires a
+parent-domain RP ID. Browsers treat `localhost` and
 `127.0.0.1` as different WebAuthn relying parties; mixing them can create an
 account without completing Passkey enrollment. Database URLs may continue to
 use `127.0.0.1`.

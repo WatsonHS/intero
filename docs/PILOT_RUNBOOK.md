@@ -14,8 +14,28 @@ pnpm --filter @intero/mcp-stdio build
 pnpm dev:pilot
 ```
 
-`pnpm dev:pilot` starts the Fastify API at `http://127.0.0.1:4310` and the
-canonical Intero Web application at `http://127.0.0.1:5173`.
+`pnpm dev:pilot` starts the Fastify API on port `4310` and the canonical Intero
+Web application on port `5173`; both listen on all IPv4 interfaces and remain
+reachable through `localhost` and `127.0.0.1`. Run `pnpm dev:proxy` once to add
+the same-origin Caddy entry point configured by `INTERO_PUBLIC_URL`.
+
+For a copied invitation or MCP URL, configure one canonical external origin.
+OAuth requires HTTPS whenever the host is not loopback:
+
+```bash
+export INTERO_PUBLIC_URL='https://intero.internal.example:4311'
+export INTERO_CADDY_PORT='4311'
+export INTERO_CADDY_LISTEN_PORT='4311'
+pnpm dev:proxy
+```
+
+Caddy issues an internal certificate for the private hostname. Prefer a LAN
+DNS or mDNS name over a raw IP so TLS clients can consistently select the
+correct certificate. Every machine running a browser or coding-agent GUI must
+trust that Caddy root CA. When a publicly resolvable domain becomes available,
+replace
+`INTERO_PUBLIC_URL` with that HTTPS domain and let Caddy obtain its normal
+public certificate; no invitation, OAuth, or MCP code changes are required.
 
 For a persistent PostgreSQL pilot, migrate with an administrator connection,
 then run the API with the RLS-constrained application connection and a
@@ -141,12 +161,13 @@ Organization. No compatibility or legacy-data migration promise is made.
 
 ## Internal pilot prerequisites
 
-In development, open canonical **Settings → Test Setup** deliberately; the Web
-renderer never forces Setup and does not replace the product navigation. In
-**Setup → 模型服务**, the deployment administrator enters an
-OpenAI-compatible provider base URL, API key, and default model. The key is sent
-only to the API, encrypted at rest with AES-GCM, and never returned in browser
-responses.
+An uninitialized deployment opens the one-time **Intero Admin Bootstrap** for
+the first administrator. After the Organization exists, Setup is no longer a
+member or Settings destination: Organization, Team, Project, and Provider
+changes live in the Admin surface. In **Admin → Model Service**, the deployment
+administrator enters an OpenAI-compatible provider base URL, API key, and
+default model. The key is sent only to the API, encrypted at rest with AES-GCM,
+and never returned in browser responses.
 
 For local flow validation without spending provider credits, start the bundled
 test-only OpenAI-compatible fixture in another terminal:
@@ -167,13 +188,14 @@ It is an internal adapter regression fixture only. It does **not** satisfy the
 Stand-in acceptance scenario below, which must use an administrator-
 configured real provider endpoint and model.
 
-The dev identity selector is available only inside Test Setup. Complete the
-internal setup once so that two isolated browser contexts represent different
-members of one Team, share one collaborative Project, and have an active Codex,
-Claude Code, or OpenCode connection. Setup/provider checks, policy controls,
-adapter contracts, privacy withdrawal, and canonical-navigation regression are
-prerequisites and regression checks; they are not additional user-facing
-acceptance scenarios.
+The development identity selector is explicit test tooling enabled by the
+`interoDevIdentity=1` query parameter in a development build. Complete Admin
+Bootstrap once so that two isolated browser contexts represent different
+members of one Team and share one collaborative Project. Connect Codex, Claude
+Code, or OpenCode later through the Project-scoped Coding Agent connection
+center. Bootstrap/provider checks, policy controls, adapter contracts, privacy
+withdrawal, and canonical-navigation regression are prerequisites and
+regression checks; they are not additional user-facing acceptance scenarios.
 
 ### Phase 4 invite-only onboarding validation
 
@@ -182,8 +204,9 @@ Better Auth secret, a delivery webhook, and the exact renderer origin:
 
 ```bash
 export INTERO_AUTH_SECRET='replace-with-at-least-32-random-characters'
+export INTERO_PUBLIC_URL='https://intero.internal.example:4311'
 export INTERO_MAGIC_LINK_WEBHOOK='https://operator.example/magic-link'
-export INTERO_AUTH_TRUSTED_ORIGINS='http://127.0.0.1:5173,http://127.0.0.1:4310'
+export INTERO_AUTH_TRUSTED_ORIGINS='https://intero.internal.example:4311'
 pnpm dev:pilot
 ```
 
@@ -244,38 +267,37 @@ two-way conversation, plus a reload/reopen assertion in the browser E2E.
 
 1. The actively working coding session uses its real Intero MCP connection to
    submit one real structured result/checkpoint from the work being performed.
-   With the built bridge, the equivalent connection command is:
+   From the Project connection center, create the Codex connection task, merge
+   the generated `.codex/config.toml` entry, select **Authenticate** for Intero
+   in the Codex GUI, and approve the browser consent screen. The connection
+   center must remain pending until Intero receives the OAuth-authenticated
+   native MCP `initialize`, then change to **OAuth 与原生 MCP 已验证**.
 
-   ```bash
-   agent_data_dir=$(mktemp -d /tmp/intero-pilot-agent.XXXXXX)
-   node apps/mcp-stdio/dist/index.js cloud connect \
-     --client codex \
-     --cloud-url http://127.0.0.1:4310 \
-     --connect-ticket 'ticket_FROM_THE_UI' \
-     --cloud-data-dir "$agent_data_dir"
-   ```
+   The legacy stdio bridge remains available only for compatibility regression.
+   For current acceptance, use the native OAuth connection and submit the actual
+   ongoing-work result through `stand_in.report_checkpoint`:
 
-   The connect command submits an optional connection-validation checkpoint,
-   but that synthetic validation does not replace the real acceptance event.
-   Submit the actual ongoing-work result:
-
-   ```bash
-   node apps/mcp-stdio/dist/index.js cloud checkpoint \
-     --client codex \
-     --cloud-data-dir "$agent_data_dir" \
-     --event-type review_requested \
-     --client-event-id billing-export-review-0001 \
-     --workstream-key billing-csv-export \
-     --workstream-title '客户账单 CSV 导出' \
-     --phase validating \
-     --current-focus '正在让大批量账单导出满足财务月度对账要求。' \
-     --completed-outcome '已实现可恢复的导出任务，并生成首份完整账单 CSV。' \
-     --evidence '预发环境成功导出 12,480 行发票。' \
-     --evidence '账单导出集成测试 18/18 通过。' \
-     --next-step '由财务确认列名后合并并发布导出功能。' \
-     --needs-help \
-     --help-request '请确认税区和发票状态是否应保留为两个独立列。' \
-     --requested-from '财务负责人'
+   ```json
+   {
+     "eventType": "review_requested",
+     "workstreamKey": "billing-csv-export",
+     "workstreamTitle": "客户账单 CSV 导出",
+     "phase": "validating",
+     "narrative": {
+       "currentFocus": "正在让大批量账单导出满足财务月度对账要求。",
+       "completedOutcome": "已实现可恢复的导出任务，并生成首份完整账单 CSV。",
+       "evidence": [
+         "预发环境成功导出 12,480 行发票。",
+         "账单导出集成测试 18/18 通过。"
+       ],
+       "nextStep": "由财务确认列名后合并并发布导出功能。",
+       "collaboration": {
+         "needed": true,
+         "request": "请确认税区和发票状态是否应保留为两个独立列。",
+         "requestedFrom": "财务负责人"
+       }
+     }
+   }
    ```
 
 2. Verify the API accepted the MCP event and persisted the originator's private

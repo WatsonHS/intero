@@ -369,8 +369,8 @@ appear in one Team-level Spec Review page with a Project filter; Project pages
 deep-link with that filter applied.
 
 Member Management and Accept Invitation reuse the same visual system but remain
-distinct authority surfaces. Recipient acceptance never routes through
-administrator/Test Setup.
+distinct authority surfaces. Recipient acceptance enters Team Pulse directly
+and never routes through administrator Bootstrap.
 
 Team Pulse projects one column per person. A column header contains:
 
@@ -440,20 +440,28 @@ stand_in.report_checkpoint
 
 Codex, Claude Code, and OpenCode connect directly to the authenticated HTTPS MCP
 endpoint inherited from the member's selected team deployment. From a bound
-project page, the user copies a one-time **Connect Agent** prompt tailored to the
-selected Agent and pastes it there. The Agent performs its own MCP configuration
-and project binding, then reports connection success to Intero.
+project page, the user copies a **Connect Agent** prompt tailored to the
+selected Agent and pastes it there. The Agent merges a unique Project connection
+URL into its native MCP configuration. The user then completes OAuth from the
+native GUI, and Intero records the connection only after the authenticated MCP
+`initialize` handshake succeeds.
 
-The prompt carries team-derived endpoint context and a short-lived, single-use,
-project-scoped connection ticket. The ticket bootstraps a least-privilege,
-revocable connection but is never surfaced as a user-managed API key. The
-project UI shows connection status and supports disconnect/reconnect; revocation
-invalidates Intero access without blocking local coding. Generic MCP clients are
-outside the pilot.
+Better Auth provides the OAuth 2.1 authorization server, authorization code +
+PKCE, dynamic client registration, refresh-token storage, JWT/JWKS verification,
+revocation endpoints, and discovery metadata. Protected-resource metadata
+advertises the stable Intero MCP audience. Each endpoint URL additionally
+contains a Project ID and non-secret connection ID; every request verifies the
+OAuth subject-to-principal mapping, connection ownership, active binding, and
+current Project membership. The UI presents pending OAuth and verified native
+MCP states and supports disconnect/reconnect. Disconnecting a binding makes its
+Project tools unavailable immediately, while the URL continues to initialize as
+an unprivileged MCP exposing only `intero.connection_status`. This keeps a
+disconnected optional integration from blocking unrelated coding work. Existing
+bearer bindings remain readable during migration but are not issued by the
+current UI.
 
 The optional Desktop App may perform one-click MCP configuration for the same
-three clients using the same endpoint and ticket. It writes the relevant client
-configuration and reports success, failure, and disconnect status. This is an
+three clients using the same connection task and OAuth endpoint. This is an
 acceleration path only: Web prompts remain universal for the supported clients,
 and no Desktop process or daemon joins the runtime path.
 
