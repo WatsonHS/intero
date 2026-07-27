@@ -31,7 +31,10 @@ import type {
   RequestAuth,
 } from "./auth.js";
 import type { PostgresAutomationStore } from "./automation-store.js";
-import { ACTIVATION_BOOTSTRAP_HEADER } from "./auth.js";
+import {
+  ACTIVATION_BOOTSTRAP_HEADER,
+  findPrincipalForAuthUser,
+} from "./auth.js";
 import type { CoordinationTransport, ModelGateway } from "./pilot-ports.js";
 import type { PostgresInformationStore } from "./information-store.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
@@ -1190,56 +1193,23 @@ export async function registerPilotRoutes(
         .object({ client: PilotAgentClient })
         .strict()
         .parse(request.body);
-      const projectId = ProjectId.parse(request.params.projectId);
-      const project = (await options.store.listProjects(principal.id)).find(
-        (item) => item.id === projectId,
+      const issued = await issueAgentTicket(
+        options,
+        request,
+        principal,
+        ProjectId.parse(request.params.projectId),
+        input.client,
       );
-      if (!project) {
-        throw new PilotStoreError(
-          "PROJECT_NOT_FOUND",
-          404,
-          "Project was not found.",
-        );
-      }
-      const organization = await options.store.getOrganization();
-      if (!organization) {
-        throw new PilotStoreError(
-          "SETUP_REQUIRED",
-          409,
-          "Intero setup must be completed first.",
-        );
-      }
-      const now = new Date().toISOString();
-      const connectionId = uuidv7();
-      const clientLabel =
-        input.client === "claude-code"
-          ? "Claude Code"
-          : input.client === "opencode"
-            ? "OpenCode"
-            : "Codex";
-      const binding: PilotAgentBinding = {
-        id: connectionId,
-        projectId,
-        ownerId: principal.id,
-        client: input.client,
-        name: `${clientLabel} repository`,
-        workspaceId: uuidv7(),
-        preferredLanguage: principal.preferredLanguage ?? "en-US",
-        authMode: "oauth",
-        credentialHash: sha256(randomBytes(32).toString("base64url")),
-        createdAt: now,
-      };
-      await options.store.createAgentBinding(binding);
-      const baseUrl = effectiveDeploymentBaseUrl(options, organization);
-      const mcpUrl = `${baseUrl}/v1/pilot/projects/${project.id}/agent-connections/${connectionId}/mcp`;
       return reply.status(201).send({
-        connection: presentBinding(binding),
-        mcpUrl,
-        connectPrompt: buildOAuthConnectPrompt(
+        ticket: presentAgentTicket(issued.ticket),
+        mcpUrl: `${issued.baseUrl}/v1/pilot/mcp`,
+        connectPrompt: buildConnectPrompt(
           input.client,
-          mcpUrl,
-          project,
-          binding.preferredLanguage,
+          issued.baseUrl,
+          issued.rawTicket,
+          issued.ticket.expiresAt,
+          issued.project,
+          issued.ticket.preferredLanguage,
         ),
       });
     },
@@ -1253,50 +1223,22 @@ export async function registerPilotRoutes(
         .object({ client: PilotAgentClient })
         .strict()
         .parse(request.body);
-      const rawTicket = `ticket_${randomBytes(24).toString("base64url")}`;
-      const now = new Date();
-      const ticket: PilotAgentTicket = {
-        id: uuidv7(),
-        projectId: ProjectId.parse(request.params.projectId),
-        ownerId: principal.id,
-        client: input.client,
-        preferredLanguage: principal.preferredLanguage ?? "en-US",
-        ticketHash: sha256(rawTicket),
-        createdAt: now.toISOString(),
-        expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
-      };
-      await options.store.createAgentTicket(ticket);
-      const organization = await options.store.getOrganization();
-      if (!organization) {
-        throw new PilotStoreError(
-          "SETUP_REQUIRED",
-          409,
-          "Intero setup must be completed first.",
-        );
-      }
-      const project = (await options.store.listProjects(principal.id)).find(
-        (item) => item.id === ticket.projectId,
+      const issued = await issueAgentTicket(
+        options,
+        request,
+        principal,
+        ProjectId.parse(request.params.projectId),
+        input.client,
       );
-      if (!project) {
-        throw new PilotStoreError(
-          "PROJECT_NOT_FOUND",
-          404,
-          "Project was not found.",
-        );
-      }
       return reply.status(201).send({
-        ticket: {
-          id: ticket.id,
-          client: ticket.client,
-          expiresAt: ticket.expiresAt,
-        },
+        ticket: presentAgentTicket(issued.ticket),
         connectPrompt: buildConnectPrompt(
           input.client,
-          effectiveDeploymentBaseUrl(options, organization),
-          rawTicket,
-          ticket.expiresAt,
-          project,
-          ticket.preferredLanguage,
+          issued.baseUrl,
+          issued.rawTicket,
+          issued.ticket.expiresAt,
+          issued.project,
+          issued.ticket.preferredLanguage,
         ),
       });
     },
@@ -1313,6 +1255,10 @@ export async function registerPilotRoutes(
       .strict()
       .parse(request.body);
     const now = new Date().toISOString();
+    const authenticatedOwnerId = await consumeAgentTicketIdentity(
+      options,
+      input.ticket,
+    );
     const credential = `agent_${randomBytes(32).toString("base64url")}`;
     const verificationCode = `verify_${randomBytes(24).toString("base64url")}`;
     const verificationExpiresAt = new Date(
@@ -1328,6 +1274,7 @@ export async function registerPilotRoutes(
       verificationCode,
       verificationExpiresAt,
       now,
+      authenticatedOwnerId,
     );
     return reply.status(201).send({
       credential,
@@ -1492,23 +1439,147 @@ async function findTicketContext(
   verificationCode: string,
   verificationExpiresAt: string,
   now: string,
+  authenticatedOwnerId?: PrincipalId,
 ): Promise<PilotAgentBinding> {
   const ticketHash = sha256(rawTicket);
   const ticket = await store.resolveAgentTicket(ticketHash, now);
+  if (authenticatedOwnerId && ticket.ownerId !== authenticatedOwnerId) {
+    throw new PilotStoreError(
+      "AGENT_TICKET_INVALID",
+      401,
+      "Agent connection ticket is invalid, expired, or already used.",
+    );
+  }
   const binding: PilotAgentBinding = {
-    id: uuidv7(),
+    id: ticket.id,
     projectId: ticket.projectId,
     ownerId: ticket.ownerId,
     client,
     name,
     workspaceId,
     preferredLanguage: ticket.preferredLanguage,
+    authMode: "project_bearer",
     credentialHash: sha256(credential),
     verificationCodeHash: sha256(verificationCode),
     verificationExpiresAt,
     createdAt: now,
   };
   return store.exchangeAgentTicket(ticketHash, binding, now);
+}
+
+async function issueAgentTicket(
+  options: PilotRoutesOptions,
+  request: FastifyRequest,
+  principal: AuthenticatedPrincipal,
+  projectId: ProjectId,
+  client: PilotAgentBinding["client"],
+): Promise<{
+  ticket: PilotAgentTicket;
+  rawTicket: string;
+  project: PilotProject;
+  baseUrl: string;
+}> {
+  const [organization, project] = await Promise.all([
+    options.store.getOrganization(),
+    options.store
+      .listProjects(principal.id)
+      .then((projects) => projects.find((item) => item.id === projectId)),
+  ]);
+  if (!organization) {
+    throw new PilotStoreError(
+      "SETUP_REQUIRED",
+      409,
+      "Intero setup must be completed first.",
+    );
+  }
+  if (!project) {
+    throw new PilotStoreError(
+      "PROJECT_NOT_FOUND",
+      404,
+      "Project was not found.",
+    );
+  }
+  const rawTicket = await generateAgentTicketToken(options, request, principal);
+  const now = new Date();
+  const ticket: PilotAgentTicket = {
+    id: uuidv7(),
+    projectId,
+    ownerId: principal.id,
+    client,
+    preferredLanguage: principal.preferredLanguage ?? "en-US",
+    ticketHash: sha256(rawTicket),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
+  };
+  await options.store.createAgentTicket(ticket);
+  return {
+    ticket,
+    rawTicket,
+    project,
+    baseUrl: effectiveDeploymentBaseUrl(options, organization),
+  };
+}
+
+async function generateAgentTicketToken(
+  options: PilotRoutesOptions,
+  request: FastifyRequest,
+  principal: AuthenticatedPrincipal,
+): Promise<string> {
+  if (!options.auth || !principal.authUserId) {
+    return `ticket_${randomBytes(24).toString("base64url")}`;
+  }
+  try {
+    const generated = await options.auth.api.generateOneTimeToken({
+      headers: authHeaders(request),
+    });
+    return generated.token;
+  } catch {
+    throw new PilotStoreError(
+      "AGENT_TICKET_IDENTITY_REQUIRED",
+      401,
+      "Sign in again before creating a Coding Agent connection.",
+    );
+  }
+}
+
+async function consumeAgentTicketIdentity(
+  options: PilotRoutesOptions,
+  rawTicket: string,
+): Promise<PrincipalId | undefined> {
+  if (!rawTicket.startsWith("ott_")) return undefined;
+  if (!options.auth || !options.authDatabase) {
+    throw new PilotStoreError(
+      "AGENT_TICKET_INVALID",
+      401,
+      "Agent connection ticket is invalid, expired, or already used.",
+    );
+  }
+  try {
+    const verified = await options.auth.api.verifyOneTimeToken({
+      body: { token: rawTicket },
+    });
+    const principalId = await findPrincipalForAuthUser(
+      options.authDatabase,
+      verified.user.id,
+    );
+    if (!principalId) throw new Error("Intero principal not found.");
+    return principalId;
+  } catch {
+    throw new PilotStoreError(
+      "AGENT_TICKET_INVALID",
+      401,
+      "Agent connection ticket is invalid, expired, or already used.",
+    );
+  }
+}
+
+function authHeaders(request: FastifyRequest): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue;
+    headers.set(name, Array.isArray(value) ? value.join(",") : String(value));
+  }
+  return headers;
 }
 
 async function requireIdentity(
@@ -1771,84 +1842,12 @@ function presentBinding(binding: PilotAgentBinding) {
   return safe;
 }
 
-function buildOAuthConnectPrompt(
-  client: PilotAgentBinding["client"],
-  mcpUrl: string,
-  project: Pick<PilotProject, "id" | "name">,
-  preferredLanguage: PilotAgentBinding["preferredLanguage"],
-): string {
-  const clientLabel =
-    client === "claude-code"
-      ? "Claude Code"
-      : client === "opencode"
-        ? "OpenCode"
-        : "Codex";
-  const config =
-    client === "codex"
-      ? [
-          "[mcp_servers.intero]",
-          `url = "${mcpUrl}"`,
-          "enabled = true",
-        ].join("\n")
-      : client === "claude-code"
-        ? JSON.stringify(
-            {
-              mcpServers: {
-                intero: {
-                  type: "http",
-                  url: mcpUrl,
-                },
-              },
-            },
-            null,
-            2,
-          )
-        : JSON.stringify(
-            {
-              mcp: {
-                intero: {
-                  type: "remote",
-                  url: mcpUrl,
-                  enabled: true,
-                },
-              },
-            },
-            null,
-            2,
-          );
-  const configFile =
-    client === "codex"
-      ? ".codex/config.toml"
-      : client === "claude-code"
-        ? ".mcp.json"
-        : "opencode.json";
-  const instructionFile = client === "claude-code" ? "CLAUDE.md" : "AGENTS.md";
-
-  return preferredLanguage === "zh-CN"
-    ? [
-        `把当前仓库的 ${clientLabel} 原生 MCP 连接配置到 Intero Project“${project.name}”。`,
-        "",
-        `在仓库根目录检查并最小合并 ${configFile}，保留已有配置，将 intero 条目设为：`,
-        "```",
-        config,
-        "```",
-        "",
-        `在 ${instructionFile} 的 intero-managed 小节中记录：当前 Intero Project ID 是 ${project.id}；在工作意图、重要决定、阻塞、依赖、阶段性产出、验证结果和完成时，通过 stand_in.report_checkpoint 上报结构化语义检查点。`,
-        "",
-        `校验 ${configFile} 的语法和最终 intero URL。完成状态写为 configured_waiting_for_oauth，并提示用户在 ${clientLabel} GUI 的 MCP 设置中对 Intero 执行 Authenticate。Intero 服务端收到绑定到该 connection URL 的 OAuth 身份和原生 MCP initialize 后，会自动完成真实连接验证。`,
-      ].join("\n")
-    : [
-        `Configure this repository's native ${clientLabel} MCP connection for the Intero Project "${project.name}".`,
-        "",
-        `Inspect and minimally merge ${configFile} at the repository root, preserving existing settings and setting the intero entry to:`,
-        "```",
-        config,
-        "```",
-        "",
-        `Add an intero-managed section to ${instructionFile}: the current Intero Project ID is ${project.id}; report structured semantic checkpoints with stand_in.report_checkpoint at work intent, important decisions, blockers, dependencies, milestone outputs, validation results, and completion.`,
-        "",
-        `Validate ${configFile} syntax and the final intero URL. Finish with configured_waiting_for_oauth and direct the user to Authenticate Intero in ${clientLabel}'s GUI MCP settings. Intero completes real connection verification after receiving OAuth identity and a native MCP initialize for this connection URL.`,
-      ].join("\n");
+function presentAgentTicket(ticket: PilotAgentTicket) {
+  return {
+    id: ticket.id,
+    client: ticket.client,
+    expiresAt: ticket.expiresAt,
+  };
 }
 
 function buildConnectPrompt(
@@ -1955,7 +1954,7 @@ function buildConnectPrompt(
           "evidenceRefs",
         ],
         idempotency:
-          "Derive clientEventId deterministically from client, lifecycle event, and a local hash of the native event/session ID. Never transmit the raw session ID.",
+          "Derive clientEventId deterministically from client, lifecycle event, and a local hash of the native event/session ID.",
       },
       projectInstructions: {
         preferredLanguage,
@@ -1971,18 +1970,13 @@ function buildConnectPrompt(
           "pause",
           "completion",
         ],
-        forbiddenContent: [
-          "raw prompts",
-          "file contents",
-          "diffs",
-          "terminal output",
-          "tool logs",
-          "secrets",
-        ],
       },
       artifacts: {
         ...artifacts,
         localCredential: ".intero/connection.json",
+        credentialFileMode: "0600",
+        credentialGitVisibility: "excluded",
+        reportCredentialValuesAs: "redacted",
       },
       nativeConfiguration,
     },
@@ -1999,9 +1993,9 @@ function buildConnectPrompt(
         "",
         "执行要求：",
         "1. 找到仓库根目录。现有本地文件只提供候选 workspaceId，不能单独证明连接有效。用 manifest.setupAuthorization.reuseProbeUrl 检查候选 credential；仅当响应为 HTTP 200、binding 与当前项目及 client 匹配、validatedAt 已存在，并且当前原生客户端能加载完整 Intero 工具目录时复用。若 probe 未授权、验证尚未完成，或 intero.connection_status 返回 disconnected，立即使用本次 ticket 兑换新 credential；沿用已有稳定 workspaceId。",
-        "2. 将 credential 写入本机项目配置或原生凭证能力，权限设为 0600，并把所有含 credential 的文件加入 .git/info/exclude。新兑换的 verification.code 仅临时写入 manifest.validation.temporaryCodePath，交给新的 GUI 验证任务；不得提交、打印或在最终报告中回显 ticket、credential 或 verification code。",
+        "2. 按 manifest.artifacts 的权限、Git 可见性和脱敏规则保存 credential。新兑换的 verification.code 临时写入 manifest.validation.temporaryCodePath，供新的 GUI 验证任务使用。",
         `3. 通过 ${clientLabel} 的原生项目配置合并 Streamable HTTP MCP。`,
-        "4. 用原生 Hook 配置和项目内隐私过滤器上报生命周期。过滤器只能发送 manifest.allowedPayload，必须在本地哈希原生 event/session ID 生成稳定 clientEventId，并丢弃原始 hook payload、路径、prompt、文件、diff、终端和工具日志；Hook 失败不得阻塞 Coding Agent。",
+        "4. 用原生 Hook 配置和项目内隐私过滤器上报生命周期。按 manifest.allowedPayload 构造上报数据，在本地哈希原生 event/session ID 生成稳定 clientEventId，并让 Hook 采用 fail-open 行为。",
         "5. 在项目 instructions 中添加带 intero-managed 标记的规则：仅在语义分支点调用 stand_in.report_checkpoint；依赖或定向协作必须提供当前项目成员的 collaboration.targetPrincipalId。",
         `6. 校验配置语法和 ${clientLabel} 的原生 MCP 注册状态。`,
         client === "codex"
@@ -2019,9 +2013,9 @@ function buildConnectPrompt(
         "",
         "Execution requirements:",
         "1. Locate the repository root. An existing local file supplies only a candidate workspaceId; it does not prove that the connection is active. Probe the candidate credential with manifest.setupAuthorization.reuseProbeUrl. Reuse it only when the response is HTTP 200, the binding matches this Project and client, validatedAt is present, and the current native client loads the full Intero tool catalog. If the probe is unauthorized, validation is pending, or intero.connection_status reports disconnected, immediately exchange this ticket for a new credential while preserving the stable workspaceId.",
-        "2. Store the credential in native or local Project credential storage, mode 0600, and add every credential-bearing file to .git/info/exclude. Store a newly exchanged verification.code only temporarily at manifest.validation.temporaryCodePath for the fresh GUI validation task. Never commit, print, or echo the ticket, credential, or verification code in the final report.",
+        "2. Store the credential according to manifest.artifacts file-mode, Git-visibility, and redaction rules. Store a newly exchanged verification.code temporarily at manifest.validation.temporaryCodePath for the fresh GUI validation task.",
         `3. Merge the Streamable HTTP MCP server through ${clientLabel}'s native Project configuration.`,
-        "4. Configure native lifecycle hooks plus a Project-local privacy filter. Send only manifest.allowedPayload, derive a stable clientEventId from a local hash of the native event/session ID, and discard raw hook payloads, paths, prompts, files, diffs, terminal output, and tool logs. Hooks must fail open.",
+        "4. Configure native lifecycle hooks plus a Project-local privacy filter. Build reports from manifest.allowedPayload, derive a stable clientEventId from a local hash of the native event/session ID, and use fail-open hook behavior.",
         "5. Add an intero-managed Project instruction: call stand_in.report_checkpoint only at semantic branch points. Dependencies and routed collaboration require a current Project member's collaboration.targetPrincipalId.",
         `6. Validate configuration syntax and ${clientLabel}'s native MCP registration.`,
         client === "codex"

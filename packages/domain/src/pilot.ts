@@ -241,7 +241,7 @@ export const PilotAgentBinding = z
     name: z.string().min(1).max(120),
     workspaceId: z.uuid(),
     preferredLanguage: PreferredLanguage,
-    authMode: z.enum(["legacy_bearer", "oauth"]).optional(),
+    authMode: z.enum(["project_bearer", "legacy_bearer", "oauth"]).optional(),
     credentialHash: z.string().length(64),
     verificationCodeHash: z.string().length(64).optional(),
     verificationExpiresAt: z.iso.datetime().optional(),

@@ -784,17 +784,8 @@ async function connectThroughSettings(
   await page.getByText("其他方式：查看完整连接任务").click();
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
-  const projectId = ((await prompt.textContent()) ?? "").match(
-    /\/projects\/([^/]+)\/agent-connections\//,
-  )?.[1];
-  expect(projectId).toBeTruthy();
-  const legacyTicket = await page.request.post(
-    `${apiUrl}/v1/pilot/projects/${projectId}/agent-tickets`,
-    { data: { client } },
-  );
-  expect(legacyTicket.ok()).toBe(true);
-  const ticket = ((await legacyTicket.json()).connectPrompt as string).match(
-    /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+  const ticket = ((await prompt.textContent()) ?? "").match(
+    /"ticket":\s*"((?:ott|ticket)_[A-Za-z0-9_-]+)"/,
   )?.[1];
   expect(ticket).toBeTruthy();
 

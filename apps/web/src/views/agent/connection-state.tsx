@@ -13,7 +13,9 @@ export function summarizeProjectAgentConnections(
   bindings: PilotSafeAgentBinding[],
   identityId?: string,
 ): ProjectAgentConnectionSummary {
-  const active = bindings.filter((binding) => !binding.disconnectedAt);
+  const active = bindings.filter(
+    (binding) => !binding.disconnectedAt && binding.authMode !== "oauth",
+  );
   const connected = active.filter((binding) => Boolean(binding.validatedAt));
   const pending = active.filter((binding) => !binding.validatedAt);
   return {

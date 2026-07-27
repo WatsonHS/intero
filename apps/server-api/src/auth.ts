@@ -1,11 +1,10 @@
 import { passkey } from "@better-auth/passkey";
-import { oauthProvider } from "@better-auth/oauth-provider";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { deviceAuthorization, jwt } from "better-auth/plugins";
+import { deviceAuthorization, jwt, oneTimeToken } from "better-auth/plugins";
 import type { PreferredLanguage, PrincipalId } from "@intero/domain";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Pool } from "pg";
 
 import type { PrincipalSummary } from "./platform-store.js";
@@ -76,30 +75,13 @@ export function createInteroAuth(config: AuthConfig) {
           issuer: `${config.publicUrl.replace(/\/+$/, "")}/api/auth`,
         },
       }),
-      oauthProvider({
-        loginPage: "/",
-        consentPage: "/oauth/consent",
-        validAudiences: [
-          `${config.publicUrl.replace(/\/+$/, "")}/v1/pilot/mcp`,
-        ],
-        silenceWarnings: {
-          oauthAuthServerConfig: true,
-          openidConfig: true,
-        },
-        scopes: ["openid", "offline_access", "intero:mcp"],
-        grantTypes: ["authorization_code", "refresh_token"],
-        allowDynamicClientRegistration: true,
-        allowUnauthenticatedClientRegistration: true,
-        clientRegistrationDefaultScopes: [
-          "openid",
-          "offline_access",
-          "intero:mcp",
-        ],
-        clientRegistrationAllowedScopes: [
-          "openid",
-          "offline_access",
-          "intero:mcp",
-        ],
+      oneTimeToken({
+        expiresIn: 10,
+        disableClientRequest: true,
+        disableSetSessionCookie: true,
+        storeToken: "hashed",
+        generateToken: async () =>
+          `ott_${randomBytes(32).toString("base64url")}`,
       }),
       passkey({
         rpID: config.rpId,
@@ -446,6 +428,12 @@ export function mountAuth(
     );
   }
   const forward = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (request.url.startsWith("/api/auth/one-time-token/")) {
+      return reply.status(404).send({
+        code: "NOT_FOUND",
+        message: "Route not found.",
+      });
+    }
     const headers = toHeaders(request);
     headers.delete("content-length");
     const host = request.headers.host ?? "localhost";
@@ -482,7 +470,6 @@ export function mountAuth(
   };
 
   app.all("/api/auth/*", forward);
-  app.get("/.well-known/oauth-authorization-server/api/auth", forward);
 }
 
 function serializeAuthBody(body: unknown): BodyInit | undefined {

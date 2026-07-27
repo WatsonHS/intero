@@ -1744,9 +1744,6 @@ export abstract class SnapshotPilotStore implements PilotStore {
         if (client.protocolVersion) {
           binding.mcpProtocolVersion = client.protocolVersion;
         }
-        if (binding.authMode === "oauth") {
-          binding.validatedAt ??= now;
-        }
         return binding;
       },
       {

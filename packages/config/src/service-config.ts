@@ -225,14 +225,6 @@ function normalizePublicUrl(value: string): string {
       "INTERO_PUBLIC_URL must be an origin without a path, query, or fragment.",
     );
   }
-  const loopback = ["localhost", "127.0.0.1", "::1"].includes(
-    parsed.hostname,
-  );
-  if (parsed.protocol !== "https:" && !loopback) {
-    throw new Error(
-      "INTERO_PUBLIC_URL must use HTTPS for a non-loopback address.",
-    );
-  }
   return parsed.origin;
 }
 

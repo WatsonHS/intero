@@ -55,4 +55,18 @@ describe("summarizeProjectAgentConnections", () => {
     expect(result.connected).toHaveLength(0);
     expect(result.pending).toHaveLength(0);
   });
+
+  it("does not count retired OAuth bindings as active connections", () => {
+    const result = summarizeProjectAgentConnections([
+      binding({
+        id: "018f0000-0000-7000-8000-000000000013",
+        ownerId: "018f0000-0000-7000-8000-000000000022" as never,
+        authMode: "oauth",
+        validatedAt: "2026-07-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(result.connected).toHaveLength(0);
+    expect(result.pending).toHaveLength(0);
+  });
 });

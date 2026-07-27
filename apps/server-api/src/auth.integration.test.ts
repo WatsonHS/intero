@@ -161,11 +161,27 @@ databaseSuite("Better Auth database integration", () => {
       },
       payload: { email: mountedEmail, redirectTo: "/" },
     });
+    const unavailableOneTimeGenerate = await app.inject({
+      method: "GET",
+      url: "/api/auth/one-time-token/generate",
+      headers: { origin: "http://127.0.0.1:5174" },
+    });
+    const unavailableOneTimeVerify = await app.inject({
+      method: "POST",
+      url: "/api/auth/one-time-token/verify",
+      headers: {
+        origin: "http://127.0.0.1:5174",
+        "content-type": "application/json",
+      },
+      payload: { token: "ott_public-route-is-disabled" },
+    });
     await app.close();
 
     expect(response.statusCode).toBe(403);
     expect(removedLinkLogin.statusCode).toBe(404);
     expect(unavailableRecovery.statusCode).toBe(404);
+    expect(unavailableOneTimeGenerate.statusCode).toBe(404);
+    expect(unavailableOneTimeVerify.statusCode).toBe(404);
     expect(response.headers["access-control-allow-origin"]).toBe(
       "http://127.0.0.1:5174",
     );

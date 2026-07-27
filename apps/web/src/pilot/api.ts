@@ -631,7 +631,11 @@ export function createPilotAgentConnection(
   client: PilotAgentClient,
 ) {
   return request<{
-    connection: PilotSafeAgentBinding;
+    ticket: {
+      id: string;
+      client: PilotAgentClient;
+      expiresAt: string;
+    };
     mcpUrl: string;
     connectPrompt: string;
   }>(`/v1/pilot/projects/${projectId}/agent-connections`, {

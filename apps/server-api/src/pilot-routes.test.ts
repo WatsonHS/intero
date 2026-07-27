@@ -258,7 +258,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
   });
 
-  it("creates a project-scoped OAuth connection without issuing Agent secrets", async () => {
+  it("creates a project-scoped one-time Bearer connection task", async () => {
     const { project } = await readyProject(app);
     await app.inject({
       method: "PATCH",
@@ -275,27 +275,18 @@ describe("pilot cloud-first vertical slice", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json().connection).toMatchObject({
-      projectId: project.id,
-      ownerId: A,
+    expect(response.json().ticket).toMatchObject({
       client: "codex",
-      authMode: "oauth",
     });
-    expect(response.json().connection).not.toHaveProperty("credentialHash");
-    expect(response.json()).not.toHaveProperty("ticket");
-    expect(response.json().mcpUrl).toBe(
-      `http://127.0.0.1:4310/v1/pilot/projects/${project.id}/agent-connections/${response.json().connection.id}/mcp`,
-    );
-    expect(response.json().connectPrompt).toContain("[mcp_servers.intero]");
-    expect(response.json().connectPrompt).toContain("enabled = true");
+    expect(response.json().ticket).not.toHaveProperty("ticketHash");
+    expect(response.json().mcpUrl).toBe("http://127.0.0.1:4310/v1/pilot/mcp");
     expect(response.json().connectPrompt).toContain(
-      "GUI 的 MCP 设置中对 Intero 执行 Authenticate",
+      '"authorization": "Bearer credential returned by setup exchange"',
     );
-    expect(response.json().connectPrompt).not.toContain('auth = "oauth"');
+    expect(response.json().connectPrompt).toContain('"singleUse": true');
+    expect(response.json().connectPrompt).toContain("pending_gui_validation");
     expect(response.json().connectPrompt).not.toContain("required = false");
-    expect(response.json().connectPrompt).not.toMatch(
-      /ticket_|credential|verification|authorization http_headers|SDK|CLI/i,
-    );
+    expect(response.json().connectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
     expect(response.json().connectPrompt).not.toMatch(
       /不要|不得|禁止|never|do not/i,
     );
@@ -311,7 +302,7 @@ describe("pilot cloud-first vertical slice", () => {
         { id: A, displayName: "Alex Rivera", kind: "human" },
         { id: B, displayName: "Morgan Chen", kind: "human" },
       ],
-      authPublicUrl: "https://10.20.30.40:4311",
+      authPublicUrl: "http://10.20.30.40:4311",
       deploymentProbe: async () => true,
       providerEncryptionSecret: "test-provider-secret",
       pilotModelGateway: modelGateway,
@@ -324,10 +315,10 @@ describe("pilot cloud-first vertical slice", () => {
       headers: identity(A),
     });
     expect(bootstrap.json()).toMatchObject({
-      publicUrl: "https://10.20.30.40:4311",
+      publicUrl: "http://10.20.30.40:4311",
       deploymentEndpointManaged: true,
       organization: {
-        deploymentBaseUrl: "https://10.20.30.40:4311",
+        deploymentBaseUrl: "http://10.20.30.40:4311",
       },
     });
 
@@ -342,7 +333,7 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(invitation.statusCode).toBe(201);
     expect(invitation.json().activationUrl).toBe(
-      `https://10.20.30.40:4311${invitation.json().activationPath}`,
+      `http://10.20.30.40:4311${invitation.json().activationPath}`,
     );
 
     const connection = await app.inject({
@@ -352,10 +343,8 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "codex" },
     });
     expect(connection.statusCode).toBe(201);
-    expect(connection.json().mcpUrl).toMatch(
-      new RegExp(
-        `^https://10\\.20\\.30\\.40:4311/v1/pilot/projects/${project.id}/agent-connections/`,
-      ),
+    expect(connection.json().mcpUrl).toBe(
+      "http://10.20.30.40:4311/v1/pilot/mcp",
     );
 
     const conflictingUpdate = await app.inject({
@@ -365,9 +354,7 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { deploymentBaseUrl: "https://other.internal.example" },
     });
     expect(conflictingUpdate.statusCode).toBe(409);
-    expect(conflictingUpdate.json().code).toBe(
-      "DEPLOYMENT_ENDPOINT_MANAGED",
-    );
+    expect(conflictingUpdate.json().code).toBe("DEPLOYMENT_ENDPOINT_MANAGED");
   });
 
   it("requires a selected identity and keeps provider credentials server-only", async () => {
@@ -1171,7 +1158,10 @@ describe("pilot cloud-first vertical slice", () => {
       version: "1.0.0",
     });
     const disconnectedTransport = new StreamableHTTPClientTransport(
-      new URL("/v1/pilot/mcp", baseUrl),
+      new URL(
+        `/v1/pilot/projects/${fixture.project.id}/agent-connections/${connected.json().binding.id}/mcp`,
+        baseUrl,
+      ),
       {
         requestInit: {
           headers: {

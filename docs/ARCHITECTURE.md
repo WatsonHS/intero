@@ -438,30 +438,27 @@ stand_in.check_scope
 stand_in.report_checkpoint
 ```
 
-Codex, Claude Code, and OpenCode connect directly to the authenticated HTTPS MCP
-endpoint inherited from the member's selected team deployment. From a bound
+Codex, Claude Code, and OpenCode connect directly to the authenticated MCP
+endpoint inherited from the member's selected deployment. From a bound
 project page, the user copies a **Connect Agent** prompt tailored to the
-selected Agent and pastes it there. The Agent merges a unique Project connection
-URL into its native MCP configuration. The user then completes OAuth from the
-native GUI, and Intero records the connection only after the authenticated MCP
-`initialize` handshake succeeds.
+selected Agent and pastes it there. The task exchanges a Better Auth one-time
+token for an opaque Project-scoped Bearer credential, merges the credential into
+the Agent's native project configuration, and launches a fresh GUI task for
+native validation.
 
-Better Auth provides the OAuth 2.1 authorization server, authorization code +
-PKCE, dynamic client registration, refresh-token storage, JWT/JWKS verification,
-revocation endpoints, and discovery metadata. Protected-resource metadata
-advertises the stable Intero MCP audience. Each endpoint URL additionally
-contains a Project ID and non-secret connection ID; every request verifies the
-OAuth subject-to-principal mapping, connection ownership, active binding, and
-current Project membership. The UI presents pending OAuth and verified native
-MCP states and supports disconnect/reconnect. Disconnecting a binding makes its
-Project tools unavailable immediately, while the URL continues to initialize as
-an unprivileged MCP exposing only `intero.connection_status`. This keeps a
-disconnected optional integration from blocking unrelated coding work. Existing
-bearer bindings remain readable during migration but are not issued by the
-current UI.
+Better Auth owns the signed-in identity and one-time token lifecycle: hashed
+storage, ten-minute expiry, and single consumption. Intero owns the
+product-specific binding between member, Project, Agent client, and local
+workspace. It persists only the credential hash and checks active membership on
+every Project operation. The UI presents ticket-issued, native-MCP-loaded, and
+validated states. A binding is connected only after MCP `initialize` and
+`intero.validate_connection` both succeed. Disconnecting makes its Project tools
+unavailable immediately while the stable MCP endpoint continues to initialize
+as an unprivileged server exposing only `intero.connection_status`. This keeps a
+disconnected optional integration from blocking unrelated coding work.
 
 The optional Desktop App may perform one-click MCP configuration for the same
-three clients using the same connection task and OAuth endpoint. This is an
+three clients using the same single-use connection task. This is an
 acceleration path only: Web prompts remain universal for the supported clients,
 and no Desktop process or daemon joins the runtime path.
 

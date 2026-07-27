@@ -105,39 +105,28 @@ describe("service environment schemas", () => {
 
   it("does not add local development origins to a public deployment", () => {
     const config = loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-      });
-    expect(config.auth?.trustedOrigins).toEqual([
-      "https://intero.example.com",
-    ]);
+      ...postgresEnvironment,
+      INTERO_AUTH_SECRET:
+        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      INTERO_PUBLIC_URL: "https://intero.example.com",
+    });
+    expect(config.auth?.trustedOrigins).toEqual(["https://intero.example.com"]);
     expect(config.auth?.passkeyRpId).toBe("intero.example.com");
   });
 
-  it("requires HTTPS for a LAN address and keeps it as the canonical OAuth origin", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "http://10.20.30.40:4311",
-      }),
-    ).toThrow("must use HTTPS for a non-loopback address");
-
+  it("allows a LAN HTTP address as the canonical pilot origin", () => {
     expect(
       loadApiServiceConfig({
         ...postgresEnvironment,
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "https://10.20.30.40:4311/",
+        INTERO_PUBLIC_URL: "http://10.20.30.40:4311/",
       }),
     ).toMatchObject({
       auth: {
-        publicUrl: "https://10.20.30.40:4311",
+        publicUrl: "http://10.20.30.40:4311",
         passkeyRpId: "10.20.30.40",
-        trustedOrigins: ["https://10.20.30.40:4311"],
+        trustedOrigins: ["http://10.20.30.40:4311"],
       },
     });
   });
@@ -185,7 +174,7 @@ describe("service environment schemas", () => {
         INTERO_SEED_DEMO: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "https://intero.internal.example",
+        INTERO_PUBLIC_URL: "http://intero.internal.example:4311",
       }),
     ).toMatchObject({
       runtimeMode: "product",

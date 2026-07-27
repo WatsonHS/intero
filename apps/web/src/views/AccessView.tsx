@@ -24,6 +24,8 @@ import {
 import { usePilot } from "../pilot/context.js";
 
 export function SignInView() {
+  const passkeysAvailable =
+    typeof window === "undefined" || window.isSecureContext;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -45,7 +47,8 @@ export function SignInView() {
   return (
     <AccessShell eyebrow="INTERO · 登录" title="回到你的团队">
       <p className="text-[13px] leading-[1.75] text-ink-muted">
-        使用已激活账号的邮箱和密码登录，也可以使用 Passkey。Intero
+        使用已激活账号的邮箱和密码登录
+        {passkeysAvailable ? "，也可以使用 Passkey" : ""}。Intero
         不开放公开注册。
       </p>
       <form
@@ -96,21 +99,25 @@ export function SignInView() {
           {passwordSignIn.isPending ? "正在登录…" : "使用邮箱和密码登录"}
         </button>
       </form>
-      <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
-        <span className="h-px flex-1 bg-line" />
-        或使用 Passkey
-        <span className="h-px flex-1 bg-line" />
-      </div>
-      <button
-        type="button"
-        data-testid="sign-in-passkey"
-        disabled={passkeySignIn.isPending}
-        onClick={() => passkeySignIn.mutate()}
-        className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
-      >
-        <FingerprintIcon size={17} />
-        {passkeySignIn.isPending ? "正在验证…" : "使用 Passkey 登录"}
-      </button>
+      {passkeysAvailable ? (
+        <>
+          <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+            <span className="h-px flex-1 bg-line" />
+            或使用 Passkey
+            <span className="h-px flex-1 bg-line" />
+          </div>
+          <button
+            type="button"
+            data-testid="sign-in-passkey"
+            disabled={passkeySignIn.isPending}
+            onClick={() => passkeySignIn.mutate()}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+          >
+            <FingerprintIcon size={17} />
+            {passkeySignIn.isPending ? "正在验证…" : "使用 Passkey 登录"}
+          </button>
+        </>
+      ) : null}
       <p className="mt-4 text-[10.5px] leading-[1.65] text-faint">
         当前不提供自助密码找回。管理员可以通过受控的人工恢复流程协助，系统不会发送虚假的找回邮件。
       </p>
@@ -217,6 +224,8 @@ export function AcceptInvitationView({
   token: string;
   onEnterPulse: (projectId?: string) => void;
 }) {
+  const passkeysAvailable =
+    typeof window === "undefined" || window.isSecureContext;
   const queryClient = useQueryClient();
   const pilot = usePilot();
   const [password, setPassword] = useState("");
@@ -345,8 +354,11 @@ export function AcceptInvitationView({
       ) : !signedIn && detail.activationRequired ? (
         <>
           <p className="mt-5 text-[12px] leading-[1.7] text-ink-muted">
-            这个一次性激活链接只用于建立首个登录凭据。推荐创建
-            Passkey，也可以先设置密码。激活完成后，链接不能用于再次登录。
+            这个一次性激活链接用于建立首个登录凭据。
+            {passkeysAvailable
+              ? "可以创建 Passkey，也可以先设置密码。"
+              : "当前为内网 HTTP 试用地址，请先设置密码。"}
+            激活完成后，链接不能用于再次登录。
           </p>
           {activate.isError ? (
             <Notice tone="danger">
@@ -374,12 +386,14 @@ export function AcceptInvitationView({
               onChange={setPassword}
               onToggle={() => setPasswordVisible((current) => !current)}
             />
-            <Checkbox
-              className="mt-3"
-              checked={alsoAddPasskey}
-              onChange={setAlsoAddPasskey}
-              label="激活后同时添加 Passkey"
-            />
+            {passkeysAvailable ? (
+              <Checkbox
+                className="mt-3"
+                checked={alsoAddPasskey}
+                onChange={setAlsoAddPasskey}
+                label="激活后同时添加 Passkey"
+              />
+            ) : null}
             <button
               type="submit"
               data-testid="activation-password-submit"
@@ -390,26 +404,31 @@ export function AcceptInvitationView({
               设置密码并激活
             </button>
           </form>
-          <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
-            <span className="h-px flex-1 bg-line" />
-            或使用 Passkey
-            <span className="h-px flex-1 bg-line" />
-          </div>
-          <button
-            type="button"
-            data-testid="activation-passkey"
-            disabled={activate.isPending}
-            onClick={() => activate.mutate({ credential: "passkey" })}
-            className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
-          >
-            <FingerprintIcon size={16} />
-            {activate.isPending ? "正在激活…" : "使用 Passkey 激活"}
-          </button>
+          {passkeysAvailable ? (
+            <>
+              <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+                <span className="h-px flex-1 bg-line" />
+                或使用 Passkey
+                <span className="h-px flex-1 bg-line" />
+              </div>
+              <button
+                type="button"
+                data-testid="activation-passkey"
+                disabled={activate.isPending}
+                onClick={() => activate.mutate({ credential: "passkey" })}
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+              >
+                <FingerprintIcon size={16} />
+                {activate.isPending ? "正在激活…" : "使用 Passkey 激活"}
+              </button>
+            </>
+          ) : null}
         </>
       ) : !signedIn ? (
         <>
           <p className="mt-5 text-[12px] leading-[1.7] text-ink-muted">
-            这个账号已经激活。请用 Passkey 或已有密码登录，再确认加入团队。
+            这个账号已经激活。请用已有密码
+            {passkeysAvailable ? "或 Passkey" : ""}登录，再确认加入团队。
           </p>
           {signInExisting.isError ? (
             <Notice tone="danger">
@@ -442,20 +461,24 @@ export function AcceptInvitationView({
               使用密码登录
             </button>
           </form>
-          <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
-            <span className="h-px flex-1 bg-line" />
-            或使用 Passkey
-            <span className="h-px flex-1 bg-line" />
-          </div>
-          <button
-            type="button"
-            disabled={signInExisting.isPending}
-            onClick={() => signInExisting.mutate({ mode: "passkey" })}
-            className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
-          >
-            <FingerprintIcon size={16} />
-            使用 Passkey 登录
-          </button>
+          {passkeysAvailable ? (
+            <>
+              <div className="my-5 flex items-center gap-3 text-[10px] text-faint">
+                <span className="h-px flex-1 bg-line" />
+                或使用 Passkey
+                <span className="h-px flex-1 bg-line" />
+              </div>
+              <button
+                type="button"
+                disabled={signInExisting.isPending}
+                onClick={() => signInExisting.mutate({ mode: "passkey" })}
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+              >
+                <FingerprintIcon size={16} />
+                使用 Passkey 登录
+              </button>
+            </>
+          ) : null}
         </>
       ) : !emailMatches ? (
         <>

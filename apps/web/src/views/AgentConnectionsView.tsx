@@ -111,7 +111,7 @@ export function AgentConnectionsView({
     }),
     onSuccess: async ({ client, result }) => {
       setIssued({
-        bindingId: result.connection.id,
+        bindingId: result.ticket.id,
         client,
         prompt: result.connectPrompt,
         mcpUrl: result.mcpUrl,
@@ -140,7 +140,13 @@ export function AgentConnectionsView({
     );
   }, [issued, overview.data?.bindings]);
 
-  const progress = issuedBinding?.validatedAt ? 3 : issued ? 1 : 0;
+  const progress = issuedBinding?.validatedAt
+    ? 3
+    : issuedBinding?.mcpInitializedAt
+      ? 2
+      : issued
+        ? 1
+        : 0;
 
   async function launchCodex(prompt: string) {
     setLaunchError(undefined);
@@ -270,9 +276,9 @@ export function AgentConnectionsView({
                   ].join(" ")}
                 >
                   {summary.connected.length > 0
-                    ? `${summary.connected.length} 个 OAuth 已验证连接`
+                    ? `${summary.connected.length} 个已验证连接`
                     : summary.pending.length > 0
-                      ? `${summary.pending.length} 个连接等待 OAuth`
+                      ? `${summary.pending.length} 个连接正在配置`
                       : "尚未连接"}
                 </span>
               </div>
@@ -310,11 +316,13 @@ export function AgentConnectionsView({
                           </strong>
                           <small className="mt-1 text-[10.5px] text-ink-muted">
                             {binding.client} ·{" "}
-                            {binding.validatedAt
-                              ? "OAuth 与原生 MCP 已验证"
-                              : binding.mcpInitializedAt
-                                ? "MCP 已加载"
-                                : "等待 GUI OAuth 授权"}
+                            {binding.authMode === "oauth"
+                              ? "旧 OAuth 连接已停用，请重新连接"
+                              : binding.validatedAt
+                                ? "Bearer credential 与原生 MCP 已验证"
+                                : binding.mcpInitializedAt
+                                  ? "MCP 已加载"
+                                  : "等待连接任务写入配置"}
                             {binding.lastSeenAt
                               ? ` · 最后活跃 ${new Date(
                                   binding.lastSeenAt,
@@ -402,18 +410,18 @@ export function AgentConnectionsView({
                 </strong>
                 <p className="mt-1.5 text-[11px] leading-[1.65] text-ink-muted">
                   Codex 打开后会把当前本地仓库配置到 {project?.name}
-                  。保存配置后，在 Codex GUI 的 MCP 设置中对 Intero 点击
-                  Authenticate；浏览器授权成功并收到原生 initialize
-                  后，这里会自动显示已连接。
+                  。连接任务会兑换一次性 ticket，把 Project-scoped credential
+                  写入本地原生配置；新的 GUI 任务完成 MCP initialize
+                  和验证工具调用后，这里会自动显示已连接。
                 </p>
               </span>
             </div>
 
             <div className="mt-4 grid grid-cols-3 gap-2">
               {[
-                "连接任务已创建",
-                "等待 GUI OAuth 授权",
-                "OAuth + MCP initialize 已验证",
+                "单次连接 ticket 已创建",
+                "等待原生 MCP 加载",
+                "MCP + Project credential 已验证",
               ].map((label, index) => (
                 <span
                   key={label}

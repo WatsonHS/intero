@@ -35,7 +35,6 @@ import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
 import { CoordinationView } from "./views/CoordinationView.js";
 import { PersonView } from "./views/PersonView.js";
-import { OAuthConsentView } from "./views/OAuthConsentView.js";
 import { ProjectView } from "./views/ProjectView.js";
 import { SettingsView, type SettingsCategory } from "./views/SettingsView.js";
 import { ProfileMenu } from "./views/ProfileMenu.js";
@@ -113,12 +112,6 @@ function navButtonClass(open: boolean, active: boolean): string {
 }
 
 export function App() {
-  if (
-    typeof window !== "undefined" &&
-    window.location.pathname === "/oauth/consent"
-  ) {
-    return <OAuthConsentView />;
-  }
   return <InteroApp />;
 }
 

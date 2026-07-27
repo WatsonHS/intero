@@ -102,17 +102,8 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     const prompt = admin.getByTestId("agent-connect-prompt");
     await expect(prompt).toBeVisible();
     const promptText = (await prompt.textContent()) ?? "";
-    const connectionProjectId = promptText.match(
-      /\/projects\/([^/]+)\/agent-connections\//,
-    )?.[1];
-    expect(connectionProjectId).toBeTruthy();
-    const legacyTicket = await admin.request.post(
-      `${apiUrl}/v1/pilot/projects/${connectionProjectId}/agent-tickets`,
-      { data: { client: connectClient } },
-    );
-    expect(legacyTicket.ok()).toBe(true);
-    const ticket = ((await legacyTicket.json()).connectPrompt as string).match(
-      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+    const ticket = promptText.match(
+      /"ticket":\s*"((?:ott|ticket)_[A-Za-z0-9_-]+)"/,
     )?.[1];
     expect(ticket).toBeTruthy();
 

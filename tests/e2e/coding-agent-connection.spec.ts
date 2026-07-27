@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createHash, randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://127.0.0.1:4310";
 const password = process.env.INTERO_E2E_PASSWORD ?? "Intero-demo-2026!";
@@ -33,30 +33,32 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
   const promptText = (await prompt.textContent()) ?? "";
-  expect(promptText).toContain("[mcp_servers.intero]");
+  expect(promptText).toContain('"transport": "streamable-http"');
   expect(promptText).toContain(".codex/config.toml");
   expect(promptText).toContain("AGENTS.md");
-  expect(promptText).toContain("enabled = true");
-  expect(promptText).toContain("configured_waiting_for_oauth");
-  expect(promptText).not.toContain('auth = "oauth"');
+  expect(promptText).toContain(
+    '"authorization": "Bearer credential returned by setup exchange"',
+  );
+  expect(promptText).toContain("pending_gui_validation");
   expect(promptText).not.toContain("required = false");
-  expect(promptText).not.toMatch(/ticket_|credential|verification|SDK|CLI/i);
+  expect(promptText).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
+  expect(promptText).not.toMatch(/不要|不得|禁止|never|do not/i);
   await expect(
     page.locator(
       '[data-testid^="pilot-agent-disconnect-"][data-client="codex"]',
     ),
-  ).toHaveCount(1);
-  await expect(page.getByText("等待 GUI OAuth 授权")).toBeVisible();
+  ).toHaveCount(0);
+  await expect(page.getByText("等待原生 MCP 加载")).toBeVisible();
 
-  const connection = await authorizeConnection(page, promptText);
+  const connection = await exchangeConnection(page, promptText);
   await initializeMcp(page, connection);
 
   const disconnectButton = page.getByTestId(
     `pilot-agent-disconnect-${connection.bindingId}`,
   );
   const status = disconnectButton.locator("xpath=..");
-  await expect(status).toContainText("Codex repository");
-  await expect(status).toContainText("OAuth 与原生 MCP 已验证");
+  await expect(status).toContainText("Codex E2E repository");
+  await expect(status).toContainText("Bearer credential 与原生 MCP 已验证");
   await expect(page.getByTestId("agent-connection-success")).toBeVisible();
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
     "连接另一个 Codex 仓库",
@@ -141,119 +143,43 @@ async function createCleanProject(page: Page) {
 interface TestAgentConnection {
   bindingId: string;
   accessToken: string;
+  verificationCode: string;
   mcpUrl: string;
 }
 
-async function authorizeConnection(
+async function exchangeConnection(
   page: Page,
   prompt: string,
 ): Promise<TestAgentConnection> {
-  const mcpUrl = prompt.match(/url = "([^"]+)"/)?.[1];
-  expect(mcpUrl).toBeTruthy();
-  const bindingId = new URL(mcpUrl!).pathname.match(
-    /agent-connections\/([^/]+)\/mcp$/,
+  const ticket = prompt.match(
+    /"ticket":\s*"((?:ott|ticket)_[A-Za-z0-9_-]+)"/,
   )?.[1];
-  expect(bindingId).toBeTruthy();
-
-  const challenge = await page.request.post(mcpUrl!, {
-    headers: {
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
+  const exchangeUrl = prompt.match(/"exchangeUrl":\s*"([^"]+)"/)?.[1];
+  const mcpUrl = prompt.match(
+    /"url":\s*"(https?:\/\/[^"]+\/v1\/pilot\/mcp)"/,
+  )?.[1];
+  expect(ticket).toBeTruthy();
+  expect(exchangeUrl).toBeTruthy();
+  expect(mcpUrl).toBeTruthy();
+  const exchanged = await page.request.post(exchangeUrl!, {
+    data: {
+      ticket,
+      client: "codex",
+      name: "Codex E2E repository",
+      workspaceId: randomUUID(),
     },
-    data: initializePayload("oauth-challenge"),
   });
-  expect(challenge.status()).toBe(401);
-  const resourceMetadataUrl = challenge
-    .headers()
-    ["www-authenticate"]?.match(/resource_metadata="([^"]+)"/)?.[1];
-  expect(resourceMetadataUrl).toBeTruthy();
-  const metadata = await page.request.get(resourceMetadataUrl!);
-  expect(metadata.ok()).toBe(true);
-  const resource = (await metadata.json()) as {
-    resource: string;
-    authorization_servers: string[];
+  const exchangedText = await exchanged.text();
+  expect(exchanged.ok(), exchangedText).toBe(true);
+  const result = JSON.parse(exchangedText) as {
+    credential: string;
+    verification: { code: string };
+    binding: { id: string };
   };
-
-  const registration = await page.request.post(
-    `${resource.authorization_servers[0]}/oauth2/register`,
-    {
-      data: {
-        client_name: "Codex E2E",
-        redirect_uris: ["http://127.0.0.1:1455/callback"],
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-        type: "native",
-        scope: "openid offline_access intero:mcp",
-      },
-    },
-  );
-  expect(registration.ok()).toBe(true);
-  const client = (await registration.json()) as {
-    client_id: string;
-  };
-
-  const verifier = randomBytes(48).toString("base64url");
-  const codeChallenge = createHash("sha256")
-    .update(verifier)
-    .digest("base64url");
-  const authorizeUrl = new URL(
-    `${resource.authorization_servers[0]}/oauth2/authorize`,
-  );
-  authorizeUrl.search = new URLSearchParams({
-    response_type: "code",
-    client_id: client.client_id,
-    redirect_uri: "http://127.0.0.1:1455/callback",
-    scope: "openid offline_access intero:mcp",
-    state: "codex-e2e",
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
-    prompt: "consent",
-  }).toString();
-  const authorize = await page.request.get(authorizeUrl.toString(), {
-    maxRedirects: 0,
-    headers: { accept: "application/json" },
-  });
-  const authorizeBody = (await authorize.json()) as { url: string };
-  const consentUrl = new URL(authorizeBody.url, apiUrl);
-  const consent = await page.request.post(
-    `${resource.authorization_servers[0]}/oauth2/consent`,
-    {
-      data: {
-        accept: true,
-        oauth_query: consentUrl.search.slice(1),
-      },
-      headers: { origin: apiUrl, accept: "application/json" },
-    },
-  );
-  expect(consent.ok()).toBe(true);
-  const consentBody = (await consent.json()) as {
-    url?: string;
-    redirect_uri?: string;
-  };
-  const callback = new URL(consentBody.url ?? consentBody.redirect_uri!);
-  const code = callback.searchParams.get("code");
-  expect(code).toBeTruthy();
-
-  const token = await page.request.post(
-    `${resource.authorization_servers[0]}/oauth2/token`,
-    {
-      form: {
-        grant_type: "authorization_code",
-        client_id: client.client_id,
-        code: code!,
-        code_verifier: verifier,
-        redirect_uri: "http://127.0.0.1:1455/callback",
-        resource: resource.resource,
-      },
-    },
-  );
-  const tokenText = await token.text();
-  expect(token.ok(), tokenText).toBe(true);
-  const tokenBody = JSON.parse(tokenText) as { access_token: string };
   return {
-    bindingId: bindingId!,
-    accessToken: tokenBody.access_token,
+    bindingId: result.binding.id,
+    accessToken: result.credential,
+    verificationCode: result.verification.code,
     mcpUrl: mcpUrl!,
   };
 }
@@ -268,6 +194,21 @@ async function initializeMcp(
   });
   const responseText = await response.text();
   expect(response.ok(), responseText).toBe(true);
+  const validation = await page.request.post(connection.mcpUrl, {
+    headers: mcpHeaders(connection.accessToken),
+    data: {
+      jsonrpc: "2.0",
+      id: "validate-e2e",
+      method: "tools/call",
+      params: {
+        name: "intero.validate_connection",
+        arguments: { verificationCode: connection.verificationCode },
+      },
+    },
+  });
+  const validationText = await validation.text();
+  expect(validation.ok(), validationText).toBe(true);
+  expect(validationText).toContain('"status":"connected"');
 }
 
 function mcpHeaders(accessToken: string): Record<string, string> {

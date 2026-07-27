@@ -20,22 +20,22 @@ reachable through `localhost` and `127.0.0.1`. Run `pnpm dev:proxy` once to add
 the same-origin Caddy entry point configured by `INTERO_PUBLIC_URL`.
 
 For a copied invitation or MCP URL, configure one canonical external origin.
-OAuth requires HTTPS whenever the host is not loopback:
+A LAN pilot can use the host's private IP or mDNS name over HTTP:
 
 ```bash
-export INTERO_PUBLIC_URL='https://intero.internal.example:4311'
+export INTERO_PUBLIC_URL='http://intero-host.local:4311'
 export INTERO_CADDY_PORT='4311'
 export INTERO_CADDY_LISTEN_PORT='4311'
 pnpm dev:proxy
 ```
 
-Caddy issues an internal certificate for the private hostname. Prefer a LAN
-DNS or mDNS name over a raw IP so TLS clients can consistently select the
-correct certificate. Every machine running a browser or coding-agent GUI must
-trust that Caddy root CA. When a publicly resolvable domain becomes available,
-replace
-`INTERO_PUBLIC_URL` with that HTTPS domain and let Caddy obtain its normal
-public certificate; no invitation, OAuth, or MCP code changes are required.
+This avoids client-side certificate installation for an internal trial.
+Invitation links, setup-ticket exchange, MCP, and Hooks all use this origin.
+The Access UI offers password activation and login because browsers do not
+expose Passkeys on a non-loopback HTTP origin. Keep this mode on a trusted LAN
+with disposable pilot data. When a publicly resolvable domain becomes
+available, replace `INTERO_PUBLIC_URL` with that HTTPS domain and restart the
+deployment.
 
 For a persistent PostgreSQL pilot, migrate with an administrator connection,
 then run the API with the RLS-constrained application connection and a
@@ -204,9 +204,9 @@ Better Auth secret, a delivery webhook, and the exact renderer origin:
 
 ```bash
 export INTERO_AUTH_SECRET='replace-with-at-least-32-random-characters'
-export INTERO_PUBLIC_URL='https://intero.internal.example:4311'
+export INTERO_PUBLIC_URL='http://intero-host.local:4311'
 export INTERO_MAGIC_LINK_WEBHOOK='https://operator.example/magic-link'
-export INTERO_AUTH_TRUSTED_ORIGINS='https://intero.internal.example:4311'
+export INTERO_AUTH_TRUSTED_ORIGINS='http://intero-host.local:4311'
 pnpm dev:pilot
 ```
 
@@ -268,14 +268,13 @@ two-way conversation, plus a reload/reopen assertion in the browser E2E.
 1. The actively working coding session uses its real Intero MCP connection to
    submit one real structured result/checkpoint from the work being performed.
    From the Project connection center, create the Codex connection task, merge
-   the generated `.codex/config.toml` entry, select **Authenticate** for Intero
-   in the Codex GUI, and approve the browser consent screen. The connection
-   center must remain pending until Intero receives the OAuth-authenticated
-   native MCP `initialize`, then change to **OAuth 与原生 MCP 已验证**.
+   the generated `.codex/config.toml` entry, and open the fresh Codex GUI
+   validation task. The connection center remains pending until Intero receives
+   the Bearer-authenticated native MCP `initialize` and
+   `intero.validate_connection`, then changes to **Bearer credential 与原生
+   MCP 已验证**.
 
-   The legacy stdio bridge remains available only for compatibility regression.
-   For current acceptance, use the native OAuth connection and submit the actual
-   ongoing-work result through `stand_in.report_checkpoint`:
+   Submit the actual ongoing-work result through `stand_in.report_checkpoint`:
 
    ```json
    {

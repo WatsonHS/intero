@@ -337,37 +337,33 @@ Team Pulse, Project, Spec Review, and Settings all route to one Project-scoped
 Coding Agent connection center. It requires an explicit Project selection and
 provides a Codex App deep link as the primary path, with a copy-ready
 configuration task for Codex, Claude Code, or OpenCode as fallback. The Agent
-adds a unique Project connection URL to its native MCP configuration, uses the
-canonical `INTERO_PUBLIC_URL`, then completes OAuth in the native client's GUI.
-The same origin is used for invitation links, team join links, OAuth discovery,
-and MCP protected-resource URLs. Users do not generate, copy, or manage personal
-API keys.
+uses a single-use setup ticket to obtain a Project-scoped Bearer credential,
+stores that credential in its native project configuration, and connects to the
+canonical `INTERO_PUBLIC_URL`. The same origin is used for invitations, team
+join links, setup-ticket exchange, MCP, and Hooks.
 
-Intero uses Better Auth's OAuth 2.1 Provider with authorization code + PKCE,
-dynamic client registration, refresh tokens, JWT/JWKS verification, and
-standards-based authorization/protected-resource discovery. The connection
-center creates a non-secret pending binding whose URL contains both the selected
-Project and a unique connection ID. Intero marks it connected only after the
-OAuth subject maps to the same Intero member, current Project membership passes,
-the token audience and `intero:mcp` scope verify, and the native MCP
-`initialize` request succeeds. Codex registrations use its standard `url` and
-`enabled` fields; OAuth starts from the MCP protected-resource challenge.
-Disconnecting removes every Project tool from that connection immediately while
-leaving an unprivileged `intero.connection_status` MCP surface available, so a
-configured repository can continue starting coding tasks. Existing bearer
-bindings remain accepted temporarily for migration and use the same disconnected
-surface after revocation.
+Better Auth issues the signed-in member's one-time setup token, stores only its
+hash, expires it after ten minutes, and consumes it once. Intero binds the
+resulting opaque credential to one member, one Project, one Agent client, and
+one local workspace; only its hash is persisted. The connection becomes active
+after the native MCP `initialize` request and
+`intero.validate_connection` tool call both succeed. Disconnecting revokes all
+Project tools immediately while leaving an unprivileged
+`intero.connection_status` MCP surface available, so a configured repository
+can continue starting coding tasks.
 
-Product runtime requires `INTERO_PUBLIC_URL`. A non-loopback address must use
-HTTPS; for an internal deployment this can be a LAN DNS/mDNS name with a trusted
-internal certificate. Moving to a real domain only requires changing
-`INTERO_PUBLIC_URL` and the reverse-proxy listener/certificate, then restarting
-the deployment. Organization settings display this effective origin but cannot
-override it independently of the OAuth issuer.
+Product runtime requires one canonical `INTERO_PUBLIC_URL`. A LAN pilot may use
+an HTTP private IP or mDNS hostname so teammates can open invitations and MCP
+connections without installing a private CA. Browsers do not expose Passkeys on
+that insecure origin, so invitation activation and login use passwords. This
+mode is intended for a trusted network and disposable pilot data. A public or
+sensitive deployment should use a real HTTPS domain.
+Organization settings display this effective origin but cannot override it
+independently of the authentication service.
 
 As an optional acceleration, the Desktop App can configure MCP in one click for
 the same three supported clients. It opens the selected repository in the
-native client with the same non-secret OAuth configuration task and shows
+native client with the same single-use connection task and shows
 pending, connected, and disconnected status. Web prompts remain the complete
 Desktop-independent path; Desktop adds no required daemon or runtime dependency.
 

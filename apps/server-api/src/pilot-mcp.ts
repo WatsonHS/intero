@@ -13,12 +13,9 @@ import {
 } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { verifyJwsAccessToken } from "better-auth/oauth2";
 import { createHash, randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import { z } from "zod";
 
-import { findPrincipalForAuthUser, type InteroAuth } from "./auth.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
@@ -26,9 +23,6 @@ import { PilotStoreError } from "./pilot-store.js";
 export interface PilotMcpRoutesOptions {
   store: PilotStore;
   checkpointService: PilotCheckpointService;
-  auth?: InteroAuth;
-  authDatabase?: Pool;
-  authPublicUrl?: string;
 }
 
 const lifecycleInput = z
@@ -63,120 +57,12 @@ export async function registerPilotMcpRoutes(
   app: FastifyInstance,
   options: PilotMcpRoutesOptions,
 ): Promise<void> {
-  app.get<{
-    Params: { projectId: string; bindingId: string };
-  }>(
-    "/.well-known/oauth-protected-resource/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
-    async (request, reply) => {
-      const endpoint = oauthMcpEndpointUrl(
-        options.authPublicUrl,
-        request.params.projectId,
-        request.params.bindingId,
-      );
-      const resource = oauthMcpAudience(options.authPublicUrl);
-      if (!endpoint || !resource) {
-        return reply.status(404).send({
-          code: "OAUTH_NOT_CONFIGURED",
-          message: "OAuth is not configured for this Intero deployment.",
-        });
-      }
-      return reply
-        .header(
-          "cache-control",
-          "public, max-age=15, stale-while-revalidate=15",
-        )
-        .send({
-          resource,
-          resource_name: "Intero Project coding-agent connection",
-          authorization_servers: [
-            `${options.authPublicUrl!.replace(/\/+$/, "")}/api/auth`,
-          ],
-          scopes_supported: ["intero:mcp"],
-          bearer_methods_supported: ["header"],
-        });
-    },
-  );
-
   app.post<{
     Params: { projectId: string; bindingId: string };
   }>(
     "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
-    async (request, reply) => {
-      const activeBinding = await options.store.findAgentBindingById(
-        request.params.bindingId,
-      );
-      if (!activeBinding) {
-        return handleMcpRequest(request, reply, undefined, options);
-      }
-      const binding = await authenticateOAuthBinding(
-        request,
-        reply,
-        options,
-        activeBinding,
-      );
-      if (!binding) return;
-      return handleMcpRequest(request, reply, binding, options);
-    },
-  );
-
-  app.get<{
-    Params: { projectId: string; bindingId: string };
-  }>(
-    "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
-    async (request, reply) => {
-      const activeBinding = await options.store.findAgentBindingById(
-        request.params.bindingId,
-      );
-      if (!activeBinding) {
-        return reply.status(405).send({
-          jsonrpc: "2.0",
-          error: { code: -32000, message: "Method not allowed." },
-          id: null,
-        });
-      }
-      const binding = await authenticateOAuthBinding(
-        request,
-        reply,
-        options,
-        activeBinding,
-      );
-      if (!binding) return;
-      return reply.status(405).send({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method not allowed." },
-        id: null,
-      });
-    },
-  );
-
-  app.delete<{
-    Params: { projectId: string; bindingId: string };
-  }>(
-    "/v1/pilot/projects/:projectId/agent-connections/:bindingId/mcp",
-    async (request, reply) => {
-      const activeBinding = await options.store.findAgentBindingById(
-        request.params.bindingId,
-      );
-      if (!activeBinding) {
-        return reply.status(405).send({
-          jsonrpc: "2.0",
-          error: { code: -32000, message: "Method not allowed." },
-          id: null,
-        });
-      }
-      const binding = await authenticateOAuthBinding(
-        request,
-        reply,
-        options,
-        activeBinding,
-      );
-      if (!binding) return;
-      return reply.status(405).send({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Method not allowed." },
-        id: null,
-      });
-    },
+    async (request, reply) =>
+      handleMcpRequest(request, reply, undefined, options),
   );
 
   app.post("/v1/pilot/mcp", async (request, reply) => {
@@ -267,110 +153,6 @@ async function handleMcpRequest(
   }
 }
 
-async function authenticateOAuthBinding(
-  request: FastifyRequest<{
-    Params: { projectId: string; bindingId: string };
-  }>,
-  reply: FastifyReply,
-  options: PilotMcpRoutesOptions,
-  binding: PilotAgentBinding,
-): Promise<PilotAgentBinding | undefined> {
-  const resource = oauthMcpResourceUrl(options.authPublicUrl);
-  const endpoint = oauthMcpEndpointUrl(
-    options.authPublicUrl,
-    request.params.projectId,
-    request.params.bindingId,
-  );
-  const metadataUrl = endpoint
-    ? protectedResourceMetadataUrl(endpoint)
-    : undefined;
-  const unauthorized = () => {
-    if (metadataUrl) {
-      reply.header(
-        "www-authenticate",
-        `Bearer resource_metadata="${metadataUrl}", scope="intero:mcp"`,
-      );
-    }
-    reply.status(401).send({
-      code: "AGENT_AUTHENTICATION_REQUIRED",
-      message: "Authenticate this Intero connection with OAuth.",
-    });
-    return undefined;
-  };
-  if (
-    !resource ||
-    !options.auth ||
-    !options.authDatabase ||
-    !options.authPublicUrl
-  ) {
-    return unauthorized();
-  }
-  const authorization = request.headers.authorization;
-  const token = authorization?.startsWith("Bearer ")
-    ? authorization.slice("Bearer ".length).trim()
-    : undefined;
-  let subject: string | undefined;
-  try {
-    if (!token) return unauthorized();
-    const jwt = await verifyJwsAccessToken(token, {
-      jwksFetch: () => options.auth!.api.getJwks(),
-      jwksCacheKey: options.auth,
-      verifyOptions: {
-        audience: resource,
-        issuer: `${options.authPublicUrl.replace(/\/+$/, "")}/api/auth`,
-      },
-    });
-    const scopes = typeof jwt.scope === "string" ? jwt.scope.split(/\s+/) : [];
-    if (!scopes.includes("intero:mcp")) return unauthorized();
-    subject = jwt.sub;
-  } catch {
-    return unauthorized();
-  }
-  if (!subject) return unauthorized();
-  const principalId = await findPrincipalForAuthUser(
-    options.authDatabase,
-    subject,
-  );
-  if (
-    !principalId ||
-    binding.authMode !== "oauth" ||
-    binding.projectId !== request.params.projectId ||
-    binding.ownerId !== principalId
-  ) {
-    return unauthorized();
-  }
-  const project = (await options.store.listProjects(principalId)).find(
-    (candidate) => candidate.id === binding.projectId,
-  );
-  if (!project) return unauthorized();
-  return binding;
-}
-
-function oauthMcpEndpointUrl(
-  publicUrl: string | undefined,
-  projectId: string,
-  bindingId: string,
-): string | undefined {
-  if (!publicUrl) return undefined;
-  return `${publicUrl.replace(/\/+$/, "")}/v1/pilot/projects/${projectId}/agent-connections/${bindingId}/mcp`;
-}
-
-function oauthMcpResourceUrl(
-  publicUrl: string | undefined,
-): string | undefined {
-  return oauthMcpAudience(publicUrl);
-}
-
-function oauthMcpAudience(publicUrl: string | undefined): string | undefined {
-  if (!publicUrl) return undefined;
-  return `${publicUrl.replace(/\/+$/, "")}/v1/pilot/mcp`;
-}
-
-function protectedResourceMetadataUrl(resource: string): string {
-  const url = new URL(resource);
-  return `${url.origin}/.well-known/oauth-protected-resource${url.pathname}`;
-}
-
 function ensureDestroySoon(
   socket: FastifyRequest["raw"]["socket"] & {
     destroy?: () => void;
@@ -403,17 +185,14 @@ function createPilotMcpServer(
     },
     async ({ verificationCode }) => {
       const binding =
-        initialBinding.authMode === "oauth"
-          ? ((await options.store.findAgentBindingById(initialBinding.id)) ??
-            initialBinding)
-          : initialBinding.validatedAt !== undefined
-            ? initialBinding
-            : await options.store.validateAgentBinding(
-                initialBinding.id,
-                initialBinding.ownerId,
-                verificationCode,
-                new Date().toISOString(),
-              );
+        initialBinding.validatedAt !== undefined
+          ? initialBinding
+          : await options.store.validateAgentBinding(
+              initialBinding.id,
+              initialBinding.ownerId,
+              verificationCode,
+              new Date().toISOString(),
+            );
       return toolResult({
         status: "connected",
         bindingId: binding.id,
