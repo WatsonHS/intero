@@ -19,7 +19,7 @@ import type {
   ThreadMessage,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   concludeThread,
@@ -104,6 +104,9 @@ export function CommunicationsView({
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [mentionCursor, setMentionCursor] = useState(0);
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
     PrincipalId | undefined
   >(initialStandInOwnerId as PrincipalId | undefined);
@@ -241,6 +244,14 @@ export function CommunicationsView({
     ...(pilotDms.data?.principals ?? []),
   ]);
   const principalNames = buildPrincipalNames(principals);
+  for (const member of pilot?.teams.data?.teams.flatMap(
+    (team) => team.members,
+  ) ?? []) {
+    principalNames.set(
+      personalStandInPrincipalId(member.id),
+      `${member.displayName} 的替身`,
+    );
+  }
   const teamNames = new Map(
     (pilot?.teams.data?.teams ?? []).map((team) => [team.id, team.name]),
   );
@@ -278,15 +289,21 @@ export function CommunicationsView({
     teams: pilot?.teams.data?.teams ?? [],
     currentPrincipalId: pilot?.identityId,
   });
-  const activeStandInMention =
-    currentIsPilotStandIn && draft.includes("@")
-      ? personalStandInMentionQuery(draft)
-      : undefined;
-  const visibleStandInMentionCandidates = activeStandInMention
-    ? standInMentionCandidates.filter((candidate) =>
-        candidate.displayName
-          .toLocaleLowerCase()
-          .includes(activeStandInMention.query.toLocaleLowerCase()),
+  const mentionCandidates = current
+    ? conversationMentionCandidates({
+        participantIds: current.thread.participantIds,
+        standInIds: current.thread.standInIds,
+        principalNames,
+        additionalStandIns: currentIsPilotStandIn
+          ? standInMentionCandidates
+          : [],
+      })
+    : [];
+  const activeMention = conversationMentionQuery(draft, mentionCursor);
+  const visibleMentionCandidates = mentionPickerOpen
+    ? filterConversationMentionCandidates(
+        mentionCandidates,
+        activeMention?.query ?? "",
       )
     : [];
   const currentSenderId = !current
@@ -347,6 +364,10 @@ export function CommunicationsView({
   useEffect(() => {
     if (initialThreadId) setSelectedThreadId(initialThreadId);
   }, [initialThreadId]);
+
+  useEffect(() => {
+    setMentionPickerOpen(false);
+  }, [current?.thread.id]);
 
   useEffect(() => {
     if (
@@ -476,6 +497,7 @@ export function CommunicationsView({
     ) {
       return;
     }
+    setMentionPickerOpen(false);
     send.mutate({
       threadId: current.thread.id,
       senderId: currentSenderId,
@@ -488,6 +510,25 @@ export function CommunicationsView({
         : currentIsPilotStandIn
           ? "pilot-stand-in"
           : "canonical",
+    });
+  }
+
+  function selectMention(candidate: ConversationMentionCandidate) {
+    const result = applyConversationMention(
+      draft,
+      mentionCursor,
+      candidate,
+      activeMention,
+    );
+    setDraft(result.draft);
+    setMentionCursor(result.cursor);
+    setMentionPickerOpen(false);
+    if (currentIsPilotStandIn && candidate.standInOwnerId) {
+      setSelectedStandInOwnerId(candidate.standInOwnerId);
+    }
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(result.cursor, result.cursor);
     });
   }
 
@@ -585,9 +626,14 @@ export function CommunicationsView({
               </time>
             </div>
             <p className="text-[13px] leading-[1.75] text-ink [text-wrap:pretty]">
-              {message.serverReadable
-                ? message.body
-                : t("chat.encryptedMessage")}
+              {message.serverReadable ? (
+                <MentionText
+                  body={message.body}
+                  candidates={mentionCandidates}
+                />
+              ) : (
+                t("chat.encryptedMessage")
+              )}
             </p>
             {groundedExchange?.structuredAnswer ? (
               <StandInAnswerContent
@@ -671,7 +717,11 @@ export function CommunicationsView({
                 : "mt-[7px] max-w-[560px] rounded-card bg-bubble p-[12px_15px] text-[13px] leading-[1.7] text-ink [text-wrap:pretty]"
             }
           >
-            {message.serverReadable ? message.body : t("chat.encryptedMessage")}
+            {message.serverReadable ? (
+              <MentionText body={message.body} candidates={mentionCandidates} />
+            ) : (
+              t("chat.encryptedMessage")
+            )}
           </p>
         </div>
       </div>
@@ -952,28 +1002,28 @@ export function CommunicationsView({
 
           <div className="p-[0_26px_22px]">
             <div className="mx-auto max-w-[800px]">
-              <div className="rounded-card border border-line2 bg-panel2 p-[11px_13px]">
+              <div className="relative rounded-card border border-line2 bg-panel2 p-[11px_13px]">
                 <div className="mb-[9px] flex items-center gap-[7px]">
-                  {current.thread.standInIds.map((standInId, index) => {
-                    const name =
-                      principalNames.get(standInId) ?? standInId.slice(0, 8);
-                    return (
-                      <button
-                        type="button"
-                        key={standInId}
-                        className={
-                          index === 0
-                            ? "rounded-pill bg-accent-soft px-[9px] py-[3px] text-[10px] text-accent-strong cursor-pointer"
-                            : "rounded-pill bg-raise px-[9px] py-[3px] text-[10px] text-ink-muted cursor-pointer"
-                        }
-                        onClick={() =>
-                          setDraft((prevDraft) => `${prevDraft}@${name} `)
-                        }
-                      >
-                        @{name}
-                      </button>
-                    );
-                  })}
+                  <button
+                    type="button"
+                    aria-label={t("chat.mention")}
+                    aria-expanded={mentionPickerOpen}
+                    data-testid="communications-mention-trigger"
+                    onClick={() => {
+                      const cursor =
+                        composerRef.current?.selectionStart ?? draft.length;
+                      setMentionCursor(cursor);
+                      setMentionPickerOpen((open) => !open);
+                    }}
+                    className={cn(
+                      "grid h-6 w-6 cursor-pointer place-items-center rounded-[8px] border text-[13px] font-[650]",
+                      mentionPickerOpen
+                        ? "border-accent-strong bg-accent-soft text-accent-strong"
+                        : "border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong",
+                    )}
+                  >
+                    @
+                  </button>
                   <span className="ml-auto inline-flex items-center gap-[5px] text-[10px] text-faint">
                     <LockSimpleIcon size={12} />
                     {currentIsPilot
@@ -985,51 +1035,103 @@ export function CommunicationsView({
                           : t("chat.hint")}
                   </span>
                 </div>
-                {currentIsPilotStandIn &&
-                activeStandInMention &&
-                visibleStandInMentionCandidates.length > 0 ? (
+                {mentionPickerOpen ? (
                   <div
-                    data-testid="personal-stand-in-mention-picker"
-                    className="mb-2 grid gap-1 rounded-inset border border-line bg-panel p-1.5"
+                    data-testid="communications-mention-picker"
+                    className="absolute bottom-[54px] left-[11px] right-[11px] z-20 grid max-h-[220px] gap-1 overflow-auto rounded-inset border border-line bg-panel p-1.5 shadow-[0_16px_42px_rgba(0,0,0,0.22)] sm:right-auto sm:w-[360px]"
                   >
-                    {visibleStandInMentionCandidates.map((candidate) => (
-                      <button
-                        type="button"
-                        key={candidate.principalId}
-                        data-testid={`personal-stand-in-option-${candidate.principalId}`}
-                        onClick={() => {
-                          setSelectedStandInOwnerId(candidate.principalId);
-                          setDraft(
-                            applyPersonalStandInMention(
-                              draft,
-                              activeStandInMention,
-                              candidate,
-                            ),
-                          );
-                        }}
-                        className="flex cursor-pointer items-center gap-2 rounded-btn border-0 bg-transparent px-2.5 py-2 text-left hover:bg-raise"
-                      >
-                        <RobotIcon size={14} className="text-accent-strong" />
-                        <span className="grid">
-                          <strong className="text-[11.5px] font-[620] text-ink">
-                            {candidate.displayName} 的替身
+                    {visibleMentionCandidates.length > 0 ? (
+                      visibleMentionCandidates.map((candidate) => (
+                        <button
+                          type="button"
+                          key={candidate.principalId}
+                          data-testid={`communications-mention-option-${candidate.principalId}`}
+                          onClick={() => selectMention(candidate)}
+                          className="grid cursor-pointer grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 rounded-btn border-0 bg-transparent px-2.5 py-2 text-left hover:bg-raise"
+                        >
+                          {candidate.kind === "stand_in" ? (
+                            <span className="grid h-7 w-7 place-items-center rounded-[9px] bg-accent-soft text-accent-strong">
+                              <RobotIcon size={14} />
+                            </span>
+                          ) : (
+                            <Avatar
+                              id={candidate.principalId}
+                              name={candidate.displayName}
+                              size="md"
+                            />
+                          )}
+                          <strong className="truncate text-[11.5px] font-[620] text-ink">
+                            {candidate.displayName}
                           </strong>
-                          <small className="text-[10px] text-ink-muted">
-                            {candidate.teamName} · 当前项目共享范围
+                          <small className="rounded-pill bg-raise px-2 py-0.5 text-[9.5px] text-faint">
+                            {t(
+                              candidate.kind === "stand_in"
+                                ? "chat.mentionStandIn"
+                                : "chat.mentionPerson",
+                            )}
                           </small>
-                        </span>
-                      </button>
-                    ))}
+                        </button>
+                      ))
+                    ) : (
+                      <span className="px-2.5 py-3 text-[11px] text-faint">
+                        {t("chat.noMentionCandidates")}
+                      </span>
+                    )}
                   </div>
                 ) : null}
                 <div className="grid grid-cols-[1fr_34px] items-end gap-[9px]">
                   <textarea
+                    ref={composerRef}
                     data-testid="communications-composer"
                     rows={1}
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={(event) => {
+                      const cursor =
+                        event.currentTarget.selectionStart ??
+                        event.currentTarget.value.length;
+                      setDraft(event.currentTarget.value);
+                      setMentionCursor(cursor);
+                      setMentionPickerOpen(
+                        Boolean(
+                          conversationMentionQuery(
+                            event.currentTarget.value,
+                            cursor,
+                          ),
+                        ),
+                      );
+                    }}
+                    onSelect={(event) => {
+                      setMentionCursor(
+                        event.currentTarget.selectionStart ?? draft.length,
+                      );
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
+                      const isComposing =
+                        event.nativeEvent.isComposing ||
+                        event.nativeEvent.keyCode === 229;
+                      if (event.key === "Escape" && mentionPickerOpen) {
+                        event.preventDefault();
+                        setMentionPickerOpen(false);
+                        return;
+                      }
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !isComposing &&
+                        mentionPickerOpen &&
+                        visibleMentionCandidates[0]
+                      ) {
+                        event.preventDefault();
+                        selectMention(visibleMentionCandidates[0]);
+                        return;
+                      }
+                      if (
+                        shouldSubmitComposerKey({
+                          key: event.key,
+                          shiftKey: event.shiftKey,
+                          isComposing,
+                        })
+                      ) {
                         event.preventDefault();
                         submit();
                       }
@@ -1150,6 +1252,141 @@ export function canRenderCommunicationItems(input: {
   );
 }
 
+export interface ConversationMentionCandidate {
+  principalId: PrincipalId;
+  displayName: string;
+  kind: "human" | "stand_in";
+  standInOwnerId?: PrincipalId;
+}
+
+export interface ConversationMention {
+  start: number;
+  end: number;
+  query: string;
+}
+
+export function conversationMentionCandidates(input: {
+  participantIds: string[];
+  standInIds: string[];
+  principalNames: Map<string, string>;
+  additionalStandIns?: PersonalStandInMentionCandidate[];
+}): ConversationMentionCandidate[] {
+  const standInIds = new Set(input.standInIds);
+  const candidates = new Map<string, ConversationMentionCandidate>();
+  for (const principalId of input.participantIds) {
+    candidates.set(principalId, {
+      principalId: principalId as PrincipalId,
+      displayName:
+        input.principalNames.get(principalId) ?? principalId.slice(0, 8),
+      kind: standInIds.has(principalId) ? "stand_in" : "human",
+    });
+  }
+  for (const candidate of input.additionalStandIns ?? []) {
+    const principalId = personalStandInPrincipalId(candidate.principalId);
+    candidates.set(principalId, {
+      principalId,
+      displayName: `${candidate.displayName} 的替身`,
+      kind: "stand_in",
+      standInOwnerId: candidate.principalId,
+    });
+  }
+  return [...candidates.values()].toSorted(
+    (left, right) =>
+      Number(left.kind === "stand_in") - Number(right.kind === "stand_in") ||
+      left.displayName.localeCompare(right.displayName),
+  );
+}
+
+export function conversationMentionQuery(
+  draft: string,
+  cursor: number,
+): ConversationMention | undefined {
+  const beforeCursor = draft.slice(0, cursor);
+  const match = /@([^\s@]*)$/u.exec(beforeCursor);
+  if (!match) return undefined;
+  return {
+    start: match.index,
+    end: cursor,
+    query: match[1] ?? "",
+  };
+}
+
+export function filterConversationMentionCandidates(
+  candidates: ConversationMentionCandidate[],
+  query: string,
+): ConversationMentionCandidate[] {
+  const needle = query.replaceAll(/\s/gu, "").toLocaleLowerCase();
+  return candidates.filter((candidate) =>
+    candidate.displayName
+      .replaceAll(/\s/gu, "")
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+export function applyConversationMention(
+  draft: string,
+  cursor: number,
+  candidate: ConversationMentionCandidate,
+  mention = conversationMentionQuery(draft, cursor),
+): { draft: string; cursor: number } {
+  const start = mention?.start ?? cursor;
+  const end = mention?.end ?? cursor;
+  const nextCharacter = draft[end];
+  const separator =
+    nextCharacter === undefined ||
+    !/[\s，。！？、,.!?:;；：）)\]】]/u.test(nextCharacter)
+      ? " "
+      : "";
+  const token = `@${candidate.displayName}${separator}`;
+  return {
+    draft: `${draft.slice(0, start)}${token}${draft.slice(end)}`,
+    cursor: start + token.length,
+  };
+}
+
+export interface ConversationMessagePart {
+  text: string;
+  mention?: ConversationMentionCandidate;
+}
+
+export function splitConversationMentions(
+  body: string,
+  candidates: ConversationMentionCandidate[],
+): ConversationMessagePart[] {
+  const candidateByName = new Map(
+    candidates.map((candidate) => [candidate.displayName, candidate]),
+  );
+  const names = [...candidateByName.keys()]
+    .filter(Boolean)
+    .toSorted((left, right) => right.length - left.length);
+  if (names.length === 0) return [{ text: body }];
+
+  const alternatives = names.map(escapeRegularExpression).join("|");
+  const matcher = new RegExp(
+    `@(${alternatives})(?=$|[\\s，。！？、,.!?:;；：）)\\]】])`,
+    "gu",
+  );
+  const parts: ConversationMessagePart[] = [];
+  let offset = 0;
+  for (const match of body.matchAll(matcher)) {
+    const index = match.index;
+    if (index > offset) parts.push({ text: body.slice(offset, index) });
+    const candidate = candidateByName.get(match[1] ?? "");
+    parts.push({
+      text: match[0],
+      ...(candidate ? { mention: candidate } : {}),
+    });
+    offset = index + match[0].length;
+  }
+  if (offset < body.length) parts.push({ text: body.slice(offset) });
+  return parts.length > 0 ? parts : [{ text: body }];
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 export interface PersonalStandInMentionCandidate {
   principalId: PrincipalId;
   displayName: string;
@@ -1201,16 +1438,21 @@ export function personalStandInMentionCandidates(input: {
 export function personalStandInMentionQuery(
   draft: string,
 ): PersonalStandInMention | undefined {
-  const match = /(?:^|\s)@([^\s@]*)$/u.exec(draft);
+  const match = /@([^\s@]*)$/u.exec(draft);
   if (!match) return undefined;
-  const matchedText = match[0];
-  const atOffset = matchedText.lastIndexOf("@");
-  const start = match.index + atOffset;
   return {
-    start,
+    start: match.index,
     end: draft.length,
     query: match[1] ?? "",
   };
+}
+
+export function shouldSubmitComposerKey(input: {
+  key: string;
+  shiftKey: boolean;
+  isComposing: boolean;
+}): boolean {
+  return input.key === "Enter" && !input.shiftKey && !input.isComposing;
 }
 
 export function applyPersonalStandInMention(
@@ -1238,6 +1480,28 @@ export function mergeCommunicationItems(
     ),
     ...pilotItems,
   ];
+}
+
+function MentionText({
+  body,
+  candidates,
+}: {
+  body: string;
+  candidates: ConversationMentionCandidate[];
+}) {
+  return splitConversationMentions(body, candidates).map((part, index) =>
+    part.mention ? (
+      <span
+        key={`${part.mention.principalId}-${index}`}
+        data-mention-id={part.mention.principalId}
+        className="inline-flex rounded-[5px] bg-accent-soft px-1 font-[620] text-accent-strong"
+      >
+        {part.text}
+      </span>
+    ) : (
+      part.text
+    ),
+  );
 }
 
 function AnswerLine({

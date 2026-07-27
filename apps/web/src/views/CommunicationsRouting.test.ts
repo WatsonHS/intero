@@ -2,12 +2,18 @@ import { PrincipalId, type PilotProject } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
 import {
+  applyConversationMention,
   applyPersonalStandInMention,
   canRenderCommunicationItems,
+  conversationMentionCandidates,
+  conversationMentionQuery,
+  filterConversationMentionCandidates,
   mergeCommunicationItems,
   personalStandInMentionCandidates,
   personalStandInMentionQuery,
   resolvePilotCommunicationPrincipal,
+  shouldSubmitComposerKey,
+  splitConversationMentions,
 } from "./CommunicationsView.js";
 import type { ThreadPayload } from "../api.js";
 
@@ -69,9 +75,7 @@ describe("Communications personal Stand-in routing", () => {
   it("lists only other members from the Project's current teams", () => {
     const project = {
       id: "019f9f20-0000-7000-8000-000000000010",
-      participatingTeamIds: [
-        "019f9f20-0000-7000-8000-000000000020",
-      ],
+      participatingTeamIds: ["019f9f20-0000-7000-8000-000000000020"],
     } as PilotProject;
     const candidates = personalStandInMentionCandidates({
       project,
@@ -98,9 +102,7 @@ describe("Communications personal Stand-in routing", () => {
           name: "Outside team",
           members: [
             {
-              id: PrincipalId.parse(
-                "019f9f20-0000-7000-8000-000000000003",
-              ),
+              id: PrincipalId.parse("019f9f20-0000-7000-8000-000000000003"),
               displayName: "Outside Member",
               kind: "human",
             },
@@ -130,6 +132,104 @@ describe("Communications personal Stand-in routing", () => {
     ).toBe("Can you ask @Development Member 的替身 ");
   });
 
+  it("recognizes an @ fragment directly after Chinese text", () => {
+    expect(personalStandInMentionQuery("请帮我问@开发")).toMatchObject({
+      start: 4,
+      query: "开发",
+    });
+  });
+
+  it("does not submit while a Chinese input method is composing", () => {
+    expect(
+      shouldSubmitComposerKey({
+        key: "Enter",
+        shiftKey: false,
+        isComposing: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSubmitComposerKey({
+        key: "Enter",
+        shiftKey: false,
+        isComposing: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSubmitComposerKey({
+        key: "Enter",
+        shiftKey: true,
+        isComposing: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("builds one mention list from people and Stand-ins in the conversation", () => {
+    const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000001");
+    const candidates = conversationMentionCandidates({
+      participantIds: [SESSION_PRINCIPAL_ID, DEV_PRINCIPAL_ID, standInId],
+      standInIds: [standInId],
+      principalNames: new Map([
+        [SESSION_PRINCIPAL_ID, "Session Member"],
+        [DEV_PRINCIPAL_ID, "Development Member"],
+        [standInId, "Session Member 的替身"],
+      ]),
+    });
+
+    expect(
+      candidates.map(({ displayName, kind }) => ({ displayName, kind })),
+    ).toEqual([
+      { displayName: "Development Member", kind: "human" },
+      { displayName: "Session Member", kind: "human" },
+      { displayName: "Session Member 的替身", kind: "stand_in" },
+    ]);
+    expect(filterConversationMentionCandidates(candidates, "替身")).toEqual([
+      expect.objectContaining({
+        principalId: standInId,
+        kind: "stand_in",
+      }),
+    ]);
+  });
+
+  it("replaces the active @ fragment at the cursor", () => {
+    const candidate = {
+      principalId: DEV_PRINCIPAL_ID,
+      displayName: "Development Member",
+      kind: "human" as const,
+    };
+    const draft = "请问@Dev 后面的内容";
+    const cursor = "请问@Dev".length;
+    const mention = conversationMentionQuery(draft, cursor);
+
+    expect(mention).toMatchObject({ start: 2, end: cursor, query: "Dev" });
+    expect(applyConversationMention(draft, cursor, candidate, mention)).toEqual(
+      {
+        draft: "请问@Development Member 后面的内容",
+        cursor: "请问@Development Member".length,
+      },
+    );
+  });
+
+  it("highlights only complete mentions of conversation participants", () => {
+    const candidates = [
+      {
+        principalId: DEV_PRINCIPAL_ID,
+        displayName: "开发同学",
+        kind: "human" as const,
+      },
+    ];
+    const parts = splitConversationMentions(
+      "请 @开发同学，检查 a@b.com；@陌生人 不应高亮。",
+      candidates,
+    );
+
+    expect(parts.filter((part) => part.mention)).toEqual([
+      {
+        text: "@开发同学",
+        mention: candidates[0],
+      },
+    ]);
+  });
+
   it("renders one personal Stand-in and hides legacy canonical Stand-in rows", () => {
     const personal = payload("stand_in", "Session Member 的替身", "1");
     const legacy = payload("stand_in", "Legacy generic Stand-in", "2");
@@ -141,9 +241,9 @@ describe("Communications personal Stand-in routing", () => {
       true,
     );
 
-    expect(
-      merged.filter((item) => item.thread.kind === "stand_in"),
-    ).toEqual([personal]);
+    expect(merged.filter((item) => item.thread.kind === "stand_in")).toEqual([
+      personal,
+    ]);
     expect(merged).toContain(direct);
   });
 });
