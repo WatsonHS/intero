@@ -145,6 +145,20 @@ export function loadApiServiceConfig(
     environment.INTERO_RUNTIME_MODE ??
       (environment.NODE_ENV === "production" ? "product" : "development"),
   );
+  const publicUrl = normalizePublicUrl(
+    environment.INTERO_PUBLIC_URL ?? `http://localhost:${runtime.port}`,
+  );
+  const publicUrlHost = new URL(publicUrl).hostname;
+  const configuredTrustedOrigins =
+    environment.INTERO_AUTH_TRUSTED_ORIGINS?.split(",").map((origin) =>
+      z.url().parse(origin.trim()),
+    ) ?? [];
+  const trustedOrigins = Array.from(
+    new Set([
+      ...defaultAuthTrustedOrigins(publicUrl, runtime.port),
+      ...configuredTrustedOrigins,
+    ]),
+  );
   const pilot = loadPilotAdapterConfig(environment);
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
@@ -156,6 +170,11 @@ export function loadApiServiceConfig(
   if (runtimeMode === "product" && !authSecret) {
     throw new Error(
       "Product runtime requires INTERO_AUTH_SECRET for session authentication.",
+    );
+  }
+  if (runtimeMode === "product" && !environment.INTERO_PUBLIC_URL) {
+    throw new Error(
+      "Product runtime requires INTERO_PUBLIC_URL as its canonical external address.",
     );
   }
   if (runtimeMode === "product" && !pilot.databaseUrl) {
@@ -179,28 +198,62 @@ export function loadApiServiceConfig(
     ...(authSecret
       ? {
           auth: {
-            publicUrl: z
-              .url()
-              .parse(
-                environment.INTERO_PUBLIC_URL ??
-                  `http://${runtime.host}:${runtime.port}`,
-              ),
+            publicUrl: z.url().parse(publicUrl),
             secret: z.string().min(32).parse(authSecret),
-            trustedOrigins: (
-              environment.INTERO_AUTH_TRUSTED_ORIGINS ??
-              environment.INTERO_PUBLIC_URL ??
-              `http://${runtime.host}:${runtime.port}`
-            )
-              .split(",")
-              .map((origin) => z.url().parse(origin.trim())),
+            trustedOrigins,
             passkeyRpId: z
               .string()
               .min(1)
-              .parse(environment.INTERO_PASSKEY_RP_ID ?? "localhost"),
+              .parse(environment.INTERO_PASSKEY_RP_ID ?? publicUrlHost),
           },
         }
       : {}),
   };
+}
+
+function normalizePublicUrl(value: string): string {
+  const parsed = new URL(z.url().parse(value));
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("INTERO_PUBLIC_URL must use HTTP or HTTPS.");
+  }
+  if (
+    parsed.pathname !== "/" ||
+    parsed.search.length > 0 ||
+    parsed.hash.length > 0
+  ) {
+    throw new Error(
+      "INTERO_PUBLIC_URL must be an origin without a path, query, or fragment.",
+    );
+  }
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(
+    parsed.hostname,
+  );
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new Error(
+      "INTERO_PUBLIC_URL must use HTTPS for a non-loopback address.",
+    );
+  }
+  return parsed.origin;
+}
+
+function defaultAuthTrustedOrigins(
+  publicUrl: string,
+  apiPort: number,
+): string[] {
+  const parsed = new URL(publicUrl);
+  if (!["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname)) {
+    return [parsed.origin];
+  }
+
+  const ports = new Set([
+    parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
+    String(apiPort),
+    "4311",
+    "5173",
+  ]);
+  return ["localhost", "127.0.0.1", "0.0.0.0"].flatMap((hostname) =>
+    Array.from(ports, (port) => `http://${hostname}:${port}`),
+  );
 }
 
 export function loadWorkerServiceConfig(

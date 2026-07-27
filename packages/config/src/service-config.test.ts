@@ -72,7 +72,72 @@ describe("service environment schemas", () => {
       auth: {
         publicUrl: "http://127.0.0.1:4310",
         passkeyRpId: "127.0.0.1",
-        trustedOrigins: ["http://127.0.0.1:5183"],
+        trustedOrigins: expect.arrayContaining([
+          "http://127.0.0.1:4310",
+          "http://127.0.0.1:5183",
+          "http://127.0.0.1:5173",
+        ]),
+      },
+    });
+  });
+
+  it("keeps the public auth URL on localhost when binding all interfaces", () => {
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      }),
+    ).toMatchObject({
+      runtime: { host: "0.0.0.0", port: 4310 },
+      auth: {
+        publicUrl: "http://localhost:4310",
+        trustedOrigins: expect.arrayContaining([
+          "http://localhost:4310",
+          "http://localhost:4311",
+          "http://127.0.0.1:5173",
+          "http://127.0.0.1:4311",
+          "http://0.0.0.0:4311",
+        ]),
+      },
+    });
+  });
+
+  it("does not add local development origins to a public deployment", () => {
+    const config = loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "https://intero.example.com",
+      });
+    expect(config.auth?.trustedOrigins).toEqual([
+      "https://intero.example.com",
+    ]);
+    expect(config.auth?.passkeyRpId).toBe("intero.example.com");
+  });
+
+  it("requires HTTPS for a LAN address and keeps it as the canonical OAuth origin", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "http://10.20.30.40:4311",
+      }),
+    ).toThrow("must use HTTPS for a non-loopback address");
+
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "https://10.20.30.40:4311/",
+      }),
+    ).toMatchObject({
+      auth: {
+        publicUrl: "https://10.20.30.40:4311",
+        passkeyRpId: "10.20.30.40",
+        trustedOrigins: ["https://10.20.30.40:4311"],
       },
     });
   });
@@ -120,6 +185,7 @@ describe("service environment schemas", () => {
         INTERO_SEED_DEMO: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "https://intero.internal.example",
       }),
     ).toMatchObject({
       runtimeMode: "product",

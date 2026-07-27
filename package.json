@@ -12,6 +12,8 @@
     "dev": "turbo run dev --filter=@intero/web --filter=@intero/server-api --filter=@intero/server-worker",
     "dev:desktop": "turbo run dev --filter=@intero/desktop --filter=@intero/server-api --filter=@intero/server-worker",
     "dev:pilot": "turbo run dev:pilot --filter=@intero/web --filter=@intero/server-api",
+    "dev:proxy": "docker compose -f compose.proxy.yaml up -d",
+    "dev:proxy:down": "docker compose -f compose.proxy.yaml down",
     "generate": "turbo run generate",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm test:ts",

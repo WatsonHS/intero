@@ -8,7 +8,9 @@ fi
 
 export INTERO_RUNTIME_MODE=product
 export INTERO_ALLOW_DEVELOPMENT_IDENTITY=false
-export VITE_INTERO_API_URL="${VITE_INTERO_API_URL:-${INTERO_PUBLIC_URL:-http://localhost:4310}}"
+# Leave the default empty so the browser uses :4310 when opened directly on
+# Vite and stays same-origin when opened through Caddy on :4311.
+export VITE_INTERO_API_URL="${VITE_INTERO_API_URL:-}"
 
 pnpm demo:seed
 exec pnpm dev:pilot

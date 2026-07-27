@@ -2,7 +2,7 @@ import pino, { type LoggerOptions } from "pino";
 import { z } from "zod";
 
 export const RuntimeConfig = z.object({
-  host: z.string().default("127.0.0.1"),
+  host: z.string().default("0.0.0.0"),
   port: z.coerce.number().int().min(1).max(65_535).default(4310),
   logLevel: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
@@ -58,8 +58,7 @@ export const PilotAdapterConfig = z
       context.addIssue({
         code: "custom",
         path: ["standInJobs"],
-        message:
-          "Transactional Stand-in jobs require PostgreSQL persistence.",
+        message: "Transactional Stand-in jobs require PostgreSQL persistence.",
       });
     }
     if (value.authorization === "spicedb") {

@@ -25,6 +25,20 @@ describe("Intero API vertical slice", () => {
     await app.close();
   });
 
+  it("allows browser requests from the all-interfaces development address", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/health",
+      headers: { origin: "http://0.0.0.0:5173" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe(
+      "http://0.0.0.0:5173",
+    );
+    expect(response.headers["access-control-allow-credentials"]).toBe("true");
+  });
+
   it("branches a Thread, concludes it back into its parent, and refuses twice", async () => {
     const alex = "019f9a00-0000-7000-8000-000000000101" as PrincipalId;
     const priya = "019f9a00-0000-7000-8000-000000000102" as PrincipalId;

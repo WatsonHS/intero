@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { loadPilotAdapterConfig, safeTelemetryAttributes } from "./index.js";
+import {
+  loadPilotAdapterConfig,
+  loadRuntimeConfig,
+  safeTelemetryAttributes,
+} from "./index.js";
+
+describe("runtime configuration", () => {
+  it("listens on every IPv4 interface by default", () => {
+    expect(loadRuntimeConfig({})).toMatchObject({
+      host: "0.0.0.0",
+      port: 4310,
+    });
+  });
+
+  it("keeps an explicit loopback binding available", () => {
+    expect(loadRuntimeConfig({ INTERO_API_HOST: "127.0.0.1" }).host).toBe(
+      "127.0.0.1",
+    );
+  });
+});
 
 describe("telemetry allowlist", () => {
   it("drops content and secret fields", () => {
