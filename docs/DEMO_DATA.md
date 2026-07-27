@@ -97,12 +97,19 @@ Enable Better Auth and start the existing canonical browser renderer:
 
 ```sh
 export INTERO_AUTH_SECRET='replace-with-at-least-32-development-characters'
+export INTERO_RUNTIME_MODE='product'
 export INTERO_PUBLIC_URL='http://localhost:4310'
+export VITE_INTERO_API_URL='http://localhost:4310'
 export INTERO_AUTH_TRUSTED_ORIGINS='http://localhost:5173,http://localhost:4310'
 export INTERO_PASSKEY_RP_ID='localhost'
 
 pnpm dev:demo
 ```
+
+`dev:demo` always starts the normal product auth boundary. It refuses to start
+without `INTERO_AUTH_SECRET`, disables development identity simulation, and
+uses Better Auth sessions. Seeded demo records do not create a third or more
+permissive auth mode.
 
 Use `localhost` consistently for the API public URL, renderer URL, trusted
 origins, and Passkey relying-party ID. Browsers treat `localhost` and
