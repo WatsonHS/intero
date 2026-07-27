@@ -1,7 +1,7 @@
 import type { PrincipalId } from "@intero/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getActionInbox } from "./api.js";
+import { createConversationThread, getActionInbox } from "./api.js";
 import {
   AUTHENTICATION_REQUIRED_EVENT,
   PILOT_IDENTITY_STORAGE_KEY,
@@ -131,6 +131,49 @@ describe("authenticated API requests", () => {
     await expect(getActionInbox()).rejects.toThrow(
       "A group chat needs a valid signed-in participant.",
     );
+  });
+
+  it("creates a conversation when randomUUID is unavailable over HTTP", async () => {
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.fill(0xab);
+        return bytes;
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "abababab-abab-4bab-abab-abababababab",
+          kind: "room",
+          title: "产品群",
+          participantIds: [],
+          standInIds: [],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          sequence: 0,
+          createdAt: "2026-07-28T00:00:00.000Z",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createConversationThread({
+      kind: "room",
+      title: "产品群",
+      participantIds: [],
+      standInIds: [],
+    });
+
+    const options = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(options.body))).toMatchObject({
+      id: "abababab-abab-4bab-abab-abababababab",
+      kind: "room",
+      title: "产品群",
+    });
   });
 
   it("centrally requests login for pilot API 401s", async () => {

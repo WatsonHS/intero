@@ -33,6 +33,7 @@ import {
   type PrincipalSummary,
   type ThreadPayload,
 } from "../api.js";
+import { useNotifications } from "../design/notifications.js";
 import { Avatar, cn } from "../design/primitives.js";
 import { initials, tintFor } from "../design/utils.js";
 import { useI18n } from "../i18n/index.js";
@@ -93,6 +94,7 @@ export function CommunicationsView({
   initialStandInOwnerId?: string;
 } = {}) {
   const { formatRelative, formatTime, t } = useI18n();
+  const notifications = useNotifications();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
@@ -430,6 +432,12 @@ export function CommunicationsView({
         queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
       ]);
     },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.createFailed"),
+        { title: t("chat.createFailed") },
+      );
+    },
   });
   const addStandIn = useMutation({
     mutationFn: (threadId: string) =>
@@ -718,13 +726,6 @@ export function CommunicationsView({
           <NewConversationModal
             candidates={conversationCandidates}
             busy={create.isPending}
-            error={
-              create.error instanceof Error
-                ? create.error.message
-                : create.isError
-                  ? t("chat.createFailed")
-                  : undefined
-            }
             onClose={() => setShowCreate(false)}
             onCreate={(input) => create.mutate(input)}
           />

@@ -28,13 +28,11 @@ export interface ConversationCandidate {
 export function NewConversationModal({
   candidates,
   busy,
-  error,
   onClose,
   onCreate,
 }: {
   candidates: ConversationCandidate[];
   busy: boolean;
-  error: string | undefined;
   onClose: () => void;
   onCreate: (input: {
     title: string;
@@ -163,7 +161,7 @@ export function NewConversationModal({
             {t("general.close")}
           </button>
           <span className="ml-auto text-[10.5px] text-faint">
-            {error ? error : t("chat.roomHint")}
+            {t("chat.roomHint")}
           </span>
         </>
       }

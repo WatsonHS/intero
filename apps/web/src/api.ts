@@ -40,6 +40,7 @@ import {
   PILOT_IDENTITY_STORAGE_KEY,
 } from "./pilot/auth-state.js";
 import { INTERO_API_URL } from "./api-url.js";
+import { createClientUuid } from "./client-id.js";
 
 const API_URL = INTERO_API_URL;
 
@@ -448,7 +449,7 @@ export async function createKanbanCard(input: {
   relatedWorkstreamIds: string[];
 }): Promise<KanbanCard> {
   return postJson("/v1/kanban/cards", {
-    id: crypto.randomUUID(),
+    id: createClientUuid(),
     ...input,
   });
 }
@@ -474,7 +475,7 @@ export async function sendThreadMessage(input: {
   body: string;
 }): Promise<ThreadMessage> {
   return postJson(`/v1/threads/${input.threadId}/messages`, {
-    id: crypto.randomUUID(),
+    id: createClientUuid(),
     senderId: input.senderId,
     body: input.body,
     createdAt: new Date().toISOString(),
@@ -492,7 +493,7 @@ export async function createConversationThread(input: {
   parentThreadId?: string;
 }): Promise<ConversationThread> {
   return postJson("/v1/threads", {
-    id: crypto.randomUUID(),
+    id: createClientUuid(),
     ...input,
     accessMode: "agent_readable",
     priorHistoryGranted: false,
@@ -518,7 +519,7 @@ export async function concludeThread(input: {
   conclusion: string;
 }): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
   return postJson(`/v1/threads/${input.threadId}/conclusion`, {
-    messageId: crypto.randomUUID(),
+    messageId: createClientUuid(),
     actorId: input.actorId,
     conclusion: input.conclusion,
     createdAt: new Date().toISOString(),

@@ -20,6 +20,7 @@ import {
   getBootstrap,
   getSpecs,
 } from "../api.js";
+import { createClientUuid } from "../client-id.js";
 import { SafeMarkdown } from "../components/SafeMarkdown.js";
 import {
   Avatar,
@@ -343,7 +344,7 @@ function LegacySpecReviewView() {
         setPublishedRevision(revision.revision);
       } else {
         const created = await createSpec({
-          id: crypto.randomUUID(),
+          id: createClientUuid(),
           title: title.trim(),
           markdown,
           affectedScopes: [],
