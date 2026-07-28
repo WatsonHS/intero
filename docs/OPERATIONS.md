@@ -141,8 +141,10 @@ Quarantine has a bucket lifecycle expiration plus database cleanup; expired
 pending reservations and failed objects are tombstoned by opportunistic
 cleanup.
 
-No API or UI invokes this adapter in Phase 3. Enabling the adapter only
-initializes and monitors its bucket; it does not authorize raw capture or
+Conversation images use a separate attachment reservation and scan gate. Their
+bytes pass through the authenticated API so internal object-store endpoints and
+signed URLs are never exposed to browsers. Enabling the adapter does not
+authorize raw capture or
 attachments.
 
 ## Backup and restore

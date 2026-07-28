@@ -37,14 +37,14 @@ The architecture follows
 The pilot is intentionally thin, not throwaway. Canonical Agent event and Work
 State contracts are transport-independent behind explicit ports:
 
-| Stable port / contract  | Implemented adapter                                           | Current product boundary         |
-| ----------------------- | ------------------------------------------------------------- | -------------------------------- |
-| `ModelGateway`          | Vercel AI SDK calling the administrator-configured model      | Additional providers may adapt   |
-| `AuthorizationPort`     | SpiceDB-backed authorization plus tenant-safe membership data | Contract-tested and replaceable  |
-| `RealtimePort`          | Centrifugo fanout with reconnect cursor repair                | PostgreSQL remains authoritative |
-| `ObjectStorePort`       | MinIO/S3-compatible storage with DB-authoritative metadata    | Upload product surface disabled  |
-| `JobRunnerPort`         | Graphile Worker jobs plus transactional outbox and reconciler | Durable, idempotent processing   |
-| `CoordinationTransport` | Bounded Project-internal protocol                             | General A2A remains deferred     |
+| Stable port / contract  | Implemented adapter                                           | Current product boundary          |
+| ----------------------- | ------------------------------------------------------------- | --------------------------------- |
+| `ModelGateway`          | Vercel AI SDK calling the administrator-configured model      | Additional providers may adapt    |
+| `AuthorizationPort`     | SpiceDB-backed authorization plus tenant-safe membership data | Contract-tested and replaceable   |
+| `RealtimePort`          | Centrifugo fanout with reconnect cursor repair                | PostgreSQL remains authoritative  |
+| `ObjectStorePort`       | MinIO/S3-compatible storage with DB-authoritative metadata    | Authenticated images + raw policy |
+| `JobRunnerPort`         | Graphile Worker jobs plus transactional outbox and reconciler | Durable, idempotent processing    |
+| `CoordinationTransport` | Bounded Project-internal protocol                             | General A2A remains deferred      |
 
 The minimal model loop reads only policy-allowed structured Work State through
 `ModelGateway` and produces safe Stand-in summaries and bounded
@@ -55,9 +55,10 @@ external actions, or become a general autonomous Agent.
 These ports are not decorative empty interfaces. Each implemented adapter has
 contract tests over domain-visible behavior, and a replacement must pass the
 same tests before adoption. Canonical Agent events, Work State, and domain
-policy import no adapter-specific types. MinIO-backed object storage remains
-disabled by product policy because Phases 1–6 add no attachment/raw-capture
-surface. Temporal and general A2A infrastructure remain out of scope.
+policy import no adapter-specific types. MinIO-backed conversation images pass
+through authenticated same-origin API routes; raw capture remains separately
+disabled unless explicitly authorized. Temporal and general A2A infrastructure
+remain out of scope.
 
 ## 2. System overview
 
