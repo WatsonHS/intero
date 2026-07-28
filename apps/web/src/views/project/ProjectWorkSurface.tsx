@@ -22,6 +22,7 @@ import {
   createWorkItem,
   getProjectWork,
   closeSprint,
+  revertFeature,
   updateFeature,
   updateWorkItem,
   type ProjectWorkPayload,
@@ -72,10 +73,11 @@ const STAGE_TONE: Record<Feature["stage"], Tone> = {
   released: "accent",
 };
 
-const PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+const PRIORITIES = ["unset", "P0", "P1", "P2", "P3"] as const;
 const STAGES = ["planned", "in_development", "released"] as const;
 
 const PRIORITY_TONE: Record<WorkItem["priority"], Tone> = {
+  unset: "faint",
   P0: "danger",
   P1: "amber",
   P2: "faint",
@@ -208,6 +210,11 @@ export function ProjectWorkSurface({
   const moveFeature = useMutation({
     mutationFn: (input: { id: string; stage: Feature["stage"] }) =>
       updateFeature(projectId, input.id, { stage: input.stage }),
+    onSuccess: refresh,
+  });
+  const revertFeatureMutation = useMutation({
+    mutationFn: (input: { id: string; historyId: string }) =>
+      revertFeature(projectId, input.id, input.historyId),
     onSuccess: refresh,
   });
   const closeCurrentSprint = useMutation({
@@ -579,6 +586,9 @@ export function ProjectWorkSurface({
             setPane("list");
           }}
           onMoveFeature={(id, stage) => moveFeature.mutate({ id, stage })}
+          onRevertFeature={(id, historyId) =>
+            revertFeatureMutation.mutate({ id, historyId })
+          }
           newEpicTitle={newEpicTitle}
           onNewEpicTitle={setNewEpicTitle}
           onCreateEpic={() => createEpicMutation.mutate()}
@@ -1086,6 +1096,7 @@ function EpicPane({
   onOpenItem,
   onSeeAllInList,
   onMoveFeature,
+  onRevertFeature,
   newEpicTitle,
   onNewEpicTitle,
   onCreateEpic,
@@ -1114,6 +1125,7 @@ function EpicPane({
   onOpenItem: (id: string) => void;
   onSeeAllInList: (featureId: string) => void;
   onMoveFeature: (id: string, stage: Feature["stage"]) => void;
+  onRevertFeature: (id: string, historyId: string) => void;
   newEpicTitle: string;
   onNewEpicTitle: (value: string) => void;
   onCreateEpic: () => void;
@@ -1359,6 +1371,11 @@ function EpicPane({
                 <div className="flex flex-col pb-3.5 pl-[34px] pr-[18px]">
                   {features.map((feature) => {
                     const items = itemsByFeature.get(feature.id) ?? [];
+                    const history = work.featureHistory.filter(
+                      (entry) => entry.featureId === feature.id,
+                    );
+                    const revertTarget =
+                      history.length > 1 ? history.at(-2) : undefined;
                     const featureOpen = openFeatures[feature.id] ?? false;
                     const doneCount = items.filter(
                       (item) => item.status === "done",
@@ -1427,10 +1444,32 @@ function EpicPane({
                               <CaretDownIcon size={10} className="text-faint" />
                             </span>
                           </SelectMenu>
+                          {revertTarget ? (
+                            <button
+                              type="button"
+                              title={`Revert to ${new Date(revertTarget.occurredAt).toLocaleString()}`}
+                              onClick={() =>
+                                onRevertFeature(feature.id, revertTarget.id)
+                              }
+                              className="inline-flex h-6 items-center gap-1 rounded-quiet border border-line2 bg-transparent px-2 text-[10px] text-accent-strong"
+                            >
+                              <ArrowsClockwiseIcon size={10} />
+                              Revert
+                            </button>
+                          ) : null}
                         </div>
 
                         {featureOpen ? (
                           <div className="flex flex-col pb-2 pl-[26px] pt-0.5">
+                            {feature.sourceSpecRevisionId ? (
+                              <div className="mb-1 rounded-inset border border-line2 bg-panel2 px-3 py-2 text-[9.5px] leading-[1.5] text-ink-muted">
+                                Confirmed Spec revision{" "}
+                                {feature.sourceSpecRevisionId.slice(0, 8)} ·{" "}
+                                {(feature.sourceReferences ?? []).join(", ")} ·
+                                policy{" "}
+                                {feature.automationPolicyVersion ?? "unknown"}
+                              </div>
+                            ) : null}
                             {items
                               .slice(0, FEATURE_ITEM_PREVIEW)
                               .map((item) => {

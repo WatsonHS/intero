@@ -31,6 +31,9 @@ databaseSuite("bounded Project automation store", () => {
   const projectB = ProjectId.parse(uuidv7());
   const teamA = uuidv7();
   const workItemA = uuidv7();
+  const specA = uuidv7();
+  const specRevisionA = uuidv7();
+  const decisionA = uuidv7();
   const bindingA = uuidv7();
   const workStateA = uuidv7();
   const standInJobA = uuidv7();
@@ -164,6 +167,34 @@ databaseSuite("bounded Project automation store", () => {
       ],
     );
     await admin.query(
+      `INSERT INTO specs
+         (id,organization_id,project_id,title,status)
+       VALUES ($1,$2,$3,'支付灰度验收','approved')`,
+      [specA, organizationA, projectA],
+    );
+    await admin.query(
+      `INSERT INTO spec_revisions
+         (id,organization_id,spec_id,revision,markdown,blocks,change_summary,
+          affected_scopes,created_by,confirmed_at)
+       VALUES ($1,$2,$3,1,'# 支付灰度验收','[]'::jsonb,'确认验收口径',
+               '[]'::jsonb,$4,now())`,
+      [specRevisionA, organizationA, specA, adminA],
+    );
+    await admin.query(
+      `UPDATE specs
+       SET current_revision_id=$2,confirmed_revision_id=$2
+       WHERE id=$1`,
+      [specA, specRevisionA],
+    );
+    await admin.query(
+      `INSERT INTO decisions
+         (id,organization_id,title,outcome,source_spec_revision_id,
+          affected_scopes,decided_by)
+       VALUES ($1,$2,'支付灰度范围','先覆盖退款主路径',$3,
+               '[]'::jsonb,$4::jsonb)`,
+      [decisionA, organizationA, specRevisionA, JSON.stringify([adminA])],
+    );
+    await admin.query(
       `INSERT INTO pilot_agent_bindings
         (id,organization_id,project_id,owner_id,credential_hash,data,created_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
@@ -254,6 +285,11 @@ databaseSuite("bounded Project automation store", () => {
 
   afterAll(async () => {
     await admin.query(
+      `UPDATE specs SET confirmed_revision_id=NULL
+       WHERE organization_id=ANY($1::uuid[])`,
+      [[organizationA, organizationB]],
+    );
+    await admin.query(
       `UPDATE project_automation_signals
        SET coordination_thread_id=NULL
        WHERE organization_id=ANY($1::uuid[])`,
@@ -268,6 +304,7 @@ databaseSuite("bounded Project automation store", () => {
     for (const table of [
       "action_inbox",
       "outbox",
+      "project_automation_summary_jobs",
       "activity_events",
       "project_automation_audit",
       "pilot_coordination_participants",
@@ -278,6 +315,9 @@ databaseSuite("bounded Project automation store", () => {
       "pilot_stand_in_jobs",
       "pilot_work_states",
       "pilot_agent_bindings",
+      "decisions",
+      "spec_revisions",
+      "specs",
       "project_work_items",
       "pilot_project_teams",
       "pilot_project_settings",
@@ -373,10 +413,71 @@ databaseSuite("bounded Project automation store", () => {
         projectId: projectA,
         projectName: "Delivery A",
         openSignalCount: 1,
-        latestSafeContext: expect.stringContaining("支付灰度回归"),
+        progressFacts: {
+          total: 1,
+          todo: 0,
+          inProgress: 1,
+          readyForTest: 0,
+          done: 0,
+        },
+        risks: [
+          expect.objectContaining({
+            sourceRef: `work-item:${workItemA}`,
+            summary: expect.stringContaining("支付灰度回归"),
+          }),
+        ],
+        decisions: [
+          expect.objectContaining({
+            id: decisionA,
+            title: "支付灰度范围",
+            outcome: "先覆盖退款主路径",
+            sourceSpecRevisionId: specRevisionA,
+          }),
+        ],
+        interpretation: expect.stringContaining("待协调风险"),
+        freshnessAt: expect.any(String),
       }),
     ]);
     expect(await storeB.summarizeForPrincipal(memberA)).toEqual([]);
+    const summaryJob = await storeA.requestPortfolioSummary(memberA);
+    expect(summaryJob).toMatchObject({
+      organizationId: organizationA,
+      principalId: memberA,
+    });
+    expect(await storeA.requestPortfolioSummary(memberA)).toBeUndefined();
+    const [summaryOutbox] = await storeA.claimPortfolioSummaryOutbox();
+    expect(summaryOutbox?.payload).toEqual(summaryJob);
+    await storeA.markPortfolioSummaryOutboxCompleted(
+      summaryOutbox!.operationId,
+    );
+    const generatedSummary = await storeA.generatePortfolioSummary(summaryJob!);
+    expect(generatedSummary).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          projectId: projectA,
+          progressFacts: expect.objectContaining({ inProgress: 1 }),
+        }),
+      ]),
+    );
+    expect(await storeA.latestPortfolioSummary(memberA)).toEqual(
+      generatedSummary,
+    );
+    expect(await storeB.latestPortfolioSummary(memberA)).toBeUndefined();
+    const summaryState = await admin.query<{
+      status: string;
+      attempts: number;
+      completed_at: Date | null;
+    }>(
+      `SELECT status,attempts,completed_at
+       FROM project_automation_summary_jobs
+       WHERE id=$1`,
+      [summaryJob!.operationId],
+    );
+    expect(summaryState.rows[0]).toMatchObject({
+      status: "completed",
+      attempts: 1,
+    });
+    expect(summaryState.rows[0]!.completed_at).toBeTruthy();
 
     await storeA.markConfirmed({
       signalId: entry!.signal.id,

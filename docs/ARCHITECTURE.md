@@ -119,12 +119,13 @@ base URL in Web `/setup`, validates connectivity, and only then creates the
 Organization/team context and first Project.
 
 Normal onboarding uses **Team Settings → Member Management**. An Organization
-administrator enters one recipient's display name and exact email; Intero
-creates a one-time, expiring, revocable, email-bound account-activation link with
+administrator enters one recipient's exact email; Intero creates a one-time,
+expiring, revocable, email-bound account-activation link with
 `pending`, `accepted`, `expired`, or `revoked` lifecycle. V1 exposes copy,
 regenerate, and revoke without requiring SMTP. The recipient uses the short
-**Accept Invitation** surface and the exact invited email to bootstrap first
-credential setup. The activation link is never a normal login credential.
+**Accept Invitation** surface, chooses their own display name, and uses the exact
+invited email to bootstrap first credential setup. The activation link is never
+a normal login credential.
 Passkey is the primary normal login; email plus password is the fallback.
 Product Magic Link login is absent. The joined member inherits the
 administrator-approved Intero endpoint, team, Web experience, credentials, and
@@ -300,18 +301,17 @@ The last Organization admin cannot be removed or demoted without a replacement.
 Registration is invite-only, and an account has one active Organization.
 
 Post-Pilot invitations are created in **Team Settings → Member Management**
-from an admin-specified display name and exact email. The expiring/revocable
-link is bound to that email and has `pending`, `accepted`, `expired`, or
-`revoked` lifecycle. Copy-link is the V1 delivery mechanism; resend regenerates
-the link, and SMTP is not required.
+from an exact email. The expiring/revocable link is bound to that email and has
+`pending`, `accepted`, `expired`, or `revoked` lifecycle. Copy-link is the V1
+delivery mechanism; resend regenerates the link, and SMTP is not required.
 
 Acceptance is a recipient-only surface, not administrator Setup. It displays
-Organization, Team, pre-set name, invited email, and an explicit Accept action;
-authentication must use the matching email. Completion shows the joined Team
-and accessible Projects, direct Project/Team Pulse entry, and a skippable
-Connect Coding Agent entry. The surface cannot return deployment endpoints,
-model secrets, governance, invitation controls, or administrator Settings.
-Personal Settings may later edit the pre-set display name.
+Organization, Team, invited email, a recipient-owned display-name field, and an
+explicit Accept action; authentication must use the matching email. Completion
+shows the joined Team and accessible Projects, direct Project/Team Pulse entry,
+and a skippable Connect Coding Agent entry. The surface cannot return deployment
+endpoints, model secrets, governance, invitation controls, or administrator
+Settings. Personal Settings may later edit the recipient's chosen display name.
 
 The optional work graph is:
 
@@ -360,6 +360,17 @@ The Web application is the complete primary client for:
   detail;
 - privacy, visibility, and integration settings;
 - provenance, freshness, and authority inspection.
+
+The canonical client uses TanStack Router. Browser deployments use clean
+history-backed URLs, while the file-based Electron shell uses hash history over
+the same route tree. Stable routes cover `/pulse`, `/people/:personId`,
+`/communications/:threadId?`, `/coordination/:threadId?`,
+`/projects/:projectId/work`, `/projects/:projectId/items/:itemId`,
+`/projects/:projectId/specs`, `/settings/:category`, `/admin/:tab`, and
+`/accept-invitation?token=...`. Authentication and initialization are
+non-redirected route gates: they temporarily replace route content without
+discarding the requested URL, so successful sign-in resumes the original deep
+link.
 
 The existing Intero visual system remains canonical. Work Item detail places
 activity and coordination in the center timeline, facts/context/relations/code

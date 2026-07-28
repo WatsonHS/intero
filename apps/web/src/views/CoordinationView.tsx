@@ -63,9 +63,11 @@ const PAGE_SIZE = 8;
 
 export function CoordinationView({
   initialThreadId,
+  onSelectThread,
   onOpenThread,
 }: {
   initialThreadId?: string | undefined;
+  onSelectThread?: (threadId: string) => void;
   onOpenThread: () => void;
 }) {
   const pilot = usePilotOptional();
@@ -366,7 +368,10 @@ export function CoordinationView({
             <ListRow
               key={item.thread.id}
               selected={item.thread.id === current.thread.id}
-              onClick={() => setSelectedThreadId(item.thread.id)}
+              onClick={() => {
+                setSelectedThreadId(item.thread.id);
+                onSelectThread?.(item.thread.id);
+              }}
               {...(pilotThread
                 ? { testId: `pilot-coordination-thread-${pilotThread.id}` }
                 : {})}

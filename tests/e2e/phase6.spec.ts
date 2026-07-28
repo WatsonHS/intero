@@ -54,6 +54,7 @@ test("two users activate, authenticate, receive targeted attention, and search s
   await expect(
     recipient.getByRole("heading", { name: "加入 产品体验" }),
   ).toBeVisible();
+  await recipient.getByTestId("invitation-display-name").fill("Casey Nguyen");
   await recipient.getByRole("button", { name: "使用 Passkey 激活" }).click();
   const confirmMembership = recipient.getByRole("button", {
     name: "确认加入团队",

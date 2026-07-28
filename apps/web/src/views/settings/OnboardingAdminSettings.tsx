@@ -58,7 +58,6 @@ export function OnboardingAdminSettings({
     refetchInterval: 10_000,
   });
   const [displayName, setDisplayName] = useState("");
-  const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [copiedLink, setCopiedLink] = useState<string>();
 
@@ -79,14 +78,13 @@ export function OnboardingAdminSettings({
     mutationFn: () =>
       createPilotInvitation(
         team!.id,
-        { displayName: inviteName, email: inviteEmail },
+        { email: inviteEmail },
         developmentIdentityId,
       ),
     onSuccess: async (result) => {
       const link = result.activationUrl;
       setCopiedLink(link);
       await navigator.clipboard.writeText(link);
-      setInviteName("");
       setInviteEmail("");
       await queryClient.invalidateQueries({
         queryKey: ["pilot", "invitations", team?.id],

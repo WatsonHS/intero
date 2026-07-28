@@ -15,7 +15,9 @@ describe("Phase 5 Project Work routes", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let createdActor: WorkActor | undefined;
   let createdIdempotencyKey: string | undefined;
+  let createdInput: Record<string, unknown> | undefined;
   const projectStore = {
+    recordAutomationAuthorityDenial: vi.fn(async () => undefined),
     listProject: vi.fn(async (requestedProjectId: ProjectId) => ({
       project: { id: requestedProjectId, name: "Delivery", timezone: "UTC" },
       epics: [],
@@ -25,17 +27,22 @@ describe("Phase 5 Project Work routes", () => {
       codeReferences: [],
       comments: [],
       history: [],
+      featureHistory: [],
       programIncrements: [],
       sprints: [],
     })),
     createWorkItem: vi.fn(
       async (
-        input: { projectId: ProjectId; title: string },
+        input: { projectId: ProjectId; title: string } & Record<
+          string,
+          unknown
+        >,
         actor: WorkActor,
         idempotencyKey?: string,
       ) => {
         createdActor = actor;
         createdIdempotencyKey = idempotencyKey;
+        createdInput = input;
         return {
           id: uuidv7(),
           projectId: input.projectId,
@@ -81,6 +88,7 @@ describe("Phase 5 Project Work routes", () => {
     signedIn = true;
     createdActor = undefined;
     createdIdempotencyKey = undefined;
+    createdInput = undefined;
     vi.clearAllMocks();
     app = await buildApp({
       logger: false,
@@ -150,6 +158,7 @@ describe("Phase 5 Project Work routes", () => {
       source: "direct_cloud_mcp",
     });
     expect(createdIdempotencyKey).toBe("phase5-route-idempotency");
+    expect(createdInput).toMatchObject({ priority: "unset" });
     expect(response.body).not.toContain("one-time-bound-agent-credential");
   });
 
@@ -184,6 +193,64 @@ describe("Phase 5 Project Work routes", () => {
       });
     }
     expect(projectStore.createWorkItem).not.toHaveBeenCalled();
+    expect(projectStore.recordAutomationAuthorityDenial).toHaveBeenCalledTimes(
+      3,
+    );
+    expect(projectStore.recordAutomationAuthorityDenial).toHaveBeenCalledWith(
+      projectId,
+      expect.objectContaining({ kind: "agent", principalId }),
+      "work_item.create",
+      expect.any(String),
+    );
+  });
+
+  it("requires idempotency and preserves confirmed-Spec derivation provenance", async () => {
+    signedIn = false;
+    const revisionId = "019b5ac0-7600-7000-8000-0000000000b1";
+    const specId = "019b5ac0-7600-7000-8000-0000000000b2";
+    const sourceReferences = ["block:block_1234567890abcdef"];
+    const missingKey = await app.inject({
+      method: "POST",
+      url: `/v1/project-work/${projectId}/items`,
+      headers: {
+        authorization: "Bearer one-time-bound-agent-credential",
+      },
+      payload: {
+        title: "Derived acceptance work",
+        specId,
+        sourceSpecRevisionId: revisionId,
+        sourceReferences,
+      },
+    });
+    expect(missingKey.statusCode).toBe(400);
+    expect(missingKey.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/project-work/${projectId}/items`,
+      headers: {
+        authorization: "Bearer one-time-bound-agent-credential",
+        "idempotency-key": "confirmed-spec-derived-work",
+      },
+      payload: {
+        title: "Derived acceptance work",
+        specId,
+        sourceSpecRevisionId: revisionId,
+        sourceReferences,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(createdInput).toMatchObject({
+      specId,
+      sourceSpecRevisionId: revisionId,
+      sourceReferences,
+      automationPolicyVersion: "confirmed-spec-v1",
+      priority: "unset",
+    });
+    expect(createdInput).not.toHaveProperty("ownerId");
+    expect(createdIdempotencyKey).toBe("confirmed-spec-derived-work");
   });
 
   it("keeps PI/Sprint governance limited to an admin or Team Leader", async () => {

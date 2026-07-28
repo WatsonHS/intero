@@ -41,12 +41,16 @@ export function ScopeBar({
   projectScoped,
   pendingByProject,
   onCreateProject,
+  onSelectProject,
+  onSelectTeam,
 }: {
   viewTitle: string;
   projectScoped: boolean;
   pendingByProject: Map<string, number>;
   /** Omitted when this deployment has no project-creation path to offer. */
   onCreateProject?: (() => void) | undefined;
+  onSelectProject?: ((projectId: string) => void) | undefined;
+  onSelectTeam?: ((teamId: string) => void) | undefined;
 }) {
   const { t } = useI18n();
   const pilot = usePilotOptional();
@@ -206,8 +210,13 @@ export function ScopeBar({
             entries={open === "team" ? teamEntries : projectEntries}
             activeId={open === "team" ? teamId : projectId}
             onPick={(id) => {
-              if (open === "team") pilot?.setSelectedTeamId(id);
-              else pilot?.setSelectedProjectId(id);
+              if (open === "team") {
+                pilot?.setSelectedTeamId(id);
+                onSelectTeam?.(id);
+              } else {
+                pilot?.setSelectedProjectId(id);
+                onSelectProject?.(id);
+              }
               setOpen(undefined);
             }}
             {...(open === "project" && onCreateProject

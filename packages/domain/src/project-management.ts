@@ -8,6 +8,7 @@ import {
   ProgramIncrementId,
   ProjectId,
   SpecId,
+  SpecRevisionId,
   SprintId,
   ThreadId,
   WorkCommentId,
@@ -78,11 +79,7 @@ export const Epic = z
   .strict();
 export type Epic = z.infer<typeof Epic>;
 
-export const FeatureStage = z.enum([
-  "planned",
-  "in_development",
-  "released",
-]);
+export const FeatureStage = z.enum(["planned", "in_development", "released"]);
 export type FeatureStage = z.infer<typeof FeatureStage>;
 
 export const Feature = z
@@ -90,6 +87,10 @@ export const Feature = z
     id: FeatureId,
     projectId: ProjectId,
     epicId: EpicId.optional(),
+    specId: SpecId.optional(),
+    sourceSpecRevisionId: SpecRevisionId.optional(),
+    sourceReferences: z.array(z.string().min(1).max(500)).max(50).optional(),
+    automationPolicyVersion: z.string().min(1).max(120).optional(),
     title: z.string().min(1).max(240),
     description: z.string().max(8_000),
     stage: FeatureStage,
@@ -98,6 +99,7 @@ export const Feature = z
     sprintId: SprintId.optional(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
+    revokedAt: z.iso.datetime().optional(),
   })
   .strict();
 export type Feature = z.infer<typeof Feature>;
@@ -110,7 +112,7 @@ export const WorkItemStatus = z.enum([
 ]);
 export type WorkItemStatus = z.infer<typeof WorkItemStatus>;
 
-export const WorkPriority = z.enum(["P0", "P1", "P2", "P3"]);
+export const WorkPriority = z.enum(["unset", "P0", "P1", "P2", "P3"]);
 export type WorkPriority = z.infer<typeof WorkPriority>;
 
 export const WorkRelationKind = z.enum([
@@ -127,8 +129,14 @@ export const WorkRelation = z
     sourceId: WorkItemId,
     targetId: WorkItemId,
     kind: WorkRelationKind,
+    specId: SpecId.optional(),
+    sourceSpecRevisionId: SpecRevisionId.optional(),
+    sourceReferences: z.array(z.string().min(1).max(500)).max(50).optional(),
+    automationPolicyVersion: z.string().min(1).max(120).optional(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
     createdBy: WorkActor,
     createdAt: z.iso.datetime(),
+    revokedAt: z.iso.datetime().optional(),
   })
   .strict();
 export type WorkRelation = z.infer<typeof WorkRelation>;
@@ -157,6 +165,11 @@ export const WorkComment = z
     workItemId: WorkItemId,
     parentId: WorkCommentId.optional(),
     body: z.string().min(1).max(16_000),
+    specId: SpecId.optional(),
+    sourceSpecRevisionId: SpecRevisionId.optional(),
+    sourceReferences: z.array(z.string().min(1).max(500)).max(50).optional(),
+    automationPolicyVersion: z.string().min(1).max(120).optional(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
     author: WorkActor,
     createdAt: z.iso.datetime(),
     revokedAt: z.iso.datetime().optional(),
@@ -172,10 +185,25 @@ export const WorkHistoryEntry = z
     snapshot: z.record(z.string(), z.unknown()),
     actor: WorkActor,
     occurredAt: z.iso.datetime(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
     revertedEntryId: z.string().uuid().optional(),
   })
   .strict();
 export type WorkHistoryEntry = z.infer<typeof WorkHistoryEntry>;
+
+export const FeatureHistoryEntry = z
+  .object({
+    id: z.string().uuid(),
+    featureId: FeatureId,
+    action: z.string().min(1).max(120),
+    snapshot: z.record(z.string(), z.unknown()),
+    actor: WorkActor,
+    occurredAt: z.iso.datetime(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
+    revertedEntryId: z.string().uuid().optional(),
+  })
+  .strict();
+export type FeatureHistoryEntry = z.infer<typeof FeatureHistoryEntry>;
 
 export const WorkItem = z
   .object({
@@ -187,6 +215,9 @@ export const WorkItem = z
     status: WorkItemStatus,
     ownerId: PrincipalId.optional(),
     specId: SpecId.optional(),
+    sourceSpecRevisionId: SpecRevisionId.optional(),
+    sourceReferences: z.array(z.string().min(1).max(500)).max(50).optional(),
+    automationPolicyVersion: z.string().min(1).max(120).optional(),
     priority: WorkPriority,
     points: z.number().finite().nonnegative().optional(),
     piId: ProgramIncrementId.optional(),

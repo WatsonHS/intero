@@ -11,7 +11,14 @@ import {
   SidebarSimpleIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import {
+  Outlet,
+  useMatchRoute,
+  useNavigate,
+  useRouterState,
+  useSearch,
+} from "@tanstack/react-router";
+import { createContext, useContext, useEffect, useState } from "react";
 
 import { getActionInbox, getBootstrap } from "./api.js";
 import { useI18n } from "./i18n/index.js";
@@ -20,7 +27,11 @@ import {
   developmentIdentityToolEnabled,
   resolveAuthenticationSurface,
 } from "./pilot/auth-state.js";
-import { useGovernance, usePilotOptional } from "./pilot/context.js";
+import {
+  projectInTeam,
+  useGovernance,
+  usePilotOptional,
+} from "./pilot/context.js";
 import { resolvePilotEntryGate } from "./pilot/entry-gate.js";
 import {
   AcceptInvitationView,
@@ -29,7 +40,7 @@ import {
   NoTeamAccessView,
   SignInView,
 } from "./views/AccessView.js";
-import { AdminView } from "./views/AdminView.js";
+import { AdminView, type AdminTab } from "./views/AdminView.js";
 import { AttentionView } from "./views/AttentionView.js";
 import { CommunicationsView } from "./views/CommunicationsView.js";
 import { CoordinationView } from "./views/CoordinationView.js";
@@ -44,7 +55,7 @@ import { SpecReviewView } from "./views/SpecReviewView.js";
 import { TeamPulseView } from "./views/TeamPulseView.js";
 import { WorkItemView } from "./views/WorkItemView.js";
 
-type View =
+export type AppView =
   | "pulse"
   | "person"
   | "chat"
@@ -55,7 +66,8 @@ type View =
   | "inbox"
   | "search"
   | "admin"
-  | "settings";
+  | "settings"
+  | "not_found";
 
 // The primary group is the places work lives. Settings configures the app
 // rather than holding any work, so it sits below the spacer with the other
@@ -65,7 +77,10 @@ type View =
 // the project chip in the titlebar breadcrumb. `lead` marks the views that
 // only exist for a team leader or an organization admin.
 const NAV: Array<{
-  id: Extract<View, "pulse" | "chat" | "coord" | "spec" | "project" | "admin">;
+  id: Extract<
+    AppView,
+    "pulse" | "chat" | "coord" | "spec" | "project" | "admin"
+  >;
   label: TranslationKey;
   icon: typeof PulseIcon;
   scoped?: boolean;
@@ -79,9 +94,9 @@ const NAV: Array<{
   { id: "admin", label: "nav.admin", icon: ShieldCheckIcon, lead: true },
 ];
 
-const SCOPED_VIEWS = new Set<View>(["spec", "project", "item"]);
+const SCOPED_VIEWS = new Set<AppView>(["spec", "project", "item"]);
 
-const TITLES: Record<View, TranslationKey> = {
+const TITLES: Record<AppView, TranslationKey> = {
   pulse: "nav.pulse",
   person: "title.person",
   chat: "nav.chat",
@@ -93,7 +108,72 @@ const TITLES: Record<View, TranslationKey> = {
   search: "app.search",
   admin: "nav.admin",
   settings: "nav.settings",
+  not_found: "nav.pulse",
 };
+
+const SETTINGS_CATEGORIES = new Set<SettingsCategory>([
+  "personal",
+  "project",
+  "agent",
+]);
+
+const ADMIN_TABS = new Set<AdminTab>([
+  "members",
+  "teams",
+  "projects",
+  "policy",
+  "org",
+  "service",
+  "audit",
+]);
+
+export function resolveAppView(pathname: string): AppView {
+  if (pathname === "/" || pathname === "/pulse") return "pulse";
+  if (pathname.startsWith("/people/")) return "person";
+  if (pathname === "/communications" || pathname.startsWith("/communications/"))
+    return "chat";
+  if (pathname === "/coordination" || pathname.startsWith("/coordination/"))
+    return "coord";
+  if (/^\/projects\/[^/]+\/specs$/.test(pathname)) return "spec";
+  if (/^\/projects\/[^/]+\/items\/[^/]+$/.test(pathname)) return "item";
+  if (/^\/projects\/[^/]+\/work$/.test(pathname)) return "project";
+  if (pathname === "/attention") return "inbox";
+  if (pathname === "/search") return "search";
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return "admin";
+  if (pathname === "/settings" || pathname.startsWith("/settings/"))
+    return "settings";
+  return "not_found";
+}
+
+function settingsCategory(value: string | undefined): SettingsCategory {
+  return SETTINGS_CATEGORIES.has(value as SettingsCategory)
+    ? (value as SettingsCategory)
+    : "personal";
+}
+
+function adminTab(value: string | undefined): AdminTab {
+  return ADMIN_TABS.has(value as AdminTab) ? (value as AdminTab) : "members";
+}
+
+interface RoutedNavigation {
+  openAction: (sourceRef: string) => void;
+  openAgentConnections: (projectId?: string) => void;
+  openProjectSurface: (surface: "work" | "specs", projectId?: string) => void;
+  openPulse: (options?: { replace?: boolean }) => void;
+  selectedProjectId: string | undefined;
+}
+
+const RoutedNavigationContext = createContext<RoutedNavigation | undefined>(
+  undefined,
+);
+
+function useRoutedNavigation(): RoutedNavigation {
+  const value = useContext(RoutedNavigationContext);
+  if (!value) {
+    throw new Error("Routed workspace is outside the application shell.");
+  }
+  return value;
+}
 
 function navButtonClass(open: boolean, active: boolean): string {
   return [
@@ -115,26 +195,24 @@ export function App() {
 function InteroApp() {
   const { t } = useI18n();
   const pilot = usePilotOptional();
-  const [view, setView] = useState<View>("pulse");
-  const [settingsCategory, setSettingsCategory] =
-    useState<SettingsCategory>("personal");
+  const navigate = useNavigate();
+  const matchRoute = useMatchRoute();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const routeSearch = useSearch({ strict: false }) as {
+    token?: string;
+    standInOwnerId?: string;
+  };
+  const view = resolveAppView(pathname);
+  const projectMatch = matchRoute({ to: "/projects/$projectId/work" });
+  const itemMatch = matchRoute({
+    to: "/projects/$projectId/items/$itemId",
+  });
+  const specMatch = matchRoute({ to: "/projects/$projectId/specs" });
+  const invitationMatch = matchRoute({ to: "/accept-invitation" });
   const [bootstrapActive, setBootstrapActive] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [personId, setPersonId] = useState<string>();
-  const [personReturnView, setPersonReturnView] = useState<"pulse" | "search">(
-    "pulse",
-  );
-  const [chatThreadId, setChatThreadId] = useState<string>();
-  const [chatStandInOwnerId, setChatStandInOwnerId] = useState<string>();
-  const [itemId, setItemId] = useState<string>();
-  const [coordinationThreadId, setCoordinationThreadId] = useState<string>();
-  const [invitationToken, setInvitationToken] = useState<string | undefined>(
-    () =>
-      typeof window === "undefined"
-        ? undefined
-        : (new URL(window.location.href).searchParams.get("token") ??
-          undefined),
-  );
 
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -175,32 +253,86 @@ function InteroApp() {
     );
   }
 
+  const selectedProjectId =
+    pilot?.selectedProjectId ?? pilot?.projects.data?.projects[0]?.id;
+
+  function openPulse(options?: { replace?: boolean }) {
+    void navigate({
+      to: "/pulse",
+      ...(options?.replace !== undefined ? { replace: options.replace } : {}),
+    });
+  }
+
+  function openProjectSurface(
+    surface: "work" | "specs",
+    projectId = selectedProjectId,
+  ) {
+    if (!projectId) {
+      openPulse();
+      return;
+    }
+    pilot?.setSelectedProjectId(projectId);
+    if (surface === "specs") {
+      void navigate({
+        to: "/projects/$projectId/specs",
+        params: { projectId },
+      });
+    } else {
+      void navigate({
+        to: "/projects/$projectId/work",
+        params: { projectId },
+      });
+    }
+  }
+
   function openAgentConnections(projectId?: string) {
     if (projectId) pilot?.setSelectedProjectId(projectId);
-    setSettingsCategory("agent");
-    setView("settings");
+    void navigate({
+      to: "/settings/$category",
+      params: { category: "agent" },
+    });
   }
 
   function openAction(sourceRef: string) {
     if (sourceRef.startsWith("spec:")) {
-      setView("spec");
+      openProjectSurface("specs");
       return;
     }
     if (sourceRef.startsWith("coordination:")) {
-      setCoordinationThreadId(sourceRef.slice("coordination:".length));
-      setView("coord");
+      void navigate({
+        to: "/coordination/$threadId",
+        params: { threadId: sourceRef.slice("coordination:".length) },
+      });
       return;
     }
-    setView("pulse");
+    openPulse();
   }
 
-  function leaveInvitation(nextView: "pulse", projectId?: string) {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("token");
-    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
-    setInvitationToken(undefined);
+  function leaveInvitation(projectId?: string) {
     if (projectId) pilot?.setSelectedProjectId(projectId);
-    setView(nextView);
+    openPulse({ replace: true });
+  }
+
+  function moveProjectScope(projectId: string) {
+    pilot?.setSelectedProjectId(projectId);
+    if (view === "spec") {
+      openProjectSurface("specs", projectId);
+      return;
+    }
+    openProjectSurface("work", projectId);
+  }
+
+  function moveTeamScope(teamId: string) {
+    pilot?.setSelectedTeamId(teamId);
+    if (!SCOPED_VIEWS.has(view)) return;
+    const projects = pilot?.projects.data?.projects ?? [];
+    const current = projects.find(
+      (project) =>
+        project.id === selectedProjectId && projectInTeam(project, teamId),
+    );
+    const next =
+      current ?? projects.find((project) => projectInTeam(project, teamId));
+    if (next) moveProjectScope(next.id);
   }
 
   useEffect(() => {
@@ -217,11 +349,43 @@ function InteroApp() {
     pilot?.enabled,
   ]);
 
-  if (pilot?.enabled && invitationToken) {
+  const routedProjectId =
+    (specMatch && specMatch.projectId) ||
+    (projectMatch && projectMatch.projectId) ||
+    (itemMatch && itemMatch.projectId) ||
+    undefined;
+  useEffect(() => {
+    if (!pilot?.enabled || !routedProjectId) return;
+    const project = pilot.projects.data?.projects.find(
+      (candidate) => candidate.id === routedProjectId,
+    );
+    if (!project) {
+      if (pilot.projects.isSuccess) openPulse({ replace: true });
+      return;
+    }
+    if (
+      !pilot.selectedTeamId ||
+      !projectInTeam(project, pilot.selectedTeamId)
+    ) {
+      pilot.setSelectedTeamId(project.primaryTeamId);
+    }
+    if (pilot.selectedProjectId !== routedProjectId) {
+      pilot.setSelectedProjectId(routedProjectId);
+    }
+  }, [
+    pilot?.enabled,
+    pilot?.projects.data,
+    pilot?.projects.isSuccess,
+    pilot?.selectedProjectId,
+    pilot?.selectedTeamId,
+    routedProjectId,
+  ]);
+
+  if (invitationMatch) {
     return (
       <AcceptInvitationView
-        token={invitationToken}
-        onEnterPulse={(projectId) => leaveInvitation("pulse", projectId)}
+        token={routeSearch.token ?? ""}
+        onEnterPulse={leaveInvitation}
       />
     );
   }
@@ -272,7 +436,7 @@ function InteroApp() {
         mode="canonical"
         onDone={() => {
           setBootstrapActive(false);
-          setView("pulse");
+          openPulse({ replace: true });
         }}
       />
     );
@@ -303,11 +467,13 @@ function InteroApp() {
           viewTitle={t(TITLES[view])}
           projectScoped={SCOPED_VIEWS.has(view)}
           pendingByProject={pendingByProject}
+          onSelectProject={moveProjectScope}
+          onSelectTeam={moveTeamScope}
         />
         <span className="ml-auto flex items-center gap-2 [-webkit-app-region:no-drag]">
           <button
             type="button"
-            onClick={() => setView("search")}
+            onClick={() => void navigate({ to: "/search" })}
             className="inline-flex h-6 items-center gap-[7px] rounded-[7px] border-0 bg-raise px-2.5 text-[11px] text-faint hover:bg-hover-wash hover:text-ink"
           >
             <MagnifyingGlassIcon size={12} aria-hidden="true" />
@@ -318,7 +484,7 @@ function InteroApp() {
             type="button"
             className="relative grid h-6 w-6 cursor-pointer place-items-center rounded-[7px] border-0 bg-transparent p-0 text-ink-muted hover:bg-hover-wash"
             aria-label={t("app.notifications")}
-            onClick={() => setView("inbox")}
+            onClick={() => void navigate({ to: "/attention" })}
           >
             <BellIcon size={14} />
             {(inbox.data?.unreadCount ?? 0) > 0 ? (
@@ -348,7 +514,20 @@ function InteroApp() {
               title={t(item.label)}
               className={navButtonClass(navOpen, active)}
               aria-current={active ? "page" : undefined}
-              onClick={() => setView(item.id)}
+              onClick={() => {
+                if (item.id === "pulse") openPulse();
+                else if (item.id === "chat")
+                  void navigate({ to: "/communications" });
+                else if (item.id === "coord")
+                  void navigate({ to: "/coordination" });
+                else if (item.id === "spec") openProjectSurface("specs");
+                else if (item.id === "project") openProjectSurface("work");
+                else
+                  void navigate({
+                    to: "/admin/$tab",
+                    params: { tab: "members" },
+                  });
+              }}
             >
               <span className="grid place-items-center justify-self-center">
                 <Icon size={18} />
@@ -372,7 +551,12 @@ function InteroApp() {
           title={t("nav.settings")}
           className={navButtonClass(navOpen, activeNav === "settings")}
           aria-current={activeNav === "settings" ? "page" : undefined}
-          onClick={() => setView("settings")}
+          onClick={() =>
+            void navigate({
+              to: "/settings/$category",
+              params: { category: "personal" },
+            })
+          }
         >
           <span className="grid place-items-center justify-self-center">
             <GearSixIcon size={18} />
@@ -420,104 +604,255 @@ function InteroApp() {
             ? { organizationName: organization.name }
             : {})}
           onOpenPersonal={() => {
-            setSettingsCategory("personal");
-            setView("settings");
+            void navigate({
+              to: "/settings/$category",
+              params: { category: "personal" },
+            });
           }}
         />
       </nav>
 
       <main className="min-w-0 overflow-hidden">
-        {view === "pulse" ? (
-          <TeamPulseView
-            onOpenPerson={(ownerId) => {
-              setPersonId(ownerId);
-              setPersonReturnView("pulse");
-              setView("person");
-            }}
-            onOpenAction={openAction}
-            onOpenAgentConnections={openAgentConnections}
-            onOpenSpecs={() => setView("spec")}
-          />
-        ) : null}
-        {view === "person" && personId ? (
-          <PersonView
-            ownerId={personId}
-            onBack={() => setView(personReturnView)}
-            onOpenChat={(threadId) => {
-              setChatThreadId(threadId);
-              setChatStandInOwnerId(undefined);
-              setView("chat");
-            }}
-            onOpenStandIn={(ownerId) => {
-              setChatThreadId(undefined);
-              setChatStandInOwnerId(ownerId);
-              setView("chat");
-            }}
-          />
-        ) : null}
-        {view === "chat" ? (
-          <CommunicationsView
-            {...(chatThreadId ? { initialThreadId: chatThreadId } : {})}
-            {...(chatStandInOwnerId
-              ? { initialStandInOwnerId: chatStandInOwnerId }
-              : {})}
-          />
-        ) : null}
-        {view === "coord" ? (
-          <CoordinationView
-            initialThreadId={coordinationThreadId}
-            onOpenThread={() => setView("chat")}
-          />
-        ) : null}
-        {view === "spec" ? (
-          <SpecReviewView onOpenAgentConnections={openAgentConnections} />
-        ) : null}
-        {view === "project" ? (
-          <ProjectView
-            onOpenItem={(cardId) => {
-              setItemId(cardId);
-              setView("item");
-            }}
-            onOpenAgentConnections={openAgentConnections}
-          />
-        ) : null}
-        {view === "item" && itemId ? (
-          <WorkItemView cardId={itemId} onBack={() => setView("project")} />
-        ) : null}
-        {view === "settings" ? (
-          <SettingsView
-            initialCategory={settingsCategory}
-            onCategoryChange={setSettingsCategory}
-          />
-        ) : null}
-        {/* AdminView owns its own permission state: gating here would blank the
-            surface for a frame every time the teams query refetches. */}
-        {view === "admin" ? (
-          <AdminView onOpenSpecs={() => setView("spec")} />
-        ) : null}
-        {view === "inbox" ? <AttentionView onOpenAction={openAction} /> : null}
-        {view === "search" ? (
-          <SearchView
-            onOpenPerson={(ownerId) => {
-              setPersonId(ownerId);
-              setPersonReturnView("search");
-              setView("person");
-            }}
-            onOpenResult={(result) => {
-              if (result.sourceRef.startsWith("work-item:")) {
-                setItemId(result.sourceRef.slice("work-item:".length));
-                setView("item");
-              } else if (result.sourceRef.startsWith("spec")) {
-                setView("spec");
-              } else if (result.sourceRef.startsWith("coordination:")) {
-                setView("coord");
-              } else {
-                setView("pulse");
-              }
-            }}
-          />
-        ) : null}
+        <RoutedNavigationContext.Provider
+          value={{
+            openAction,
+            openAgentConnections,
+            openProjectSurface,
+            openPulse,
+            selectedProjectId,
+          }}
+        >
+          <Outlet />
+        </RoutedNavigationContext.Provider>
       </main>
+    </div>
+  );
+}
+
+export function RoutedWorkspace() {
+  const navigate = useNavigate();
+  const matchRoute = useMatchRoute();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const routeSearch = useSearch({ strict: false }) as {
+    standInOwnerId?: string;
+  };
+  const {
+    openAction,
+    openAgentConnections,
+    openProjectSurface,
+    openPulse,
+    selectedProjectId,
+  } = useRoutedNavigation();
+  const view = resolveAppView(pathname);
+  const personMatch = matchRoute({ to: "/people/$personId" });
+  const communicationMatch = matchRoute({
+    to: "/communications/$threadId",
+  });
+  const coordinationMatch = matchRoute({
+    to: "/coordination/$threadId",
+  });
+  const projectMatch = matchRoute({ to: "/projects/$projectId/work" });
+  const itemMatch = matchRoute({
+    to: "/projects/$projectId/items/$itemId",
+  });
+  const settingsMatch = matchRoute({ to: "/settings/$category" });
+  const adminMatch = matchRoute({ to: "/admin/$tab" });
+
+  if (view === "pulse") {
+    return (
+      <TeamPulseView
+        onOpenPerson={(personId) =>
+          void navigate({
+            to: "/people/$personId",
+            params: { personId },
+          })
+        }
+        onOpenAction={openAction}
+        onOpenAgentConnections={openAgentConnections}
+        onOpenSpecs={() => openProjectSurface("specs")}
+      />
+    );
+  }
+
+  if (view === "person" && personMatch) {
+    return (
+      <PersonView
+        ownerId={personMatch.personId}
+        onBack={openPulse}
+        onOpenChat={(threadId) =>
+          void navigate({
+            to: "/communications/$threadId",
+            params: { threadId },
+          })
+        }
+        onOpenStandIn={(standInOwnerId) =>
+          void navigate({
+            to: "/communications",
+            search: { standInOwnerId },
+          })
+        }
+      />
+    );
+  }
+
+  if (view === "chat") {
+    return (
+      <CommunicationsView
+        {...(communicationMatch
+          ? { initialThreadId: communicationMatch.threadId }
+          : {})}
+        {...(routeSearch.standInOwnerId
+          ? { initialStandInOwnerId: routeSearch.standInOwnerId }
+          : {})}
+        onOpenThread={(threadId) =>
+          void navigate({
+            to: "/communications/$threadId",
+            params: { threadId },
+          })
+        }
+        onOpenStandIn={(standInOwnerId) =>
+          void navigate({
+            to: "/communications",
+            search: { standInOwnerId },
+          })
+        }
+      />
+    );
+  }
+
+  if (view === "coord") {
+    return (
+      <CoordinationView
+        {...(coordinationMatch
+          ? { initialThreadId: coordinationMatch.threadId }
+          : {})}
+        onSelectThread={(threadId) =>
+          void navigate({
+            to: "/coordination/$threadId",
+            params: { threadId },
+          })
+        }
+        onOpenThread={() => void navigate({ to: "/communications" })}
+      />
+    );
+  }
+
+  if (view === "spec") {
+    return <SpecReviewView onOpenAgentConnections={openAgentConnections} />;
+  }
+
+  if (view === "project") {
+    return (
+      <ProjectView
+        onOpenItem={(itemId) => {
+          const projectId =
+            (projectMatch && projectMatch.projectId) ?? selectedProjectId;
+          if (!projectId) return;
+          void navigate({
+            to: "/projects/$projectId/items/$itemId",
+            params: { projectId, itemId },
+          });
+        }}
+        onOpenAgentConnections={openAgentConnections}
+      />
+    );
+  }
+
+  if (view === "item" && itemMatch) {
+    return (
+      <WorkItemView
+        cardId={itemMatch.itemId}
+        onBack={() => openProjectSurface("work", itemMatch.projectId)}
+      />
+    );
+  }
+
+  if (view === "settings") {
+    return (
+      <SettingsView
+        initialCategory={settingsCategory(
+          settingsMatch ? settingsMatch.category : undefined,
+        )}
+        onCategoryChange={(category) =>
+          void navigate({
+            to: "/settings/$category",
+            params: { category },
+          })
+        }
+      />
+    );
+  }
+
+  if (view === "admin") {
+    return (
+      <AdminView
+        initialTab={adminTab(adminMatch ? adminMatch.tab : undefined)}
+        onTabChange={(tab) =>
+          void navigate({
+            to: "/admin/$tab",
+            params: { tab },
+          })
+        }
+        onOpenSpecs={() => openProjectSurface("specs")}
+      />
+    );
+  }
+
+  if (view === "inbox") {
+    return <AttentionView onOpenAction={openAction} />;
+  }
+
+  if (view === "search") {
+    return (
+      <SearchView
+        onOpenPerson={(personId) =>
+          void navigate({
+            to: "/people/$personId",
+            params: { personId },
+          })
+        }
+        onOpenResult={(result) => {
+          if (result.sourceRef.startsWith("work-item:")) {
+            if (!selectedProjectId) return;
+            void navigate({
+              to: "/projects/$projectId/items/$itemId",
+              params: {
+                projectId: selectedProjectId,
+                itemId: result.sourceRef.slice("work-item:".length),
+              },
+            });
+          } else if (result.sourceRef.startsWith("spec")) {
+            openProjectSurface("specs");
+          } else if (result.sourceRef.startsWith("coordination:")) {
+            void navigate({
+              to: "/coordination/$threadId",
+              params: {
+                threadId: result.sourceRef.slice("coordination:".length),
+              },
+            });
+          } else {
+            openPulse();
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="grid h-full place-items-center p-10 text-center">
+      <div>
+        <p className="font-mono text-[11px] text-faint">404</p>
+        <h1 className="mt-2 text-[22px] font-[620]">找不到这个页面</h1>
+        <button
+          type="button"
+          onClick={() => openPulse({ replace: true })}
+          className="mt-5 h-9 rounded-btn border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent"
+        >
+          返回 Team Pulse
+        </button>
+      </div>
     </div>
   );
 }

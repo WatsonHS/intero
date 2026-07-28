@@ -2,7 +2,8 @@ import {
   EpicId,
   FeatureId,
   type Epic,
-  type Feature,
+  Feature,
+  type FeatureHistoryEntry,
   type OrganizationId,
   type PrincipalId,
   planningStatus,
@@ -16,6 +17,7 @@ import {
   type SpecConfirmation,
   type SpecReviewPolicy,
   type SpecRevision,
+  type SpecRevisionId,
   SprintId,
   type Sprint,
   type WorkActor,
@@ -41,6 +43,7 @@ export interface ProjectWorkSnapshot {
   codeReferences: WorkCodeReference[];
   comments: WorkComment[];
   history: WorkHistoryEntry[];
+  featureHistory: FeatureHistoryEntry[];
   programIncrements: Array<ProgramIncrement & { status: string }>;
   sprints: Array<Sprint & { status: string }>;
 }
@@ -67,6 +70,9 @@ export type WorkItemPatch = Partial<
   sprintId?: SprintId | null;
   points?: number | null;
   completionEvidence?: string | null;
+  sourceSpecRevisionId?: SpecRevisionId | null;
+  sourceReferences?: string[];
+  automationPolicyVersion?: string | null;
 };
 
 export class PostgresProjectWorkStore {
@@ -87,7 +93,9 @@ export class PostgresProjectWorkStore {
         [projectId],
       );
       const features = await client.query(
-        "SELECT * FROM project_features WHERE project_id = $1 ORDER BY created_at",
+        `SELECT * FROM project_features
+         WHERE project_id = $1 AND revoked_at IS NULL
+         ORDER BY created_at`,
         [projectId],
       );
       const items = await client.query(
@@ -102,6 +110,7 @@ export class PostgresProjectWorkStore {
          JOIN project_work_items target ON target.id = r.target_id
          WHERE i.project_id = $1
            AND i.revoked_at IS NULL AND target.revoked_at IS NULL
+           AND r.revoked_at IS NULL
          ORDER BY r.created_at`,
         [projectId],
       );
@@ -121,6 +130,11 @@ export class PostgresProjectWorkStore {
       );
       const history = await client.query(
         `SELECT * FROM project_work_history
+         WHERE project_id = $1 ORDER BY occurred_at`,
+        [projectId],
+      );
+      const featureHistory = await client.query(
+        `SELECT * FROM project_feature_history
          WHERE project_id = $1 ORDER BY occurred_at`,
         [projectId],
       );
@@ -148,6 +162,7 @@ export class PostgresProjectWorkStore {
         codeReferences: refs.rows.map(codeRefFromRow),
         comments: comments.rows.map(commentFromRow),
         history: history.rows.map(historyFromRow),
+        featureHistory: featureHistory.rows.map(featureHistoryFromRow),
         programIncrements: pis.rows.map((row) => {
           const pi = piFromRow(row);
           return {
@@ -253,11 +268,67 @@ export class PostgresProjectWorkStore {
     });
   }
 
+  async recordAutomationAuthorityDenial(
+    projectId: ProjectId,
+    actor: WorkActor,
+    attemptedAction: string,
+    detail: string,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      const operationId = uuidv7();
+      const payload = {
+        projectId,
+        attemptedAction,
+        detail,
+        actorKind: actor.kind,
+        actorSource: actor.source,
+      };
+      await client.query(
+        `INSERT INTO activity_events
+          (organization_id,operation_id,actor_id,aggregate_type,aggregate_id,
+           event_type,metadata)
+         VALUES ($1,$2,$3,'automation_authority',$4,
+                 'project.automation.authority_denied',$5)`,
+        [
+          this.organizationId,
+          operationId,
+          actor.principalId,
+          projectId,
+          json(payload),
+        ],
+      );
+      await client.query(
+        `INSERT INTO outbox (operation_id,organization_id,topic,payload)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          operationId,
+          this.organizationId,
+          `project.${projectId}.phase7`,
+          json({
+            eventType: "project.automation.authority_denied",
+            ...payload,
+          }),
+        ],
+      );
+    });
+  }
+
   async createFeature(
     input: Omit<Feature, "id" | "createdAt" | "updatedAt">,
     actor: WorkActor,
     idempotencyKey?: string,
   ) {
+    try {
+      assertAgentFeatureMutation(actor, input);
+    } catch (error) {
+      await this.recordAutomationAuthorityDenial(
+        input.projectId,
+        actor,
+        "feature.create",
+        error instanceof Error ? error.message : "Feature authority denied.",
+      );
+      throw error;
+    }
     const now = new Date().toISOString();
     const feature: Feature = {
       ...input,
@@ -274,6 +345,12 @@ export class PostgresProjectWorkStore {
       if (duplicate) return duplicate;
       await assertHumanOwner(client, feature.ownerId);
       await assertEpic(client, feature.projectId, feature.epicId);
+      await assertConfirmedSpecSource(client, {
+        projectId: feature.projectId,
+        specId: feature.specId,
+        sourceSpecRevisionId: feature.sourceSpecRevisionId,
+        sourceReferences: feature.sourceReferences,
+      });
       await assertPlanning(
         client,
         feature.projectId,
@@ -282,13 +359,19 @@ export class PostgresProjectWorkStore {
       );
       await client.query(
         `INSERT INTO project_features
-         (id,organization_id,project_id,epic_id,title,description,stage,owner_id,pi_id,sprint_id,created_at,updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+         (id,organization_id,project_id,epic_id,spec_id,
+          source_spec_revision_id,source_references,automation_policy_version,
+          title,description,stage,owner_id,pi_id,sprint_id,created_at,updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
         [
           feature.id,
           this.organizationId,
           feature.projectId,
           feature.epicId ?? null,
+          feature.specId ?? null,
+          feature.sourceSpecRevisionId ?? null,
+          json(feature.sourceReferences ?? []),
+          feature.automationPolicyVersion ?? null,
           feature.title,
           feature.description,
           feature.stage,
@@ -307,6 +390,22 @@ export class PostgresProjectWorkStore {
         "project.feature.created",
         feature,
       );
+      await this.featureHistory(
+        client,
+        feature,
+        "created",
+        actor,
+        idempotencyKey,
+      );
+      if (feature.sourceSpecRevisionId && !feature.ownerId) {
+        await this.createAutomationChoiceAttention(
+          client,
+          feature.projectId,
+          "feature",
+          feature.id,
+          feature.title,
+        );
+      }
       await this.rememberResult(client, idempotencyKey, feature.id);
       return feature;
     });
@@ -317,6 +416,10 @@ export class PostgresProjectWorkStore {
     featureId: string,
     patch: Partial<Pick<Feature, "title" | "description" | "stage">> & {
       epicId?: Epic["id"] | null;
+      specId?: SpecId | null;
+      sourceSpecRevisionId?: SpecRevisionId | null;
+      sourceReferences?: string[];
+      automationPolicyVersion?: string | null;
       ownerId?: PrincipalId | null;
       piId?: ProgramIncrementId | null;
       sprintId?: SprintId | null;
@@ -324,6 +427,17 @@ export class PostgresProjectWorkStore {
     actor: WorkActor,
     idempotencyKey?: string,
   ): Promise<Feature> {
+    try {
+      assertAgentFeatureMutation(actor, patch);
+    } catch (error) {
+      await this.recordAutomationAuthorityDenial(
+        projectId,
+        actor,
+        "feature.update",
+        error instanceof Error ? error.message : "Feature authority denied.",
+      );
+      throw error;
+    }
     return this.write(async (client) => {
       const duplicate = await this.idempotentFeature(
         client,
@@ -349,6 +463,27 @@ export class PostgresProjectWorkStore {
       };
       if (patch.epicId === null) delete next.epicId;
       else if (patch.epicId !== undefined) next.epicId = patch.epicId;
+      if (patch.specId === null) {
+        delete next.specId;
+        delete next.sourceSpecRevisionId;
+        delete next.sourceReferences;
+        delete next.automationPolicyVersion;
+      } else if (patch.specId !== undefined) next.specId = patch.specId;
+      if (patch.sourceSpecRevisionId === null) {
+        delete next.sourceSpecRevisionId;
+        delete next.sourceReferences;
+        delete next.automationPolicyVersion;
+      } else if (patch.sourceSpecRevisionId !== undefined) {
+        next.sourceSpecRevisionId = patch.sourceSpecRevisionId;
+      }
+      if (patch.sourceReferences !== undefined) {
+        next.sourceReferences = patch.sourceReferences;
+      }
+      if (patch.automationPolicyVersion === null) {
+        delete next.automationPolicyVersion;
+      } else if (patch.automationPolicyVersion !== undefined) {
+        next.automationPolicyVersion = patch.automationPolicyVersion;
+      }
       if (patch.ownerId === null) delete next.ownerId;
       else if (patch.ownerId !== undefined) next.ownerId = patch.ownerId;
       if (patch.piId === null) delete next.piId;
@@ -357,16 +492,28 @@ export class PostgresProjectWorkStore {
       else if (patch.sprintId !== undefined) next.sprintId = patch.sprintId;
       await assertHumanOwner(client, next.ownerId);
       await assertEpic(client, projectId, next.epicId);
+      await assertConfirmedSpecSource(client, {
+        projectId,
+        specId: next.specId,
+        sourceSpecRevisionId: next.sourceSpecRevisionId,
+        sourceReferences: next.sourceReferences,
+      });
       await assertPlanning(client, projectId, next.piId, next.sprintId);
       await client.query(
         `UPDATE project_features SET
-           epic_id=$3,title=$4,description=$5,stage=$6,owner_id=$7,
-           pi_id=$8,sprint_id=$9,updated_at=$10
+           epic_id=$3,spec_id=$4,source_spec_revision_id=$5,
+           source_references=$6,automation_policy_version=$7,
+           title=$8,description=$9,stage=$10,owner_id=$11,
+           pi_id=$12,sprint_id=$13,updated_at=$14
          WHERE id=$1 AND project_id=$2`,
         [
           featureId,
           projectId,
           next.epicId ?? null,
+          next.specId ?? null,
+          next.sourceSpecRevisionId ?? null,
+          json(next.sourceReferences ?? []),
+          next.automationPolicyVersion ?? null,
           next.title,
           next.description,
           next.stage,
@@ -385,8 +532,172 @@ export class PostgresProjectWorkStore {
         "project.feature.updated",
         next,
       );
+      await this.featureHistory(client, next, "updated", actor, idempotencyKey);
+      if (next.sourceSpecRevisionId && !next.ownerId) {
+        await this.createAutomationChoiceAttention(
+          client,
+          projectId,
+          "feature",
+          next.id,
+          next.title,
+        );
+      } else {
+        await this.resolveAutomationChoiceAttention(client, "feature", next.id);
+      }
       await this.rememberResult(client, idempotencyKey, featureId);
       return next;
+    });
+  }
+
+  async revertFeature(
+    projectId: ProjectId,
+    featureId: FeatureId,
+    historyId: string,
+    actor: WorkActor,
+    idempotencyKey?: string,
+  ): Promise<Feature> {
+    return this.write(async (client) => {
+      const duplicate = await this.idempotentFeature(
+        client,
+        projectId,
+        idempotencyKey,
+      );
+      if (duplicate) return duplicate;
+      const current = await client.query(
+        `SELECT * FROM project_features
+         WHERE id=$1 AND project_id=$2 AND revoked_at IS NULL
+         FOR UPDATE`,
+        [featureId, projectId],
+      );
+      if (!current.rows[0]) throw new Error("Feature was not found.");
+      const target = await client.query<{ snapshot: unknown }>(
+        `SELECT snapshot FROM project_feature_history
+         WHERE id=$1 AND project_id=$2 AND feature_id=$3`,
+        [historyId, projectId, featureId],
+      );
+      if (!target.rows[0]) throw new Error("Feature history was not found.");
+      const snapshot = Feature.parse(target.rows[0].snapshot);
+      const currentFeature = featureFromRow(current.rows[0]);
+      if (
+        actor.kind === "agent" &&
+        (snapshot.ownerId !== currentFeature.ownerId ||
+          (snapshot.stage === "released" &&
+            currentFeature.stage !== "released"))
+      ) {
+        throw new PilotStoreError(
+          "AUTOMATION_AUTHORITY_DENIED",
+          403,
+          "Agent revert cannot change the Feature owner or make a release decision.",
+        );
+      }
+      await assertHumanOwner(client, snapshot.ownerId);
+      await assertEpic(client, projectId, snapshot.epicId);
+      await assertHistoricallyConfirmedSpecSource(client, {
+        projectId,
+        specId: snapshot.specId,
+        sourceSpecRevisionId: snapshot.sourceSpecRevisionId,
+        sourceReferences: snapshot.sourceReferences,
+      });
+      await assertPlanning(client, projectId, snapshot.piId, snapshot.sprintId);
+      const reverted: Feature = {
+        ...snapshot,
+        id: featureId,
+        projectId,
+        updatedAt: new Date().toISOString(),
+      };
+      delete reverted.revokedAt;
+      await persistFeature(client, reverted);
+      await this.featureHistory(
+        client,
+        reverted,
+        "reverted",
+        actor,
+        idempotencyKey,
+        historyId,
+      );
+      await this.record(
+        client,
+        projectId,
+        actor,
+        "feature",
+        featureId,
+        "project.feature.reverted",
+        { historyId },
+      );
+      if (reverted.sourceSpecRevisionId && !reverted.ownerId) {
+        await this.createAutomationChoiceAttention(
+          client,
+          projectId,
+          "feature",
+          reverted.id,
+          reverted.title,
+        );
+      } else {
+        await this.resolveAutomationChoiceAttention(
+          client,
+          "feature",
+          reverted.id,
+        );
+      }
+      await this.rememberResult(client, idempotencyKey, featureId);
+      return reverted;
+    });
+  }
+
+  async revokeFeature(
+    projectId: ProjectId,
+    featureId: FeatureId,
+    actor: WorkActor,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      const current = await client.query(
+        `SELECT * FROM project_features
+         WHERE id=$1 AND project_id=$2 AND revoked_at IS NULL
+         FOR UPDATE`,
+        [featureId, projectId],
+      );
+      if (!current.rows[0]) throw new Error("Feature was not found.");
+      const feature = featureFromRow(current.rows[0]);
+      if (actor.kind === "agent") {
+        const created = await client.query<{ actor: WorkActor }>(
+          `SELECT actor FROM project_feature_history
+           WHERE feature_id=$1 AND action='created'
+           ORDER BY occurred_at LIMIT 1`,
+          [featureId],
+        );
+        if (
+          created.rows[0]?.actor.kind !== "agent" ||
+          created.rows[0].actor.principalId !== actor.principalId
+        ) {
+          throw new PilotStoreError(
+            "AUTOMATION_AUTHORITY_DENIED",
+            403,
+            "Agent may revoke only a Feature it created.",
+          );
+        }
+      }
+      const revokedAt = new Date().toISOString();
+      await client.query(
+        `UPDATE project_features SET revoked_at=$3,updated_at=$3
+         WHERE id=$1 AND project_id=$2`,
+        [featureId, projectId, revokedAt],
+      );
+      await this.featureHistory(
+        client,
+        { ...feature, revokedAt, updatedAt: revokedAt },
+        "revoked",
+        actor,
+      );
+      await this.record(
+        client,
+        projectId,
+        actor,
+        "feature",
+        featureId,
+        "project.feature.revoked",
+        { revokedAt },
+      );
+      await this.resolveAutomationChoiceAttention(client, "feature", featureId);
     });
   }
 
@@ -395,6 +706,17 @@ export class PostgresProjectWorkStore {
     actor: WorkActor,
     idempotencyKey?: string,
   ): Promise<WorkItem> {
+    try {
+      assertAgentWorkItemMutation(actor, input, true);
+    } catch (error) {
+      await this.recordAutomationAuthorityDenial(
+        input.projectId,
+        actor,
+        "work_item.create",
+        error instanceof Error ? error.message : "Work authority denied.",
+      );
+      throw error;
+    }
     const now = new Date().toISOString();
     const item: WorkItem = {
       ...input,
@@ -404,7 +726,11 @@ export class PostgresProjectWorkStore {
       updatedAt: now,
     };
     return this.write(async (client) => {
-      const duplicate = await this.idempotent<WorkItem>(client, idempotencyKey);
+      const duplicate = await this.idempotent<WorkItem>(
+        client,
+        input.projectId,
+        idempotencyKey,
+      );
       if (duplicate) return duplicate;
       await assertHumanOwner(client, item.ownerId);
       await assertWorkLinks(
@@ -413,13 +739,20 @@ export class PostgresProjectWorkStore {
         item.featureId,
         item.specId,
       );
+      await assertConfirmedSpecSource(client, {
+        projectId: item.projectId,
+        specId: item.specId,
+        sourceSpecRevisionId: item.sourceSpecRevisionId,
+        sourceReferences: item.sourceReferences,
+      });
       await assertPlanning(client, item.projectId, item.piId, item.sprintId);
       await client.query(
         `INSERT INTO project_work_items
          (id,organization_id,project_id,feature_id,title,description,status,owner_id,spec_id,
+          source_spec_revision_id,source_references,automation_policy_version,
           priority,points,pi_id,sprint_id,source_sprint_id,carryover,completion_evidence,
           completed_by,completed_at,coordination_thread_ids,created_by,created_at,updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)`,
         [
           item.id,
           this.organizationId,
@@ -430,6 +763,9 @@ export class PostgresProjectWorkStore {
           item.status,
           item.ownerId ?? null,
           item.specId ?? null,
+          item.sourceSpecRevisionId ?? null,
+          json(item.sourceReferences ?? []),
+          item.automationPolicyVersion ?? null,
           item.priority,
           item.points ?? null,
           item.piId ?? null,
@@ -454,6 +790,18 @@ export class PostgresProjectWorkStore {
         "project.work_item.created",
         item,
       );
+      if (
+        item.sourceSpecRevisionId &&
+        (!item.ownerId || item.priority === "unset")
+      ) {
+        await this.createAutomationChoiceAttention(
+          client,
+          item.projectId,
+          "work_item",
+          item.id,
+          item.title,
+        );
+      }
       return item;
     });
   }
@@ -465,8 +813,23 @@ export class PostgresProjectWorkStore {
     actor: WorkActor,
     idempotencyKey?: string,
   ): Promise<WorkItem> {
+    try {
+      assertAgentWorkItemMutation(actor, patch, false);
+    } catch (error) {
+      await this.recordAutomationAuthorityDenial(
+        projectId,
+        actor,
+        "work_item.update",
+        error instanceof Error ? error.message : "Work authority denied.",
+      );
+      throw error;
+    }
     return this.write(async (client) => {
-      const duplicate = await this.idempotent<WorkItem>(client, idempotencyKey);
+      const duplicate = await this.idempotent<WorkItem>(
+        client,
+        projectId,
+        idempotencyKey,
+      );
       if (duplicate) return duplicate;
       const currentResult = await client.query(
         "SELECT * FROM project_work_items WHERE id = $1 AND project_id = $2 FOR UPDATE",
@@ -501,22 +864,46 @@ export class PostgresProjectWorkStore {
         updatedAt: now,
       } as WorkItem;
       if (patch.ownerId === null) delete next.ownerId;
-      if (patch.specId === null) delete next.specId;
+      if (patch.specId === null) {
+        delete next.specId;
+        delete next.sourceSpecRevisionId;
+        delete next.sourceReferences;
+        delete next.automationPolicyVersion;
+      }
       if (patch.featureId === null) delete next.featureId;
       if (patch.piId === null) delete next.piId;
       if (patch.sprintId === null) delete next.sprintId;
       if (patch.points === null) delete next.points;
       if (patch.completionEvidence === null) delete next.completionEvidence;
+      if (patch.sourceSpecRevisionId === null) {
+        delete next.sourceSpecRevisionId;
+        delete next.sourceReferences;
+        delete next.automationPolicyVersion;
+      }
+      if (patch.sourceReferences !== undefined) {
+        next.sourceReferences = patch.sourceReferences;
+      }
+      if (patch.automationPolicyVersion === null) {
+        delete next.automationPolicyVersion;
+      }
       if (status !== "done") {
         delete next.completedBy;
         delete next.completedAt;
       }
       await assertWorkLinks(client, projectId, next.featureId, next.specId);
+      await assertConfirmedSpecSource(client, {
+        projectId,
+        specId: next.specId,
+        sourceSpecRevisionId: next.sourceSpecRevisionId,
+        sourceReferences: next.sourceReferences,
+      });
       await client.query(
         `UPDATE project_work_items SET
-          title=$3,description=$4,status=$5,owner_id=$6,spec_id=$7,priority=$8,points=$9,
-          feature_id=$10,pi_id=$11,sprint_id=$12,completion_evidence=$13,
-          completed_by=$14,completed_at=$15,coordination_thread_ids=$16,updated_at=$17
+          title=$3,description=$4,status=$5,owner_id=$6,spec_id=$7,
+          source_spec_revision_id=$8,source_references=$9,
+          automation_policy_version=$10,priority=$11,points=$12,
+          feature_id=$13,pi_id=$14,sprint_id=$15,completion_evidence=$16,
+          completed_by=$17,completed_at=$18,coordination_thread_ids=$19,updated_at=$20
          WHERE id=$1 AND project_id=$2`,
         [
           workItemId,
@@ -526,6 +913,9 @@ export class PostgresProjectWorkStore {
           next.status,
           next.ownerId ?? null,
           next.specId ?? null,
+          next.sourceSpecRevisionId ?? null,
+          json(next.sourceReferences ?? []),
+          next.automationPolicyVersion ?? null,
           next.priority,
           next.points ?? null,
           next.featureId ?? null,
@@ -548,6 +938,24 @@ export class PostgresProjectWorkStore {
         "project.work_item.updated",
         next,
       );
+      if (
+        next.sourceSpecRevisionId &&
+        (!next.ownerId || next.priority === "unset")
+      ) {
+        await this.createAutomationChoiceAttention(
+          client,
+          projectId,
+          "work_item",
+          next.id,
+          next.title,
+        );
+      } else {
+        await this.resolveAutomationChoiceAttention(
+          client,
+          "work_item",
+          next.id,
+        );
+      }
       return next;
     });
   }
@@ -560,7 +968,11 @@ export class PostgresProjectWorkStore {
     idempotencyKey?: string,
   ): Promise<WorkItem> {
     return this.write(async (client) => {
-      const duplicate = await this.idempotent<WorkItem>(client, idempotencyKey);
+      const duplicate = await this.idempotent<WorkItem>(
+        client,
+        projectId,
+        idempotencyKey,
+      );
       if (duplicate) return duplicate;
       const current = await client.query(
         `SELECT * FROM project_work_items
@@ -589,6 +1001,18 @@ export class PostgresProjectWorkStore {
         );
       }
       await assertHumanOwner(client, snapshot.ownerId);
+      await assertWorkLinks(
+        client,
+        projectId,
+        snapshot.featureId,
+        snapshot.specId,
+      );
+      await assertHistoricallyConfirmedSpecSource(client, {
+        projectId,
+        specId: snapshot.specId,
+        sourceSpecRevisionId: snapshot.sourceSpecRevisionId,
+        sourceReferences: snapshot.sourceReferences,
+      });
       await assertPlanning(client, projectId, snapshot.piId, snapshot.sprintId);
       const now = new Date().toISOString();
       const reverted: WorkItem = {
@@ -616,6 +1040,24 @@ export class PostgresProjectWorkStore {
         "project.work_item.reverted",
         { historyId },
       );
+      if (
+        reverted.sourceSpecRevisionId &&
+        (!reverted.ownerId || reverted.priority === "unset")
+      ) {
+        await this.createAutomationChoiceAttention(
+          client,
+          projectId,
+          "work_item",
+          reverted.id,
+          reverted.title,
+        );
+      } else {
+        await this.resolveAutomationChoiceAttention(
+          client,
+          "work_item",
+          reverted.id,
+        );
+      }
       return reverted;
     });
   }
@@ -665,6 +1107,11 @@ export class PostgresProjectWorkStore {
         "project.work_item.revoked",
         {},
       );
+      await this.resolveAutomationChoiceAttention(
+        client,
+        "work_item",
+        workItemId,
+      );
     });
   }
 
@@ -674,6 +1121,10 @@ export class PostgresProjectWorkStore {
     idempotencyKey?: string,
   ): Promise<WorkRelation> {
     return this.write(async (client) => {
+      const persistedRelation: WorkRelation = {
+        ...relation,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      };
       if (idempotencyKey) {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
           idempotencyKey,
@@ -703,33 +1154,126 @@ export class PostgresProjectWorkStore {
       if (scopedItems.rowCount !== 2) {
         throw new Error("Work Item relation targets must share one Project.");
       }
+      await assertConfirmedSpecSource(client, {
+        projectId,
+        specId: persistedRelation.specId,
+        sourceSpecRevisionId: persistedRelation.sourceSpecRevisionId,
+        sourceReferences: persistedRelation.sourceReferences,
+      });
       const inserted = await client.query(
         `INSERT INTO project_work_relations
-         (organization_id,source_id,target_id,kind,created_by,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (source_id,target_id,kind) DO NOTHING`,
+         (organization_id,source_id,target_id,kind,spec_id,
+          source_spec_revision_id,source_references,automation_policy_version,
+          idempotency_key,created_by,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (source_id,target_id,kind) DO UPDATE SET
+           spec_id=EXCLUDED.spec_id,
+           source_spec_revision_id=EXCLUDED.source_spec_revision_id,
+           source_references=EXCLUDED.source_references,
+           automation_policy_version=EXCLUDED.automation_policy_version,
+           idempotency_key=EXCLUDED.idempotency_key,
+           created_by=EXCLUDED.created_by,
+           created_at=EXCLUDED.created_at,
+           revoked_at=NULL
+         WHERE project_work_relations.revoked_at IS NOT NULL
+         RETURNING *`,
         [
           this.organizationId,
-          relation.sourceId,
-          relation.targetId,
-          relation.kind,
-          json(relation.createdBy),
-          relation.createdAt,
+          persistedRelation.sourceId,
+          persistedRelation.targetId,
+          persistedRelation.kind,
+          persistedRelation.specId ?? null,
+          persistedRelation.sourceSpecRevisionId ?? null,
+          json(persistedRelation.sourceReferences ?? []),
+          persistedRelation.automationPolicyVersion ?? null,
+          persistedRelation.idempotencyKey ?? null,
+          json(persistedRelation.createdBy),
+          persistedRelation.createdAt,
         ],
       );
+      const storedRelation = inserted.rows[0]
+        ? relationFromRow(inserted.rows[0])
+        : relationFromRow(
+            (
+              await client.query(
+                `SELECT * FROM project_work_relations
+                 WHERE source_id=$1 AND target_id=$2 AND kind=$3`,
+                [
+                  persistedRelation.sourceId,
+                  persistedRelation.targetId,
+                  persistedRelation.kind,
+                ],
+              )
+            ).rows[0],
+          );
       if (inserted.rowCount) {
         await this.record(
           client,
           projectId,
-          relation.createdBy,
+          persistedRelation.createdBy,
           "work_relation",
-          relation.sourceId,
+          persistedRelation.sourceId,
           "project.work_relation.created",
-          relation,
+          persistedRelation,
         );
       }
-      await this.rememberResult(client, idempotencyKey, relation.sourceId);
-      return relation;
+      await this.rememberResult(
+        client,
+        idempotencyKey,
+        storedRelation.sourceId,
+      );
+      return storedRelation;
+    });
+  }
+
+  async revokeRelation(
+    projectId: ProjectId,
+    sourceId: WorkItemId,
+    targetId: WorkItemId,
+    kind: WorkRelation["kind"],
+    actor: WorkActor,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      const result = await client.query(
+        `SELECT relation.*
+         FROM project_work_relations relation
+         JOIN project_work_items source ON source.id=relation.source_id
+         JOIN project_work_items target ON target.id=relation.target_id
+         WHERE relation.source_id=$1 AND relation.target_id=$2
+           AND relation.kind=$3 AND relation.revoked_at IS NULL
+           AND source.project_id=$4 AND target.project_id=$4
+         FOR UPDATE OF relation`,
+        [sourceId, targetId, kind, projectId],
+      );
+      if (!result.rows[0]) throw new Error("Work relation was not found.");
+      const relation = relationFromRow(result.rows[0]);
+      if (
+        actor.kind === "agent" &&
+        (relation.createdBy.kind !== "agent" ||
+          relation.createdBy.principalId !== actor.principalId)
+      ) {
+        throw new PilotStoreError(
+          "AUTOMATION_AUTHORITY_DENIED",
+          403,
+          "Agent may revoke only a relation it created.",
+        );
+      }
+      const revokedAt = new Date().toISOString();
+      await client.query(
+        `UPDATE project_work_relations
+         SET revoked_at=$4
+         WHERE source_id=$1 AND target_id=$2 AND kind=$3`,
+        [sourceId, targetId, kind, revokedAt],
+      );
+      await this.record(
+        client,
+        projectId,
+        actor,
+        "work_relation",
+        sourceId,
+        "project.work_relation.revoked",
+        { targetId, kind, revokedAt },
+      );
     });
   }
 
@@ -775,8 +1319,24 @@ export class PostgresProjectWorkStore {
   async addWorkComment(
     projectId: ProjectId,
     comment: WorkComment,
+    idempotencyKey?: string,
   ): Promise<WorkComment> {
     return this.write(async (client) => {
+      if (idempotencyKey) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          idempotencyKey,
+        ]);
+        const existing = await client.query(
+          `SELECT * FROM project_work_comments
+           WHERE organization_id=$1 AND idempotency_key=$2`,
+          [this.organizationId, idempotencyKey],
+        );
+        if (existing.rows[0]) return commentFromRow(existing.rows[0]);
+      }
+      const persistedComment: WorkComment = {
+        ...comment,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      };
       await assertWorkItem(client, comment.workItemId, projectId);
       if (comment.parentId) {
         const parent = await client.query(
@@ -788,21 +1348,90 @@ export class PostgresProjectWorkStore {
           throw new Error("Comment replies must stay in one Work Item.");
         }
       }
+      await assertConfirmedSpecSource(client, {
+        projectId,
+        specId: persistedComment.specId,
+        sourceSpecRevisionId: persistedComment.sourceSpecRevisionId,
+        sourceReferences: persistedComment.sourceReferences,
+      });
       await client.query(
         `INSERT INTO project_work_comments
-         (id,organization_id,work_item_id,parent_id,body,author,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+         (id,organization_id,work_item_id,parent_id,body,spec_id,
+          source_spec_revision_id,source_references,automation_policy_version,
+          idempotency_key,author,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
-          comment.id,
+          persistedComment.id,
           this.organizationId,
-          comment.workItemId,
-          comment.parentId ?? null,
-          comment.body,
-          json(comment.author),
-          comment.createdAt,
+          persistedComment.workItemId,
+          persistedComment.parentId ?? null,
+          persistedComment.body,
+          persistedComment.specId ?? null,
+          persistedComment.sourceSpecRevisionId ?? null,
+          json(persistedComment.sourceReferences ?? []),
+          persistedComment.automationPolicyVersion ?? null,
+          persistedComment.idempotencyKey ?? null,
+          json(persistedComment.author),
+          persistedComment.createdAt,
         ],
       );
-      return comment;
+      await this.record(
+        client,
+        projectId,
+        persistedComment.author,
+        "work_comment",
+        persistedComment.id,
+        "project.work_comment.created",
+        persistedComment,
+      );
+      await this.rememberResult(client, idempotencyKey, persistedComment.id);
+      return persistedComment;
+    });
+  }
+
+  async revokeWorkComment(
+    projectId: ProjectId,
+    workItemId: WorkItemId,
+    commentId: WorkComment["id"],
+    actor: WorkActor,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      const result = await client.query(
+        `SELECT comment.*
+         FROM project_work_comments comment
+         JOIN project_work_items item ON item.id=comment.work_item_id
+         WHERE comment.id=$1 AND comment.work_item_id=$2
+           AND item.project_id=$3 AND comment.revoked_at IS NULL
+         FOR UPDATE OF comment`,
+        [commentId, workItemId, projectId],
+      );
+      if (!result.rows[0]) throw new Error("Work comment was not found.");
+      const comment = commentFromRow(result.rows[0]);
+      if (
+        actor.kind === "agent" &&
+        (comment.author.kind !== "agent" ||
+          comment.author.principalId !== actor.principalId)
+      ) {
+        throw new PilotStoreError(
+          "AUTOMATION_AUTHORITY_DENIED",
+          403,
+          "Agent may revoke only a comment it created.",
+        );
+      }
+      const revokedAt = new Date().toISOString();
+      await client.query(
+        "UPDATE project_work_comments SET revoked_at=$2 WHERE id=$1",
+        [commentId, revokedAt],
+      );
+      await this.record(
+        client,
+        projectId,
+        actor,
+        "work_comment",
+        commentId,
+        "project.work_comment.revoked",
+        { workItemId, revokedAt },
+      );
     });
   }
 
@@ -1417,6 +2046,12 @@ export class PostgresProjectWorkStore {
           "UPDATE specs SET confirmed_revision_id=$2,status='approved',updated_at=now() WHERE id=$1",
           [specId, revisionId],
         );
+        await client.query(
+          `UPDATE spec_revisions
+           SET confirmed_at=COALESCE(confirmed_at,now())
+           WHERE id=$1`,
+          [revisionId],
+        );
       }
       return (await this.specDetail(client, specId))!;
     });
@@ -1561,12 +2196,15 @@ export class PostgresProjectWorkStore {
 
   private async idempotent<T>(
     client: PoolClient,
+    projectId: ProjectId,
     key?: string,
   ): Promise<T | undefined> {
     if (!key) return undefined;
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
     const result = await client.query<{ snapshot: T }>(
-      "SELECT snapshot FROM project_work_history WHERE idempotency_key=$1",
-      [key],
+      `SELECT snapshot FROM project_work_history
+       WHERE project_id=$1 AND idempotency_key=$2`,
+      [projectId, key],
     );
     return result.rows[0]?.snapshot;
   }
@@ -1578,14 +2216,13 @@ export class PostgresProjectWorkStore {
   ): Promise<Feature | undefined> {
     if (!key) return undefined;
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
-    const result = await client.query(
-      `SELECT f.*
-       FROM idempotency_keys i
-       JOIN project_features f ON f.id=i.result_ref::uuid
-       WHERE i.key=$1 AND i.organization_id=$2 AND f.project_id=$3`,
-      [key, this.organizationId, projectId],
+    const result = await client.query<{ snapshot: unknown }>(
+      `SELECT snapshot
+       FROM project_feature_history
+       WHERE project_id=$1 AND idempotency_key=$2`,
+      [projectId, key],
     );
-    return result.rows[0] ? featureFromRow(result.rows[0]) : undefined;
+    return result.rows[0] ? Feature.parse(result.rows[0].snapshot) : undefined;
   }
 
   private async rememberResult(
@@ -1626,6 +2263,107 @@ export class PostgresProjectWorkStore {
         json(item),
         json(actor),
         revertedEntryId ?? null,
+      ],
+    );
+  }
+
+  private async featureHistory(
+    client: PoolClient,
+    feature: Feature,
+    action: string,
+    actor: WorkActor,
+    key?: string,
+    revertedEntryId?: string,
+  ) {
+    await client.query(
+      `INSERT INTO project_feature_history
+       (id,organization_id,project_id,feature_id,idempotency_key,action,
+        snapshot,actor,reverted_entry_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        uuidv7(),
+        this.organizationId,
+        feature.projectId,
+        feature.id,
+        key ?? null,
+        action,
+        json(feature),
+        json(actor),
+        revertedEntryId ?? null,
+      ],
+    );
+  }
+
+  private async createAutomationChoiceAttention(
+    client: PoolClient,
+    projectId: ProjectId,
+    aggregateType: "feature" | "work_item",
+    aggregateId: string,
+    title: string,
+  ): Promise<void> {
+    const principals = await client.query<{ principal_id: PrincipalId }>(
+      `SELECT DISTINCT principal_id
+       FROM (
+         SELECT m.principal_id
+         FROM memberships m
+         WHERE m.organization_id=$1 AND m.role IN ('admin','owner')
+         UNION ALL
+         SELECT ptm.principal_id
+         FROM pilot_project_teams ppt
+         JOIN pilot_team_memberships ptm
+           ON ptm.organization_id=ppt.organization_id
+          AND ptm.team_id=ppt.team_id
+         WHERE ppt.project_id=$2 AND ptm.role='leader'
+         UNION ALL
+         SELECT (settings.data->>'ownerId')::uuid
+         FROM pilot_project_settings settings
+         WHERE settings.project_id=$2
+       ) candidates
+       JOIN principals p ON p.id=candidates.principal_id
+       WHERE candidates.principal_id IS NOT NULL AND p.kind='human'
+       ORDER BY principal_id
+       LIMIT 20`,
+      [this.organizationId, projectId],
+    );
+    for (const row of principals.rows) {
+      await client.query(
+        `INSERT INTO action_inbox
+          (id,organization_id,principal_id,project_id,kind,title,detail,
+           source_ref,dedupe_key)
+         VALUES ($1,$2,$3,$4,'human_decision',$5,$6,$7,$8)
+         ON CONFLICT (organization_id,principal_id,dedupe_key)
+           WHERE resolved_at IS NULL
+         DO NOTHING`,
+        [
+          uuidv7(),
+          this.organizationId,
+          row.principal_id,
+          projectId,
+          `Confirm derived work · ${title}`,
+          aggregateType === "work_item"
+            ? "A confirmed Spec produced this Work Item. A human must confirm its owner and priority."
+            : "A confirmed Spec produced this Feature. A human must confirm its owner.",
+          `${aggregateType}:${aggregateId}`,
+          `spec-derivation-choice:${aggregateType}:${aggregateId}`,
+        ],
+      );
+    }
+  }
+
+  private async resolveAutomationChoiceAttention(
+    client: PoolClient,
+    aggregateType: "feature" | "work_item",
+    aggregateId: string,
+  ): Promise<void> {
+    await client.query(
+      `UPDATE action_inbox
+       SET resolved_at=now(),updated_at=now()
+       WHERE organization_id=$1
+         AND dedupe_key=$2
+         AND resolved_at IS NULL`,
+      [
+        this.organizationId,
+        `spec-derivation-choice:${aggregateType}:${aggregateId}`,
       ],
     );
   }
@@ -1718,6 +2456,61 @@ async function assertHumanOwner(client: PoolClient, ownerId?: string) {
     throw new Error("Work Items may only be assigned to a human.");
 }
 
+function assertAgentFeatureMutation(
+  actor: WorkActor,
+  input: {
+    ownerId?: PrincipalId | null | undefined;
+    stage?: Feature["stage"] | undefined;
+  },
+): void {
+  if (actor.kind !== "agent") return;
+  if (input.ownerId !== undefined) {
+    throw new PilotStoreError(
+      "AUTOMATION_AUTHORITY_DENIED",
+      403,
+      "Agent automation cannot assign or change a human Feature owner.",
+    );
+  }
+  if (input.stage === "released") {
+    throw new PilotStoreError(
+      "AUTOMATION_AUTHORITY_DENIED",
+      403,
+      "Agent automation cannot make the human Feature release decision.",
+    );
+  }
+}
+
+function assertAgentWorkItemMutation(
+  actor: WorkActor,
+  input: {
+    ownerId?: PrincipalId | null | undefined;
+    priority?: WorkItem["priority"] | undefined;
+    status?: WorkItem["status"] | undefined;
+  },
+  creating: boolean,
+): void {
+  if (actor.kind !== "agent") return;
+  if (
+    input.ownerId !== undefined ||
+    (creating
+      ? input.priority !== undefined && input.priority !== "unset"
+      : input.priority !== undefined)
+  ) {
+    throw new PilotStoreError(
+      "AUTOMATION_AUTHORITY_DENIED",
+      403,
+      "Agent automation cannot assign a human owner or set/change priority.",
+    );
+  }
+  if (creating && input.status === "done") {
+    throw new PilotStoreError(
+      "AUTOMATION_AUTHORITY_DENIED",
+      403,
+      "Agent automation cannot create work already marked done.",
+    );
+  }
+}
+
 async function assertWorkItem(
   client: PoolClient,
   workItemId: string,
@@ -1757,7 +2550,7 @@ async function assertWorkLinks(
   if (featureId) {
     const feature = await client.query(
       `SELECT 1 FROM project_features
-       WHERE id=$1 AND project_id=$2`,
+       WHERE id=$1 AND project_id=$2 AND revoked_at IS NULL`,
       [featureId, projectId],
     );
     if (!feature.rowCount) {
@@ -1773,6 +2566,125 @@ async function assertWorkLinks(
     if (!spec.rowCount) {
       throw new Error("Work Item Spec must belong to the same Project.");
     }
+  }
+}
+
+async function assertConfirmedSpecSource(
+  client: PoolClient,
+  source: {
+    projectId: ProjectId;
+    specId?: SpecId | undefined;
+    sourceSpecRevisionId?: SpecRevisionId | undefined;
+    sourceReferences?: string[] | undefined;
+  },
+): Promise<void> {
+  const references = source.sourceReferences ?? [];
+  const hasDerivedSource =
+    Boolean(source.sourceSpecRevisionId) || references.length > 0;
+  if (!hasDerivedSource) {
+    if (source.specId) {
+      const linked = await client.query(
+        "SELECT 1 FROM specs WHERE id=$1 AND project_id=$2",
+        [source.specId, source.projectId],
+      );
+      if (!linked.rowCount) {
+        throw new Error("Feature Spec must belong to the same Project.");
+      }
+    }
+    return;
+  }
+  if (
+    !source.specId ||
+    !source.sourceSpecRevisionId ||
+    references.length === 0
+  ) {
+    throw new PilotStoreError(
+      "CONFIRMED_SPEC_SOURCE_REQUIRED",
+      409,
+      "Derived work requires a Spec, its confirmed revision, and at least one source block reference.",
+    );
+  }
+  const revision = await client.query<{
+    markdown: string;
+    blocks: Array<{ id: string }>;
+  }>(
+    `SELECT r.markdown,r.blocks
+     FROM specs s
+     JOIN spec_revisions r
+       ON r.id=s.confirmed_revision_id AND r.spec_id=s.id
+     WHERE s.id=$1 AND s.project_id=$2
+       AND r.id=$3 AND r.revoked_at IS NULL`,
+    [source.specId, source.projectId, source.sourceSpecRevisionId],
+  );
+  if (!revision.rows[0]) {
+    throw new PilotStoreError(
+      "CONFIRMED_SPEC_SOURCE_REQUIRED",
+      409,
+      "Derived work may reference only the Project's active confirmed Spec revision.",
+    );
+  }
+  const blockIds = new Set(
+    (revision.rows[0].blocks ?? []).map((block) => `block:${block.id}`),
+  );
+  const invalid = references.find((reference) => !blockIds.has(reference));
+  if (invalid) {
+    throw new PilotStoreError(
+      "INVALID_SPEC_SOURCE_REFERENCE",
+      409,
+      `Spec source reference "${invalid}" does not identify a block in the confirmed revision.`,
+    );
+  }
+}
+
+async function assertHistoricallyConfirmedSpecSource(
+  client: PoolClient,
+  source: {
+    projectId: ProjectId;
+    specId?: SpecId | undefined;
+    sourceSpecRevisionId?: SpecRevisionId | undefined;
+    sourceReferences?: string[] | undefined;
+  },
+): Promise<void> {
+  const references = source.sourceReferences ?? [];
+  if (!source.sourceSpecRevisionId && references.length === 0) {
+    return assertConfirmedSpecSource(client, source);
+  }
+  if (
+    !source.specId ||
+    !source.sourceSpecRevisionId ||
+    references.length === 0
+  ) {
+    throw new PilotStoreError(
+      "CONFIRMED_SPEC_SOURCE_REQUIRED",
+      409,
+      "Derived work requires a Spec, its confirmed revision, and at least one source block reference.",
+    );
+  }
+  const revision = await client.query<{ blocks: Array<{ id: string }> }>(
+    `SELECT r.blocks
+     FROM specs s
+     JOIN spec_revisions r ON r.spec_id=s.id
+     WHERE s.id=$1 AND s.project_id=$2 AND r.id=$3
+       AND r.confirmed_at IS NOT NULL AND r.revoked_at IS NULL`,
+    [source.specId, source.projectId, source.sourceSpecRevisionId],
+  );
+  if (!revision.rows[0]) {
+    throw new PilotStoreError(
+      "CONFIRMED_SPEC_SOURCE_REQUIRED",
+      409,
+      "Revert may restore only a non-revoked Spec revision that was previously confirmed.",
+    );
+  }
+  const blockIds = new Set(
+    (revision.rows[0].blocks ?? []).map((block) => `block:${block.id}`),
+  );
+  const invalid = references.find((reference) => !blockIds.has(reference));
+  if (invalid) {
+    throw new PilotStoreError(
+      "INVALID_SPEC_SOURCE_REFERENCE",
+      409,
+      `Spec source reference "${invalid}" does not identify a block in the confirmed revision.`,
+    );
   }
 }
 
@@ -1801,14 +2713,42 @@ async function assertPlanning(
     throw new Error("Sprint assignment must imply its parent PI.");
 }
 
+async function persistFeature(client: PoolClient, feature: Feature) {
+  await client.query(
+    `UPDATE project_features SET
+       epic_id=$3,spec_id=$4,source_spec_revision_id=$5,
+       source_references=$6,automation_policy_version=$7,
+       title=$8,description=$9,stage=$10,owner_id=$11,
+       pi_id=$12,sprint_id=$13,revoked_at=NULL,updated_at=$14
+     WHERE id=$1 AND project_id=$2`,
+    [
+      feature.id,
+      feature.projectId,
+      feature.epicId ?? null,
+      feature.specId ?? null,
+      feature.sourceSpecRevisionId ?? null,
+      json(feature.sourceReferences ?? []),
+      feature.automationPolicyVersion ?? null,
+      feature.title,
+      feature.description,
+      feature.stage,
+      feature.ownerId ?? null,
+      feature.piId ?? null,
+      feature.sprintId ?? null,
+      feature.updatedAt,
+    ],
+  );
+}
+
 async function persistWorkItem(client: PoolClient, item: WorkItem) {
   await client.query(
     `UPDATE project_work_items SET
        feature_id=$3,title=$4,description=$5,status=$6,owner_id=$7,
-       spec_id=$8,priority=$9,points=$10,pi_id=$11,sprint_id=$12,
-       source_sprint_id=$13,carryover=$14,completion_evidence=$15,
-       completed_by=$16,completed_at=$17,revoked_at=NULL,
-       coordination_thread_ids=$18,updated_at=$19
+       spec_id=$8,source_spec_revision_id=$9,source_references=$10,
+       automation_policy_version=$11,priority=$12,points=$13,pi_id=$14,
+       sprint_id=$15,source_sprint_id=$16,carryover=$17,
+       completion_evidence=$18,completed_by=$19,completed_at=$20,
+       revoked_at=NULL,coordination_thread_ids=$21,updated_at=$22
      WHERE id=$1 AND project_id=$2`,
     [
       item.id,
@@ -1819,6 +2759,9 @@ async function persistWorkItem(client: PoolClient, item: WorkItem) {
       item.status,
       item.ownerId ?? null,
       item.specId ?? null,
+      item.sourceSpecRevisionId ?? null,
+      json(item.sourceReferences ?? []),
+      item.automationPolicyVersion ?? null,
       item.priority,
       item.points ?? null,
       item.piId ?? null,
@@ -1849,6 +2792,16 @@ function featureFromRow(row: QueryResultRow): Feature {
     id: row.id,
     projectId: row.project_id,
     ...(row.epic_id ? { epicId: row.epic_id } : {}),
+    ...(row.spec_id ? { specId: row.spec_id } : {}),
+    ...(row.source_spec_revision_id
+      ? { sourceSpecRevisionId: row.source_spec_revision_id }
+      : {}),
+    ...(row.source_references?.length
+      ? { sourceReferences: row.source_references }
+      : {}),
+    ...(row.automation_policy_version
+      ? { automationPolicyVersion: row.automation_policy_version }
+      : {}),
     title: row.title,
     description: row.description,
     stage: row.stage,
@@ -1857,6 +2810,7 @@ function featureFromRow(row: QueryResultRow): Feature {
     ...(row.sprint_id ? { sprintId: row.sprint_id } : {}),
     createdAt: asIso(row.created_at),
     updatedAt: asIso(row.updated_at),
+    ...(row.revoked_at ? { revokedAt: asIso(row.revoked_at) } : {}),
   };
 }
 function workItemFromRow(row: QueryResultRow): WorkItem {
@@ -1869,6 +2823,15 @@ function workItemFromRow(row: QueryResultRow): WorkItem {
     status: row.status,
     ...(row.owner_id ? { ownerId: row.owner_id } : {}),
     ...(row.spec_id ? { specId: row.spec_id } : {}),
+    ...(row.source_spec_revision_id
+      ? { sourceSpecRevisionId: row.source_spec_revision_id }
+      : {}),
+    ...(row.source_references?.length
+      ? { sourceReferences: row.source_references }
+      : {}),
+    ...(row.automation_policy_version
+      ? { automationPolicyVersion: row.automation_policy_version }
+      : {}),
     priority: row.priority,
     ...(row.points === null ? {} : { points: Number(row.points) }),
     ...(row.pi_id ? { piId: row.pi_id } : {}),
@@ -1892,8 +2855,20 @@ function relationFromRow(row: QueryResultRow): WorkRelation {
     sourceId: row.source_id,
     targetId: row.target_id,
     kind: row.kind,
+    ...(row.spec_id ? { specId: row.spec_id } : {}),
+    ...(row.source_spec_revision_id
+      ? { sourceSpecRevisionId: row.source_spec_revision_id }
+      : {}),
+    ...(row.source_references?.length
+      ? { sourceReferences: row.source_references }
+      : {}),
+    ...(row.automation_policy_version
+      ? { automationPolicyVersion: row.automation_policy_version }
+      : {}),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
     createdBy: row.created_by,
     createdAt: asIso(row.created_at),
+    ...(row.revoked_at ? { revokedAt: asIso(row.revoked_at) } : {}),
   };
 }
 function codeRefFromRow(row: QueryResultRow): WorkCodeReference {
@@ -1915,6 +2890,17 @@ function commentFromRow(row: QueryResultRow): WorkComment {
     workItemId: row.work_item_id,
     ...(row.parent_id ? { parentId: row.parent_id } : {}),
     body: row.body,
+    ...(row.spec_id ? { specId: row.spec_id } : {}),
+    ...(row.source_spec_revision_id
+      ? { sourceSpecRevisionId: row.source_spec_revision_id }
+      : {}),
+    ...(row.source_references?.length
+      ? { sourceReferences: row.source_references }
+      : {}),
+    ...(row.automation_policy_version
+      ? { automationPolicyVersion: row.automation_policy_version }
+      : {}),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
     author: row.author,
     createdAt: asIso(row.created_at),
     ...(row.revoked_at ? { revokedAt: asIso(row.revoked_at) } : {}),
@@ -1928,6 +2914,21 @@ function historyFromRow(row: QueryResultRow): WorkHistoryEntry {
     snapshot: row.snapshot,
     actor: row.actor,
     occurredAt: asIso(row.occurred_at),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
+    ...(row.reverted_entry_id
+      ? { revertedEntryId: row.reverted_entry_id }
+      : {}),
+  };
+}
+function featureHistoryFromRow(row: QueryResultRow): FeatureHistoryEntry {
+  return {
+    id: row.id,
+    featureId: row.feature_id,
+    action: row.action,
+    snapshot: row.snapshot,
+    actor: row.actor,
+    occurredAt: asIso(row.occurred_at),
+    ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
     ...(row.reverted_entry_id
       ? { revertedEntryId: row.reverted_entry_id }
       : {}),

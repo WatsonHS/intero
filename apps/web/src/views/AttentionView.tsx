@@ -94,7 +94,7 @@ export function AttentionView({
           {inbox.data.automationSummary.map((summary) => (
             <div
               key={summary.projectId}
-              className="max-w-[360px] rounded-btn border border-line bg-panel2 px-3 py-2"
+              className="max-w-[430px] rounded-btn border border-line bg-panel2 px-3 py-2.5"
             >
               <div className="flex items-center gap-2 text-[10px]">
                 <strong className="font-[650] text-ink">
@@ -107,8 +107,32 @@ export function AttentionView({
                     : ""}
                 </span>
               </div>
-              <p className="mt-1 line-clamp-2 text-[10.5px] leading-[1.55] text-ink-muted">
-                {summary.latestSafeContext}
+              <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-ink-muted">
+                <span>总计 {summary.progressFacts.total}</span>
+                <span>进行中 {summary.progressFacts.inProgress}</span>
+                <span>待测试 {summary.progressFacts.readyForTest}</span>
+                <span>已完成 {summary.progressFacts.done}</span>
+              </div>
+              {summary.risks[0] ? (
+                <p className="mt-1.5 line-clamp-2 text-[10.5px] leading-[1.55] text-ink-muted">
+                  <strong className="font-[650] text-amber">风险事实：</strong>
+                  {summary.risks[0].summary}
+                </p>
+              ) : null}
+              {summary.decisions[0] ? (
+                <p className="mt-1 line-clamp-2 text-[10.5px] leading-[1.55] text-ink-muted">
+                  <strong className="font-[650] text-ink">最近决定：</strong>
+                  {summary.decisions[0].title} · {summary.decisions[0].outcome}
+                </p>
+              ) : null}
+              <p className="mt-1 text-[10.5px] leading-[1.55] text-ink-muted">
+                <strong className="font-[650] text-accent-strong">
+                  自动解读：
+                </strong>
+                {summary.interpretation}
+              </p>
+              <p className="mt-1 text-[9.5px] text-faint">
+                事实新鲜度：{new Date(summary.freshnessAt).toLocaleString()}
               </p>
             </div>
           ))}

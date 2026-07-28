@@ -166,6 +166,10 @@ function normalize(kind: IntegrationKind, input: AdapterInput) {
 
 const INSTRUCTION_CONTENT = `# Intero coordination
 
+After understanding the first user request in each new conversation and before
+substantive work, report an intent checkpoint with a safe summary of the current
+work. Include a stable workstream key, a concise title, and currentFocus.
+
 Use the Intero MCP tools only at semantic branch points. Report an intent,
 decision, blocker, dependency, meaningful scope change, artifact, validation
 outcome, pause, or completion. Never send prompts, chain-of-thought, raw tool

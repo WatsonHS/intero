@@ -2,6 +2,7 @@ import {
   OrganizationId,
   PrincipalId,
   ProjectId,
+  WorkCommentId,
   type WorkActor,
   uuidv7,
 } from "@intero/domain";
@@ -66,6 +67,11 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
       `INSERT INTO principals (id,display_name,kind) VALUES
          ($1,'Admin','human'),($2,'Member','human'),($3,'Stand-in','stand_in')`,
       [adminId, memberId, standInId],
+    );
+    await admin.query(
+      `INSERT INTO memberships (organization_id,principal_id,role) VALUES
+         ($1,$2,'admin'),($1,$3,'member')`,
+      [organizationId, adminId, memberId],
     );
     await admin.query(
       `INSERT INTO projects
@@ -198,9 +204,24 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
           carryover: false,
           coordinationThreadIds: [],
         },
-        memberAgentActor,
+        adminActor,
       ),
     ).rejects.toThrow("only be assigned to a human");
+    await expect(
+      store.createWorkItem(
+        {
+          projectId,
+          title: "Agent cannot choose a human owner or priority",
+          description: "",
+          status: "todo",
+          ownerId: memberId,
+          priority: "P1",
+          carryover: false,
+          coordinationThreadIds: [],
+        },
+        memberAgentActor,
+      ),
+    ).rejects.toMatchObject({ code: "AUTOMATION_AUTHORITY_DENIED" });
   });
 
   it("marks unfinished early-closed Sprint work as visible carryover", async () => {
@@ -272,9 +293,34 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
           description: "",
           stage: "planned",
         },
-        memberAgentActor,
+        adminActor,
       ),
     ).rejects.toThrow("human");
+    await expect(
+      store.createFeature(
+        {
+          projectId,
+          epicId: epic.id,
+          ownerId: memberId,
+          title: "Agent must not assign a Feature owner",
+          description: "",
+          stage: "planned",
+        },
+        memberAgentActor,
+      ),
+    ).rejects.toMatchObject({ code: "AUTOMATION_AUTHORITY_DENIED" });
+    const deniedAudit = await admin.query<{ attempted_action: string }>(
+      `SELECT metadata->>'attemptedAction' AS attempted_action
+       FROM activity_events
+       WHERE organization_id=$1
+         AND actor_id=$2
+         AND event_type='project.automation.authority_denied'
+       ORDER BY sequence`,
+      [organizationId, memberId],
+    );
+    expect(deniedAudit.rows.map((row) => row.attempted_action)).toContain(
+      "feature.create",
+    );
 
     const feature = await store.createFeature(
       {
@@ -285,7 +331,7 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
         description: "",
         stage: "in_development",
       },
-      memberAgentActor,
+      adminActor,
       "phase7-agent-feature-create",
     );
     const duplicateFeature = await store.createFeature(
@@ -295,7 +341,7 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
         description: "",
         stage: "planned",
       },
-      memberAgentActor,
+      adminActor,
       "phase7-agent-feature-create",
     );
     expect(duplicateFeature.id).toBe(feature.id);
@@ -303,14 +349,14 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
       projectId,
       feature.id,
       { epicId: null, ownerId: null },
-      memberAgentActor,
+      adminActor,
       "phase7-agent-feature-update",
     );
     const duplicateUpdate = await store.updateFeature(
       projectId,
       feature.id,
       { title: "A replay must not apply this title" },
-      memberAgentActor,
+      adminActor,
       "phase7-agent-feature-update",
     );
     expect(duplicateUpdate.title).toBe(detached.title);
@@ -338,7 +384,7 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
           carryover: false,
           coordinationThreadIds: [],
         },
-        memberAgentActor,
+        adminActor,
       ),
     ).rejects.toThrow("same Project");
   });
@@ -465,7 +511,7 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
         title: "Original title",
         description: "",
         status: "todo",
-        priority: "P2",
+        priority: "unset",
         carryover: false,
         coordinationThreadIds: [],
       },
@@ -521,6 +567,330 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
     ).toBe(false);
   });
 
+  it("derives traceable work only from confirmed Spec blocks and leaves human choices unset", async () => {
+    const confirmed = await store.createSpecVersion({
+      projectId,
+      title: "Refund evidence contract",
+      markdown:
+        "# Refund evidence\n\nCapture the signed export receipt for every refund.",
+      changeSummary: "Initial confirmed source",
+      affectedScopes: ["billing/refunds"],
+      actor: adminActor,
+      idempotencyKey: "phase7-derived-spec",
+    });
+    await store.confirmSpec(projectId, confirmed.spec.id, memberActor);
+    const sourceReference = `block:${confirmed.revisions[0]!.blocks[1]!.id}`;
+
+    const feature = await store.createFeature(
+      {
+        projectId,
+        specId: confirmed.spec.id,
+        sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+        sourceReferences: [sourceReference],
+        automationPolicyVersion: "confirmed-spec-v1",
+        title: "Refund evidence",
+        description: "Derived from the confirmed acceptance paragraph.",
+        stage: "planned",
+      },
+      memberAgentActor,
+      "phase7-derived-feature",
+    );
+    const replayed = await store.createFeature(
+      {
+        projectId,
+        title: "Must not be created",
+        description: "",
+        stage: "planned",
+      },
+      memberAgentActor,
+      "phase7-derived-feature",
+    );
+    expect(replayed.id).toBe(feature.id);
+    expect(feature).toMatchObject({
+      specId: confirmed.spec.id,
+      sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+      sourceReferences: [sourceReference],
+      automationPolicyVersion: "confirmed-spec-v1",
+    });
+    expect(feature.ownerId).toBeUndefined();
+
+    const item = await store.createWorkItem(
+      {
+        projectId,
+        featureId: feature.id,
+        specId: confirmed.spec.id,
+        sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+        sourceReferences: [sourceReference],
+        automationPolicyVersion: "confirmed-spec-v1",
+        title: "Verify signed refund receipt",
+        description: "",
+        status: "todo",
+        priority: "unset",
+        carryover: false,
+        coordinationThreadIds: [],
+      },
+      memberAgentActor,
+      "phase7-derived-work",
+    );
+    expect(item.ownerId).toBeUndefined();
+    expect(item.priority).toBe("unset");
+    const related = await store.createWorkItem(
+      {
+        projectId,
+        title: "Publish refund evidence",
+        description: "",
+        status: "todo",
+        priority: "unset",
+        carryover: false,
+        coordinationThreadIds: [],
+      },
+      memberAgentActor,
+      "phase7-derived-related-work",
+    );
+    const relation = await store.addRelation(
+      projectId,
+      {
+        sourceId: item.id,
+        targetId: related.id,
+        kind: "blocks",
+        specId: confirmed.spec.id,
+        sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+        sourceReferences: [sourceReference],
+        automationPolicyVersion: "confirmed-spec-v1",
+        createdBy: memberAgentActor,
+        createdAt: new Date().toISOString(),
+      },
+      "phase7-derived-relation",
+    );
+    expect(relation).toMatchObject({
+      sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+      idempotencyKey: "phase7-derived-relation",
+    });
+    const commentId = WorkCommentId.parse(uuidv7());
+    const comment = await store.addWorkComment(
+      projectId,
+      {
+        id: commentId,
+        workItemId: item.id,
+        body: "Acceptance wording comes from the confirmed refund paragraph.",
+        specId: confirmed.spec.id,
+        sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+        sourceReferences: [sourceReference],
+        automationPolicyVersion: "confirmed-spec-v1",
+        author: memberAgentActor,
+        createdAt: new Date().toISOString(),
+      },
+      "phase7-derived-comment",
+    );
+    const replayedComment = await store.addWorkComment(
+      projectId,
+      {
+        ...comment,
+        id: WorkCommentId.parse(uuidv7()),
+        body: "A replay must not replace the original comment.",
+      },
+      "phase7-derived-comment",
+    );
+    expect(replayedComment.id).toBe(commentId);
+
+    await expect(
+      store.createWorkItem(
+        {
+          projectId,
+          specId: confirmed.spec.id,
+          sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+          sourceReferences: ["block:block_not_in_confirmed_revision"],
+          automationPolicyVersion: "confirmed-spec-v1",
+          title: "Invalid source",
+          description: "",
+          status: "todo",
+          priority: "unset",
+          carryover: false,
+          coordinationThreadIds: [],
+        },
+        memberAgentActor,
+        "phase7-invalid-source",
+      ),
+    ).rejects.toThrow("does not identify a block");
+
+    const decided = await store.updateWorkItem(
+      projectId,
+      item.id,
+      { ownerId: memberId, priority: "P1" },
+      adminActor,
+      "phase7-human-work-choice",
+    );
+    expect(decided).toMatchObject({ ownerId: memberId, priority: "P1" });
+    await store.updateFeature(
+      projectId,
+      feature.id,
+      { title: "Temporarily renamed refund evidence" },
+      adminActor,
+      "phase7-human-feature-update",
+    );
+    const beforeSupersede = await store.listProject(projectId);
+    const originalFeatureHistory = beforeSupersede.featureHistory.find(
+      (entry) => entry.featureId === feature.id && entry.action === "created",
+    )!;
+    const originalWorkHistory = beforeSupersede.history.find(
+      (entry) => entry.workItemId === item.id && entry.action === "created",
+    )!;
+    const nextVersion = await store.createSpecVersion({
+      projectId,
+      specId: confirmed.spec.id,
+      title: confirmed.spec.title,
+      markdown:
+        "# Refund evidence\n\nCapture the signed export receipt and archive checksum for every refund.",
+      changeSummary: "Supersede the original confirmed wording",
+      affectedScopes: ["billing/refunds"],
+      actor: adminActor,
+      idempotencyKey: "phase7-derived-spec-v2",
+    });
+    await store.confirmSpec(projectId, confirmed.spec.id, memberActor);
+    expect(nextVersion.spec.currentRevisionId).not.toBe(
+      confirmed.spec.currentRevisionId,
+    );
+    const revertedFeature = await store.revertFeature(
+      projectId,
+      feature.id,
+      originalFeatureHistory.id,
+      adminActor,
+      "phase7-feature-revert-after-new-confirmation",
+    );
+    const revertedWork = await store.revertWorkItem(
+      projectId,
+      item.id,
+      originalWorkHistory.id,
+      adminActor,
+      "phase7-work-revert-after-new-confirmation",
+    );
+    expect(revertedFeature.title).toBe("Refund evidence");
+    expect(revertedWork.ownerId).toBeUndefined();
+    expect(revertedWork.priority).toBe("unset");
+    const snapshot = await store.listProject(projectId);
+    expect(
+      snapshot.featureHistory.filter((entry) => entry.featureId === feature.id),
+    ).toEqual([
+      expect.objectContaining({
+        action: "created",
+        idempotencyKey: "phase7-derived-feature",
+      }),
+      expect.objectContaining({
+        action: "updated",
+        idempotencyKey: "phase7-human-feature-update",
+      }),
+      expect.objectContaining({
+        action: "reverted",
+        idempotencyKey: "phase7-feature-revert-after-new-confirmation",
+        revertedEntryId: originalFeatureHistory.id,
+      }),
+    ]);
+    expect(
+      snapshot.history.find((entry) => entry.workItemId === item.id),
+    ).toMatchObject({
+      idempotencyKey: "phase7-derived-work",
+      snapshot: expect.objectContaining({
+        sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+        sourceReferences: [sourceReference],
+      }),
+    });
+    expect(
+      snapshot.relations.find(
+        (entry) => entry.sourceId === item.id && entry.targetId === related.id,
+      ),
+    ).toMatchObject({
+      sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+      sourceReferences: [sourceReference],
+    });
+    expect(
+      snapshot.comments.find((entry) => entry.id === commentId),
+    ).toMatchObject({
+      sourceSpecRevisionId: confirmed.spec.currentRevisionId,
+      sourceReferences: [sourceReference],
+      idempotencyKey: "phase7-derived-comment",
+    });
+    const attention = await admin.query<{
+      open_count: number;
+      resolved_count: number;
+    }>(
+      `SELECT
+         count(*) FILTER (WHERE resolved_at IS NULL)::int AS open_count,
+         count(*) FILTER (WHERE resolved_at IS NOT NULL)::int AS resolved_count
+       FROM action_inbox
+       WHERE organization_id=$1
+         AND dedupe_key IN ($2,$3)`,
+      [
+        organizationId,
+        `spec-derivation-choice:feature:${feature.id}`,
+        `spec-derivation-choice:work_item:${item.id}`,
+      ],
+    );
+    expect(attention.rows[0]).toEqual({
+      open_count: 2,
+      resolved_count: 1,
+    });
+    await store.revokeRelation(
+      projectId,
+      relation.sourceId,
+      relation.targetId,
+      relation.kind,
+      memberAgentActor,
+    );
+    await store.revokeWorkComment(
+      projectId,
+      item.id,
+      comment.id,
+      memberAgentActor,
+    );
+    const afterRevoke = await store.listProject(projectId);
+    expect(
+      afterRevoke.relations.some(
+        (entry) =>
+          entry.sourceId === relation.sourceId &&
+          entry.targetId === relation.targetId &&
+          entry.kind === relation.kind,
+      ),
+    ).toBe(false);
+    expect(
+      afterRevoke.comments.find((entry) => entry.id === comment.id),
+    ).toMatchObject({ revokedAt: expect.any(String) });
+    await store.revokeWorkItem(projectId, item.id, memberAgentActor);
+    await store.revokeFeature(projectId, feature.id, memberAgentActor);
+    const resolvedAfterSourceRevoke = await admin.query<{
+      open_count: number;
+    }>(
+      `SELECT count(*) FILTER (WHERE resolved_at IS NULL)::int AS open_count
+       FROM action_inbox
+       WHERE organization_id=$1
+         AND dedupe_key IN ($2,$3)`,
+      [
+        organizationId,
+        `spec-derivation-choice:feature:${feature.id}`,
+        `spec-derivation-choice:work_item:${item.id}`,
+      ],
+    );
+    expect(resolvedAfterSourceRevoke.rows[0]?.open_count).toBe(0);
+    const revokeEvents = await admin.query<{ event_type: string }>(
+      `SELECT event_type FROM activity_events
+       WHERE organization_id=$1
+         AND aggregate_id=ANY($2::uuid[])
+         AND event_type IN (
+           'project.feature.revoked',
+           'project.work_item.revoked',
+           'project.work_relation.revoked',
+           'project.work_comment.revoked'
+         )
+       ORDER BY event_type`,
+      [organizationId, [feature.id, item.id, comment.id]],
+    );
+    expect(revokeEvents.rows.map((row) => row.event_type)).toEqual([
+      "project.feature.revoked",
+      "project.work_comment.revoked",
+      "project.work_item.revoked",
+      "project.work_relation.revoked",
+    ]);
+  });
+
   it("forces Organization RLS on every new Phase 5 table", async () => {
     const client = new Client({ connectionString: databaseAppUrl });
     await client.connect();
@@ -559,6 +929,7 @@ const phase5Tables = [
   "project_work_code_refs",
   "project_work_comments",
   "project_work_history",
+  "project_feature_history",
   "project_spec_review_policies",
   "project_spec_reviewer_nominations",
   "project_spec_comment_threads",
@@ -577,14 +948,16 @@ const cleanupTables = [
   "project_work_comments",
   "project_work_relations",
   "project_work_history",
+  "project_feature_history",
   "project_work_items",
+  "project_features",
   "spec_revisions",
   "specs",
-  "project_features",
   "project_sprints",
   "project_program_increments",
   "project_epics",
   "outbox",
   "activity_events",
   "idempotency_keys",
+  "memberships",
 ] as const;

@@ -228,16 +228,16 @@ explicit development fallback, not the normal onboarding path.
 Use two isolated browser contexts against the same renderer and API:
 
 1. As an Organization Admin, open canonical **设置 → 团队 · 成员管理**,
-   enter one recipient's display name and exact email, then choose
-   **创建并复制链接**.
+   enter one recipient's exact email, then choose **创建并复制链接**.
 2. Confirm the invitation is shown as pending and that it can be copied,
    regenerated, or revoked without SMTP.
 3. Open the copied link in the recipient context. Confirm the distinct
-   invitation page shows the Organization, Team, preset name, and invited
-   email—but no endpoint, provider, or admin controls.
-4. Sign in with the exact invited email through the real Better Auth magic-link
-   route and accept. A mismatched email must be denied.
-5. Confirm the recipient enters the canonical Team Pulse, the preset name is
+   invitation page shows the Organization, Team, invited email, and a display
+   name field—but no endpoint, provider, or admin controls.
+4. Enter the recipient's chosen display name, sign in with the exact invited
+   email through the real Better Auth route, and accept. A mismatched email must
+   be denied.
+5. Confirm the recipient enters the canonical Team Pulse, the chosen name is
    editable in Personal Settings, and the admin sees the persistent membership
    plus accepted invitation state.
 6. In canonical **通讯**, let the recipient create a participant-only 1:1 DM,

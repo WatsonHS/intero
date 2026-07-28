@@ -94,7 +94,6 @@ export const PilotTeamInvitation = z
     id: z.uuid(),
     organizationId: OrganizationId,
     teamId: z.uuid(),
-    displayName: z.string().min(1).max(160),
     email: z.email().max(320),
     tokenHash: z.string().length(64),
     createdBy: PrincipalId,

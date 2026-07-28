@@ -631,7 +631,7 @@ function PersonCard({
     <section
       // `group` is load-bearing: every Reveal layer is opacity-0 until
       // group-hover, so without it the acrylic never becomes visible.
-      className="group relative overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
+      className="group relative w-full max-w-[520px] overflow-hidden rounded-container border border-line bg-panel2-glass p-[18px] animate-card-enter"
       style={{ animationDelay: `${Math.min(index * 45, 320)}ms` }}
       onMouseEnter={revealMove}
       onMouseMove={revealMove}
@@ -768,7 +768,7 @@ function ParallelTaskRow({
   return (
     <div
       className={cn(
-        "relative w-full rounded-[11px] border text-left text-ink",
+        "group/parallel-task relative w-full rounded-[11px] border text-left text-ink",
         blocked
           ? "border-danger-soft bg-danger-soft"
           : "border-line bg-raise hover:border-line2",
@@ -778,8 +778,10 @@ function ParallelTaskRow({
         type="button"
         onClick={onOpen}
         data-testid={`peer-work-card-${workstream.id}`}
-        className="grid w-full cursor-pointer grid-cols-[7px_minmax(0,1fr)] items-start gap-2.5 border-0 bg-transparent px-[11px] py-2.5 text-left text-ink"
-      >
+        aria-label={workstream.title}
+        className="absolute inset-0 z-0 cursor-pointer rounded-[11px] border-0 bg-transparent outline-offset-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent-strong"
+      />
+      <div className="pointer-events-none relative z-[1] grid w-full grid-cols-[7px_minmax(0,1fr)] items-start gap-2.5 px-[11px] py-2.5 text-left text-ink">
         <span
           className={cn(
             "mt-[5px] h-[7px] w-[7px] rounded-full",
@@ -790,12 +792,23 @@ function ParallelTaskRow({
         <span className="grid min-w-0 gap-[7px]">
           <span
             className={cn(
-              "pr-12 text-[12.5px] font-[540] leading-[1.45] tracking-[-0.008em] [text-wrap:pretty]",
+              "pr-16 text-[12.5px] font-[540] leading-[1.45] tracking-[-0.008em] [text-wrap:pretty]",
               meta.tone === "faint" ? "text-faint" : "text-ink",
             )}
           >
             {workstream.title}
           </span>
+          <Meta
+            tone={stale ? "amber" : "faint"}
+            className={cn(
+              "absolute top-[12px] right-[11px] shrink-0 text-[9.5px]",
+              withdrawableEntry
+                ? "transition-opacity duration-150 group-hover/parallel-task:opacity-0 group-focus-within/parallel-task:opacity-0"
+                : undefined,
+            )}
+          >
+            {formatRelative(workstream.freshnessAt)}
+          </Meta>
           <span className="flex min-w-0 items-center gap-2">
             <Meta
               tone="muted"
@@ -811,12 +824,6 @@ function ParallelTaskRow({
                 {line.evidence}
               </span>
             ) : null}
-            <Meta
-              tone={stale ? "amber" : "faint"}
-              className="ml-auto shrink-0 text-[9.5px]"
-            >
-              {formatRelative(workstream.freshnessAt)}
-            </Meta>
           </span>
           <span className="mt-px grid grid-cols-[34px_minmax(0,1fr)] gap-x-[9px] gap-y-2">
             <span className="pt-px text-[9px] font-[650] tracking-[0.04em] text-faint">
@@ -843,7 +850,7 @@ function ParallelTaskRow({
             </span>
           </span>
         </span>
-      </button>
+      </div>
       {withdrawableEntry ? (
         <button
           type="button"
@@ -853,7 +860,7 @@ function ParallelTaskRow({
             title: withdrawableEntry.title,
           })}
           onClick={() => onWithdraw(withdrawableEntry)}
-          className="absolute top-2 right-2 cursor-pointer rounded-pill border border-line2 bg-panel px-2 py-1 text-[9px] font-[620] text-ink-muted hover:border-danger-soft hover:bg-danger-soft hover:text-danger disabled:cursor-wait disabled:opacity-60"
+          className="pointer-events-none absolute top-[10px] right-[10px] z-10 cursor-pointer border-0 bg-transparent px-1 py-0.5 text-[9px] font-[620] text-faint opacity-0 underline-offset-2 transition-[color,opacity] duration-150 group-hover/parallel-task:pointer-events-auto group-hover/parallel-task:opacity-100 group-focus-within/parallel-task:pointer-events-auto group-focus-within/parallel-task:opacity-100 hover:text-danger hover:underline disabled:cursor-wait disabled:no-underline disabled:opacity-60"
         >
           {withdrawing
             ? t("pulse.card.withdrawing")

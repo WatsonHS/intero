@@ -481,6 +481,7 @@ export const actionInbox = pgTable(
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id),
+    projectId: uuid("project_id").references(() => projects.id),
     kind: text("kind").notNull(),
     title: text("title").notNull(),
     detail: text("detail").notNull(),
@@ -634,6 +635,7 @@ export const specRevisions = pgTable(
     createdBy: uuid("created_by")
       .notNull()
       .references(() => principals.id),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,
   },
@@ -723,6 +725,12 @@ export const projectFeatures = pgTable(
       .notNull()
       .references(() => projects.id),
     epicId: uuid("epic_id").references(() => projectEpics.id),
+    specId: uuid("spec_id").references(() => specs.id),
+    sourceSpecRevisionId: uuid("source_spec_revision_id").references(
+      () => specRevisions.id,
+    ),
+    sourceReferences: jsonb("source_references").notNull().default([]),
+    automationPolicyVersion: text("automation_policy_version"),
     title: text("title").notNull(),
     description: text("description").notNull().default(""),
     stage: text("stage", {
@@ -731,6 +739,7 @@ export const projectFeatures = pgTable(
     ownerId: uuid("owner_id").references(() => principals.id),
     piId: uuid("pi_id").references(() => projectProgramIncrements.id),
     sprintId: uuid("sprint_id").references(() => projectSprints.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [index("project_features_project_idx").on(table.projectId)],
@@ -756,7 +765,14 @@ export const projectWorkItems = pgTable(
       .default("todo"),
     ownerId: uuid("owner_id").references(() => principals.id),
     specId: uuid("spec_id").references(() => specs.id),
-    priority: text("priority", { enum: ["P0", "P1", "P2", "P3"] })
+    sourceSpecRevisionId: uuid("source_spec_revision_id").references(
+      () => specRevisions.id,
+    ),
+    sourceReferences: jsonb("source_references").notNull().default([]),
+    automationPolicyVersion: text("automation_policy_version"),
+    priority: text("priority", {
+      enum: ["unset", "P0", "P1", "P2", "P3"],
+    })
       .notNull()
       .default("P2"),
     points: numeric("points"),
@@ -805,13 +821,28 @@ export const projectWorkRelations = pgTable(
     kind: text("kind", {
       enum: ["blocks", "blocked_by", "related", "duplicate", "duplicated_by"],
     }).notNull(),
+    specId: uuid("spec_id").references(() => specs.id),
+    sourceSpecRevisionId: uuid("source_spec_revision_id").references(
+      () => specRevisions.id,
+    ),
+    sourceReferences: jsonb("source_references").notNull().default([]),
+    automationPolicyVersion: text("automation_policy_version"),
+    idempotencyKey: text("idempotency_key"),
     createdBy: jsonb("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
   (table) => [
     primaryKey({ columns: [table.sourceId, table.targetId, table.kind] }),
+    uniqueIndex("project_work_relations_idempotency_idx")
+      .on(table.organizationId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    index("project_work_relations_source_spec_idx").on(
+      table.specId,
+      table.sourceSpecRevisionId,
+    ),
   ],
 );
 
@@ -848,6 +879,13 @@ export const projectWorkComments = pgTable(
       .references(() => projectWorkItems.id),
     parentId: uuid("parent_id"),
     body: text("body").notNull(),
+    specId: uuid("spec_id").references(() => specs.id),
+    sourceSpecRevisionId: uuid("source_spec_revision_id").references(
+      () => specRevisions.id,
+    ),
+    sourceReferences: jsonb("source_references").notNull().default([]),
+    automationPolicyVersion: text("automation_policy_version"),
+    idempotencyKey: text("idempotency_key"),
     author: jsonb("author").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -858,6 +896,13 @@ export const projectWorkComments = pgTable(
     index("project_work_comments_item_idx").on(
       table.workItemId,
       table.createdAt,
+    ),
+    uniqueIndex("project_work_comments_idempotency_idx")
+      .on(table.organizationId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    index("project_work_comments_source_spec_idx").on(
+      table.specId,
+      table.sourceSpecRevisionId,
     ),
   ],
 );
@@ -886,6 +931,36 @@ export const projectWorkHistory = pgTable(
   },
   (table) => [
     uniqueIndex("project_work_history_idempotency_idx").on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+  ],
+);
+
+export const projectFeatureHistory = pgTable(
+  "project_feature_history",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    featureId: uuid("feature_id")
+      .notNull()
+      .references(() => projectFeatures.id),
+    idempotencyKey: text("idempotency_key"),
+    action: text("action").notNull(),
+    snapshot: jsonb("snapshot").notNull(),
+    actor: jsonb("actor").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revertedEntryId: uuid("reverted_entry_id"),
+  },
+  (table) => [
+    uniqueIndex("project_feature_history_idempotency_idx").on(
       table.projectId,
       table.idempotencyKey,
     ),
@@ -1122,6 +1197,49 @@ export const outbox = pgTable(
   ],
 );
 
+export const projectAutomationSummaryJobs = pgTable(
+  "project_automation_summary_jobs",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    sourceFingerprint: text("source_fingerprint").notNull(),
+    status: text("status", {
+      enum: ["pending", "processing", "completed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    summary: jsonb("summary"),
+    freshnessAt: timestamp("freshness_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("project_automation_summary_active_key_idx")
+      .on(table.organizationId, table.principalId, table.sourceFingerprint)
+      .where(sql`${table.status} in ('pending','processing','completed')`),
+    index("project_automation_summary_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+      table.completedAt,
+    ),
+    index("project_automation_summary_pending_idx")
+      .on(table.organizationId, table.status, table.createdAt)
+      .where(sql`${table.status} in ('pending','processing')`),
+  ],
+);
+
 export const idempotencyKeys = pgTable("idempotency_keys", {
   key: text("key").primaryKey(),
   organizationId: uuid("organization_id")
@@ -1208,7 +1326,6 @@ export const pilotTeamInvitations = pgTable(
     teamId: uuid("team_id")
       .notNull()
       .references(() => pilotTeams.id),
-    displayName: text("display_name").notNull(),
     email: text("email").notNull(),
     tokenHash: text("token_hash").notNull(),
     createdBy: uuid("created_by")

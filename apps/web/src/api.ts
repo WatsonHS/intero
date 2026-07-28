@@ -7,6 +7,7 @@ import type {
   DecisionRecord,
   Epic,
   Feature,
+  FeatureHistoryEntry,
   KanbanCard,
   KanbanCardId,
   KanbanColumn,
@@ -98,6 +99,7 @@ export interface ProjectWorkPayload {
   codeReferences: WorkCodeReference[];
   comments: WorkComment[];
   history: WorkHistoryEntry[];
+  featureHistory: FeatureHistoryEntry[];
   programIncrements: Array<ProgramIncrement & { status: string }>;
   sprints: Array<Sprint & { status: string }>;
 }
@@ -189,12 +191,33 @@ export async function updateFeature(
   );
 }
 
+export async function revertFeature(
+  projectId: string,
+  featureId: string,
+  historyId: string,
+): Promise<Feature> {
+  return postJson(
+    `/v1/project-work/${projectId}/features/${featureId}/revert`,
+    { historyId },
+  );
+}
+
 export async function updateWorkItem(
   projectId: string,
   workItemId: string,
   input: Record<string, unknown>,
 ): Promise<WorkItem> {
   return patchJson(`/v1/project-work/${projectId}/items/${workItemId}`, input);
+}
+
+export async function revertWorkItem(
+  projectId: string,
+  workItemId: string,
+  historyId: string,
+): Promise<WorkItem> {
+  return postJson(`/v1/project-work/${projectId}/items/${workItemId}/revert`, {
+    historyId,
+  });
 }
 
 export async function addWorkComment(
@@ -205,6 +228,16 @@ export async function addWorkComment(
   return postJson(
     `/v1/project-work/${projectId}/items/${workItemId}/comments`,
     input,
+  );
+}
+
+export async function removeWorkComment(
+  projectId: string,
+  workItemId: string,
+  commentId: string,
+): Promise<void> {
+  return deleteJson(
+    `/v1/project-work/${projectId}/items/${workItemId}/comments/${commentId}`,
   );
 }
 
@@ -227,6 +260,17 @@ export async function addWorkRelation(
   return postJson(
     `/v1/project-work/${projectId}/items/${workItemId}/relations`,
     input,
+  );
+}
+
+export async function removeWorkRelation(
+  projectId: string,
+  sourceId: string,
+  targetId: string,
+  kind: WorkRelation["kind"],
+): Promise<void> {
+  return deleteJson(
+    `/v1/project-work/${projectId}/items/${sourceId}/relations/${targetId}/${kind}`,
   );
 }
 
@@ -370,8 +414,28 @@ export async function getActionInbox(signal?: AbortSignal): Promise<{
     projectName: string;
     openSignalCount: number;
     confirmedSignalCount: number;
-    latestSafeContext: string;
-    updatedAt: string;
+    progressFacts: {
+      total: number;
+      todo: number;
+      inProgress: number;
+      readyForTest: number;
+      done: number;
+    };
+    risks: Array<{
+      sourceRef: string;
+      kind: ProjectAutomationSignalKind;
+      summary: string;
+      updatedAt: string;
+    }>;
+    decisions: Array<{
+      id: string;
+      title: string;
+      outcome: string;
+      sourceSpecRevisionId: string;
+      createdAt: string;
+    }>;
+    interpretation: string;
+    freshnessAt: string;
   }>;
 }> {
   return getJson("/v1/action-inbox", signal);
@@ -480,6 +544,29 @@ export async function sendThreadMessage(input: {
     body: input.body,
     createdAt: new Date().toISOString(),
   });
+}
+
+export async function addStandInToThread(input: {
+  threadId: string;
+  standInId: string;
+  actorId: string;
+}): Promise<void> {
+  try {
+    await postJson(`/v1/threads/${input.threadId}/stand-ins`, {
+      standInId: input.standInId,
+      actorId: input.actorId,
+    });
+  } catch (error) {
+    // A stale client can race another participant that addressed the same
+    // Stand-in. The access transition is already durable in that case.
+    if (
+      error instanceof Error &&
+      error.message === "Stand-in is already present in this Thread."
+    ) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function createConversationThread(input: {

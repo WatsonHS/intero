@@ -12,7 +12,10 @@ import {
 import { Pool } from "pg";
 
 import { NormalizedPostgresPilotStore } from "../../server-api/src/normalized-postgres-pilot-store.js";
-import { PostgresAutomationStore } from "../../server-api/src/automation-store.js";
+import {
+  type PortfolioSummaryJobReference,
+  PostgresAutomationStore,
+} from "../../server-api/src/automation-store.js";
 import {
   InstrumentedModelGateway,
   MembershipAuthorizationAdapter,
@@ -29,8 +32,11 @@ import {
   AUTOMATION_DISPATCH_TASK,
   AUTOMATION_RECONCILE_TASK,
   AUTOMATION_SIGNAL_TASK,
+  AUTOMATION_SUMMARY_TASK,
   AutomationOutboxDispatcher,
   GraphileAutomationJobRunner,
+  GraphilePortfolioSummaryJobRunner,
+  PortfolioSummaryOutboxDispatcher,
   type AutomationJobReference,
 } from "./automation-jobs.js";
 import {
@@ -126,6 +132,14 @@ const automationOutbox = new AutomationOutboxDispatcher(
   automationStore,
   automationJobs,
 );
+const portfolioSummaryJobs = new GraphilePortfolioSummaryJobRunner(
+  workerUtils,
+  organizationId,
+);
+const portfolioSummaryOutbox = new PortfolioSummaryOutboxDispatcher(
+  automationStore,
+  portfolioSummaryJobs,
+);
 
 const tasks: TaskList = {
   [AUTOMATION_SIGNAL_TASK]: async (payload: unknown) => {
@@ -135,9 +149,30 @@ const tasks: TaskList = {
     }
     await automationStore.openCoordination(reference.signalId);
   },
+  [AUTOMATION_SUMMARY_TASK]: async (payload: unknown, helpers: JobHelpers) => {
+    const reference = payload as PortfolioSummaryJobReference;
+    try {
+      await automationStore.generatePortfolioSummary(reference);
+    } catch (error) {
+      const normalized =
+        error instanceof Error
+          ? error
+          : new Error("portfolio_summary_generation_failed");
+      await automationStore.markPortfolioSummaryJobFailed(
+        reference,
+        helpers.job.attempts,
+        helpers.job.max_attempts,
+        normalized.message.split(":")[0] ??
+          "portfolio_summary_generation_failed",
+      );
+      throw normalized;
+    }
+  },
   [AUTOMATION_DETECT_TASK]: async (_payload, helpers) => {
     await automationStore.detectMeaningfulSignals();
+    await automationStore.requestPortfolioSummaries();
     await automationOutbox.dispatch();
+    await portfolioSummaryOutbox.dispatch();
     await helpers.addJob(
       AUTOMATION_DETECT_TASK,
       {},
@@ -151,6 +186,7 @@ const tasks: TaskList = {
   },
   [AUTOMATION_DISPATCH_TASK]: async (_payload, helpers) => {
     await automationOutbox.dispatch();
+    await portfolioSummaryOutbox.dispatch();
     await helpers.addJob(
       AUTOMATION_DISPATCH_TASK,
       {},
@@ -164,7 +200,9 @@ const tasks: TaskList = {
   },
   [AUTOMATION_RECONCILE_TASK]: async (_payload, helpers) => {
     await automationStore.reconcilePending();
+    await automationStore.requestPortfolioSummaries();
     await automationOutbox.dispatch();
+    await portfolioSummaryOutbox.dispatch();
     await helpers.addJob(
       AUTOMATION_RECONCILE_TASK,
       {},

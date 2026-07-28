@@ -196,6 +196,7 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.emptyThreadDetail": "The first message will persist in this thread.",
   "chat.accessChanged": "The thread's access boundary changed visibly.",
   "chat.sendFailed": "The message was not persisted; try again.",
+  "chat.standInReplyFailed": "Message sent, but the Stand-in could not reply",
   "chat.createFailed": "Creating the thread failed; try again.",
   "chat.identityUnavailable":
     "Your signed-in identity is unavailable. Sign in again and retry.",
@@ -557,7 +558,6 @@ export const enUS: Record<TranslationKey, string> = {
     "Members and roles of the team you lead. Inviting someone new into the organization needs an organization admin.",
   "admin.members.count": "{count} people",
   "admin.members.invite": "Invite member",
-  "admin.members.inviteName": "Name",
   "admin.members.inviteEmail": "Email",
   "admin.members.inviteSend": "Send invitation",
   "admin.members.inviteFailed":

@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
+  addStandInToThread,
   concludeThread,
   createConversationThread,
   getBootstrap,
@@ -44,6 +45,7 @@ import {
 } from "../pilot/adapters.js";
 import {
   addPilotStandIn,
+  answerPilotStandInInConversation,
   askPilotStandIn,
   getPilotDms,
   getPilotStandIn,
@@ -89,9 +91,13 @@ export function buildGroupChatThreadInput(input: {
 export function CommunicationsView({
   initialThreadId,
   initialStandInOwnerId,
+  onOpenThread,
+  onOpenStandIn,
 }: {
   initialThreadId?: string;
   initialStandInOwnerId?: string;
+  onOpenThread?: (threadId: string) => void;
+  onOpenStandIn?: (ownerId: string) => void;
 } = {}) {
   const { formatRelative, formatTime, t } = useI18n();
   const notifications = useNotifications();
@@ -244,13 +250,22 @@ export function CommunicationsView({
     ...(pilotDms.data?.principals ?? []),
   ]);
   const principalNames = buildPrincipalNames(principals);
-  for (const member of pilot?.teams.data?.teams.flatMap(
-    (team) => team.members,
-  ) ?? []) {
-    principalNames.set(
-      personalStandInPrincipalId(member.id),
-      `${member.displayName} 的替身`,
+  const pilotTeamMembers =
+    pilot?.teams.data?.teams.flatMap((team) => team.members) ?? [];
+  const standInOwnerIds = new Map<PrincipalId, PrincipalId>();
+  for (const member of pilotTeamMembers.filter(
+    (candidate) => candidate.kind === "human",
+  )) {
+    const standInId = personalStandInPrincipalId(member.id);
+    standInOwnerIds.set(standInId, member.id);
+    principalNames.set(standInId, `${member.displayName} 的替身`);
+  }
+  if (pilotPrincipal?.kind === "human") {
+    const standInId = personalStandInPrincipalId(
+      pilotPrincipal.id as PrincipalId,
     );
+    standInOwnerIds.set(standInId, pilotPrincipal.id as PrincipalId);
+    principalNames.set(standInId, `${pilotPrincipal.displayName} 的替身`);
   }
   const teamNames = new Map(
     (pilot?.teams.data?.teams ?? []).map((team) => [team.id, team.name]),
@@ -294,9 +309,16 @@ export function CommunicationsView({
         participantIds: current.thread.participantIds,
         standInIds: current.thread.standInIds,
         principalNames,
+        standInOwnerIds,
         additionalStandIns: currentIsPilotStandIn
           ? standInMentionCandidates
-          : [],
+          : !currentIsPilot &&
+              (current.thread.kind === "room" ||
+                current.thread.kind === "human_group")
+            ? standInMentionCandidates.filter((candidate) =>
+                current.thread.participantIds.includes(candidate.principalId),
+              )
+            : [],
       })
     : [];
   const activeMention = conversationMentionQuery(draft, mentionCursor);
@@ -317,6 +339,18 @@ export function CommunicationsView({
         : current.thread.participantIds.find(
             (id) => !current.thread.standInIds.includes(id),
           );
+
+  function selectThread(threadId: string) {
+    setSelectedStandInOwnerId(undefined);
+    setSelectedThreadId(threadId);
+    onOpenThread?.(threadId);
+  }
+
+  function selectStandIn(ownerId: PrincipalId) {
+    setSelectedStandInOwnerId(ownerId);
+    if (pilotProject) setSelectedThreadId(pilotProject.id);
+    onOpenStandIn?.(ownerId);
+  }
 
   const markRead = useMutation({
     mutationFn: (input: { threadId: string; sequence: number }) =>
@@ -341,7 +375,7 @@ export function CommunicationsView({
     onSuccess: async ({ thread }) => {
       setConcluding(false);
       setConclusion("");
-      if (thread.parentThreadId) setSelectedThreadId(thread.parentThreadId);
+      if (thread.parentThreadId) selectThread(thread.parentThreadId);
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
@@ -386,6 +420,28 @@ export function CommunicationsView({
     });
   }, [current?.thread.id, currentUnread, currentLastSequence]);
 
+  const standInReplies = useMutation({
+    mutationFn: (input: {
+      threadId: string;
+      senderId: string;
+      body: string;
+      projectId?: string;
+      mentionedStandIns: MentionedStandIn[];
+    }) =>
+      requestConversationStandInReplies(input, {
+        sendMessage: sendThreadMessage,
+        answerStandIn: answerPilotStandInInConversation,
+      }),
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.standInReplyFailed"),
+        { title: t("chat.standInReplyFailed") },
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
   const send = useMutation({
     mutationFn: async (input: {
       threadId: string;
@@ -393,6 +449,7 @@ export function CommunicationsView({
       body: string;
       mode: "canonical" | "pilot-dm" | "pilot-stand-in";
       standInOwnerId?: PrincipalId;
+      mentionedStandIns?: MentionedStandIn[];
     }) => {
       if (input.mode === "pilot-dm") {
         await sendPilotDm(
@@ -400,7 +457,7 @@ export function CommunicationsView({
           input.threadId,
           input.body,
         );
-        return;
+        return input;
       }
       if (input.mode === "pilot-stand-in") {
         if (!input.standInOwnerId) {
@@ -412,19 +469,43 @@ export function CommunicationsView({
           input.standInOwnerId,
           input.body,
         );
-        return;
+        return input;
       }
-      await sendThreadMessage(input);
+      await sendCanonicalConversationMessage(input, {
+        addStandIn: addStandInToThread,
+        sendMessage: sendThreadMessage,
+      });
+      return input;
     },
-    onSuccess: async () => {
+    onSuccess: (input) => {
       setDraft("");
-      await Promise.all([
+      if (
+        input.mode === "canonical" &&
+        (input.mentionedStandIns?.length ?? 0) > 0
+      ) {
+        standInReplies.mutate({
+          threadId: input.threadId,
+          senderId: input.senderId,
+          body: input.body,
+          ...(pilot?.selectedProjectId
+            ? { projectId: pilot.selectedProjectId }
+            : {}),
+          mentionedStandIns: input.mentionedStandIns ?? [],
+        });
+      }
+      void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
         queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
         queryClient.invalidateQueries({
           queryKey: ["pilot", "stand_in"],
         }),
       ]);
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.sendFailed"),
+        { title: t("chat.sendFailed") },
+      );
     },
   });
   const create = useMutation({
@@ -447,7 +528,7 @@ export function CommunicationsView({
     },
     onSuccess: async ({ threadId }) => {
       setShowCreate(false);
-      setSelectedThreadId(threadId);
+      selectThread(threadId);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
         queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
@@ -466,6 +547,12 @@ export function CommunicationsView({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] });
     },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.sendFailed"),
+        { title: t("chat.sendFailed") },
+      );
+    },
   });
   const createStandIn = useMutation({
     mutationFn: async () => {
@@ -482,7 +569,7 @@ export function CommunicationsView({
       });
     },
     onSuccess: async (thread) => {
-      setSelectedThreadId(thread.id);
+      selectThread(thread.id);
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
@@ -498,10 +585,12 @@ export function CommunicationsView({
       return;
     }
     setMentionPickerOpen(false);
+    const body = draft.trim();
     send.mutate({
       threadId: current.thread.id,
       senderId: currentSenderId,
-      body: draft.trim(),
+      body,
+      mentionedStandIns: mentionedStandIns(body, mentionCandidates),
       ...(currentIsPilotStandIn && activeStandInOwnerId
         ? { standInOwnerId: activeStandInOwnerId }
         : {}),
@@ -524,7 +613,7 @@ export function CommunicationsView({
     setMentionCursor(result.cursor);
     setMentionPickerOpen(false);
     if (currentIsPilotStandIn && candidate.standInOwnerId) {
-      setSelectedStandInOwnerId(candidate.standInOwnerId);
+      selectStandIn(candidate.standInOwnerId);
     }
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
@@ -833,7 +922,16 @@ export function CommunicationsView({
                         threadTitles={threadTitles}
                         formatRelative={formatRelative}
                         t={t}
-                        onSelect={() => setSelectedThreadId(item.thread.id)}
+                        onSelect={() => {
+                          if (
+                            item.thread.id === pilotStandInItem?.thread.id &&
+                            activeStandInOwnerId
+                          ) {
+                            selectStandIn(activeStandInOwnerId);
+                          } else {
+                            selectThread(item.thread.id);
+                          }
+                        }}
                       />
                     ))}
                   </div>
@@ -903,9 +1001,7 @@ export function CommunicationsView({
                   })}
                   <button
                     type="button"
-                    onClick={() =>
-                      setSelectedThreadId(current.thread.parentThreadId)
-                    }
+                    onClick={() => selectThread(current.thread.parentThreadId!)}
                     className="ml-auto cursor-pointer border-0 bg-transparent p-0 text-[11.5px] text-accent-strong hover:underline"
                   >
                     {t("chat.openOrigin")}
@@ -1162,15 +1258,6 @@ export function CommunicationsView({
                   </button>
                 </div>
               </div>
-              {send.isError || addStandIn.isError ? (
-                <p className="mt-2 text-[11px] text-danger">
-                  {send.error instanceof Error
-                    ? send.error.message
-                    : addStandIn.error instanceof Error
-                      ? addStandIn.error.message
-                      : t("chat.sendFailed")}
-                </p>
-              ) : null}
             </div>
           </div>
         </div>
@@ -1257,6 +1344,13 @@ export interface ConversationMentionCandidate {
   displayName: string;
   kind: "human" | "stand_in";
   standInOwnerId?: PrincipalId;
+  threadParticipant?: boolean;
+}
+
+export interface MentionedStandIn {
+  principalId: PrincipalId;
+  ownerId: PrincipalId;
+  needsJoin: boolean;
 }
 
 export interface ConversationMention {
@@ -1269,25 +1363,33 @@ export function conversationMentionCandidates(input: {
   participantIds: string[];
   standInIds: string[];
   principalNames: Map<string, string>;
+  standInOwnerIds?: Map<PrincipalId, PrincipalId>;
   additionalStandIns?: PersonalStandInMentionCandidate[];
 }): ConversationMentionCandidate[] {
   const standInIds = new Set(input.standInIds);
   const candidates = new Map<string, ConversationMentionCandidate>();
   for (const principalId of input.participantIds) {
+    const standInOwnerId = input.standInOwnerIds?.get(
+      principalId as PrincipalId,
+    );
     candidates.set(principalId, {
       principalId: principalId as PrincipalId,
       displayName:
         input.principalNames.get(principalId) ?? principalId.slice(0, 8),
       kind: standInIds.has(principalId) ? "stand_in" : "human",
+      threadParticipant: true,
+      ...(standInOwnerId ? { standInOwnerId } : {}),
     });
   }
   for (const candidate of input.additionalStandIns ?? []) {
     const principalId = personalStandInPrincipalId(candidate.principalId);
+    if (candidates.has(principalId)) continue;
     candidates.set(principalId, {
       principalId,
       displayName: `${candidate.displayName} 的替身`,
       kind: "stand_in",
       standInOwnerId: candidate.principalId,
+      threadParticipant: false,
     });
   }
   return [...candidates.values()].toSorted(
@@ -1295,6 +1397,141 @@ export function conversationMentionCandidates(input: {
       Number(left.kind === "stand_in") - Number(right.kind === "stand_in") ||
       left.displayName.localeCompare(right.displayName),
   );
+}
+
+export function mentionedStandIns(
+  body: string,
+  candidates: ConversationMentionCandidate[],
+): MentionedStandIn[] {
+  const mentioned = new Map<PrincipalId, MentionedStandIn>();
+  for (const part of splitConversationMentions(body, candidates)) {
+    if (part.mention?.kind !== "stand_in" || !part.mention.standInOwnerId) {
+      continue;
+    }
+    mentioned.set(part.mention.principalId, {
+      principalId: part.mention.principalId,
+      ownerId: part.mention.standInOwnerId,
+      needsJoin: part.mention.threadParticipant === false,
+    });
+  }
+  return [...mentioned.values()];
+}
+
+export async function prepareConversationStandIns(
+  input: {
+    threadId: string;
+    senderId: string;
+    mentionedStandIns?: MentionedStandIn[];
+  },
+  dependencies: {
+    addStandIn: (input: {
+      threadId: string;
+      standInId: string;
+      actorId: string;
+    }) => Promise<unknown>;
+  },
+): Promise<void> {
+  for (const mentioned of input.mentionedStandIns ?? []) {
+    if (!mentioned.needsJoin) continue;
+    await dependencies.addStandIn({
+      threadId: input.threadId,
+      standInId: mentioned.principalId,
+      actorId: input.senderId,
+    });
+  }
+}
+
+export async function sendCanonicalConversationMessage(
+  input: {
+    threadId: string;
+    senderId: string;
+    body: string;
+    mentionedStandIns?: MentionedStandIn[];
+  },
+  dependencies: {
+    addStandIn: (input: {
+      threadId: string;
+      standInId: string;
+      actorId: string;
+    }) => Promise<unknown>;
+    sendMessage: (input: {
+      threadId: string;
+      senderId: string;
+      body: string;
+    }) => Promise<unknown>;
+  },
+): Promise<void> {
+  await prepareConversationStandIns(input, dependencies);
+  await dependencies.sendMessage({
+    threadId: input.threadId,
+    senderId: input.senderId,
+    body: input.body,
+  });
+}
+
+export class StandInReplyError extends Error {
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : "The Stand-in could not answer this message.",
+      { cause },
+    );
+    this.name = "StandInReplyError";
+  }
+}
+
+export async function requestConversationStandInReplies(
+  input: {
+    threadId: string;
+    senderId: string;
+    body: string;
+    projectId?: string;
+    mentionedStandIns: MentionedStandIn[];
+  },
+  dependencies: {
+    sendMessage: (input: {
+      threadId: string;
+      senderId: string;
+      body: string;
+    }) => Promise<unknown>;
+    answerStandIn: (
+      identityId: PrincipalId,
+      projectId: string,
+      standInOwnerId: PrincipalId,
+      question: string,
+    ) => Promise<{
+      answer: string;
+      standIn: { id: string };
+    }>;
+  },
+): Promise<void> {
+  if (input.mentionedStandIns.length === 0) return;
+
+  if (!input.projectId) {
+    throw new StandInReplyError(
+      new Error("No active project is available for the Stand-in."),
+    );
+  }
+  const errors: unknown[] = [];
+  for (const mentioned of input.mentionedStandIns) {
+    try {
+      const result = await dependencies.answerStandIn(
+        input.senderId as PrincipalId,
+        input.projectId,
+        mentioned.ownerId,
+        input.body,
+      );
+      await dependencies.sendMessage({
+        threadId: input.threadId,
+        senderId: result.standIn.id,
+        body: result.answer,
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) throw new StandInReplyError(errors[0]);
 }
 
 export function conversationMentionQuery(

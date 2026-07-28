@@ -1,5 +1,6 @@
 import {
   ArrowLeftIcon,
+  ArrowCounterClockwiseIcon,
   GitBranchIcon,
   GitCommitIcon,
   LinkSimpleIcon,
@@ -24,6 +25,9 @@ import {
   getProjectWork,
   getProjectSpecs,
   removeWorkCodeReference,
+  removeWorkComment,
+  removeWorkRelation,
+  revertWorkItem,
   updateWorkItem,
 } from "../../api.js";
 import { getPilotOverview } from "../../pilot/api.js";
@@ -67,6 +71,11 @@ export function WorkItemDetailSurface({
       updateWorkItem(projectId, workItemId, patch),
     onSuccess: refresh,
   });
+  const revert = useMutation({
+    mutationFn: (historyId: string) =>
+      revertWorkItem(projectId, workItemId, historyId),
+    onSuccess: refresh,
+  });
   const sendComment = useMutation({
     mutationFn: () =>
       addWorkComment(projectId, workItemId, {
@@ -78,6 +87,11 @@ export function WorkItemDetailSurface({
       setReplyTo(undefined);
       await refresh();
     },
+  });
+  const removeComment = useMutation({
+    mutationFn: (commentId: string) =>
+      removeWorkComment(projectId, workItemId, commentId),
+    onSuccess: refresh,
   });
   const removeCode = useMutation({
     mutationFn: (referenceId: string) =>
@@ -94,6 +108,20 @@ export function WorkItemDetailSurface({
       setRelationTargetId("");
       await refresh();
     },
+  });
+  const removeRelation = useMutation({
+    mutationFn: (relation: {
+      sourceId: string;
+      targetId: string;
+      kind: WorkRelationKind;
+    }) =>
+      removeWorkRelation(
+        projectId,
+        relation.sourceId,
+        relation.targetId,
+        relation.kind,
+      ),
+    onSuccess: refresh,
   });
   const addCode = useMutation({
     mutationFn: () =>
@@ -192,6 +220,15 @@ export function WorkItemDetailSurface({
                 <time className="font-mono text-[9.5px] text-faint">
                   {new Date(entry.occurredAt).toLocaleString()}
                 </time>
+                <button
+                  type="button"
+                  disabled={revert.isPending}
+                  onClick={() => revert.mutate(entry.id)}
+                  className="col-start-3 inline-flex items-center gap-1 justify-self-end border-0 bg-transparent p-0 text-[9.5px] text-accent-strong disabled:opacity-45"
+                >
+                  <ArrowCounterClockwiseIcon size={11} />
+                  Revert to this state
+                </button>
               </article>
             ))}
             {rootComments.map((entry) => (
@@ -201,6 +238,7 @@ export function WorkItemDetailSurface({
                 comments={comments}
                 depth={0}
                 onReply={setReplyTo}
+                onRevoke={(commentId) => removeComment.mutate(commentId)}
               />
             ))}
             {history.length === 0 && comments.length === 0 ? (
@@ -283,7 +321,7 @@ export function WorkItemDetailSurface({
               }
               className="w-full bg-transparent text-[12px] outline-none"
             >
-              {(["P0", "P1", "P2", "P3"] as const).map((priority) => (
+              {(["unset", "P0", "P1", "P2", "P3"] as const).map((priority) => (
                 <option value={priority} key={priority}>
                   {priority}
                 </option>
@@ -341,6 +379,21 @@ export function WorkItemDetailSurface({
               ))}
             </select>
           </Field>
+          {item.sourceSpecRevisionId ? (
+            <Field label="Confirmed Spec source">
+              <p className="font-mono text-[9.5px] text-ink-muted">
+                revision {item.sourceSpecRevisionId.slice(0, 8)}
+              </p>
+              <ul className="mt-1 grid gap-0.5 text-[9.5px] text-faint">
+                {(item.sourceReferences ?? []).map((reference) => (
+                  <li key={reference}>{reference}</li>
+                ))}
+              </ul>
+              <small className="mt-1 block text-[9px] text-faint">
+                policy {item.automationPolicyVersion ?? "unknown"}
+              </small>
+            </Field>
+          ) : null}
           <Field label="PI">
             <select
               value={item.piId ?? ""}
@@ -404,6 +457,20 @@ export function WorkItemDetailSurface({
                 ? relation.targetId
                 : relation.sourceId
               ).slice(0, 8)}
+              {relation.sourceSpecRevisionId ? (
+                <small className="mt-1 block font-mono text-[9px] text-faint">
+                  confirmed Spec {relation.sourceSpecRevisionId.slice(0, 8)}
+                </small>
+              ) : null}
+              <button
+                type="button"
+                aria-label="Revoke relation"
+                disabled={removeRelation.isPending}
+                onClick={() => removeRelation.mutate(relation)}
+                className="float-right border-0 bg-transparent p-0 text-faint hover:text-danger"
+              >
+                <TrashIcon size={12} />
+              </button>
             </div>
           ))}
           {item.coordinationThreadIds.map((id) => (
@@ -515,11 +582,13 @@ function CommentThread({
   comments,
   depth,
   onReply,
+  onRevoke,
 }: {
   entry: WorkComment;
   comments: WorkComment[];
   depth: number;
   onReply: (id: string) => void;
+  onRevoke: (id: string) => void;
 }) {
   const replies = comments.filter(
     (candidate) => candidate.parentId === entry.id,
@@ -532,12 +601,26 @@ function CommentThread({
           {entry.author.kind} · {new Date(entry.createdAt).toLocaleString()}
         </div>
         <p className="mt-2 text-[12.5px] leading-[1.7]">{entry.body}</p>
+        {entry.sourceSpecRevisionId ? (
+          <p className="mt-1 font-mono text-[9px] text-faint">
+            confirmed Spec {entry.sourceSpecRevisionId.slice(0, 8)} ·{" "}
+            {(entry.sourceReferences ?? []).join(", ")}
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={() => onReply(entry.id)}
           className="mt-2 border-0 bg-transparent p-0 text-[10px] text-accent-strong"
         >
           Reply
+        </button>
+        <button
+          type="button"
+          aria-label="Revoke comment"
+          onClick={() => onRevoke(entry.id)}
+          className="ml-3 border-0 bg-transparent p-0 text-[10px] text-faint hover:text-danger"
+        >
+          Revoke
         </button>
       </article>
       {replies.length > 0 ? (
@@ -549,6 +632,7 @@ function CommentThread({
               comments={comments}
               depth={depth + 1}
               onReply={onReply}
+              onRevoke={onRevoke}
             />
           ))}
         </div>

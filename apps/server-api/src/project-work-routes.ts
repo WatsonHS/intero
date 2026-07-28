@@ -8,6 +8,7 @@ import {
   ProgramIncrementId,
   ProjectId,
   SpecId,
+  SpecRevisionId,
   SprintId,
   ThreadId,
   WorkCommentId,
@@ -103,13 +104,25 @@ export async function registerProjectWorkRoutes(
           description: z.string().max(8_000).optional(),
           stage: FeatureStage.optional(),
           epicId: z.uuid().nullable().optional(),
+          specId: z.uuid().nullable().optional(),
+          sourceSpecRevisionId: z.uuid().nullable().optional(),
+          sourceReferences: specSourceReferences.optional(),
           ownerId: z.uuid().nullable().optional(),
           piId: z.uuid().nullable().optional(),
           sprintId: z.uuid().nullable().optional(),
         })
         .strict()
         .parse(request.body);
-      assertAgentFeatureBoundaries(access, input);
+      await assertAgentFeatureBoundaries(
+        options.store,
+        access,
+        input,
+        "feature.update",
+      );
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId ?? undefined,
+      );
       return options.store.updateFeature(
         access.projectId,
         FeatureId.parse(request.params.featureId),
@@ -125,6 +138,28 @@ export async function registerProjectWorkRoutes(
                 epicId:
                   input.epicId === null ? null : EpicId.parse(input.epicId),
               }),
+          ...(input.specId === undefined
+            ? {}
+            : {
+                specId:
+                  input.specId === null ? null : SpecId.parse(input.specId),
+              }),
+          ...(input.sourceSpecRevisionId === undefined
+            ? {}
+            : {
+                sourceSpecRevisionId:
+                  input.sourceSpecRevisionId === null
+                    ? null
+                    : SpecRevisionId.parse(input.sourceSpecRevisionId),
+              }),
+          ...(input.sourceReferences === undefined
+            ? {}
+            : { sourceReferences: input.sourceReferences }),
+          ...(input.sourceSpecRevisionId
+            ? { automationPolicyVersion: DERIVATION_POLICY_VERSION }
+            : input.sourceSpecRevisionId === null
+              ? { automationPolicyVersion: null }
+              : {}),
           ...(input.ownerId === undefined
             ? {}
             : {
@@ -151,7 +186,7 @@ export async function registerProjectWorkRoutes(
               }),
         } as Parameters<PostgresProjectWorkStore["updateFeature"]>[2],
         access.actor,
-        idempotencyKey(request),
+        key,
       );
     },
   );
@@ -166,13 +201,25 @@ export async function registerProjectWorkRoutes(
           description: z.string().max(8_000).default(""),
           stage: FeatureStage.default("planned"),
           epicId: z.uuid().optional(),
+          specId: z.uuid().optional(),
+          sourceSpecRevisionId: z.uuid().optional(),
+          sourceReferences: specSourceReferences.optional(),
           ownerId: z.uuid().optional(),
           piId: z.uuid().optional(),
           sprintId: z.uuid().optional(),
         })
         .strict()
         .parse(request.body);
-      assertAgentFeatureBoundaries(access, input);
+      await assertAgentFeatureBoundaries(
+        options.store,
+        access,
+        input,
+        "feature.create",
+      );
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId,
+      );
       return reply.status(201).send(
         await options.store.createFeature(
           {
@@ -181,6 +228,16 @@ export async function registerProjectWorkRoutes(
             description: input.description,
             stage: input.stage,
             ...(input.epicId ? { epicId: EpicId.parse(input.epicId) } : {}),
+            ...(input.specId ? { specId: SpecId.parse(input.specId) } : {}),
+            ...(input.sourceSpecRevisionId
+              ? {
+                  sourceSpecRevisionId: SpecRevisionId.parse(
+                    input.sourceSpecRevisionId,
+                  ),
+                  sourceReferences: input.sourceReferences ?? [],
+                  automationPolicyVersion: DERIVATION_POLICY_VERSION,
+                }
+              : {}),
             ...(input.ownerId
               ? { ownerId: PrincipalId.parse(input.ownerId) }
               : {}),
@@ -192,9 +249,40 @@ export async function registerProjectWorkRoutes(
               : {}),
           },
           access.actor,
-          idempotencyKey(request),
+          key,
         ),
       );
+    },
+  );
+
+  app.post<{ Params: { projectId: string; featureId: string } }>(
+    "/v1/project-work/:projectId/features/:featureId/revert",
+    async (request) => {
+      const access = await requireProjectAccess(request, options, "either");
+      const input = z
+        .object({ historyId: z.uuid() })
+        .strict()
+        .parse(request.body);
+      return options.store.revertFeature(
+        access.projectId,
+        FeatureId.parse(request.params.featureId),
+        input.historyId,
+        access.actor,
+        idempotencyKey(request),
+      );
+    },
+  );
+
+  app.delete<{ Params: { projectId: string; featureId: string } }>(
+    "/v1/project-work/:projectId/features/:featureId",
+    async (request, reply) => {
+      const access = await requireProjectAccess(request, options, "either");
+      await options.store.revokeFeature(
+        access.projectId,
+        FeatureId.parse(request.params.featureId),
+        access.actor,
+      );
+      return reply.status(204).send();
     },
   );
 
@@ -203,7 +291,17 @@ export async function registerProjectWorkRoutes(
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
       const input = workItemMutation.parse(request.body);
-      assertAgentWorkItemBoundaries(access, input, true);
+      await assertAgentWorkItemBoundaries(
+        options.store,
+        access,
+        input,
+        true,
+        "work_item.create",
+      );
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId ?? undefined,
+      );
       return reply.status(201).send(
         await options.store.createWorkItem(
           {
@@ -211,7 +309,9 @@ export async function registerProjectWorkRoutes(
             title: input.title,
             description: input.description ?? "",
             status: input.status ?? "todo",
-            priority: input.priority ?? "P2",
+            priority:
+              input.priority ??
+              (access.actor.kind === "agent" ? "unset" : "P2"),
             carryover: false,
             coordinationThreadIds: (input.coordinationThreadIds ?? []).map(
               (id) => ThreadId.parse(id),
@@ -223,6 +323,15 @@ export async function registerProjectWorkRoutes(
               ? { ownerId: PrincipalId.parse(input.ownerId) }
               : {}),
             ...(input.specId ? { specId: SpecId.parse(input.specId) } : {}),
+            ...(input.sourceSpecRevisionId
+              ? {
+                  sourceSpecRevisionId: SpecRevisionId.parse(
+                    input.sourceSpecRevisionId,
+                  ),
+                  sourceReferences: input.sourceReferences ?? [],
+                  automationPolicyVersion: DERIVATION_POLICY_VERSION,
+                }
+              : {}),
             ...(input.points === undefined || input.points === null
               ? {}
               : { points: input.points }),
@@ -237,7 +346,7 @@ export async function registerProjectWorkRoutes(
               : {}),
           },
           access.actor,
-          idempotencyKey(request),
+          key,
         ),
       );
     },
@@ -248,13 +357,23 @@ export async function registerProjectWorkRoutes(
     async (request) => {
       const access = await requireProjectAccess(request, options, "either");
       const input = workItemMutation.partial().parse(request.body);
-      assertAgentWorkItemBoundaries(access, input, false);
+      await assertAgentWorkItemBoundaries(
+        options.store,
+        access,
+        input,
+        false,
+        "work_item.update",
+      );
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId ?? undefined,
+      );
       return options.store.updateWorkItem(
         access.projectId,
         WorkItemId.parse(request.params.workItemId),
         workItemPatch(input),
         access.actor,
-        idempotencyKey(request),
+        key,
       );
     },
   );
@@ -274,6 +393,22 @@ export async function registerProjectWorkRoutes(
         access.actor,
         idempotencyKey(request),
       );
+    },
+  );
+
+  app.delete<{
+    Params: { projectId: string; workItemId: string; commentId: string };
+  }>(
+    "/v1/project-work/:projectId/items/:workItemId/comments/:commentId",
+    async (request, reply) => {
+      const access = await requireProjectAccess(request, options, "either");
+      await options.store.revokeWorkComment(
+        access.projectId,
+        WorkItemId.parse(request.params.workItemId),
+        WorkCommentId.parse(request.params.commentId),
+        access.actor,
+      );
+      return reply.status(204).send();
     },
   );
 
@@ -298,21 +433,64 @@ export async function registerProjectWorkRoutes(
         .object({
           body: z.string().min(1).max(16_000),
           parentId: z.uuid().optional(),
+          specId: z.uuid().optional(),
+          sourceSpecRevisionId: z.uuid().optional(),
+          sourceReferences: specSourceReferences.optional(),
         })
         .strict()
         .parse(request.body);
-      return reply.status(201).send(
-        await options.store.addWorkComment(access.projectId, {
-          id: WorkCommentId.parse(uuidv7()),
-          workItemId: WorkItemId.parse(request.params.workItemId),
-          body: input.body,
-          ...(input.parentId
-            ? { parentId: WorkCommentId.parse(input.parentId) }
-            : {}),
-          author: access.actor,
-          createdAt: new Date().toISOString(),
-        }),
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId,
       );
+      return reply.status(201).send(
+        await options.store.addWorkComment(
+          access.projectId,
+          {
+            id: WorkCommentId.parse(uuidv7()),
+            workItemId: WorkItemId.parse(request.params.workItemId),
+            body: input.body,
+            ...(input.parentId
+              ? { parentId: WorkCommentId.parse(input.parentId) }
+              : {}),
+            ...(input.specId ? { specId: SpecId.parse(input.specId) } : {}),
+            ...(input.sourceSpecRevisionId
+              ? {
+                  sourceSpecRevisionId: SpecRevisionId.parse(
+                    input.sourceSpecRevisionId,
+                  ),
+                  sourceReferences: input.sourceReferences ?? [],
+                  automationPolicyVersion: DERIVATION_POLICY_VERSION,
+                }
+              : {}),
+            author: access.actor,
+            createdAt: new Date().toISOString(),
+          },
+          key,
+        ),
+      );
+    },
+  );
+
+  app.delete<{
+    Params: {
+      projectId: string;
+      workItemId: string;
+      targetId: string;
+      kind: string;
+    };
+  }>(
+    "/v1/project-work/:projectId/items/:workItemId/relations/:targetId/:kind",
+    async (request, reply) => {
+      const access = await requireProjectAccess(request, options, "either");
+      await options.store.revokeRelation(
+        access.projectId,
+        WorkItemId.parse(request.params.workItemId),
+        WorkItemId.parse(request.params.targetId),
+        WorkRelationKind.parse(request.params.kind),
+        access.actor,
+      );
+      return reply.status(204).send();
     },
   );
 
@@ -362,9 +540,16 @@ export async function registerProjectWorkRoutes(
         .object({
           targetId: z.uuid(),
           kind: WorkRelationKind,
+          specId: z.uuid().optional(),
+          sourceSpecRevisionId: z.uuid().optional(),
+          sourceReferences: specSourceReferences.optional(),
         })
         .strict()
         .parse(request.body);
+      const key = requireDerivationIdempotencyKey(
+        request,
+        input.sourceSpecRevisionId,
+      );
       return reply.status(201).send(
         await options.store.addRelation(
           access.projectId,
@@ -372,10 +557,20 @@ export async function registerProjectWorkRoutes(
             sourceId: WorkItemId.parse(request.params.workItemId),
             targetId: WorkItemId.parse(input.targetId),
             kind: input.kind,
+            ...(input.specId ? { specId: SpecId.parse(input.specId) } : {}),
+            ...(input.sourceSpecRevisionId
+              ? {
+                  sourceSpecRevisionId: SpecRevisionId.parse(
+                    input.sourceSpecRevisionId,
+                  ),
+                  sourceReferences: input.sourceReferences ?? [],
+                  automationPolicyVersion: DERIVATION_POLICY_VERSION,
+                }
+              : {}),
             createdBy: access.actor,
             createdAt: new Date().toISOString(),
           },
-          idempotencyKey(request),
+          key,
         ),
       );
     },
@@ -668,6 +863,13 @@ export async function registerProjectWorkRoutes(
   );
 }
 
+const specSourceReferences = z
+  .array(z.string().regex(/^block:block_[a-zA-Z0-9_-]{8,80}$/))
+  .min(1)
+  .max(50);
+
+const DERIVATION_POLICY_VERSION = "confirmed-spec-v1";
+
 const workItemMutation = z
   .object({
     title: z.string().min(1).max(240),
@@ -676,6 +878,8 @@ const workItemMutation = z
     ownerId: z.uuid().nullable().optional(),
     featureId: z.uuid().nullable().optional(),
     specId: z.uuid().nullable().optional(),
+    sourceSpecRevisionId: z.uuid().nullable().optional(),
+    sourceReferences: specSourceReferences.optional(),
     priority: WorkPriority.optional(),
     points: z.number().finite().nonnegative().nullable().optional(),
     piId: z.uuid().nullable().optional(),
@@ -777,6 +981,21 @@ function idempotencyKey(request: FastifyRequest): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function requireDerivationIdempotencyKey(
+  request: FastifyRequest,
+  sourceSpecRevisionId?: string,
+): string | undefined {
+  const key = idempotencyKey(request);
+  if (sourceSpecRevisionId && !key) {
+    throw new PilotStoreError(
+      "IDEMPOTENCY_KEY_REQUIRED",
+      400,
+      "Confirmed-Spec derivation requires an Idempotency-Key header.",
+    );
+  }
+  return key;
+}
+
 function workItemPatch(
   input: z.infer<ReturnType<typeof workItemMutation.partial>>,
 ): Parameters<PostgresProjectWorkStore["updateWorkItem"]>[2] {
@@ -803,6 +1022,22 @@ function workItemPatch(
       : {
           specId: input.specId === null ? null : SpecId.parse(input.specId),
         }),
+    ...(input.sourceSpecRevisionId === undefined
+      ? {}
+      : {
+          sourceSpecRevisionId:
+            input.sourceSpecRevisionId === null
+              ? null
+              : SpecRevisionId.parse(input.sourceSpecRevisionId),
+        }),
+    ...(input.sourceReferences === undefined
+      ? {}
+      : { sourceReferences: input.sourceReferences }),
+    ...(input.sourceSpecRevisionId
+      ? { automationPolicyVersion: DERIVATION_POLICY_VERSION }
+      : input.sourceSpecRevisionId === null
+        ? { automationPolicyVersion: null }
+        : {}),
     ...(input.priority === undefined ? {} : { priority: input.priority }),
     ...(input.points === undefined ? {} : { points: input.points }),
     ...(input.piId === undefined
@@ -846,45 +1081,77 @@ function forbidden() {
   );
 }
 
-function assertAgentFeatureBoundaries(
+async function assertAgentFeatureBoundaries(
+  store: PostgresProjectWorkStore,
   access: Access,
   input: {
     ownerId?: string | null | undefined;
     stage?: "planned" | "in_development" | "released" | undefined;
   },
-): void {
+  attemptedAction: string,
+): Promise<void> {
   if (access.actor.kind !== "agent") return;
   if (input.ownerId !== undefined) {
-    throw automationAuthorityDenied(
+    const error = automationAuthorityDenied(
       "A connected Agent cannot assign or change a Feature owner.",
     );
+    await store.recordAutomationAuthorityDenial(
+      access.projectId,
+      access.actor,
+      attemptedAction,
+      error.message,
+    );
+    throw error;
   }
   if (input.stage === "released") {
-    throw automationAuthorityDenied(
+    const error = automationAuthorityDenied(
       "A connected Agent cannot make the human release decision.",
     );
+    await store.recordAutomationAuthorityDenial(
+      access.projectId,
+      access.actor,
+      attemptedAction,
+      error.message,
+    );
+    throw error;
   }
 }
 
-function assertAgentWorkItemBoundaries(
+async function assertAgentWorkItemBoundaries(
+  store: PostgresProjectWorkStore,
   access: Access,
   input: {
     ownerId?: string | null | undefined;
-    priority?: "P0" | "P1" | "P2" | "P3" | undefined;
+    priority?: "unset" | "P0" | "P1" | "P2" | "P3" | undefined;
     status?: "todo" | "in_progress" | "ready_for_test" | "done" | undefined;
   },
   creating: boolean,
-): void {
+  attemptedAction: string,
+): Promise<void> {
   if (access.actor.kind !== "agent") return;
   if (input.ownerId !== undefined || input.priority !== undefined) {
-    throw automationAuthorityDenied(
+    const error = automationAuthorityDenied(
       "A connected Agent cannot assign an owner or change priority.",
     );
+    await store.recordAutomationAuthorityDenial(
+      access.projectId,
+      access.actor,
+      attemptedAction,
+      error.message,
+    );
+    throw error;
   }
   if (creating && input.status === "done") {
-    throw automationAuthorityDenied(
+    const error = automationAuthorityDenied(
       "A connected Agent cannot create work already marked done.",
     );
+    await store.recordAutomationAuthorityDenial(
+      access.projectId,
+      access.actor,
+      attemptedAction,
+      error.message,
+    );
+    throw error;
   }
 }
 

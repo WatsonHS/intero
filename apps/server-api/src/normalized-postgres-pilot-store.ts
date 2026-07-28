@@ -442,10 +442,10 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
     for (const invitation of snapshot.invitations) {
       await client.query(
         `INSERT INTO pilot_team_invitations
-          (id, organization_id, team_id, display_name, email, token_hash,
+          (id, organization_id, team_id, email, token_hash,
            created_by, expires_at, accepted_at, accepted_by, revoked_at, data,
            created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (id) DO UPDATE SET
            token_hash = EXCLUDED.token_hash,
            expires_at = EXCLUDED.expires_at,
@@ -458,7 +458,6 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           invitation.id,
           this.organizationId,
           invitation.teamId,
-          invitation.displayName,
           invitation.email,
           invitation.tokenHash,
           invitation.createdBy,

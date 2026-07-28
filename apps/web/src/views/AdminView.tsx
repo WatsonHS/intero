@@ -21,7 +21,7 @@ import type {
   ProjectAutomationSignalKind,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   getGovernanceAudit,
@@ -73,7 +73,7 @@ import { TeamPicker } from "./admin/TeamPicker.js";
 import { TeamsTab } from "./admin/TeamsTab.js";
 import { OrganizationServiceSettings } from "./settings/OrganizationServiceSettings.js";
 
-type Tab =
+export type AdminTab =
   "members" | "teams" | "projects" | "policy" | "org" | "service" | "audit";
 
 type MemberRoleChange = {
@@ -111,12 +111,20 @@ const SIGNAL_KINDS: ProjectAutomationSignalKind[] = [
  * invitations, the project's automation policy, and the audit trail those
  * changes leave. Nothing on this page is illustrative.
  */
-export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
+export function AdminView({
+  initialTab = "members",
+  onTabChange,
+  onOpenSpecs,
+}: {
+  initialTab?: AdminTab;
+  onTabChange?: (tab: AdminTab) => void;
+  onOpenSpecs: () => void;
+}) {
   const { t, formatRelative } = useI18n();
   const pilot = usePilotOptional();
   const queryClient = useQueryClient();
   const notifications = useNotifications();
-  const [tab, setTab] = useState<Tab>("members");
+  const [tab, setTab] = useState<AdminTab>(initialTab);
   const [rosterTeamId, setRosterTeamId] = useState<string>();
 
   const teams = pilot?.teams.data?.teams ?? [];
@@ -133,6 +141,15 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
       ? identityId
       : undefined;
   const { isOrgAdmin, canGovern, pending } = useGovernance();
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+
+  function selectTab(next: AdminTab) {
+    setTab(next);
+    onTabChange?.(next);
+  }
 
   // Organization-wide teams, projects and people. Only an admin may read it,
   // and only an admin has anything to do with the teams they are not in.
@@ -325,7 +342,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
       icon: UserPlusIcon,
       title: t("admin.queue.invites", { count: pendingInvites.length }),
       detail: t("admin.queue.invitesDetail"),
-      onClick: () => setTab("members"),
+      onClick: () => selectTab("members"),
     });
   }
   if (openSignals.length > 0) {
@@ -345,7 +362,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
       icon: WarningCircleIcon,
       title: t("admin.queue.noAdmin"),
       detail: t("admin.queue.noAdminDetail"),
-      onClick: () => setTab("members"),
+      onClick: () => selectTab("members"),
     });
   }
 
@@ -400,7 +417,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
         <Tabs
           className="mt-7"
           value={tab}
-          onChange={setTab}
+          onChange={selectTab}
           items={[
             {
               id: "members" as const,
@@ -486,7 +503,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
             scopedToOwnTeams={!isOrgAdmin}
             onOpenMembers={(nextTeamId) => {
               setRosterTeamId(nextTeamId);
-              setTab("members");
+              selectTab("members");
             }}
             onChanged={refreshScope}
           />
@@ -530,7 +547,7 @@ export function AdminView({ onOpenSpecs }: { onOpenSpecs: () => void }) {
             members={directoryMembers}
             identityId={identityId}
             canManage={isOrgAdmin}
-            onOpenService={() => setTab("service")}
+            onOpenService={() => selectTab("service")}
             onChanged={refreshScope}
           />
         ) : null}
@@ -805,7 +822,6 @@ function MembersTab({
   orgMembers: PilotOrganizationDirectoryPayload["members"];
   invitations: Array<{
     id: string;
-    displayName: string;
     email: string;
     status: string;
     expiresAt: string;
@@ -820,7 +836,6 @@ function MembersTab({
   const { t, formatRelative } = useI18n();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [invitationLinks, setInvitationLinks] = useState<
     Record<string, string>
@@ -832,7 +847,7 @@ function MembersTab({
     mutationFn: () =>
       createPilotInvitation(
         team!.id,
-        { displayName: displayName.trim(), email: email.trim() },
+        { email: email.trim() },
         developmentIdentityId,
       ),
     onSuccess: async (result) => {
@@ -841,7 +856,6 @@ function MembersTab({
         ...current,
         [result.invitation.id]: link,
       }));
-      setDisplayName("");
       setEmail("");
       setInviteOpen(false);
       try {
@@ -936,20 +950,12 @@ function MembersTab({
 
       {inviteOpen ? (
         <form
-          className="mt-3.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2.5 rounded-[13px] border border-line bg-panel2 p-4"
+          className="mt-3.5 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 rounded-[13px] border border-line bg-panel2 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (displayName.trim() && email.trim()) invite.mutate();
+            if (email.trim()) invite.mutate();
           }}
         >
-          <label className="grid gap-1.5">
-            <SectionLabel>{t("admin.members.inviteName")}</SectionLabel>
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              className="h-8 rounded-btn border border-line bg-panel px-2.5 text-[12px] text-ink outline-none focus:border-accent-strong"
-            />
-          </label>
           <label className="grid gap-1.5">
             <SectionLabel>{t("admin.members.inviteEmail")}</SectionLabel>
             <input
@@ -961,7 +967,7 @@ function MembersTab({
           </label>
           <button
             type="submit"
-            disabled={!displayName.trim() || !email.trim() || invite.isPending}
+            disabled={!email.trim() || invite.isPending}
             className="h-8 cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"
           >
             {t("admin.members.inviteSend")}
@@ -1128,7 +1134,6 @@ function MembersTab({
                     {invitation.email}
                   </strong>
                   <small className="mt-1 text-[10.5px] text-faint">
-                    {invitation.displayName} ·{" "}
                     {t("admin.invites.expires", {
                       when: formatRelative(invitation.expiresAt),
                     })}

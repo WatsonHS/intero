@@ -95,6 +95,10 @@ async function runCloudMcpServer(
     async (input) => result(await client.reportCheckpoint(input)),
   );
   const mutationId = z.string().min(8).max(200);
+  const specSourceReferences = z
+    .array(z.string().regex(/^block:block_[a-zA-Z0-9_-]{8,80}$/))
+    .min(1)
+    .max(50);
   server.registerTool(
     "project.create_epic",
     {
@@ -146,12 +150,15 @@ async function runCloudMcpServer(
     "project.create_feature",
     {
       description:
-        "Create a Project Feature as a direct execution unit or as a parent for Work Items.",
+        "Create a Project Feature. For confirmed-Spec derivation, provide specId, sourceSpecRevisionId, exact sourceReferences, and clientMutationId; owner remains a human choice.",
       inputSchema: {
         title: z.string().min(1).max(240),
         description: z.string().max(8_000).optional(),
         stage: z.enum(["planned", "in_development", "released"]).optional(),
         epicId: z.string().uuid().optional(),
+        specId: z.string().uuid().optional(),
+        sourceSpecRevisionId: z.string().uuid().optional(),
+        sourceReferences: specSourceReferences.optional(),
         piId: z.string().uuid().optional(),
         sprintId: z.string().uuid().optional(),
         clientMutationId: mutationId,
@@ -171,13 +178,16 @@ async function runCloudMcpServer(
     "project.update_feature",
     {
       description:
-        "Update one Project Feature without changing team membership or Project visibility.",
+        "Update one Project Feature without changing team membership or Project visibility. Confirmed-Spec provenance must name the confirmed revision and exact source blocks.",
       inputSchema: {
         featureId: z.string().uuid(),
         title: z.string().min(1).max(240).optional(),
         description: z.string().max(8_000).optional(),
         stage: z.enum(["planned", "in_development", "released"]).optional(),
         epicId: z.string().uuid().nullable().optional(),
+        specId: z.string().uuid().nullable().optional(),
+        sourceSpecRevisionId: z.string().uuid().nullable().optional(),
+        sourceReferences: specSourceReferences.optional(),
         piId: z.string().uuid().nullable().optional(),
         sprintId: z.string().uuid().nullable().optional(),
         clientMutationId: mutationId,
@@ -194,10 +204,46 @@ async function runCloudMcpServer(
       ),
   );
   server.registerTool(
+    "project.revert_feature",
+    {
+      description:
+        "Revert a Feature by creating a new provenance history entry from an earlier snapshot.",
+      inputSchema: {
+        featureId: z.string().uuid(),
+        historyId: z.string().uuid(),
+        clientMutationId: mutationId,
+      },
+    },
+    async ({ featureId, historyId, clientMutationId }) =>
+      result(
+        await client.projectRequest({
+          path: `/features/${featureId}/revert`,
+          method: "POST",
+          body: { historyId },
+          clientMutationId,
+        }),
+      ),
+  );
+  server.registerTool(
+    "project.revoke_feature",
+    {
+      description:
+        "Revoke an Agent-created Feature while retaining its provenance history.",
+      inputSchema: { featureId: z.string().uuid() },
+    },
+    async ({ featureId }) =>
+      result(
+        await client.projectRequest({
+          path: `/features/${featureId}`,
+          method: "DELETE",
+        }),
+      ),
+  );
+  server.registerTool(
     "project.create_work_item",
     {
       description:
-        "Create one Project-scoped Work Item. Owners, when supplied, must be human principals.",
+        "Create one Project-scoped Work Item. For confirmed-Spec derivation, provide specId, sourceSpecRevisionId, exact sourceReferences, and clientMutationId; owner and priority remain human choices.",
       inputSchema: {
         title: z.string().min(1).max(240),
         description: z.string().max(16_000).optional(),
@@ -206,6 +252,8 @@ async function runCloudMcpServer(
           .optional(),
         featureId: z.string().uuid().optional(),
         specId: z.string().uuid().optional(),
+        sourceSpecRevisionId: z.string().uuid().optional(),
+        sourceReferences: specSourceReferences.optional(),
         points: z.number().nonnegative().optional(),
         piId: z.string().uuid().optional(),
         sprintId: z.string().uuid().optional(),
@@ -227,7 +275,7 @@ async function runCloudMcpServer(
     "project.update_work_item",
     {
       description:
-        "Update Project work content or move ready_for_test to done with explicit evidence when available.",
+        "Update Project work content or confirmed-Spec provenance, or move ready_for_test to done with explicit evidence when available.",
       inputSchema: {
         workItemId: z.string().uuid(),
         title: z.string().min(1).max(240).optional(),
@@ -237,6 +285,8 @@ async function runCloudMcpServer(
           .optional(),
         featureId: z.string().uuid().nullable().optional(),
         specId: z.string().uuid().nullable().optional(),
+        sourceSpecRevisionId: z.string().uuid().nullable().optional(),
+        sourceReferences: specSourceReferences.optional(),
         points: z.number().nonnegative().nullable().optional(),
         piId: z.string().uuid().nullable().optional(),
         sprintId: z.string().uuid().nullable().optional(),
@@ -258,7 +308,7 @@ async function runCloudMcpServer(
     "project.add_work_relation",
     {
       description:
-        "Attach an explicit Project-scoped work relation. The Agent cannot use this to change owner, priority, access, or external systems.",
+        "Attach an explicit Project-scoped work relation. Confirmed-Spec-derived relations must include the confirmed revision and exact source blocks.",
       inputSchema: {
         sourceWorkItemId: z.string().uuid(),
         targetWorkItemId: z.string().uuid(),
@@ -269,6 +319,9 @@ async function runCloudMcpServer(
           "duplicate",
           "duplicated_by",
         ]),
+        specId: z.string().uuid().optional(),
+        sourceSpecRevisionId: z.string().uuid().optional(),
+        sourceReferences: specSourceReferences.optional(),
         clientMutationId: mutationId,
       },
     },
@@ -279,6 +332,74 @@ async function runCloudMcpServer(
           method: "POST",
           body: { targetId: targetWorkItemId, kind },
           clientMutationId,
+        }),
+      ),
+  );
+  server.registerTool(
+    "project.add_work_comment",
+    {
+      description:
+        "Add a Work Item comment or reply. Confirmed-Spec-derived comments must include the confirmed revision, exact source blocks, and clientMutationId.",
+      inputSchema: {
+        workItemId: z.string().uuid(),
+        body: z.string().min(1).max(16_000),
+        parentId: z.string().uuid().optional(),
+        specId: z.string().uuid().optional(),
+        sourceSpecRevisionId: z.string().uuid().optional(),
+        sourceReferences: specSourceReferences.optional(),
+        clientMutationId: mutationId,
+      },
+    },
+    async ({ workItemId, clientMutationId, ...body }) =>
+      result(
+        await client.projectRequest({
+          path: `/items/${workItemId}/comments`,
+          method: "POST",
+          body,
+          clientMutationId,
+        }),
+      ),
+  );
+  server.registerTool(
+    "project.revoke_work_comment",
+    {
+      description:
+        "Revoke an Agent-created Work Item comment while preserving its audit event.",
+      inputSchema: {
+        workItemId: z.string().uuid(),
+        commentId: z.string().uuid(),
+      },
+    },
+    async ({ workItemId, commentId }) =>
+      result(
+        await client.projectRequest({
+          path: `/items/${workItemId}/comments/${commentId}`,
+          method: "DELETE",
+        }),
+      ),
+  );
+  server.registerTool(
+    "project.revoke_work_relation",
+    {
+      description:
+        "Revoke an Agent-created Project relation while preserving its audit event.",
+      inputSchema: {
+        sourceWorkItemId: z.string().uuid(),
+        targetWorkItemId: z.string().uuid(),
+        kind: z.enum([
+          "blocks",
+          "blocked_by",
+          "related",
+          "duplicate",
+          "duplicated_by",
+        ]),
+      },
+    },
+    async ({ sourceWorkItemId, targetWorkItemId, kind }) =>
+      result(
+        await client.projectRequest({
+          path: `/items/${sourceWorkItemId}/relations/${targetWorkItemId}/${kind}`,
+          method: "DELETE",
         }),
       ),
   );

@@ -96,7 +96,6 @@ export interface PilotInvitationPayload {
   id: string;
   organizationId: string;
   teamId: string;
-  displayName: string;
   email: string;
   createdBy: PrincipalId;
   expiresAt: string;
@@ -350,7 +349,7 @@ export function getPilotInvitations(
 
 export function createPilotInvitation(
   teamId: string,
-  input: { displayName: string; email: string; expiresInDays?: number },
+  input: { email: string; expiresInDays?: number },
   developmentIdentityId?: PrincipalId,
 ) {
   return request<{
@@ -410,8 +409,12 @@ export function getPilotInvitation(token: string, signal?: AbortSignal) {
 export function activatePilotInvitation(
   token: string,
   input:
-    | { credential: "passkey" }
-    | { credential: "password" | "both"; password: string },
+    | { displayName: string; credential: "passkey" }
+    | {
+        displayName: string;
+        credential: "password" | "both";
+        password: string;
+      },
 ) {
   return request<{
     activated: true;
@@ -423,7 +426,7 @@ export function activatePilotInvitation(
   });
 }
 
-export function acceptPilotInvitation(token: string) {
+export function acceptPilotInvitation(token: string, displayName: string) {
   return request<{
     invitation: PilotInvitationPayload;
     team: PilotTeam;
@@ -431,7 +434,7 @@ export function acceptPilotInvitation(token: string) {
     projects: PilotProject[];
   }>(`/v1/pilot/invitations/${encodeURIComponent(token)}/accept`, {
     method: "POST",
-    body: {},
+    body: { displayName },
   });
 }
 
@@ -622,6 +625,23 @@ export function askPilotStandIn(
     method: "POST",
     identityId,
     body: { question, standInOwnerId },
+  });
+}
+
+export function answerPilotStandInInConversation(
+  identityId: PrincipalId,
+  projectId: string,
+  standInOwnerId: PrincipalId,
+  question: string,
+) {
+  return request<{
+    answer: string;
+    standInOwner: PrincipalSummary;
+    standIn: PrincipalSummary;
+  }>(`/v1/pilot/projects/${projectId}/stand-in`, {
+    method: "POST",
+    identityId,
+    body: { question, standInOwnerId, recordExchange: false },
   });
 }
 

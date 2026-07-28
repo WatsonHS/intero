@@ -85,6 +85,15 @@ describe("IntegrationAdapter conformance", () => {
         plan.files.some((file) => file.content.includes("--cloud")),
       ),
     ).toBe(true);
+    expect(
+      plans.every((plan) =>
+        plan.files.some((file) =>
+          file.content.includes(
+            "After understanding the first user request in each new conversation",
+          ),
+        ),
+      ),
+    ).toBe(true);
     expect(plans[2]!.files.at(-1)?.content).toContain("event_id: randomUUID()");
   });
 

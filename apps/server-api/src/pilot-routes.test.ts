@@ -203,6 +203,15 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain("intero.validate_connection");
     expect(chineseConnectPrompt).toContain("stand_in.report_checkpoint");
     expect(chineseConnectPrompt).toContain(
+      '"initialIntent":{"trigger":"first_user_request_understood","timing":"before_substantive_work","eventType":"work_started","fields":["workstreamKey","workstreamTitle","narrative.currentFocus"]}',
+    );
+    expect(chineseConnectPrompt).toContain(
+      "每个新对话理解首条用户请求后、开始实质工作前",
+    );
+    expect(chineseConnectPrompt).toContain(
+      "SessionStart Hook 发送 hooks.allowedPayload",
+    );
+    expect(chineseConnectPrompt).toContain(
       "本配置任务报告 pending_gui_validation",
     );
     expect(chineseConnectPrompt).toContain(
@@ -214,7 +223,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).not.toContain("以下 JSON 是声明式期望状态");
     expect(chineseConnectPrompt).not.toContain("intero-mcp");
     expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
-    expect(chineseConnectPrompt.length).toBeLessThan(3_500);
+    expect(chineseConnectPrompt.length).toBeLessThan(4_200);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
@@ -288,7 +297,7 @@ describe("pilot cloud-first vertical slice", () => {
       "exactly four JSON keys: ticket, client, name, workspaceId",
     );
     expect((englishTicket.json().connectPrompt as string).length).toBeLessThan(
-      3_600,
+      4_200,
     );
     expect(englishTicket.json().connectPrompt).not.toContain("intero-mcp");
 
@@ -383,7 +392,6 @@ describe("pilot cloud-first vertical slice", () => {
       url: `/v1/pilot/teams/${teamId}/invitations`,
       headers: identity(A),
       payload: {
-        displayName: "Morgan Chen",
         email: "morgan.chen@intero.test",
       },
     });
@@ -591,7 +599,6 @@ describe("pilot cloud-first vertical slice", () => {
       url: `/v1/pilot/teams/${teamId}/invitations`,
       headers: identity(B),
       payload: {
-        displayName: "Morgan Product",
         email: "morgan.chen@intero.test",
       },
     });
@@ -602,23 +609,23 @@ describe("pilot cloud-first vertical slice", () => {
       url: `/v1/pilot/teams/${teamId}/invitations`,
       headers: identity(A),
       payload: {
-        displayName: "Morgan Product",
         email: "morgan.chen@intero.test",
       },
     });
     expect(created.statusCode).toBe(201);
     const invitation = created.json();
     expect(invitation.invitation).toMatchObject({
-      displayName: "Morgan Product",
       email: "morgan.chen@intero.test",
       status: "pending",
     });
+    expect(invitation.invitation).not.toHaveProperty("displayName");
     expect(JSON.stringify(invitation)).not.toContain("tokenHash");
 
     const mismatch = await app.inject({
       method: "POST",
       url: `/v1/pilot/invitations/${invitation.token}/accept`,
       headers: identity(C),
+      payload: { displayName: "Taylor Singh" },
     });
     expect(mismatch.statusCode).toBe(403);
     expect(mismatch.json().code).toBe("INVITATION_EMAIL_MISMATCH");
@@ -627,6 +634,7 @@ describe("pilot cloud-first vertical slice", () => {
       method: "POST",
       url: `/v1/pilot/invitations/${invitation.token}/accept`,
       headers: identity(B),
+      payload: { displayName: "Morgan Product" },
     });
     expect(accepted.statusCode).toBe(200);
     expect(accepted.json().profile.displayName).toBe("Morgan Product");
@@ -983,7 +991,6 @@ describe("pilot cloud-first vertical slice", () => {
       url: `/v1/pilot/teams/${teamId}/invitations`,
       headers: identity(A),
       payload: {
-        displayName: "Taylor Singh",
         email: "taylor.singh@intero.test",
       },
     });
@@ -1001,6 +1008,7 @@ describe("pilot cloud-first vertical slice", () => {
       method: "POST",
       url: `/v1/pilot/invitations/${body.token}/accept`,
       headers: identity(C),
+      payload: { displayName: "Taylor Singh" },
     });
     expect(accept.statusCode).toBe(410);
     expect(accept.json().code).toBe("INVITATION_REVOKED");
@@ -1016,7 +1024,6 @@ describe("pilot cloud-first vertical slice", () => {
         organizationId:
           "019b5ac0-7600-7000-8000-000000000001" as OrganizationId,
         teamId,
-        displayName: "Taylor Singh",
         email: "taylor.singh@intero.test",
         tokenHash: createHash("sha256").update(token).digest("hex"),
         createdBy: A,
@@ -1030,6 +1037,7 @@ describe("pilot cloud-first vertical slice", () => {
       method: "POST",
       url: `/v1/pilot/invitations/${token}/accept`,
       headers: identity(C),
+      payload: { displayName: "Taylor Singh" },
     });
     expect(accept.statusCode).toBe(410);
     expect(accept.json().code).toBe("INVITATION_EXPIRED");
@@ -1690,6 +1698,34 @@ describe("pilot cloud-first vertical slice", () => {
       standIn: { kind: "stand_in" },
     });
     expect(visibleToB.json().standIn.id).not.toBe(A);
+
+    const groupAnswer = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      headers: identity(B),
+      payload: {
+        question: "Answer this only inside the group conversation.",
+        standInOwnerId: A,
+        recordExchange: false,
+      },
+    });
+    expect(groupAnswer.statusCode).toBe(200);
+    expect(groupAnswer.json()).toMatchObject({
+      answer: "Grounded in: Implemented scoped checkpoint ingestion.",
+      standInOwner: { id: A, kind: "human" },
+      standIn: { kind: "stand_in" },
+    });
+    expect(groupAnswer.json().exchange).toBeUndefined();
+
+    const stillOnlyPersonalExchange = await app.inject({
+      method: "GET",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in?standInOwnerId=${A}`,
+      headers: identity(B),
+    });
+    expect(stillOnlyPersonalExchange.json().exchanges).toHaveLength(1);
+    expect(stillOnlyPersonalExchange.json().exchanges[0].question).toBe(
+      "What is the current implementation status?",
+    );
 
     const privateToAsker = await app.inject({
       method: "GET",

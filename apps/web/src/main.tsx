@@ -1,12 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "@tanstack/react-router";
 
-import { App } from "./App.js";
 import { NotificationProvider } from "./design/notifications.js";
 import { ThemeProvider } from "./design/theme.js";
 import { I18nProvider } from "./i18n/index.js";
 import { PilotProvider } from "./pilot/context.js";
+import { router } from "./router.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -26,7 +27,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <I18nProvider>
           <ThemeProvider>
             <NotificationProvider>
-              <App />
+              <RouterProvider router={router} />
             </NotificationProvider>
           </ThemeProvider>
         </I18nProvider>

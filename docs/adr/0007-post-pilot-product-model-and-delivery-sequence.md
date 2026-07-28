@@ -60,8 +60,8 @@ irreversible decisions or final human commitments.
 - Registration is invite-only. Open signup is not available in the first
   release.
 - An admin creates an invitation from **Team Settings → Member Management** by
-  entering the recipient's display name and exact email address. Intero creates
-  a one-time, expiring, revocable account-activation link bound to that email.
+  entering the recipient's exact email address. Intero creates a one-time,
+  expiring, revocable account-activation link bound to that email.
 - V1 does not require SMTP or an email service. The UI exposes copy-link; the
   admin shares it through their own channel. Invitation lifecycle is
   `pending`, `accepted`, `expired`, or `revoked` and supports copy, resend by
@@ -69,17 +69,18 @@ irreversible decisions or final human commitments.
   configuration.
 - The recipient uses a short **Accept Invitation** surface separate from
   administrator Setup or Test Setup:
-  1. Confirm the Organization, Team, admin-specified display name, invited
-     email, and explicit Accept action.
-  2. Use the matching invited email to accept and bootstrap first credential
-     setup; mismatch is denied. The activation link is not normal login.
+  1. Confirm the Organization, Team, invited email, recipient-owned display-name
+     field, and explicit Accept action.
+  2. Choose a display name, use the matching invited email to accept, and
+     bootstrap first credential setup; mismatch is denied. The activation link
+     is not normal login.
   3. See the joined Team and accessible Projects, then enter Team Pulse
      directly. Coding Agent connection remains an optional, contextual action
      on Team Pulse, Project, and Spec Review surfaces.
 - The recipient surface does not expose deployment endpoint, model-provider
   secrets, governance, invitation management, or administrator Settings. The
-  pre-set name becomes the initial personal display name and is editable later
-  in Personal Settings.
+  recipient's chosen name becomes the initial personal display name and is
+  editable later in Personal Settings.
 - Passkey is the primary normal login. Email plus password is fallback. Product
   Magic Link login is removed.
 - Password recovery is not implemented. A future release may add an

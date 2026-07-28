@@ -228,6 +228,7 @@ export function AcceptInvitationView({
     typeof window === "undefined" || window.isSecureContext;
   const queryClient = useQueryClient();
   const pilot = usePilot();
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [alsoAddPasskey, setAlsoAddPasskey] = useState(false);
@@ -242,7 +243,7 @@ export function AcceptInvitationView({
         invitation.data.invitation.email.toLowerCase()
       : false;
   const accept = useMutation({
-    mutationFn: () => acceptPilotInvitation(token),
+    mutationFn: () => acceptPilotInvitation(token, displayName.trim()),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
     },
@@ -255,8 +256,9 @@ export function AcceptInvitationView({
       await activatePilotInvitation(
         token,
         input.credential === "passkey"
-          ? { credential: "passkey" }
+          ? { displayName: displayName.trim(), credential: "passkey" }
           : {
+              displayName: displayName.trim(),
               credential: input.credential,
               password: input.password!,
             },
@@ -267,7 +269,7 @@ export function AcceptInvitationView({
         });
         if (passkey.error) throw new Error(passkey.error.message);
       }
-      return acceptPilotInvitation(token);
+      return acceptPilotInvitation(token, displayName.trim());
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["pilot"] });
@@ -322,9 +324,27 @@ export function AcceptInvitationView({
       <div className="grid gap-3 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
         <InvitationRow label="组织" value={detail.organization.name} />
         <InvitationRow label="团队" value={detail.team.name} />
-        <InvitationRow label="你的姓名" value={detail.invitation.displayName} />
         <InvitationRow label="受邀邮箱" value={detail.invitation.email} mono />
       </div>
+
+      {!accepted && status === "pending" ? (
+        <label className="mt-5 grid gap-1.5">
+          <span className="text-[11px] font-[620] text-ink-muted">
+            你的姓名
+          </span>
+          <input
+            type="text"
+            value={displayName}
+            autoComplete="name"
+            data-testid="invitation-display-name"
+            onChange={(event) => setDisplayName(event.target.value)}
+            className="h-10 rounded-btn border border-line2 bg-panel2 px-3 text-[12.5px] text-ink outline-none focus:border-accent-strong"
+          />
+          <small className="text-[10.5px] leading-[1.55] text-faint">
+            请填写你希望团队成员看到的姓名。
+          </small>
+        </label>
+      ) : null}
 
       {accepted ? (
         <>
@@ -397,7 +417,11 @@ export function AcceptInvitationView({
             <button
               type="submit"
               data-testid="activation-password-submit"
-              disabled={password.length < 12 || activate.isPending}
+              disabled={
+                !displayName.trim() ||
+                password.length < 12 ||
+                activate.isPending
+              }
               className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12px] font-[620] text-on-accent disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
             >
               <KeyIcon size={15} />
@@ -414,7 +438,7 @@ export function AcceptInvitationView({
               <button
                 type="button"
                 data-testid="activation-passkey"
-                disabled={activate.isPending}
+                disabled={!displayName.trim() || activate.isPending}
                 onClick={() => activate.mutate({ credential: "passkey" })}
                 className="flex h-10 w-full items-center justify-center gap-2 rounded-btn border border-line2 bg-transparent text-[12.5px] font-[620] text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
               >
@@ -504,7 +528,7 @@ export function AcceptInvitationView({
           ) : null}
           <button
             type="button"
-            disabled={accept.isPending}
+            disabled={!displayName.trim() || accept.isPending}
             onClick={() => accept.mutate()}
             className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-btn border-0 bg-accent-strong text-[12.5px] font-[620] text-on-accent disabled:opacity-50"
           >

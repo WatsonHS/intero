@@ -109,23 +109,23 @@ associations, or visibility. Users can disconnect or revoke Agent Project
 access.
 
 Post-Pilot onboarding is invite-only through **Team Settings → Member
-Management**. An admin enters the recipient's display name and exact email;
-Intero creates a one-time, expiring/revocable email-bound account-activation
-link with
+Management**. An admin enters the recipient's exact email; Intero creates a
+one-time, expiring/revocable email-bound account-activation link with
 pending/accepted/expired/revoked lifecycle. V1 provides copy-link, regenerate,
 and revoke without requiring SMTP; the admin shares the link through their own
 channel.
 
 The recipient uses a short **Accept Invitation** flow, confirms the
-Organization/Team/name/email, accepts with the exact invited email, and uses the
-link only to bootstrap first credential setup. It is not a normal login link.
+Organization/Team/email, chooses their own display name, accepts with the exact
+invited email, and uses the link only to bootstrap first credential setup. It
+is not a normal login link.
 Passkey is the primary normal login; email plus password is the fallback.
 After joining, the recipient enters Team Pulse directly. Coding Agent
 connection remains an optional, contextual action on Team Pulse, Project, and
 Spec Review surfaces rather than an onboarding step.
 Deployment endpoint, model keys, governance, invitations, and admin Settings
-are not shown. The pre-set name becomes the initial display name and remains
-editable in Personal Settings.
+are not shown. The recipient's chosen name becomes the initial display name and
+remains editable in Personal Settings.
 
 Password recovery is not implemented. A future release must provide either an
 administrator/manual recovery-link flow or an optional SMTP-backed recovery
@@ -202,14 +202,14 @@ enter Bootstrap.
 
 In **Team Settings → Member Management**, an Organization administrator creates
 a one-time, expiring, revocable email-bound account-activation link for a
-recipient's display name and exact email. V1 exposes copy, regenerate, and
-revoke without requiring SMTP. The recipient accepts through the short **Accept
-Invitation** surface with the matching email and bootstraps first credential
-setup. The link cannot be reused for normal login. Membership inherits the
-administrator-approved Intero endpoint and team context; ordinary members do
-not type the server URL. Reusable Pilot join links are historical and are not
-the current onboarding path. Bulk email or CSV invitations, SCIM provisioning,
-and domain-based automatic join remain deferred.
+recipient's exact email. V1 exposes copy, regenerate, and revoke without
+requiring SMTP. The recipient accepts through the short **Accept Invitation**
+surface, enters their own display name, uses the matching email, and bootstraps
+first credential setup. The link cannot be reused for normal login. Membership
+inherits the administrator-approved Intero endpoint and team context; ordinary
+members do not type the server URL. Reusable Pilot join links are historical
+and are not the current onboarding path. Bulk email or CSV invitations, SCIM
+provisioning, and domain-based automatic join remain deferred.
 
 Organization is the structural tenant boundary and owns Projects. Admin
 Bootstrap creates one Organization implicitly or with a simple name. Teams contain
@@ -408,6 +408,12 @@ coding or Git commits.
 The Web application provides the complete collaboration experience: sign-in,
 Team Pulse, Stand-in conversations, Coordination, Action Inbox, Spec
 Review, Decisions, privacy controls, and integration management.
+
+TanStack Router owns client navigation and stable deep links for people,
+communication threads, coordination branches, Project work and Specs, Work
+Items, Settings categories, administration tabs, and invitation acceptance.
+Web deployments use browser history; the optional file-based Electron package
+uses hash history while rendering the same route tree.
 
 An optional Desktop App may add a lightweight Git-awareness enhancement. It
 observes only user-selected repositories and only compact repository-name,

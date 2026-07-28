@@ -609,7 +609,8 @@ export async function buildApp(
         !preferences.mutedKinds.includes(item.kind),
     ).length;
     const automationSummary = automationStore
-      ? await automationStore.summarizeForPrincipal(principal!.id)
+      ? ((await automationStore.latestPortfolioSummary(principal!.id)) ??
+        (await automationStore.summarizeForPrincipal(principal!.id)))
       : [];
     return { items, preferences, unreadCount, automationSummary };
   });

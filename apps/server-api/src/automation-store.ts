@@ -36,13 +36,40 @@ interface AutomationJobReference {
   signalId: string;
 }
 
+export interface PortfolioSummaryJobReference {
+  schemaVersion: 1;
+  organizationId: OrganizationId;
+  principalId: PrincipalId;
+  operationId: string;
+}
+
 export interface ProjectAutomationPortfolioSummary {
   projectId: ProjectId;
   projectName: string;
   openSignalCount: number;
   confirmedSignalCount: number;
-  latestSafeContext: string;
-  updatedAt: string;
+  progressFacts: {
+    total: number;
+    todo: number;
+    inProgress: number;
+    readyForTest: number;
+    done: number;
+  };
+  risks: Array<{
+    sourceRef: string;
+    kind: ProjectAutomationSignalKind;
+    summary: string;
+    updatedAt: string;
+  }>;
+  decisions: Array<{
+    id: string;
+    title: string;
+    outcome: string;
+    sourceSpecRevisionId: string;
+    createdAt: string;
+  }>;
+  interpretation: string;
+  freshnessAt: string;
 }
 
 export class PostgresAutomationStore {
@@ -176,7 +203,7 @@ export class PostgresAutomationStore {
     return this.read(async (client) => {
       const result = await client.query(
         `WITH accessible_projects AS (
-           SELECT p.id,p.name
+           SELECT p.id,p.name,p.updated_at
            FROM projects p
            WHERE p.organization_id=$1
              AND (
@@ -196,25 +223,428 @@ export class PostgresAutomationStore {
              )
          )
          SELECT ap.id,ap.name,
-                count(*) FILTER (WHERE s.status='opened')::integer open_count,
-                count(*) FILTER (WHERE s.status='confirmed')::integer confirmed_count,
-                (array_agg(s.safe_context ORDER BY s.updated_at DESC))[1] latest_context,
-                max(s.updated_at) updated_at
+                (
+                  SELECT count(*)::integer
+                  FROM project_automation_signals s
+                  WHERE s.project_id=ap.id AND s.status='opened'
+                ) open_count,
+                (
+                  SELECT count(*)::integer
+                  FROM project_automation_signals s
+                  WHERE s.project_id=ap.id AND s.status='confirmed'
+                ) confirmed_count,
+                (
+                  SELECT jsonb_build_object(
+                    'total',count(*)::integer,
+                    'todo',count(*) FILTER (WHERE status='todo')::integer,
+                    'inProgress',
+                      count(*) FILTER (WHERE status='in_progress')::integer,
+                    'readyForTest',
+                      count(*) FILTER (WHERE status='ready_for_test')::integer,
+                    'done',count(*) FILTER (WHERE status='done')::integer
+                  )
+                  FROM project_work_items wi
+                  WHERE wi.project_id=ap.id AND wi.revoked_at IS NULL
+                ) progress_facts,
+                COALESCE((
+                  SELECT jsonb_agg(
+                    jsonb_build_object(
+                      'sourceRef',risk.source_ref,
+                      'kind',risk.kind,
+                      'summary',risk.safe_context,
+                      'updatedAt',risk.updated_at
+                    )
+                    ORDER BY risk.updated_at DESC
+                  )
+                  FROM (
+                    SELECT source_ref,kind,safe_context,updated_at
+                    FROM project_automation_signals
+                    WHERE project_id=ap.id AND status='opened'
+                    ORDER BY updated_at DESC
+                    LIMIT 5
+                  ) risk
+                ),'[]'::jsonb) risks,
+                COALESCE((
+                  SELECT jsonb_agg(
+                    jsonb_build_object(
+                      'id',decision.id,
+                      'title',decision.title,
+                      'outcome',decision.outcome,
+                      'sourceSpecRevisionId',
+                        decision.source_spec_revision_id,
+                      'createdAt',decision.created_at
+                    )
+                    ORDER BY decision.created_at DESC
+                  )
+                  FROM (
+                    SELECT d.id,d.title,d.outcome,d.source_spec_revision_id,
+                           d.created_at
+                    FROM decisions d
+                    JOIN spec_revisions revision
+                      ON revision.id=d.source_spec_revision_id
+                    JOIN specs spec ON spec.id=revision.spec_id
+                    WHERE spec.project_id=ap.id
+                      AND revision.confirmed_at IS NOT NULL
+                      AND revision.revoked_at IS NULL
+                    ORDER BY d.created_at DESC
+                    LIMIT 5
+                  ) decision
+                ),'[]'::jsonb) decisions,
+                GREATEST(
+                  ap.updated_at,
+                  COALESCE((
+                    SELECT max(updated_at)
+                    FROM project_automation_signals
+                    WHERE project_id=ap.id
+                  ),ap.updated_at),
+                  COALESCE((
+                    SELECT max(updated_at)
+                    FROM project_work_items
+                    WHERE project_id=ap.id AND revoked_at IS NULL
+                  ),ap.updated_at),
+                  COALESCE((
+                    SELECT max(d.updated_at)
+                    FROM decisions d
+                    JOIN spec_revisions revision
+                      ON revision.id=d.source_spec_revision_id
+                    JOIN specs spec ON spec.id=revision.spec_id
+                    WHERE spec.project_id=ap.id
+                      AND revision.confirmed_at IS NOT NULL
+                      AND revision.revoked_at IS NULL
+                  ),ap.updated_at)
+                ) freshness_at
          FROM accessible_projects ap
-         JOIN project_automation_signals s ON s.project_id=ap.id
-         WHERE s.status IN ('opened','confirmed')
-         GROUP BY ap.id,ap.name
-         ORDER BY max(s.updated_at) DESC`,
+         ORDER BY freshness_at DESC,ap.id`,
         [this.organizationId, principalId],
       );
+      return result.rows.map((row) => {
+        const progress = row.progress_facts as {
+          total: number;
+          todo: number;
+          inProgress: number;
+          readyForTest: number;
+          done: number;
+        };
+        const openSignalCount = Number(row.open_count);
+        const incomplete = Number(progress.total) - Number(progress.done);
+        return {
+          projectId: String(row.id) as ProjectId,
+          projectName: String(row.name),
+          openSignalCount,
+          confirmedSignalCount: Number(row.confirmed_count),
+          progressFacts: {
+            total: Number(progress.total),
+            todo: Number(progress.todo),
+            inProgress: Number(progress.inProgress),
+            readyForTest: Number(progress.readyForTest),
+            done: Number(progress.done),
+          },
+          risks: (
+            row.risks as Array<{
+              sourceRef: string;
+              kind: ProjectAutomationSignalKind;
+              summary: string;
+              updatedAt: string;
+            }>
+          ).map((risk) => ({
+            ...risk,
+            updatedAt: new Date(risk.updatedAt).toISOString(),
+          })),
+          decisions: (
+            row.decisions as Array<{
+              id: string;
+              title: string;
+              outcome: string;
+              sourceSpecRevisionId: string;
+              createdAt: string;
+            }>
+          ).map((decision) => ({
+            ...decision,
+            createdAt: new Date(decision.createdAt).toISOString(),
+          })),
+          interpretation:
+            openSignalCount > 0
+              ? `存在 ${openSignalCount} 项待协调风险，需要人类确认。`
+              : incomplete > 0
+                ? `暂无自动化风险信号；仍有 ${incomplete} 项工作未完成。`
+                : "当前事实中没有未完成工作或待协调风险。",
+          freshnessAt: new Date(String(row.freshness_at)).toISOString(),
+        };
+      });
+    });
+  }
+
+  async requestPortfolioSummary(
+    principalId: PrincipalId,
+  ): Promise<PortfolioSummaryJobReference | undefined> {
+    return this.write(async (client) => {
+      const principal = await client.query(
+        `SELECT 1
+         FROM memberships membership
+         JOIN principals principal ON principal.id=membership.principal_id
+         WHERE membership.organization_id=$1
+           AND membership.principal_id=$2
+           AND principal.kind='human'`,
+        [this.organizationId, principalId],
+      );
+      if (!principal.rowCount) {
+        throw new Error("portfolio_summary_principal_not_found");
+      }
+      const sourceFingerprint = await portfolioSourceFingerprint(
+        client,
+        this.organizationId,
+        principalId,
+      );
+      const operationId = uuidv7();
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO project_automation_summary_jobs
+          (id,organization_id,principal_id,source_fingerprint)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (organization_id,principal_id,source_fingerprint)
+           WHERE status IN ('pending','processing','completed')
+         DO NOTHING
+         RETURNING id`,
+        [operationId, this.organizationId, principalId, sourceFingerprint],
+      );
+      if (!inserted.rows[0]) return undefined;
+      const payload: PortfolioSummaryJobReference = {
+        schemaVersion: 1,
+        organizationId: this.organizationId,
+        principalId,
+        operationId,
+      };
+      await client.query(
+        `INSERT INTO outbox
+          (operation_id,organization_id,topic,payload)
+         VALUES ($1,$2,'project.automation.summary.enqueue',$3)`,
+        [operationId, this.organizationId, payload],
+      );
+      return payload;
+    });
+  }
+
+  async requestPortfolioSummaries(): Promise<number> {
+    const principals = await this.read(async (client) => {
+      const result = await client.query<{ principal_id: PrincipalId }>(
+        `SELECT DISTINCT membership.principal_id
+         FROM memberships membership
+         JOIN principals principal ON principal.id=membership.principal_id
+         WHERE membership.organization_id=$1 AND principal.kind='human'
+         ORDER BY membership.principal_id`,
+        [this.organizationId],
+      );
+      return result.rows.map((row) => row.principal_id);
+    });
+    let requested = 0;
+    for (const principalId of principals) {
+      if (await this.requestPortfolioSummary(principalId)) requested += 1;
+    }
+    return requested;
+  }
+
+  async claimPortfolioSummaryOutbox(limit = 50): Promise<
+    Array<{
+      operationId: string;
+      payload: PortfolioSummaryJobReference;
+      attempts: number;
+    }>
+  > {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `WITH candidates AS (
+           SELECT operation_id
+           FROM outbox
+           WHERE organization_id=$1
+             AND topic='project.automation.summary.enqueue'
+             AND completed_at IS NULL
+             AND available_at <= now()
+           ORDER BY available_at,operation_id
+           FOR UPDATE SKIP LOCKED
+           LIMIT $2
+         )
+         UPDATE outbox
+         SET attempts=outbox.attempts+1,
+             available_at=now()+interval '30 seconds'
+         FROM candidates
+         WHERE outbox.operation_id=candidates.operation_id
+         RETURNING outbox.operation_id,outbox.payload,outbox.attempts`,
+        [this.organizationId, Math.max(1, Math.min(limit, 100))],
+      );
       return result.rows.map((row) => ({
-        projectId: String(row.id) as ProjectId,
-        projectName: String(row.name),
-        openSignalCount: Number(row.open_count),
-        confirmedSignalCount: Number(row.confirmed_count),
-        latestSafeContext: String(row.latest_context),
-        updatedAt: new Date(String(row.updated_at)).toISOString(),
+        operationId: String(row.operation_id),
+        payload: parsePortfolioSummaryJobReference(
+          row.payload,
+          this.organizationId,
+        ),
+        attempts: Number(row.attempts),
       }));
+    });
+  }
+
+  async markPortfolioSummaryOutboxCompleted(
+    operationId: string,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      await client.query(
+        `UPDATE outbox SET completed_at=now(),last_error_code=NULL
+         WHERE organization_id=$1 AND operation_id=$2
+           AND topic='project.automation.summary.enqueue'`,
+        [this.organizationId, operationId],
+      );
+    });
+  }
+
+  async markPortfolioSummaryOutboxFailed(
+    operationId: string,
+    attempts: number,
+    errorCode: string,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      const terminal = attempts >= 12;
+      await client.query(
+        `UPDATE outbox SET
+           last_error_code=$3,
+           available_at=now()+make_interval(
+             secs=>LEAST(300,GREATEST(1,power(2,LEAST($4,8))::integer))
+           ),
+           completed_at=CASE WHEN $5 THEN now() ELSE NULL END
+         WHERE organization_id=$1 AND operation_id=$2
+           AND topic='project.automation.summary.enqueue'`,
+        [
+          this.organizationId,
+          operationId,
+          (terminal ? `dead_letter:${errorCode}` : errorCode).slice(0, 120),
+          attempts,
+          terminal,
+        ],
+      );
+      if (terminal) {
+        await client.query(
+          `UPDATE project_automation_summary_jobs
+           SET status='failed',last_error_code=$3,updated_at=now()
+           WHERE organization_id=$1 AND id=$2
+             AND status<>'completed'`,
+          [this.organizationId, operationId, errorCode.slice(0, 120)],
+        );
+      }
+    });
+  }
+
+  async generatePortfolioSummary(
+    reference: PortfolioSummaryJobReference,
+  ): Promise<ProjectAutomationPortfolioSummary[]> {
+    if (
+      reference.organizationId !== this.organizationId ||
+      reference.schemaVersion !== 1
+    ) {
+      throw new Error("cross_organization_portfolio_summary_job");
+    }
+    const claimed = await this.write(async (client) => {
+      const result = await client.query<{
+        principal_id: PrincipalId;
+        status: string;
+        summary: ProjectAutomationPortfolioSummary[] | null;
+      }>(
+        `UPDATE project_automation_summary_jobs
+         SET status='processing',attempts=attempts+1,
+             last_error_code=NULL,updated_at=now()
+         WHERE organization_id=$1 AND id=$2
+           AND principal_id=$3 AND status IN ('pending','processing')
+         RETURNING principal_id,status,summary`,
+        [this.organizationId, reference.operationId, reference.principalId],
+      );
+      if (result.rows[0]) return result.rows[0];
+      const existing = await client.query<{
+        principal_id: PrincipalId;
+        status: string;
+        summary: ProjectAutomationPortfolioSummary[] | null;
+      }>(
+        `SELECT principal_id,status,summary
+         FROM project_automation_summary_jobs
+         WHERE organization_id=$1 AND id=$2 AND principal_id=$3`,
+        [this.organizationId, reference.operationId, reference.principalId],
+      );
+      return existing.rows[0];
+    });
+    if (!claimed) throw new Error("portfolio_summary_job_not_found");
+    if (claimed.status === "completed" && claimed.summary) {
+      return claimed.summary;
+    }
+    if (claimed.status === "failed") {
+      throw new Error("portfolio_summary_job_failed");
+    }
+    const summary = await this.summarizeForPrincipal(reference.principalId);
+    const freshnessAt =
+      summary
+        .map((item) => item.freshnessAt)
+        .sort()
+        .at(-1) ?? new Date(0).toISOString();
+    await this.write(async (client) => {
+      await client.query(
+        `UPDATE project_automation_summary_jobs
+         SET status='completed',summary=$4,freshness_at=$5,
+             completed_at=now(),updated_at=now(),last_error_code=NULL
+         WHERE organization_id=$1 AND id=$2 AND principal_id=$3`,
+        [
+          this.organizationId,
+          reference.operationId,
+          reference.principalId,
+          JSON.stringify(summary),
+          freshnessAt,
+        ],
+      );
+    });
+    return summary;
+  }
+
+  async markPortfolioSummaryJobFailed(
+    reference: PortfolioSummaryJobReference,
+    attempt: number,
+    maxAttempts: number,
+    errorCode: string,
+  ): Promise<void> {
+    await this.write(async (client) => {
+      await client.query(
+        `UPDATE project_automation_summary_jobs
+         SET status=CASE WHEN $5 >= $6 THEN 'failed' ELSE status END,
+             attempts=GREATEST(attempts,$5),
+             last_error_code=$4,updated_at=now()
+         WHERE organization_id=$1 AND id=$2 AND principal_id=$3
+           AND status<>'completed'`,
+        [
+          this.organizationId,
+          reference.operationId,
+          reference.principalId,
+          errorCode.slice(0, 120),
+          attempt,
+          maxAttempts,
+        ],
+      );
+    });
+  }
+
+  async latestPortfolioSummary(
+    principalId: PrincipalId,
+  ): Promise<ProjectAutomationPortfolioSummary[] | undefined> {
+    return this.read(async (client) => {
+      const sourceFingerprint = await portfolioSourceFingerprint(
+        client,
+        this.organizationId,
+        principalId,
+      );
+      const result = await client.query<{
+        summary: ProjectAutomationPortfolioSummary[];
+      }>(
+        `SELECT summary
+         FROM project_automation_summary_jobs
+         WHERE organization_id=$1 AND principal_id=$2
+           AND source_fingerprint=$3
+           AND status='completed' AND summary IS NOT NULL
+         ORDER BY completed_at DESC,id DESC
+         LIMIT 1`,
+        [this.organizationId, principalId, sourceFingerprint],
+      );
+      return result.rows[0]?.summary;
     });
   }
 
@@ -1158,6 +1588,111 @@ function parseJobReference(
     throw new Error("invalid_automation_job_reference");
   }
   return input as AutomationJobReference;
+}
+
+function parsePortfolioSummaryJobReference(
+  value: unknown,
+  organizationId: OrganizationId,
+): PortfolioSummaryJobReference {
+  const input = value as Partial<PortfolioSummaryJobReference>;
+  if (
+    input?.schemaVersion !== 1 ||
+    input.organizationId !== organizationId ||
+    typeof input.principalId !== "string" ||
+    typeof input.operationId !== "string"
+  ) {
+    throw new Error("invalid_portfolio_summary_job_reference");
+  }
+  return input as PortfolioSummaryJobReference;
+}
+
+async function portfolioSourceFingerprint(
+  client: PoolClient,
+  organizationId: OrganizationId,
+  principalId: PrincipalId,
+): Promise<string> {
+  const result = await client.query<{ fingerprint: string }>(
+    `WITH accessible_projects AS (
+       SELECT project.id,project.updated_at
+       FROM projects project
+       WHERE project.organization_id=$1
+         AND (
+           EXISTS (
+             SELECT 1 FROM memberships membership
+             WHERE membership.organization_id=project.organization_id
+               AND membership.principal_id=$2
+               AND membership.role='admin'
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM pilot_project_teams project_team
+             JOIN pilot_team_memberships team_membership
+               ON team_membership.organization_id=project_team.organization_id
+              AND team_membership.team_id=project_team.team_id
+             WHERE project_team.project_id=project.id
+               AND team_membership.principal_id=$2
+           )
+         )
+     )
+     SELECT md5(
+       COALESCE(
+         string_agg(
+           concat_ws(
+             ':',
+             project.id::text,
+             project.updated_at::text,
+             (
+               SELECT count(*)::text
+               FROM project_work_items item
+               WHERE item.project_id=project.id
+                 AND item.revoked_at IS NULL
+             ),
+             COALESCE((
+               SELECT max(item.updated_at)::text
+               FROM project_work_items item
+               WHERE item.project_id=project.id
+                 AND item.revoked_at IS NULL
+             ),''),
+             (
+               SELECT count(*)::text
+               FROM project_automation_signals signal
+               WHERE signal.project_id=project.id
+             ),
+             COALESCE((
+               SELECT max(signal.updated_at)::text
+               FROM project_automation_signals signal
+               WHERE signal.project_id=project.id
+             ),''),
+             (
+               SELECT count(*)::text
+               FROM decisions decision
+               JOIN spec_revisions revision
+                 ON revision.id=decision.source_spec_revision_id
+               JOIN specs spec ON spec.id=revision.spec_id
+               WHERE spec.project_id=project.id
+                 AND revision.confirmed_at IS NOT NULL
+                 AND revision.revoked_at IS NULL
+             ),
+             COALESCE((
+               SELECT max(decision.updated_at)::text
+               FROM decisions decision
+               JOIN spec_revisions revision
+                 ON revision.id=decision.source_spec_revision_id
+               JOIN specs spec ON spec.id=revision.spec_id
+               WHERE spec.project_id=project.id
+                 AND revision.confirmed_at IS NOT NULL
+                 AND revision.revoked_at IS NULL
+             ),'')
+           ),
+           '|' ORDER BY project.id
+         ),
+         'no-visible-projects'
+       )
+     ) AS fingerprint
+     FROM accessible_projects project`,
+    [organizationId, principalId],
+  );
+  return result.rows[0]!.fingerprint;
 }
 
 function workStateIdFromSourceRef(sourceRef: string): string | undefined {
