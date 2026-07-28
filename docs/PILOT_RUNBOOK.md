@@ -16,8 +16,10 @@ pnpm dev:pilot
 
 `pnpm dev:pilot` starts the Fastify API on port `4310` and the canonical Intero
 Web application on port `5173`; both listen on all IPv4 interfaces and remain
-reachable through `localhost` and `127.0.0.1`. Run `pnpm dev:proxy` once to add
-the same-origin Caddy entry point configured by `INTERO_PUBLIC_URL`.
+reachable through `localhost` and `127.0.0.1`. In PostgreSQL mode it also starts
+the Stand-in worker that turns MCP checkpoints into Team Pulse updates. Run
+`pnpm dev:proxy` once to add the same-origin Caddy entry point configured by
+`INTERO_PUBLIC_URL`.
 
 For a copied invitation or MCP URL, configure one canonical external origin.
 A LAN pilot can use the host's private IP or mDNS name over HTTP:
@@ -44,6 +46,7 @@ deployment-only provider encryption key:
 ```bash
 export DATABASE_URL='postgresql://migration-user:...@host/intero'
 export INTERO_DATABASE_URL='postgresql://intero_app:...@host/intero'
+export INTERO_WORKER_DATABASE_URL='postgresql://intero_worker:...@host/intero'
 export INTERO_PILOT_PERSISTENCE='postgres'
 export INTERO_PROVIDER_ENCRYPTION_KEY='replace-with-a-long-random-secret'
 pnpm --filter @intero/server-api migrate
@@ -85,10 +88,12 @@ pnpm --filter @intero/server-api migrate:spicedb
 pnpm --filter @intero/server-worker migrate
 ```
 
-Run `pnpm --filter @intero/server-worker dev` in one terminal, then
-`pnpm dev:pilot` in another. The API accepts an MCP checkpoint without waiting
-for the model and returns Stand-in `pending`; the worker later publishes
-the safe projection. `/ready` reports PostgreSQL, worker-heartbeat, and SpiceDB
+Run `pnpm dev:pilot` after exporting the variables above. When PostgreSQL Pilot
+persistence is selected, this command starts Web, API, and server-worker
+together and fails before startup if the worker database URL or provider
+encryption key is missing. The API accepts an MCP checkpoint without waiting
+for the model and returns Stand-in `pending`; the worker later publishes the
+safe projection. `/ready` reports PostgreSQL, worker-heartbeat, and SpiceDB
 state. A missing/stale worker is degraded, while unavailable PostgreSQL or
 SpiceDB is not ready.
 
