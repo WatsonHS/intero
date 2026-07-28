@@ -4,9 +4,11 @@ import {
   PilotAgentClient,
   PilotCheckpointInput,
   PilotCollaborationPosture,
+  type ConversationThread,
   type PilotAgentBinding,
   type PilotAgentTicket,
   type PilotDirectMessage,
+  type PilotDirectMessageThread,
   type PilotJoinLink,
   type PilotOrganization,
   type PilotProject,
@@ -18,6 +20,8 @@ import {
   personalStandInId,
   PrincipalId,
   ProjectId,
+  type ThreadId,
+  type ThreadMessage,
   uuidv7,
 } from "@intero/domain";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -37,10 +41,12 @@ import type { PostgresInformationStore } from "./information-store.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
+import type { PlatformStore } from "./platform-store.js";
 import type { ProviderSecretCipher } from "./provider-secrets.js";
 
 export interface PilotRoutesOptions {
   store: PilotStore;
+  conversations: PlatformStore;
   organizationId: PilotOrganization["id"];
   requestAuth: RequestAuth;
   principalDirectory: PrincipalDirectory;
@@ -57,9 +63,9 @@ export interface PilotRoutesOptions {
   coordination: CoordinationTransport;
   modelGateway: ModelGateway;
   adapters: {
-    realtime: "polling";
+    realtime: "polling" | "centrifugo";
     objectStorage: "disabled";
-    jobs: "inline";
+    jobs: "inline" | "transactional-outbox";
     coordination: "project-internal-v1";
     projectWork: "postgres" | "unavailable";
   };
@@ -962,7 +968,7 @@ export async function registerPilotRoutes(
   app.get("/v1/pilot/dms", async (request) => {
     const principal = await requireIdentity(request, options.requestAuth);
     return {
-      items: await options.store.listDirectMessageThreads(principal.id),
+      items: await listCanonicalDirectMessages(options, principal.id),
       principals: await visiblePrincipals(options, principal.id),
     };
   });
@@ -973,14 +979,62 @@ export async function registerPilotRoutes(
       .object({ teamId: z.uuid(), peerId: z.uuid() })
       .strict()
       .parse(request.body);
+    const memberships = await options.store.listTeamMembers(
+      input.teamId,
+      principal.id,
+    );
+    if (
+      input.peerId === principal.id ||
+      !memberships.some((membership) => membership.principalId === input.peerId)
+    ) {
+      throw new PilotStoreError(
+        "DM_PEER_NOT_AVAILABLE",
+        404,
+        "The direct-message peer was not found in this team.",
+      );
+    }
+    const participants = [
+      principal.id,
+      input.peerId as PrincipalId,
+    ].toSorted() as [PrincipalId, PrincipalId];
+    const existing = (
+      await options.conversations.listThreads("human_direct", principal.id)
+    ).find((item) => {
+      const existingParticipants = directMessageHumanParticipants(item.thread);
+      return (
+        item.thread.teamId === input.teamId &&
+        existingParticipants.length === participants.length &&
+        existingParticipants.every(
+          (participantId, index) => participantId === participants[index],
+        )
+      );
+    });
+    if (existing) {
+      return reply
+        .status(200)
+        .send({ thread: canonicalDirectMessageThread(existing.thread) });
+    }
+    const peer = await requireDirectoryPrincipal(
+      options,
+      input.peerId as PrincipalId,
+    );
+    const thread: ConversationThread = {
+      id: directMessageThreadId(input.teamId, participants) as ThreadId,
+      kind: "human_direct",
+      title: peer.displayName,
+      participantIds: participants,
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      sequence: 0,
+      accessVersion: 1,
+      teamId: input.teamId,
+      createdAt: new Date().toISOString(),
+    };
     return reply.status(201).send({
-      thread: await options.store.getOrCreateDirectMessage({
-        id: uuidv7(),
-        teamId: input.teamId,
-        principalId: principal.id,
-        peerId: input.peerId as PrincipalId,
-        now: new Date().toISOString(),
-      }),
+      thread: canonicalDirectMessageThread(
+        await options.conversations.createThread(thread, principal.id),
+      ),
     });
   });
 
@@ -989,20 +1043,33 @@ export async function registerPilotRoutes(
     async (request, reply) => {
       const principal = await requireIdentity(request, options.requestAuth);
       const input = z
-        .object({ body: z.string().min(1).max(4_000) })
+        .object({
+          clientMessageId: z.uuid().optional(),
+          body: z.string().min(1).max(4_000),
+        })
         .strict()
         .parse(request.body);
-      const message: PilotDirectMessage = {
-        id: uuidv7(),
-        threadId: request.params.threadId,
+      const threadId = request.params.threadId as ThreadId;
+      const visible = await options.conversations.getThread(
+        threadId,
+        principal.id,
+      );
+      if (!visible || visible.thread.kind !== "human_direct") {
+        throw new PilotStoreError(
+          "DM_NOT_FOUND",
+          404,
+          "Direct message was not found.",
+        );
+      }
+      const message = await options.conversations.appendMessage(threadId, {
+        id: (input.clientMessageId ?? uuidv7()) as ThreadMessage["id"],
         senderId: principal.id,
-        sequence: 1,
         body: input.body,
         createdAt: new Date().toISOString(),
-      };
+      });
       return reply
         .status(201)
-        .send({ message: await options.store.sendDirectMessage(message) });
+        .send({ message: canonicalDirectMessage(message) });
     },
   );
 
@@ -1010,12 +1077,28 @@ export async function registerPilotRoutes(
     "/v1/pilot/dms/:threadId/stand-in",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
+      const threadId = request.params.threadId as ThreadId;
+      const visible = await options.conversations.getThread(
+        threadId,
+        principal.id,
+      );
+      if (!visible || visible.thread.kind !== "human_direct") {
+        throw new PilotStoreError(
+          "DM_NOT_FOUND",
+          404,
+          "Direct message was not found.",
+        );
+      }
       return {
-        thread: await options.store.addStandInToDirectMessage({
-          threadId: request.params.threadId,
-          principalId: principal.id,
-          standInId: personalStandInId(principal.id),
-        }),
+        thread: canonicalDirectMessageThread(
+          (
+            await options.conversations.addStandInToThread(
+              threadId,
+              personalStandInId(principal.id),
+              principal.id,
+            )
+          ).thread,
+        ),
       };
     },
   );
@@ -1073,6 +1156,11 @@ export async function registerPilotRoutes(
     );
     return {
       exchanges,
+      threadId: standInConversationThreadId(
+        projectId,
+        principal.id,
+        standInOwnerId,
+      ),
       standInOwner,
       standIn: personalStandInPrincipal(standInOwner),
     };
@@ -1085,6 +1173,7 @@ export async function registerPilotRoutes(
       const projectId = ProjectId.parse(request.params.projectId);
       const input = z
         .object({
+          clientMessageId: z.uuid().optional(),
           question: z.string().min(1).max(2_000),
           standInOwnerId: z.uuid().optional(),
           recordExchange: z.boolean().optional(),
@@ -1122,6 +1211,54 @@ export async function registerPilotRoutes(
           409,
           "This member has no published structured Work State in the selected project.",
         );
+      }
+      if (options.adapters.jobs === "transactional-outbox") {
+        const now = new Date().toISOString();
+        const questionMessageId = input.clientMessageId ?? uuidv7();
+        const threadId = standInConversationThreadId(
+          projectId,
+          principal.id,
+          standInOwnerId,
+        ) as ThreadId;
+        const standInId = personalStandInId(standInOwnerId);
+        const questionMessage = await options.conversations.enqueueStandInQuestion(
+          {
+            jobId: derivedUuid(
+              "intero-stand-in-question-job-v1",
+              questionMessageId,
+            ) as import("@intero/domain").OperationId,
+            thread: {
+              id: threadId,
+              kind: "stand_in",
+              title: `${standInOwner.displayName} 的替身`,
+              participantIds: [principal.id, standInId],
+              standInIds: [standInId],
+              accessMode: "agent_readable",
+              priorHistoryGranted: false,
+              sequence: 0,
+              accessVersion: 1,
+              createdAt: now,
+            },
+            projectId,
+            standInOwnerId,
+            askedByPrincipalId: principal.id,
+            questionMessageId:
+              questionMessageId as import("@intero/domain").MessageId,
+            answerMessageId: derivedUuid(
+              "intero-stand-in-question-answer-v1",
+              questionMessageId,
+            ) as import("@intero/domain").MessageId,
+            question: input.question,
+            createdAt: now,
+          },
+        );
+        return reply.status(202).send({
+          status: "pending",
+          threadId,
+          questionMessage,
+          standInOwner,
+          standIn: personalStandInPrincipal(standInOwner),
+        });
       }
       const answer = await options.modelGateway.answerStandInQuestion({
         organizationId: project.organizationId,
@@ -1588,6 +1725,120 @@ function personalStandInPrincipal(
     displayName: `${owner.displayName} 的替身`,
     kind: "stand_in",
   };
+}
+
+async function listCanonicalDirectMessages(
+  options: PilotRoutesOptions,
+  principalId: PrincipalId,
+): Promise<
+  Array<{
+    thread: PilotDirectMessageThread;
+    messages: PilotDirectMessage[];
+  }>
+> {
+  const items = await options.conversations.listThreads(
+    "human_direct",
+    principalId,
+  );
+  return items
+    .filter(
+      (item) =>
+        item.thread.teamId !== undefined &&
+        directMessageHumanParticipants(item.thread).length === 2,
+    )
+    .map((item) => ({
+      thread: canonicalDirectMessageThread(item.thread),
+      messages: item.messages
+        .filter(
+          (message) =>
+            message.kind === "message" &&
+            message.serverReadable &&
+            message.body.length > 0,
+        )
+        .map(canonicalDirectMessage),
+    }));
+}
+
+function canonicalDirectMessageThread(
+  thread: ConversationThread,
+): PilotDirectMessageThread {
+  const participants = directMessageHumanParticipants(thread);
+  if (!thread.teamId || participants.length !== 2) {
+    throw new Error("Canonical direct message is missing its team or peers.");
+  }
+  const standInId = thread.standInIds[0];
+  return {
+    id: thread.id,
+    teamId: thread.teamId,
+    participantIds: participants as [PrincipalId, PrincipalId],
+    ...(standInId ? { standInId } : {}),
+    ...(thread.accessChangedAtSequence !== undefined
+      ? {
+          standInAddedAfterSequence: Math.max(
+            0,
+            thread.accessChangedAtSequence - 1,
+          ),
+        }
+      : {}),
+    sequence: thread.sequence,
+    createdAt: thread.createdAt,
+  };
+}
+
+function canonicalDirectMessage(message: ThreadMessage): PilotDirectMessage {
+  if (!message.body) {
+    throw new Error("Canonical direct message body was empty.");
+  }
+  return {
+    id: message.id,
+    threadId: message.threadId,
+    senderId: message.senderId,
+    sequence: message.sequence,
+    body: message.body,
+    createdAt: message.createdAt,
+  };
+}
+
+function directMessageHumanParticipants(
+  thread: ConversationThread,
+): PrincipalId[] {
+  return thread.participantIds
+    .filter((participantId) => !thread.standInIds.includes(participantId))
+    .toSorted();
+}
+
+export function directMessageThreadId(
+  teamId: string,
+  participants: readonly [PrincipalId, PrincipalId],
+): string {
+  return derivedUuid(
+    "intero-dm-v1",
+    `${teamId}:${participants.toSorted().join(":")}`,
+  );
+}
+
+export function standInConversationThreadId(
+  projectId: string,
+  viewerId: PrincipalId,
+  standInOwnerId: PrincipalId,
+): string {
+  return derivedUuid(
+    "intero-stand-in-thread-v1",
+    `${projectId}:${viewerId}:${standInOwnerId}`,
+  );
+}
+
+function derivedUuid(namespace: string, value: string): string {
+  const hex = createHash("sha256")
+    .update(`${namespace}:${value}`)
+    .digest("hex")
+    .slice(0, 32)
+    .split("");
+  hex[12] = "5";
+  hex[16] = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8).join("")}-${hex.slice(8, 12).join("")}-${hex
+    .slice(12, 16)
+    .join("")}-${hex.slice(16, 20).join("")}-${hex.slice(20).join("")}`;
 }
 
 async function requireAgentBinding(

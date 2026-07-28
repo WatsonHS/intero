@@ -1160,6 +1160,7 @@ debouncing, bounded snapshots, direct-cloud delivery, and shutdown cleanup.
 - [ADR-0006: Cloud-first, Web-first runtime with private-by-default cloud data](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md)
 - [ADR-0007: Post-Pilot product model and delivery sequence](adr/0007-post-pilot-product-model-and-delivery-sequence.md)
 - [ADR-0008: Phase 7 bounded Stand-in and Agent automation](adr/0008-phase-7-bounded-stand-in-and-agent-automation.md)
+- [ADR-0009: Durable, authorized realtime conversations](adr/0009-durable-authorized-realtime-conversations.md)
 
 ADR-0001, ADR-0002, and ADR-0003 are retained as superseded historical
 implementation decisions.

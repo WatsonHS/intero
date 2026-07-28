@@ -1,4 +1,10 @@
 {$INTERO_PUBLIC_URL:http://localhost:4311} {
+	@realtime path /connection/* /emulation
+
+	handle @realtime {
+		reverse_proxy host.docker.internal:8000
+	}
+
 	@api path /v1/* /api/auth/* /.well-known/* /health /ready /metrics
 
 	handle @api {

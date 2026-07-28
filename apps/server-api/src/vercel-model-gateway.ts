@@ -5,7 +5,7 @@ import {
   type PilotStandInOutput as PilotStandInOutputValue,
 } from "@intero/domain";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, Output } from "ai";
+import { generateText, Output, streamText } from "ai";
 
 import type {
   ModelGateway,
@@ -186,23 +186,7 @@ export class VercelAiModelGateway implements ModelGateway {
       const result = await generateText({
         model: provider.chatModel(configuration.defaultModel),
         system: standInQuestionSystemInstructions(input.preferredLanguage),
-        prompt: JSON.stringify({
-          project: input.project,
-          standInOwnerId: input.standInOwnerId,
-          askedByPrincipalId: input.askedByPrincipalId,
-          preferredLanguage: input.preferredLanguage,
-          question: input.question,
-          safeStructuredSources: input.sources.map((source) => ({
-            workStateId: source.workStateId,
-            title: source.title,
-            phase: source.phase,
-            eventType: source.eventType,
-            safeSummary: source.summary,
-            narrative: source.narrative,
-            freshnessAt: source.freshnessAt,
-            provenance: source.provenance,
-          })),
-        }),
+        prompt: standInQuestionPrompt(input),
         output: Output.object({
           schema: PilotStandInAnswer,
           name: "intero_stand_in_answer",
@@ -214,20 +198,65 @@ export class VercelAiModelGateway implements ModelGateway {
         maxRetries: 1,
         timeout: 10_000,
       });
-      const answer = PilotStandInAnswer.parse(result.output);
-      const allowedIds = new Set(
-        input.sources.map((source) => source.workStateId),
+      return validateStandInAnswer(
+        PilotStandInAnswer.parse(result.output),
+        input,
       );
-      if (
-        answer.sourceWorkStateIds.some(
-          (workStateId) => !allowedIds.has(workStateId),
-        )
-      ) {
-        throw new Error(
-          "The provider cited a Work State outside the supplied context.",
-        );
+    } catch {
+      throw new ModelGatewayUnavailableError(
+        "The configured AI provider did not return a valid grounded Stand-in answer.",
+      );
+    }
+  }
+
+  async streamStandInQuestion(
+    input: StandInQuestionInput,
+    onPartialAnswer: (answer: string) => Promise<void>,
+  ): Promise<PilotStandInAnswerValue> {
+    if (input.sources.length === 0) {
+      throw new ModelGatewayUnavailableError(
+        "No published structured Work State is available to ground an answer.",
+      );
+    }
+    const configuration = await this.loadConfiguration();
+    const provider = createOpenAICompatible({
+      name: "intero-admin-provider",
+      baseURL: configuration.endpoint,
+      apiKey: configuration.apiKey,
+      supportsStructuredOutputs: true,
+      transformRequestBody: usePortableJsonObjectMode,
+    });
+
+    try {
+      const result = streamText({
+        model: provider.chatModel(configuration.defaultModel),
+        system: standInQuestionSystemInstructions(input.preferredLanguage),
+        prompt: standInQuestionPrompt(input),
+        output: Output.object({
+          schema: PilotStandInAnswer,
+          name: "intero_stand_in_answer",
+          description:
+            "A grounded Stand-in answer with supporting Work State IDs.",
+        }),
+        maxOutputTokens: 700,
+        temperature: 0.1,
+        maxRetries: 1,
+        timeout: 10_000,
+      });
+      let lastAnswer = "";
+      for await (const partial of result.partialOutputStream) {
+        if (
+          typeof partial.answer === "string" &&
+          partial.answer !== lastAnswer
+        ) {
+          lastAnswer = partial.answer;
+          await onPartialAnswer(lastAnswer);
+        }
       }
-      return answer;
+      return validateStandInAnswer(
+        PilotStandInAnswer.parse(await result.output),
+        input,
+      );
     } catch {
       throw new ModelGatewayUnavailableError(
         "The configured AI provider did not return a valid grounded Stand-in answer.",
@@ -258,4 +287,41 @@ export class VercelAiModelGateway implements ModelGateway {
       );
     }
   }
+}
+
+function standInQuestionPrompt(input: StandInQuestionInput): string {
+  return JSON.stringify({
+    project: input.project,
+    standInOwnerId: input.standInOwnerId,
+    askedByPrincipalId: input.askedByPrincipalId,
+    preferredLanguage: input.preferredLanguage,
+    question: input.question,
+    safeStructuredSources: input.sources.map((source) => ({
+      workStateId: source.workStateId,
+      title: source.title,
+      phase: source.phase,
+      eventType: source.eventType,
+      safeSummary: source.summary,
+      narrative: source.narrative,
+      freshnessAt: source.freshnessAt,
+      provenance: source.provenance,
+    })),
+  });
+}
+
+function validateStandInAnswer(
+  answer: PilotStandInAnswerValue,
+  input: StandInQuestionInput,
+): PilotStandInAnswerValue {
+  const allowedIds = new Set(input.sources.map((source) => source.workStateId));
+  if (
+    answer.sourceWorkStateIds.some(
+      (workStateId) => !allowedIds.has(workStateId),
+    )
+  ) {
+    throw new Error(
+      "The provider cited a Work State outside the supplied context.",
+    );
+  }
+  return answer;
 }

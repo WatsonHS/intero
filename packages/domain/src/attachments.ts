@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ArtifactId, PrincipalId, ThreadId } from "./ids.js";
+import { ArtifactId, MessageId, PrincipalId, ThreadId } from "./ids.js";
 
 export const AttachmentEncryptionMode = z.enum([
   "client_e2ee",
@@ -36,6 +36,8 @@ export const Attachment = z
     state: AttachmentState,
     createdAt: z.iso.datetime(),
     expiresAt: z.iso.datetime(),
+    /** Set atomically when the attachment becomes part of durable history. */
+    messageId: MessageId.optional(),
   })
   .strict();
 export type Attachment = z.infer<typeof Attachment>;

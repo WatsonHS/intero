@@ -70,6 +70,10 @@ export interface ApiServiceConfig {
   metricsEnabled: boolean;
   spiceDbInsecure: boolean;
   allowDevelopmentIdentity: boolean;
+  realtime?: {
+    publicUrl: string;
+    tokenSecret: string;
+  };
   auth?: {
     publicUrl: string;
     secret: string;
@@ -160,6 +164,8 @@ export function loadApiServiceConfig(
     ]),
   );
   const pilot = loadPilotAdapterConfig(environment);
+  const realtimeTokenSecret = environment.INTERO_CENTRIFUGO_TOKEN_SECRET;
+  const realtimePublicUrl = environment.INTERO_CENTRIFUGO_PUBLIC_URL;
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
   if (runtimeMode === "product" && developmentIdentityRequested) {
@@ -182,6 +188,24 @@ export function loadApiServiceConfig(
       "Product runtime requires INTERO_DATABASE_URL for persistent sessions.",
     );
   }
+  if (
+    runtimeMode === "product" &&
+    pilot.realtime === "centrifugo" &&
+    !realtimeTokenSecret
+  ) {
+    throw new Error(
+      "Product Centrifugo realtime requires INTERO_CENTRIFUGO_TOKEN_SECRET.",
+    );
+  }
+  if (
+    runtimeMode === "product" &&
+    pilot.realtime === "centrifugo" &&
+    !pilot.centrifugoApiKey
+  ) {
+    throw new Error(
+      "Product Centrifugo realtime requires INTERO_CENTRIFUGO_API_KEY.",
+    );
+  }
   return {
     runtime,
     runtimeMode,
@@ -195,6 +219,17 @@ export function loadApiServiceConfig(
     spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
     allowDevelopmentIdentity:
       runtimeMode === "development" && developmentIdentityRequested,
+    ...(pilot.realtime === "centrifugo" && realtimeTokenSecret
+      ? {
+          realtime: {
+            publicUrl: z
+              .url()
+              .parse(realtimePublicUrl ?? publicUrl)
+              .replace(/\/+$/, ""),
+            tokenSecret: z.string().min(32).parse(realtimeTokenSecret),
+          },
+        }
+      : {}),
     ...(authSecret
       ? {
           auth: {
@@ -252,6 +287,15 @@ export function loadWorkerServiceConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): WorkerServiceConfig {
   const pilot = loadPilotAdapterConfig(environment);
+  if (
+    environment.INTERO_RUNTIME_MODE === "product" &&
+    pilot.realtime === "centrifugo" &&
+    !pilot.centrifugoApiKey
+  ) {
+    throw new Error(
+      "Product Centrifugo worker requires INTERO_CENTRIFUGO_API_KEY.",
+    );
+  }
   if (pilot.persistence !== "postgres") {
     throw new Error("server-worker requires PostgreSQL Pilot persistence.");
   }

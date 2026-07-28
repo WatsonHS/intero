@@ -44,8 +44,9 @@ export const ApplyPublicProjectionRequest = z.object({
 });
 
 export const CreateAttachmentUploadRequest = CreateAttachmentUpload;
+export const AttachmentView = Attachment.omit({ objectKey: true });
 export const AttachmentUploadResponse = z.object({
-  attachment: Attachment,
+  attachment: AttachmentView,
   uploadUrl: z.url(),
   requiredHeaders: z.record(z.string(), z.string()),
 });
@@ -116,39 +117,74 @@ export const CreateCapabilityGrantRequest = CapabilityGrant;
 // Conclusion state is set by concluding, never by the creator.
 export const CreateThreadRequest = ConversationThread.omit({
   sequence: true,
+  accessVersion: true,
+  latestMessageAt: true,
   concludedAt: true,
   concludedBy: true,
 });
 export const ConcludeThreadRequest = z
   .object({
-    messageId: z.string().uuid(),
-    actorId: z.string().uuid(),
+    clientMessageId: z.string().uuid(),
     conclusion: z.string().min(1).max(16_000),
-    createdAt: z.iso.datetime(),
   })
   .strict();
 export const MarkThreadReadRequest = z
   .object({
-    principalId: z.string().uuid(),
     sequence: z.number().int().nonnegative(),
   })
   .strict();
 export const SendThreadMessageRequest = z
   .object({
-    id: z.string().uuid(),
-    senderId: z.string().uuid(),
+    clientMessageId: z.string().uuid(),
     body: z.string().max(16_000).optional(),
     encryptedBody: z.string().max(100_000).optional(),
-    createdAt: z.iso.datetime(),
+    mentionedPrincipalIds: z.array(z.string().uuid()).max(20).default([]),
+    attachmentIds: z.array(z.string().uuid()).max(8).default([]),
+  })
+  .strict()
+  .refine((input) => {
+    if (input.encryptedBody !== undefined) {
+      return input.body === undefined && input.attachmentIds.length === 0;
+    }
+    return (
+      input.body !== undefined &&
+      (input.body.trim().length > 0 || input.attachmentIds.length > 0)
+    );
+  }, "Send ciphertext alone, or a server-readable body and/or attachments.");
+export const AddStandInRequest = z
+  .object({
+    standInId: z.string().uuid(),
   })
   .strict();
-export const AddStandInRequest = z.object({
-  standInId: z.string().uuid(),
-  actorId: z.string().uuid(),
-});
+export const ThreadMessagesQuery = z
+  .object({
+    afterSequence: z.coerce.number().int().nonnegative().optional(),
+    beforeSequence: z.coerce.number().int().positive().optional(),
+    tail: z.coerce.number().int().min(1).max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      [input.afterSequence, input.beforeSequence, input.tail].filter(
+        (value) => value !== undefined,
+      ).length <= 1,
+    "Use only one of afterSequence, beforeSequence, or tail.",
+  );
+export const ThreadMessagesResponse = z
+  .object({
+    items: z.array(ThreadMessage),
+    headSequence: z.number().int().nonnegative(),
+    accessVersion: z.number().int().positive(),
+    hasMore: z.boolean(),
+  })
+  .strict();
 export const ThreadResponse = z.object({
   thread: ConversationThread,
   messages: z.array(ThreadMessage),
+  unreadCount: z.number().int().nonnegative().default(0),
+  mentionCount: z.number().int().nonnegative().default(0),
+  lastReadSequence: z.number().int().nonnegative().default(0),
   principals: z.array(PrincipalSummary),
   actions: z.array(
     z.object({

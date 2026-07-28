@@ -228,6 +228,7 @@ export class PostgresPilotJobRepository {
               AND completed_at IS NULL
               AND topic NOT IN (
                 'pilot.stand_in.enqueue',
+                'pilot.stand_in.question.enqueue',
                 'project.automation.enqueue'
               ))
              AS realtime_outbox_depth,

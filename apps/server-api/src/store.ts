@@ -22,6 +22,8 @@ import {
   type SpecReviewResponse,
   type ThreadId,
   type ThreadMessage,
+  type ThreadMessageAttachment,
+  type ThreadMessageStreamState,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -60,6 +62,32 @@ export type KanbanCardUpdate = Partial<
     | "relatedWorkstreamIds"
   >
 >;
+
+export interface ThreadMessagePageQuery {
+  afterSequence?: number | undefined;
+  beforeSequence?: number | undefined;
+  tail?: number | undefined;
+  limit: number;
+}
+
+export interface ThreadMessagePage {
+  items: ThreadMessage[];
+  headSequence: number;
+  accessVersion: number;
+  hasMore: boolean;
+}
+
+export interface StandInQuestionInput {
+  jobId: OperationId;
+  thread: ConversationThread;
+  projectId: ProjectId;
+  standInOwnerId: PrincipalId;
+  askedByPrincipalId: PrincipalId;
+  questionMessageId: ThreadMessage["id"];
+  answerMessageId: ThreadMessage["id"];
+  question: string;
+  createdAt: string;
+}
 
 export class InMemoryPlatformStore {
   readonly projects = new Map<ProjectId, Project>();
@@ -287,18 +315,38 @@ export class InMemoryPlatformStore {
     return this.coordinationResult(envelope, "resolved", envelope.humanMessage);
   }
 
-  createThread(thread: ConversationThread): ConversationThread {
+  createThread(
+    thread: ConversationThread,
+    actorId?: PrincipalId,
+  ): ConversationThread {
     const existing = this.threads.get(thread.id);
-    if (existing) return existing;
+    if (existing) {
+      if (!sameThreadCreation(existing, thread)) {
+        throw new Error("Thread ID was already used.");
+      }
+      return existing;
+    }
     for (const participantId of thread.participantIds) {
       this.ensurePrincipal(
         participantId,
         thread.standInIds.includes(participantId) ? "stand_in" : "human",
       );
     }
-    this.threads.set(thread.id, thread);
+    const stored = {
+      ...thread,
+      accessVersion: thread.accessVersion ?? 1,
+    };
+    this.threads.set(thread.id, stored);
     this.messages.set(thread.id, []);
-    return thread;
+    if (actorId) {
+      this.recordConversationChange(
+        stored,
+        actorId,
+        "thread_created",
+        thread.id,
+      );
+    }
+    return stored;
   }
 
   appendMessage(
@@ -308,6 +356,9 @@ export class InMemoryPlatformStore {
       senderId: PrincipalId;
       body?: string;
       encryptedBody?: string;
+      mentionedPrincipalIds?: PrincipalId[];
+      attachmentIds?: ThreadMessageAttachment["id"][];
+      streamState?: ThreadMessageStreamState;
       createdAt: string;
     },
   ): ThreadMessage {
@@ -316,13 +367,128 @@ export class InMemoryPlatformStore {
     if (!thread.participantIds.includes(input.senderId)) {
       throw new Error("Sender is not a Thread participant.");
     }
-    const message = buildThreadMessage(thread, input);
-    this.threads.set(threadId, { ...thread, sequence: message.sequence });
+    if (input.attachmentIds?.length) {
+      throw new Error("Attachment storage is unavailable in memory mode.");
+    }
+    const existing = (this.messages.get(threadId) ?? []).find(
+      (message) => message.id === input.id,
+    );
+    if (existing) {
+      if (
+        (existing.streamState === "pending" ||
+          existing.streamState === "streaming") &&
+        existing.senderId === input.senderId &&
+        input.body !== undefined &&
+        input.encryptedBody === undefined &&
+        !input.attachmentIds?.length
+      ) {
+        return this.updateMessageStream({
+          threadId,
+          messageId: existing.id,
+          senderId: input.senderId,
+          body: input.body,
+          streamState: "complete",
+        });
+      }
+      if (
+        existing.senderId !== input.senderId ||
+        existing.body !== (input.body ?? "") ||
+        existing.encryptedBody !== input.encryptedBody ||
+        !sameIds(
+          existing.mentionedPrincipalIds ?? [],
+          input.mentionedPrincipalIds ?? [],
+        )
+      ) {
+        throw new Error("Client message ID was already used.");
+      }
+      return existing;
+    }
+    const message = buildThreadMessage(thread, {
+      ...input,
+      mentionedPrincipalIds: normalizeMentionIds(
+        thread,
+        input.senderId,
+        input.mentionedPrincipalIds,
+      ),
+    });
+    const updatedThread = {
+      ...thread,
+      sequence: message.sequence,
+      latestMessageAt: message.createdAt,
+      accessVersion: thread.accessVersion ?? 1,
+    };
+    this.threads.set(threadId, updatedThread);
     this.messages.set(threadId, [
       ...(this.messages.get(threadId) ?? []),
       message,
     ]);
+    this.recordConversationChange(
+      updatedThread,
+      input.senderId,
+      "message_appended",
+      message.id,
+    );
     return message;
+  }
+
+  enqueueStandInQuestion(input: StandInQuestionInput): ThreadMessage {
+    this.createThread(input.thread, input.askedByPrincipalId);
+    const question = this.appendMessage(input.thread.id, {
+      id: input.questionMessageId,
+      senderId: input.askedByPrincipalId,
+      body: input.question,
+      createdAt: input.createdAt,
+    });
+    this.appendMessage(input.thread.id, {
+      id: input.answerMessageId,
+      senderId: input.thread.standInIds[0]!,
+      body: "",
+      streamState: "pending",
+      createdAt: input.createdAt,
+    });
+    return question;
+  }
+
+  updateMessageStream(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    senderId: PrincipalId;
+    body: string;
+    streamState: ThreadMessageStreamState;
+  }): ThreadMessage {
+    const thread = this.threads.get(input.threadId);
+    if (!thread) throw new Error("Thread was not found.");
+    const messages = this.messages.get(input.threadId) ?? [];
+    const index = messages.findIndex(
+      (message) => message.id === input.messageId,
+    );
+    const current = messages[index];
+    if (!current || current.senderId !== input.senderId) {
+      throw new Error("Stream message was not found.");
+    }
+    if (
+      current.streamState === "complete" &&
+      input.streamState !== "complete"
+    ) {
+      throw new Error("Completed stream messages are immutable.");
+    }
+    const updated: ThreadMessage = {
+      ...current,
+      body: input.body,
+      streamState: input.streamState,
+      revision: (current.revision ?? 1) + 1,
+    };
+    const next = [...messages];
+    next[index] = updated;
+    this.messages.set(input.threadId, next);
+    this.recordConversationChange(
+      thread,
+      input.senderId,
+      "message_updated",
+      uuidv7(),
+      input.messageId,
+    );
+    return updated;
   }
 
   /** Read markers only move forward; see the Postgres store for why. */
@@ -331,12 +497,26 @@ export class InMemoryPlatformStore {
     principalId: PrincipalId,
     sequence: number,
   ): void {
+    const thread = this.threads.get(threadId);
+    if (!thread || !thread.participantIds.includes(principalId)) {
+      throw new Error("Thread was not found.");
+    }
+    if (sequence > thread.sequence) {
+      throw new Error("Read sequence exceeds the Thread head.");
+    }
     const key = `${threadId}:${principalId}`;
     const current = this.threadReads.get(key)?.lastReadSequence ?? 0;
+    if (sequence <= current) return;
     this.threadReads.set(key, {
       threadId,
-      lastReadSequence: Math.max(current, sequence),
+      lastReadSequence: sequence,
     });
+    this.recordConversationChange(
+      thread,
+      principalId,
+      "read_cursor_changed",
+      uuidv7(),
+    );
   }
 
   listThreadReads(
@@ -345,6 +525,54 @@ export class InMemoryPlatformStore {
     return [...this.threadReads.entries()]
       .filter(([key]) => key.endsWith(`:${principalId}`))
       .map(([, value]) => value);
+  }
+
+  listThreadMessages(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    query: ThreadMessagePageQuery,
+  ): ThreadMessagePage | undefined {
+    const thread = this.threads.get(threadId);
+    if (!thread || !thread.participantIds.includes(principalId)) {
+      return undefined;
+    }
+    const all = this.messages.get(threadId) ?? [];
+    let candidates: ThreadMessage[];
+    let hasMore = false;
+    if (query.afterSequence !== undefined) {
+      const matching = all.filter(
+        (message) => message.sequence > query.afterSequence!,
+      );
+      candidates = matching.slice(0, query.limit);
+      hasMore = matching.length > candidates.length;
+    } else if (query.beforeSequence !== undefined) {
+      const matching = all.filter(
+        (message) => message.sequence < query.beforeSequence!,
+      );
+      candidates = matching.slice(-query.limit);
+      hasMore = matching.length > candidates.length;
+    } else {
+      const limit = query.tail ?? query.limit;
+      candidates = all.slice(-limit);
+      hasMore = all.length > candidates.length;
+    }
+    return {
+      items: structuredClone(candidates),
+      headSequence: thread.sequence,
+      accessVersion: thread.accessVersion ?? 1,
+      hasMore,
+    };
+  }
+
+  getThreadMessage(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    messageId: ThreadMessage["id"],
+  ): ThreadMessage | undefined {
+    if (!this.hasThreadAccess(threadId, principalId)) return undefined;
+    return (this.messages.get(threadId) ?? []).find(
+      (message) => message.id === messageId,
+    );
   }
 
   concludeThreadIntoParent(input: {
@@ -359,7 +587,6 @@ export class InMemoryPlatformStore {
     if (!thread.parentThreadId) {
       throw new Error("Thread did not branch from another conversation.");
     }
-    if (thread.concludedAt) throw new Error("Thread was already concluded.");
     if (!thread.participantIds.includes(input.actorId)) {
       throw new Error("Only a participant can conclude the Thread.");
     }
@@ -368,6 +595,20 @@ export class InMemoryPlatformStore {
     if (!parent.participantIds.includes(input.actorId)) {
       throw new Error("Only a participant of the parent can conclude.");
     }
+    const existing = (this.messages.get(parent.id) ?? []).find(
+      (message) => message.id === input.messageId,
+    );
+    if (thread.concludedAt) {
+      if (
+        existing &&
+        existing.senderId === input.actorId &&
+        existing.body === input.conclusion
+      ) {
+        return { thread, parentMessage: existing };
+      }
+      throw new Error("Thread was already concluded.");
+    }
+    if (existing) throw new Error("Client message ID was already used.");
     const parentMessage = buildThreadMessage(parent, {
       id: input.messageId,
       senderId: input.actorId,
@@ -377,6 +618,7 @@ export class InMemoryPlatformStore {
     this.threads.set(parent.id, {
       ...parent,
       sequence: parentMessage.sequence,
+      latestMessageAt: parentMessage.createdAt,
     });
     this.messages.set(parent.id, [
       ...(this.messages.get(parent.id) ?? []),
@@ -388,6 +630,18 @@ export class InMemoryPlatformStore {
       concludedBy: input.actorId,
     };
     this.threads.set(thread.id, concluded);
+    this.recordConversationChange(
+      this.threads.get(parent.id)!,
+      input.actorId,
+      "message_appended",
+      parentMessage.id,
+    );
+    this.recordConversationChange(
+      concluded,
+      input.actorId,
+      "thread_concluded",
+      uuidv7(),
+    );
     return { thread: concluded, parentMessage };
   }
 
@@ -401,12 +655,23 @@ export class InMemoryPlatformStore {
     this.ensurePrincipal(standInId, "stand_in");
     this.ensurePrincipal(actorId, "human");
     const transition = addStandIn(current, standInId, actorId);
-    this.threads.set(threadId, transition.thread);
+    const updatedThread = {
+      ...transition.thread,
+      accessVersion: (current.accessVersion ?? 1) + 1,
+      latestMessageAt: transition.event.createdAt,
+    };
+    this.threads.set(threadId, updatedThread);
     this.messages.set(threadId, [
       ...(this.messages.get(threadId) ?? []),
       transition.event,
     ]);
-    return transition;
+    this.recordConversationChange(
+      updatedThread,
+      actorId,
+      "access_changed",
+      transition.event.id,
+    );
+    return { ...transition, thread: updatedThread };
   }
 
   createSpec(input: {
@@ -535,21 +800,141 @@ export class InMemoryPlatformStore {
     );
   }
 
-  listThreads(kind?: ConversationThread["kind"]) {
+  listThreads(kind?: ConversationThread["kind"], principalId?: PrincipalId) {
     return [...this.threads.values()]
-      .filter((thread) => kind === undefined || thread.kind === kind)
+      .filter(
+        (thread) =>
+          (kind === undefined || thread.kind === kind) &&
+          (principalId === undefined ||
+            thread.participantIds.includes(principalId)),
+      )
       .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map((thread) => ({
-        thread,
-        messages: this.messages.get(thread.id) ?? [],
-      }));
+      .map((thread) => {
+        const messages = this.messages.get(thread.id) ?? [];
+        const lastRead = principalId
+          ? (this.threadReads.get(`${thread.id}:${principalId}`)
+              ?.lastReadSequence ?? 0)
+          : 0;
+        return {
+          thread,
+          messages: messages.slice(-100),
+          unreadCount: principalId
+            ? messages.filter(
+                (message) =>
+                  message.sequence > lastRead &&
+                  message.senderId !== principalId,
+              ).length
+            : 0,
+          mentionCount: principalId
+            ? messages.filter(
+                (message) =>
+                  message.sequence > lastRead &&
+                  message.senderId !== principalId &&
+                  message.mentionedPrincipalIds?.includes(principalId),
+              ).length
+            : 0,
+        };
+      });
   }
 
-  getThread(threadId: ThreadId) {
+  getThread(threadId: ThreadId, principalId?: PrincipalId) {
     const thread = this.threads.get(threadId);
-    return thread
-      ? { thread, messages: this.messages.get(threadId) ?? [] }
+    if (
+      !thread ||
+      (principalId !== undefined &&
+        !thread.participantIds.includes(principalId))
+    ) {
+      return undefined;
+    }
+    const messages = this.messages.get(threadId) ?? [];
+    const lastRead = principalId
+      ? (this.threadReads.get(`${thread.id}:${principalId}`)
+          ?.lastReadSequence ?? 0)
+      : 0;
+    return {
+      thread,
+      messages: messages.slice(-100),
+      unreadCount: principalId
+        ? messages.filter(
+            (message) =>
+              message.sequence > lastRead && message.senderId !== principalId,
+          ).length
+        : 0,
+      mentionCount: principalId
+        ? messages.filter(
+            (message) =>
+              message.sequence > lastRead &&
+              message.senderId !== principalId &&
+              message.mentionedPrincipalIds?.includes(principalId),
+          ).length
+        : 0,
+    };
+  }
+
+  hasThreadAccess(threadId: ThreadId, principalId: PrincipalId): boolean {
+    return (
+      this.threads.get(threadId)?.participantIds.includes(principalId) ?? false
+    );
+  }
+
+  getThreadAccessVersion(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): number | undefined {
+    const thread = this.threads.get(threadId);
+    return thread?.participantIds.includes(principalId)
+      ? (thread.accessVersion ?? 1)
       : undefined;
+  }
+
+  private recordConversationChange(
+    thread: ConversationThread,
+    actorId: PrincipalId,
+    reason:
+      | "thread_created"
+      | "message_appended"
+      | "message_updated"
+      | "read_cursor_changed"
+      | "access_changed"
+      | "thread_concluded",
+    eventId: string,
+    messageId?: ThreadMessage["id"],
+  ): void {
+    const operationId = eventId as OperationId;
+    const occurredAt = new Date().toISOString();
+    const activity: ActivityEvent = {
+      sequence: ++this.#sequence,
+      organizationId: DEMO_ORGANIZATION_ID,
+      operationId,
+      actorId,
+      aggregateType: "conversation",
+      aggregateId: thread.id,
+      eventType: "conversation.changed",
+      metadata: {
+        reason,
+        headSequence: String(thread.sequence),
+        accessVersion: String(thread.accessVersion ?? 1),
+      },
+      occurredAt,
+    };
+    this.activities.push(activity);
+    this.outbox.push({
+      operationId,
+      topic: "conversation.changed",
+      payload: {
+        schemaVersion: 1,
+        eventId,
+        type: "conversation.changed",
+        threadId: thread.id,
+        headSequence: thread.sequence,
+        accessVersion: thread.accessVersion ?? 1,
+        reason,
+        ...(messageId ? { messageId } : {}),
+        occurredAt,
+      },
+      attempts: 0,
+      availableAt: occurredAt,
+    });
   }
 
   getSpec(specId: SpecId) {
@@ -735,6 +1120,9 @@ export function buildThreadMessage(
     senderId: PrincipalId;
     body?: string;
     encryptedBody?: string;
+    mentionedPrincipalIds?: PrincipalId[];
+    attachments?: ThreadMessageAttachment[];
+    streamState?: ThreadMessageStreamState;
     createdAt: string;
   },
 ): ThreadMessage {
@@ -754,9 +1142,19 @@ export function buildThreadMessage(
       encryptedBody: input.encryptedBody,
       createdAt: input.createdAt,
       serverReadable: false,
+      streamState: "complete",
+      revision: 1,
     };
   }
-  if (!input.body || input.encryptedBody) {
+  const streamState = input.streamState ?? "complete";
+  const hasVisibleContent =
+    Boolean(input.body?.trim()) || Boolean(input.attachments?.length);
+  if (
+    input.encryptedBody ||
+    (!hasVisibleContent &&
+      streamState !== "pending" &&
+      streamState !== "streaming")
+  ) {
     throw new Error("Agent-readable messages require a server-readable body.");
   }
   return {
@@ -765,10 +1163,61 @@ export function buildThreadMessage(
     senderId: input.senderId,
     sequence: thread.sequence + 1,
     kind: "message",
-    body: input.body,
+    body: input.body ?? "",
     createdAt: input.createdAt,
     serverReadable: true,
+    ...(input.mentionedPrincipalIds?.length
+      ? { mentionedPrincipalIds: input.mentionedPrincipalIds }
+      : {}),
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    streamState,
+    revision: 1,
   };
+}
+
+export function normalizeMentionIds(
+  thread: ConversationThread,
+  senderId: PrincipalId,
+  ids: PrincipalId[] = [],
+): PrincipalId[] {
+  const normalized = [...new Set(ids)];
+  if (normalized.length > 20)
+    throw new Error("A message has too many mentions.");
+  if (
+    normalized.some(
+      (principalId) =>
+        principalId === senderId ||
+        !thread.participantIds.includes(principalId),
+    )
+  ) {
+    throw new Error("Mentions must target another active Thread participant.");
+  }
+  return normalized;
+}
+
+export function sameThreadCreation(
+  left: ConversationThread,
+  right: ConversationThread,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.kind === right.kind &&
+    left.title === right.title &&
+    left.accessMode === right.accessMode &&
+    left.accessChangedAtSequence === right.accessChangedAtSequence &&
+    left.priorHistoryGranted === right.priorHistoryGranted &&
+    left.teamId === right.teamId &&
+    left.parentThreadId === right.parentThreadId &&
+    sameIds(left.participantIds, right.participantIds) &&
+    sameIds(left.standInIds, right.standInIds)
+  );
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 export function claimFromEvent(event: CanonicalWorkEvent): Claim | undefined {

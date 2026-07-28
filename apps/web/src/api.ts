@@ -1,6 +1,7 @@
 import type {
   ActionEnvelope,
   ActionInboxItem,
+  Attachment,
   AuthorizedSearchResult,
   ActivityEvent,
   ConversationThread,
@@ -45,6 +46,7 @@ import { createClientUuid } from "./client-id.js";
 import { consumeServerSentEvents } from "./sse.js";
 
 const API_URL = INTERO_API_URL;
+type ConversationAttachment = Omit<Attachment, "objectKey">;
 
 export interface TeamPulsePayload {
   generatedAt: string;
@@ -64,6 +66,26 @@ export interface BootstrapPayload {
   organization: { id: string; name: string };
   currentPrincipal: PrincipalSummary;
   standInPrincipal: PrincipalSummary;
+  adapters?: {
+    realtime: "polling" | "centrifugo";
+  };
+}
+
+export interface RealtimeSessionPayload {
+  token: string;
+  expiresAt: string;
+  transports: Array<{
+    transport: "websocket" | "sse";
+    endpoint: string;
+  }>;
+  emulationEndpoint: string;
+}
+
+export interface RealtimeSubscriptionPayload {
+  channel: string;
+  token: string;
+  expiresAt: string;
+  accessVersion: number;
 }
 
 export interface ThreadPayload {
@@ -71,7 +93,11 @@ export interface ThreadPayload {
   messages: ThreadMessage[];
   /** Messages after your read marker that you did not send. */
   unreadCount?: number;
+  /** Unread messages that explicitly target the current principal. */
+  mentionCount?: number;
   lastReadSequence?: number;
+  /** Client-only marker: the user explicitly paged beyond the bounded tail. */
+  historyExpanded?: boolean;
   principals: PrincipalSummary[];
   actions: Array<{ envelope: ActionEnvelope; status: "resolved" }>;
 }
@@ -530,6 +556,16 @@ export async function getThreads(
   );
 }
 
+export async function createRealtimeSession(): Promise<RealtimeSessionPayload> {
+  return postJson("/v1/realtime/session", {});
+}
+
+export async function createRealtimeSubscription(
+  threadId: string,
+): Promise<RealtimeSubscriptionPayload> {
+  return postJson("/v1/realtime/subscriptions", { threadId });
+}
+
 export async function getKanban(
   projectId?: string,
   signal?: AbortSignal,
@@ -575,14 +611,16 @@ export async function updateKanbanCard(
 
 export async function sendThreadMessage(input: {
   threadId: string;
-  senderId: string;
-  body: string;
+  body?: string;
+  mentionedPrincipalIds?: string[];
+  attachmentIds?: string[];
+  clientMessageId?: string;
 }): Promise<ThreadMessage> {
   return postJson(`/v1/threads/${input.threadId}/messages`, {
-    id: createClientUuid(),
-    senderId: input.senderId,
-    body: input.body,
-    createdAt: new Date().toISOString(),
+    clientMessageId: input.clientMessageId ?? createClientUuid(),
+    body: input.body ?? "",
+    mentionedPrincipalIds: input.mentionedPrincipalIds ?? [],
+    attachmentIds: input.attachmentIds ?? [],
   });
 }
 
@@ -594,7 +632,6 @@ export async function addStandInToThread(input: {
   try {
     await postJson(`/v1/threads/${input.threadId}/stand-ins`, {
       standInId: input.standInId,
-      actorId: input.actorId,
     });
   } catch (error) {
     // A stale client can race another participant that addressed the same
@@ -607,6 +644,82 @@ export async function addStandInToThread(input: {
     }
     throw error;
   }
+}
+
+export async function getThreadMessage(
+  threadId: string,
+  messageId: string,
+  signal?: AbortSignal,
+): Promise<ThreadMessage> {
+  return getJson(
+    `/v1/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(
+      messageId,
+    )}`,
+    signal,
+  );
+}
+
+export async function createAttachmentUpload(input: {
+  id: string;
+  threadId: string;
+  ownerId: string;
+  fileName: string;
+  contentType: string;
+  byteSize: number;
+  checksumSha256: string;
+  encryptionMode: "client_e2ee" | "server_envelope";
+}): Promise<{
+  attachment: ConversationAttachment;
+  uploadUrl: string;
+  requiredHeaders: Record<string, string>;
+}> {
+  return postJson("/v1/attachments/uploads", input);
+}
+
+export async function completeAttachmentUpload(
+  attachmentId: string,
+): Promise<ConversationAttachment> {
+  return postJson(
+    `/v1/attachments/${encodeURIComponent(attachmentId)}/complete`,
+    {},
+  );
+}
+
+export async function getAttachmentDownload(
+  attachmentId: string,
+  signal?: AbortSignal,
+): Promise<{ attachment: ConversationAttachment; downloadUrl: string }> {
+  return getJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, signal);
+}
+
+export async function getThreadMessages(
+  threadId: string,
+  input: {
+    afterSequence?: number;
+    beforeSequence?: number;
+    tail?: number;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<{
+  items: ThreadMessage[];
+  headSequence: number;
+  accessVersion: number;
+  hasMore: boolean;
+}> {
+  const query = new URLSearchParams();
+  if (input.afterSequence !== undefined) {
+    query.set("afterSequence", String(input.afterSequence));
+  }
+  if (input.beforeSequence !== undefined) {
+    query.set("beforeSequence", String(input.beforeSequence));
+  }
+  if (input.tail !== undefined) query.set("tail", String(input.tail));
+  if (input.limit !== undefined) query.set("limit", String(input.limit));
+  return getJson(
+    `/v1/threads/${encodeURIComponent(threadId)}/messages?${query}`,
+    signal,
+  );
 }
 
 export async function createConversationThread(input: {
@@ -630,11 +743,9 @@ export async function createConversationThread(input: {
 
 export async function markThreadRead(input: {
   threadId: string;
-  principalId: string;
   sequence: number;
 }): Promise<void> {
   await postJson(`/v1/threads/${input.threadId}/read`, {
-    principalId: input.principalId,
     sequence: input.sequence,
   });
 }
@@ -642,14 +753,11 @@ export async function markThreadRead(input: {
 /** Post the branch's conclusion into its parent and close the branch. */
 export async function concludeThread(input: {
   threadId: string;
-  actorId: string;
   conclusion: string;
 }): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
   return postJson(`/v1/threads/${input.threadId}/conclusion`, {
-    messageId: createClientUuid(),
-    actorId: input.actorId,
+    clientMessageId: createClientUuid(),
     conclusion: input.conclusion,
-    createdAt: new Date().toISOString(),
   });
 }
 

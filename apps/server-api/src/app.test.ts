@@ -2,6 +2,7 @@ import type {
   ActionEnvelope,
   CapabilityGrant,
   ConversationThread,
+  MessageId,
   PrincipalId,
   SpecId,
   Workstream,
@@ -11,6 +12,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
 import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
+
+const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
+const STAND_IN = "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
+const PRIYA = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
+
+function auth(principalId: PrincipalId = ALEX) {
+  return { "x-intero-dev-principal-id": principalId };
+}
 
 describe("Intero API vertical slice", () => {
   let store: InMemoryPlatformStore;
@@ -39,12 +48,17 @@ describe("Intero API vertical slice", () => {
     expect(response.headers["access-control-allow-credentials"]).toBe("true");
   });
 
-  it("branches a Thread, concludes it back into its parent, and refuses twice", async () => {
-    const alex = "019f9a00-0000-7000-8000-000000000101" as PrincipalId;
-    const priya = "019f9a00-0000-7000-8000-000000000102" as PrincipalId;
+  it("branches a Thread, concludes it back into its parent, and allows an exact retry", async () => {
+    const alex = ALEX;
+    const priya = PRIYA;
     const teamId = uuidv7();
     const createThread = (body: Record<string, unknown>) =>
-      app.inject({ method: "POST", url: "/v1/threads", payload: body });
+      app.inject({
+        method: "POST",
+        url: "/v1/threads",
+        headers: auth(alex),
+        payload: body,
+      });
 
     const parentId = uuidv7();
     const parent = await createThread({
@@ -76,15 +90,16 @@ describe("Intero API vertical slice", () => {
     });
     expect(branch.json<ConversationThread>().parentThreadId).toBe(parentId);
 
+    const conclusionMessageId = uuidv7();
+    const conclusionPayload = {
+      clientMessageId: conclusionMessageId,
+      conclusion: "Settled: optional in revision 3.",
+    };
     const concluded = await app.inject({
       method: "POST",
       url: `/v1/threads/${branchId}/conclusion`,
-      payload: {
-        messageId: uuidv7(),
-        actorId: alex,
-        conclusion: "Settled: optional in revision 3.",
-        createdAt: new Date().toISOString(),
-      },
+      headers: auth(alex),
+      payload: conclusionPayload,
     });
     expect(concluded.statusCode).toBe(201);
     const result = concluded.json<{
@@ -97,28 +112,136 @@ describe("Intero API vertical slice", () => {
     expect(result.parentMessage.threadId).toBe(parentId);
     expect(result.parentMessage.body).toContain("optional in revision 3");
 
+    const exactRetry = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${branchId}/conclusion`,
+      headers: auth(alex),
+      payload: conclusionPayload,
+    });
+    expect(exactRetry.statusCode).toBe(201);
+    expect(exactRetry.json().parentMessage).toMatchObject({
+      id: conclusionMessageId,
+      threadId: parentId,
+      sequence: 1,
+    });
+
     const again = await app.inject({
       method: "POST",
       url: `/v1/threads/${branchId}/conclusion`,
+      headers: auth(alex),
       payload: {
-        messageId: uuidv7(),
-        actorId: alex,
+        clientMessageId: uuidv7(),
         conclusion: "Settled again.",
-        createdAt: new Date().toISOString(),
       },
     });
     expect(again.statusCode).toBe(409);
   });
 
+  it("does not let a colliding Thread ID mutate its participant set", async () => {
+    const threadId = uuidv7();
+    const original = {
+      id: threadId,
+      kind: "human_direct" as const,
+      title: "Stable participant boundary",
+      participantIds: [ALEX],
+      standInIds: [],
+      accessMode: "agent_readable" as const,
+      priorHistoryGranted: false,
+      createdAt: new Date().toISOString(),
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: original,
+    });
+    expect(created.statusCode).toBe(201);
+
+    const collision = await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        ...original,
+        participantIds: [ALEX, PRIYA],
+      },
+    });
+    expect(collision.statusCode).toBe(400);
+    expect(collision.json()).toMatchObject({
+      code: "DOMAIN_ERROR",
+      message: "Thread ID was already used.",
+    });
+
+    const stored = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(ALEX),
+    });
+    expect(stored.json().thread.participantIds).toEqual([ALEX]);
+  });
+
+  it("settles a retried message ID exactly once and rejects payload drift", async () => {
+    const threadId = uuidv7();
+    const clientMessageId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "human_direct",
+        title: "Idempotent delivery",
+        participantIds: [ALEX],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const send = (body: string) =>
+      app.inject({
+        method: "POST",
+        url: `/v1/threads/${threadId}/messages`,
+        headers: auth(ALEX),
+        payload: { clientMessageId, body },
+      });
+
+    const first = await send("Committed once.");
+    const retry = await send("Committed once.");
+    const drift = await send("Changed while retrying.");
+
+    expect(first.statusCode).toBe(201);
+    expect(retry.statusCode).toBe(201);
+    expect(retry.json()).toEqual(first.json());
+    expect(drift.statusCode).toBe(400);
+    expect(drift.json()).toMatchObject({
+      code: "DOMAIN_ERROR",
+      message: "Client message ID was already used.",
+    });
+    const stored = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(ALEX),
+    });
+    expect(stored.json().messages).toEqual([
+      expect.objectContaining({
+        id: clientMessageId,
+        sequence: 1,
+        body: "Committed once.",
+      }),
+    ]);
+  });
+
   it("counts unread as other people's messages past your read marker", async () => {
     // Unread is per viewer, so both people must be resolvable identities —
     // an unauthenticated caller has no read marker and sees zero.
-    const alex = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
-    const priya = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
+    const alex = ALEX;
+    const priya = PRIYA;
     const threadId = uuidv7();
     await app.inject({
       method: "POST",
       url: "/v1/threads",
+      headers: auth(alex),
       payload: {
         id: threadId,
         kind: "room",
@@ -130,20 +253,20 @@ describe("Intero API vertical slice", () => {
         createdAt: new Date().toISOString(),
       },
     });
-    for (const senderId of [priya, priya, alex]) {
+    for (const [index, senderId] of [priya, priya, alex].entries()) {
       await app.inject({
         method: "POST",
         url: `/v1/threads/${threadId}/messages`,
+        headers: auth(senderId),
         payload: {
-          id: uuidv7(),
-          senderId,
+          clientMessageId: uuidv7(),
           body: "hello",
-          createdAt: new Date().toISOString(),
+          mentionedPrincipalIds: index === 0 ? [alex] : [],
         },
       });
     }
 
-    const unreadFor = async (viewer: PrincipalId) => {
+    const countsFor = async (viewer: PrincipalId) => {
       const response = await app.inject({
         method: "GET",
         url: "/v1/threads",
@@ -151,29 +274,47 @@ describe("Intero API vertical slice", () => {
       });
       return response
         .json<{
-          items: Array<{ thread: { id: string }; unreadCount: number }>;
+          items: Array<{
+            thread: { id: string };
+            unreadCount: number;
+            mentionCount: number;
+          }>;
         }>()
-        .items.find((item) => item.thread.id === threadId)?.unreadCount;
+        .items.find((item) => item.thread.id === threadId);
     };
 
     // Your own messages are never unread to you.
-    expect(await unreadFor(alex)).toBe(2);
-    expect(await unreadFor(priya)).toBe(1);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 2,
+      mentionCount: 1,
+    });
+    expect(await countsFor(priya)).toMatchObject({
+      unreadCount: 1,
+      mentionCount: 0,
+    });
 
     await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/read`,
-      payload: { principalId: alex, sequence: 3 },
+      headers: auth(alex),
+      payload: { sequence: 3 },
     });
-    expect(await unreadFor(alex)).toBe(0);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 0,
+      mentionCount: 0,
+    });
 
     // Re-reading an older message must not resurrect the ones after it.
     await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/read`,
-      payload: { principalId: alex, sequence: 1 },
+      headers: auth(alex),
+      payload: { sequence: 1 },
     });
-    expect(await unreadFor(alex)).toBe(0);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 0,
+      mentionCount: 0,
+    });
   });
 
   it("keeps demo fixtures opt-in", () => {
@@ -372,6 +513,7 @@ describe("Intero API vertical slice", () => {
         id: "019b5ac0-7600-7000-8000-000000000001",
         name: "Intero Development",
       },
+      adapters: { realtime: "polling" },
     });
   });
 
@@ -417,6 +559,7 @@ describe("Intero API vertical slice", () => {
     await app.inject({
       method: "POST",
       url: "/v1/threads",
+      headers: auth(actorId),
       payload: {
         id: threadId,
         kind: "coordination",
@@ -494,6 +637,7 @@ describe("Intero API vertical slice", () => {
     const durableThread = await app.inject({
       method: "GET",
       url: `/v1/threads/${threadId}`,
+      headers: auth(actorId),
     });
     expect(durableThread.json()).toMatchObject({
       messages: [{ operationId: envelope.operationId, sequence: 1 }],
@@ -510,7 +654,7 @@ describe("Intero API vertical slice", () => {
   });
 
   it("records the Human-only to Agent-readable boundary without exposing history", async () => {
-    const human = uuidv7() as PrincipalId;
+    const human = ALEX;
     const thread: Omit<ConversationThread, "sequence"> = {
       id: uuidv7() as ConversationThread["id"],
       kind: "human_group",
@@ -521,11 +665,17 @@ describe("Intero API vertical slice", () => {
       priorHistoryGranted: false,
       createdAt: "2026-07-24T10:00:00.000Z",
     };
-    await app.inject({ method: "POST", url: "/v1/threads", payload: thread });
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(human),
+      payload: thread,
+    });
     const transition = await app.inject({
       method: "POST",
       url: `/v1/threads/${thread.id}/stand-ins`,
-      payload: { actorId: human, standInId: uuidv7() },
+      headers: auth(human),
+      payload: { standInId: STAND_IN },
     });
     expect(transition.json().thread).toMatchObject({
       accessMode: "agent_readable",
@@ -536,8 +686,8 @@ describe("Intero API vertical slice", () => {
   });
 
   it("lists durable threads by kind with their ordered messages", async () => {
-    const human = uuidv7() as PrincipalId;
-    const standIn = uuidv7() as PrincipalId;
+    const human = ALEX;
+    const standIn = STAND_IN;
     const standInThread = uuidv7() as ConversationThread["id"];
     const roomThread = uuidv7() as ConversationThread["id"];
     for (const [id, kind] of [
@@ -547,6 +697,7 @@ describe("Intero API vertical slice", () => {
       await app.inject({
         method: "POST",
         url: "/v1/threads",
+        headers: auth(human),
         payload: {
           id,
           kind,
@@ -562,17 +713,17 @@ describe("Intero API vertical slice", () => {
     await app.inject({
       method: "POST",
       url: `/v1/threads/${standInThread}/messages`,
+      headers: auth(human),
       payload: {
-        id: uuidv7(),
-        senderId: standIn,
+        clientMessageId: uuidv7(),
         body: "This is the current durable Stand-in state.",
-        createdAt: "2026-07-24T10:01:00.000Z",
       },
     });
 
     const response = await app.inject({
       method: "GET",
       url: "/v1/threads?kind=stand_in",
+      headers: auth(human),
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().items).toHaveLength(1);
@@ -596,13 +747,56 @@ describe("Intero API vertical slice", () => {
     );
   });
 
+  it("bounds the Thread list to a 100-message tail without undercounting unread", () => {
+    const threadId = uuidv7() as ConversationThread["id"];
+    store.createThread(
+      {
+        id: threadId,
+        kind: "room",
+        title: "Long-running room",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        createdAt: "2026-07-24T10:00:00.000Z",
+      },
+      ALEX,
+    );
+    for (let index = 1; index <= 101; index += 1) {
+      store.appendMessage(threadId, {
+        id: uuidv7() as MessageId,
+        senderId: PRIYA,
+        body: `message ${index}`,
+        createdAt: new Date(Date.UTC(2026, 6, 24, 10, 0, index)).toISOString(),
+      });
+    }
+
+    const [listed] = store.listThreads("room", ALEX);
+    expect(listed?.messages).toHaveLength(100);
+    expect(listed?.messages[0]?.sequence).toBe(2);
+    expect(listed?.messages.at(-1)?.sequence).toBe(101);
+    expect(listed?.unreadCount).toBe(101);
+    expect(
+      store.listThreadMessages(threadId, ALEX, {
+        beforeSequence: 2,
+        limit: 100,
+      }),
+    ).toMatchObject({
+      items: [{ sequence: 1, body: "message 1" }],
+      headSequence: 101,
+      hasMore: false,
+    });
+  });
+
   it("accepts only ciphertext before the access boundary and plaintext after it", async () => {
-    const human = uuidv7() as PrincipalId;
-    const standIn = uuidv7() as PrincipalId;
+    const human = ALEX;
+    const standIn = STAND_IN;
     const threadId = uuidv7() as ConversationThread["id"];
     await app.inject({
       method: "POST",
       url: "/v1/threads",
+      headers: auth(human),
       payload: {
         id: threadId,
         kind: "human_direct",
@@ -617,11 +811,10 @@ describe("Intero API vertical slice", () => {
     const rejectedPlaintext = await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/messages`,
+      headers: auth(human),
       payload: {
-        id: uuidv7(),
-        senderId: human,
+        clientMessageId: uuidv7(),
         body: "This must never be server-readable.",
-        createdAt: "2026-07-24T10:01:00.000Z",
       },
     });
     expect(rejectedPlaintext.statusCode).toBe(400);
@@ -629,11 +822,10 @@ describe("Intero API vertical slice", () => {
     const encrypted = await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/messages`,
+      headers: auth(human),
       payload: {
-        id: uuidv7(),
-        senderId: human,
+        clientMessageId: uuidv7(),
         encryptedBody: "opaque-openmls-ciphertext",
-        createdAt: "2026-07-24T10:02:00.000Z",
       },
     });
     expect(encrypted.json()).toMatchObject({
@@ -644,16 +836,16 @@ describe("Intero API vertical slice", () => {
     await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/stand-ins`,
-      payload: { actorId: human, standInId: standIn },
+      headers: auth(human),
+      payload: { standInId: standIn },
     });
     const readable = await app.inject({
       method: "POST",
       url: `/v1/threads/${threadId}/messages`,
+      headers: auth(human),
       payload: {
-        id: uuidv7(),
-        senderId: human,
+        clientMessageId: uuidv7(),
         body: "This message is after the visible access boundary.",
-        createdAt: "2026-07-24T10:03:00.000Z",
       },
     });
     expect(readable.json()).toMatchObject({
@@ -663,6 +855,7 @@ describe("Intero API vertical slice", () => {
     const history = await app.inject({
       method: "GET",
       url: `/v1/threads/${threadId}`,
+      headers: auth(human),
     });
     expect(history.json().thread).toMatchObject({
       accessChangedAtSequence: 2,

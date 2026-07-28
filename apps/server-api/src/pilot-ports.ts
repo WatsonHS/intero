@@ -38,6 +38,10 @@ export interface ModelGateway {
   answerStandInQuestion(
     input: StandInQuestionInput,
   ): Promise<PilotStandInAnswer>;
+  streamStandInQuestion?(
+    input: StandInQuestionInput,
+    onPartialAnswer: (answer: string) => Promise<void>,
+  ): Promise<PilotStandInAnswer>;
 }
 
 export interface StandInQuestionInput {
@@ -73,6 +77,17 @@ export class InstrumentedModelGateway implements ModelGateway {
   ): Promise<PilotStandInAnswer> {
     return this.observe("answer", () =>
       this.inner.answerStandInQuestion(input),
+    );
+  }
+
+  async streamStandInQuestion(
+    input: StandInQuestionInput,
+    onPartialAnswer: (answer: string) => Promise<void>,
+  ): Promise<PilotStandInAnswer> {
+    return this.observe("answer", () =>
+      this.inner.streamStandInQuestion
+        ? this.inner.streamStandInQuestion(input, onPartialAnswer)
+        : this.inner.answerStandInQuestion(input),
     );
   }
 

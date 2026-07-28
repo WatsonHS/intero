@@ -204,6 +204,20 @@
       "when": 1786032000000,
       "tag": "0028_action_inbox_sse_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1786118400000,
+      "tag": "0029_production_realtime_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1786204800000,
+      "tag": "0030_chat_experience",
+      "breakpoints": true
     }
   ]
 }

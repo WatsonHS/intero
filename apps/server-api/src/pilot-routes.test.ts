@@ -9,12 +9,14 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
 import type { ModelGateway } from "./pilot-ports.js";
 import { ModelGatewayUnavailableError } from "./pilot-ports.js";
 import { InMemoryPilotStore, PilotStoreError } from "./pilot-store.js";
+import { TransactionalOutboxJobRunner } from "./pilot-service.js";
+import { InMemoryPlatformStore } from "./store.js";
 
 const A = "019b5ac0-7600-7000-8000-0000000000a1" as PrincipalId;
 const B = "019b5ac0-7600-7000-8000-0000000000b2" as PrincipalId;
@@ -586,8 +588,9 @@ describe("pilot cloud-first vertical slice", () => {
       headers: identity(C),
       payload: { body: "I should not be able to send this." },
     });
-    expect(forbiddenSend.statusCode).toBe(403);
-    expect(forbiddenSend.json().code).toBe("DM_PARTICIPANT_REQUIRED");
+    // Inaccessible and missing conversations are intentionally indistinguishable.
+    expect(forbiddenSend.statusCode).toBe(404);
+    expect(forbiddenSend.json().code).toBe("DM_NOT_FOUND");
   });
 
   it("uses email-bound invitations and audits the member/leader/admin lifecycle", async () => {
@@ -1756,6 +1759,77 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     expect(unauthorizedTarget.statusCode).toBe(403);
+  });
+
+  it("accepts a Stand-in question without waiting for the model in product job mode", async () => {
+    const fixture = await readyProject(app);
+    const connection = await connectAgent(app, fixture.project.id);
+    await sendCheckpoint(
+      app,
+      connection.credential,
+      checkpoint(fixture.project.id),
+    );
+    await app.close();
+    const answerStandInQuestion = vi.fn(async () => {
+      throw new Error("The API process must not invoke the model.");
+    });
+    app = await buildApp({
+      logger: false,
+      store: new InMemoryPlatformStore(),
+      pilotStore,
+      pilotJobs: new TransactionalOutboxJobRunner(),
+      pilotIdentities: [
+        { id: A, displayName: "Alex Rivera", kind: "human" },
+        { id: B, displayName: "Morgan Chen", kind: "human" },
+        { id: C, displayName: "Taylor Singh", kind: "human" },
+      ],
+      deploymentProbe: async () => true,
+      providerEncryptionSecret: "test-provider-secret",
+      pilotModelGateway: {
+        ...modelGateway,
+        answerStandInQuestion,
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      headers: identity(B),
+      payload: {
+        clientMessageId: uuidv7(),
+        question: "What is the current implementation status?",
+        standInOwnerId: A,
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      status: "pending",
+      questionMessage: {
+        body: "What is the current implementation status?",
+        senderId: B,
+        sequence: 1,
+      },
+    });
+    expect(answerStandInQuestion).not.toHaveBeenCalled();
+    const thread = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${response.json().threadId}`,
+      headers: identity(B),
+    });
+    expect(thread.statusCode).toBe(200);
+    expect(thread.json().messages).toEqual([
+      expect.objectContaining({
+        body: "What is the current implementation status?",
+        sequence: 1,
+      }),
+      expect.objectContaining({
+        body: "",
+        sequence: 2,
+        streamState: "pending",
+        revision: 1,
+      }),
+    ]);
   });
 
   it("persists private Work State when the model provider is unavailable", async () => {

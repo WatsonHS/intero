@@ -1,4 +1,4 @@
-import { MinioObjectStore } from "@intero/attachments";
+import { AttachmentService, MinioObjectStore } from "@intero/attachments";
 import { loadApiServiceConfig, PrivacySafeMetrics } from "@intero/config";
 import {
   OrganizationId,
@@ -35,6 +35,7 @@ const config = serviceConfig.runtime;
 const pilotAdapterConfig = serviceConfig.pilot;
 const databaseUrl = pilotAdapterConfig.databaseUrl;
 const providerEncryptionSecret = pilotAdapterConfig.providerEncryptionKey;
+const ATTACHMENT_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 const organizationId = OrganizationId.parse(serviceConfig.organizationId);
 const organizationName =
   process.env.INTERO_ORGANIZATION_NAME ?? "Intero Development";
@@ -56,6 +57,7 @@ const standInPrincipal = {
 let authDatabase: Pool | undefined;
 let databasePool: Pool | undefined;
 let objectStore: MinioObjectStore | undefined;
+let attachmentService: AttachmentService | undefined;
 let store: PlatformStore;
 let pilotStore: PilotStore;
 let projectWorkStore: PostgresProjectWorkStore | undefined;
@@ -105,6 +107,20 @@ if (databaseUrl) {
       },
     );
     await objectStore.initialize().catch(() => undefined);
+    attachmentService = new AttachmentService(
+      new Pool({ connectionString: databaseUrl }),
+      organizationId,
+      {
+        endpoint: storage.endpoint,
+        region: storage.region,
+        accessKeyId: storage.accessKeyId,
+        secretAccessKey: storage.secretAccessKey,
+        bucket: storage.bucket,
+        forcePathStyle: true,
+        serverSideEncryption: storage.encryption === "AES256",
+      },
+    );
+    await attachmentService.ensureBucket().catch(() => undefined);
   }
 } else {
   const memoryStore = new InMemoryPlatformStore();
@@ -215,9 +231,39 @@ const app = await buildApp({
       }
     : {}),
   ...(objectStore ? { pilotObjectStore: objectStore } : {}),
+  ...(attachmentService ? { attachments: attachmentService } : {}),
+  ...(serviceConfig.realtime ? { realtimeConfig: serviceConfig.realtime } : {}),
 });
 if (authorization) app.addHook("onClose", async () => authorization.close());
 if (objectStore) app.addHook("onClose", async () => objectStore.close());
+if (attachmentService) {
+  const service = attachmentService;
+  let cleanupRunning = false;
+  const cleanupExpiredAttachments = async () => {
+    if (cleanupRunning) return;
+    cleanupRunning = true;
+    try {
+      let removed = 0;
+      do {
+        removed = await service.cleanupOrphans();
+      } while (removed === 100);
+    } catch (error) {
+      app.log.error({ err: error }, "Attachment orphan cleanup failed.");
+    } finally {
+      cleanupRunning = false;
+    }
+  };
+  void cleanupExpiredAttachments();
+  const cleanupTimer = setInterval(
+    () => void cleanupExpiredAttachments(),
+    ATTACHMENT_CLEANUP_INTERVAL_MS,
+  );
+  cleanupTimer.unref();
+  app.addHook("onClose", async () => {
+    clearInterval(cleanupTimer);
+    await service.close();
+  });
+}
 if (databasePool)
   app.addHook("onClose", async () => {
     await actionInboxEvents?.close();

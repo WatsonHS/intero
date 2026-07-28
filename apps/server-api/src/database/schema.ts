@@ -245,6 +245,8 @@ export const threads = pgTable(
       .notNull()
       .default(false),
     sequence: integer("sequence").notNull().default(0),
+    accessVersion: integer("access_version").notNull().default(1),
+    latestMessageAt: timestamp("latest_message_at", { withTimezone: true }),
     /** Optional owning team. A thread may deliberately belong to no team. */
     teamId: uuid("team_id"),
     /** Set when this thread was branched out of another conversation. */
@@ -303,6 +305,8 @@ export const threadParticipants = pgTable(
       .notNull()
       .references(() => principals.id),
     standIn: boolean("stand_in").notNull().default(false),
+    visibleFromSequence: integer("visible_from_sequence").notNull().default(1),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [primaryKey({ columns: [table.threadId, table.principalId] })],
@@ -322,11 +326,23 @@ export const messages = pgTable(
       .notNull()
       .references(() => principals.id),
     operationId: uuid("operation_id"),
+    clientMessageId: uuid("client_message_id").notNull(),
     sequence: integer("sequence").notNull(),
     kind: text("kind").notNull(),
     body: text("body"),
     encryptedBody: text("encrypted_body"),
     serverReadable: boolean("server_readable").notNull(),
+    mentionedPrincipalIds: uuid("mentioned_principal_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    attachments: jsonb("attachments").notNull().default([]),
+    streamState: text("stream_state", {
+      enum: ["pending", "streaming", "complete", "failed"],
+    })
+      .notNull()
+      .default("complete"),
+    revision: integer("revision").notNull().default(1),
     ...timestamps,
   },
   (table) => [
@@ -338,7 +354,17 @@ export const messages = pgTable(
       table.organizationId,
       table.operationId,
     ),
+    uniqueIndex("messages_thread_sender_client_id_idx").on(
+      table.threadId,
+      table.senderId,
+      table.clientMessageId,
+    ),
+    index("messages_thread_sequence_desc_idx").on(
+      table.threadId,
+      table.sequence,
+    ),
     index("messages_org_idx").on(table.organizationId),
+    index("messages_mentions_idx").using("gin", table.mentionedPrincipalIds),
   ],
 );
 
@@ -363,6 +389,9 @@ export const attachments = pgTable(
     objectKey: text("object_key").notNull().unique(),
     state: text("state").notNull(),
     scanErrorCode: text("scan_error_code"),
+    messageId: uuid("message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     ...timestamps,
   },
@@ -1237,6 +1266,73 @@ export const projectAutomationSummaryJobs = pgTable(
     index("project_automation_summary_pending_idx")
       .on(table.organizationId, table.status, table.createdAt)
       .where(sql`${table.status} in ('pending','processing')`),
+  ],
+);
+
+export const outboxPublications = pgTable(
+  "outbox_publications",
+  {
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => outbox.operationId, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    channel: text("channel").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.operationId, table.channel] }),
+    index("outbox_publications_available_idx")
+      .on(table.availableAt, table.operationId)
+      .where(sql`${table.completedAt} is null`),
+  ],
+);
+
+export const standInQuestionJobs = pgTable(
+  "stand_in_question_jobs",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => threads.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    standInOwnerId: uuid("stand_in_owner_id")
+      .notNull()
+      .references(() => principals.id),
+    askedByPrincipalId: uuid("asked_by_principal_id")
+      .notNull()
+      .references(() => principals.id),
+    questionMessageId: uuid("question_message_id")
+      .notNull()
+      .references(() => messages.id)
+      .unique(),
+    answerMessageId: uuid("answer_message_id").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    claimedBy: text("claimed_by"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    index("stand_in_question_jobs_available_idx")
+      .on(table.availableAt, table.id)
+      .where(sql`${table.status} IN ('pending', 'retrying')`),
   ],
 );
 

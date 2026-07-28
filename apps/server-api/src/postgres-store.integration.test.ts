@@ -1,6 +1,9 @@
 import {
   type ActionEnvelope,
+  type ArtifactId,
   type CapabilityGrant,
+  type MessageId,
+  type OperationId,
   type OrganizationId,
   type PrincipalId,
   type Workstream,
@@ -20,6 +23,7 @@ const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 databaseSuite("PostgreSQL platform store", () => {
   const organizationId = uuidv7() as OrganizationId;
   const ownerId = uuidv7() as PrincipalId;
+  const standInId = uuidv7() as PrincipalId;
   const projectId = uuidv7() as Workstream["projectId"];
   const workstreamId = uuidv7() as Workstream["id"];
   const workspaceId = uuidv7() as Workstream["workspaceId"];
@@ -45,6 +49,23 @@ databaseSuite("PostgreSQL platform store", () => {
     app = await buildApp({
       store,
       logger: false,
+      currentPrincipal: {
+        id: ownerId,
+        displayName: "Owner",
+        kind: "human",
+      },
+      standInPrincipal: {
+        id: standInId,
+        displayName: "Owner Stand-in",
+        kind: "stand_in",
+      },
+      pilotIdentities: [
+        {
+          id: ownerId,
+          displayName: "Owner",
+          kind: "human",
+        },
+      ],
       project: {
         id: projectId!,
         name: "Intero integration fixture",
@@ -57,6 +78,8 @@ databaseSuite("PostgreSQL platform store", () => {
     await app.close();
     await store.close();
     for (const table of [
+      "outbox_publications",
+      "stand_in_question_jobs",
       "outbox",
       "activity_events",
       "action_envelopes",
@@ -65,6 +88,7 @@ databaseSuite("PostgreSQL platform store", () => {
       "spec_reviews",
       "spec_revisions",
       "specs",
+      "attachments",
       "messages",
       "thread_participants",
       "threads",
@@ -83,7 +107,9 @@ databaseSuite("PostgreSQL platform store", () => {
     await admin.query("DELETE FROM organizations WHERE id = $1", [
       organizationId,
     ]);
-    await admin.query("DELETE FROM principals WHERE id = $1", [ownerId]);
+    await admin.query("DELETE FROM principals WHERE id = ANY($1::uuid[])", [
+      [ownerId, standInId],
+    ]);
     await admin.end();
   });
 
@@ -172,6 +198,7 @@ databaseSuite("PostgreSQL platform store", () => {
     await app.inject({
       method: "POST",
       url: "/v1/threads",
+      headers: { "x-intero-dev-principal-id": ownerId },
       payload: {
         id: threadId,
         kind: "coordination",
@@ -221,6 +248,7 @@ databaseSuite("PostgreSQL platform store", () => {
       url: "/v1/coordination",
       payload: { envelope },
     });
+    expect(result.statusCode, result.body).toBe(200);
     expect(result.json().result).toMatchObject({
       status: "resolved",
       threadId,
@@ -293,5 +321,138 @@ databaseSuite("PostgreSQL platform store", () => {
       }),
     ]);
     await secondStore.close();
+  });
+
+  it("persists a Stand-in placeholder and revises the same message while streaming", async () => {
+    const threadId = uuidv7() as ActionEnvelope["threadId"];
+    const questionMessageId = uuidv7() as MessageId;
+    const answerMessageId = uuidv7() as MessageId;
+    await store.upsertPrincipal({
+      id: ownerId,
+      displayName: "Owner",
+      kind: "human",
+    });
+    await store.upsertPrincipal({
+      id: standInId,
+      displayName: "Owner Stand-in",
+      kind: "stand_in",
+    });
+    await store.enqueueStandInQuestion({
+      jobId: uuidv7() as OperationId,
+      thread: {
+        id: threadId,
+        kind: "stand_in",
+        title: "Owner Stand-in",
+        participantIds: [ownerId, standInId],
+        standInIds: [standInId],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        accessVersion: 1,
+        createdAt: new Date().toISOString(),
+      },
+      projectId: projectId!,
+      standInOwnerId: ownerId,
+      askedByPrincipalId: ownerId,
+      questionMessageId,
+      answerMessageId,
+      question: "What changed?",
+      createdAt: new Date().toISOString(),
+    });
+
+    expect((await store.getThread(threadId, ownerId))?.messages).toEqual([
+      expect.objectContaining({ id: questionMessageId, sequence: 1 }),
+      expect.objectContaining({
+        id: answerMessageId,
+        sequence: 2,
+        body: "",
+        streamState: "pending",
+        revision: 1,
+      }),
+    ]);
+    await store.updateMessageStream({
+      threadId,
+      messageId: answerMessageId,
+      senderId: standInId,
+      body: "A partial grounded answer",
+      streamState: "streaming",
+    });
+    await store.updateMessageStream({
+      threadId,
+      messageId: answerMessageId,
+      senderId: standInId,
+      body: "A complete grounded answer.",
+      streamState: "complete",
+    });
+
+    expect(
+      await store.getThreadMessage(threadId, ownerId, answerMessageId),
+    ).toMatchObject({
+      sequence: 2,
+      body: "A complete grounded answer.",
+      streamState: "complete",
+      revision: 3,
+    });
+  });
+
+  it("claims multiple image attachments for one message atomically", async () => {
+    const threadId = uuidv7() as ActionEnvelope["threadId"];
+    const messageId = uuidv7() as MessageId;
+    const attachmentIds = [uuidv7(), uuidv7()] as ArtifactId[];
+    await store.createThread({
+      id: threadId,
+      kind: "human_group",
+      title: "Image fixture",
+      participantIds: [ownerId, standInId],
+      standInIds: [standInId],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      sequence: 0,
+      accessVersion: 1,
+      createdAt: new Date().toISOString(),
+    });
+    for (const [index, attachmentId] of attachmentIds.entries()) {
+      await admin.query(
+        `INSERT INTO attachments
+          (id, organization_id, thread_id, owner_id, file_name, content_type,
+           byte_size, checksum_sha256, encryption_mode, object_key, state,
+           expires_at)
+         VALUES (
+           $1, $2, $3, $4, $5, 'image/png', 1, $6,
+           'server_envelope', $7, 'available', now() + interval '1 hour'
+         )`,
+        [
+          attachmentId,
+          organizationId,
+          threadId,
+          ownerId,
+          `image-${index}.png`,
+          "0".repeat(64),
+          `${organizationId}/${attachmentId}`,
+        ],
+      );
+    }
+
+    const message = await store.appendMessage(threadId, {
+      id: messageId,
+      senderId: ownerId,
+      body: "Two images",
+      attachmentIds,
+      createdAt: new Date().toISOString(),
+    });
+    expect(message.attachments?.map((attachment) => attachment.id)).toEqual(
+      attachmentIds,
+    );
+    const claims = await admin.query<{ message_id: string }>(
+      `SELECT message_id
+       FROM attachments
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id`,
+      [attachmentIds],
+    );
+    expect(claims.rows).toHaveLength(2);
+    expect(
+      claims.rows.every((attachment) => attachment.message_id === messageId),
+    ).toBe(true);
   });
 });

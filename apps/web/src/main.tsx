@@ -8,6 +8,7 @@ import { ThemeProvider } from "./design/theme.js";
 import { I18nProvider } from "./i18n/index.js";
 import { PilotProvider } from "./pilot/context.js";
 import { router } from "./router.js";
+import { ConversationRealtimeProvider } from "./realtime/context.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -27,7 +28,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <I18nProvider>
           <ThemeProvider>
             <NotificationProvider>
-              <RouterProvider router={router} />
+              <ConversationRealtimeProvider>
+                <RouterProvider router={router} />
+              </ConversationRealtimeProvider>
             </NotificationProvider>
           </ThemeProvider>
         </I18nProvider>

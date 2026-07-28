@@ -3,13 +3,17 @@ import {
   ArrowUpIcon,
   CheckCircleIcon,
   CircleNotchIcon,
+  EyeIcon,
   GitBranchIcon,
   HandTapIcon,
   LockSimpleIcon,
   MagnifyingGlassIcon,
+  PaperclipIcon,
+  PencilSimpleIcon,
   PlusIcon,
   RobotIcon,
   UserPlusIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import type {
   ConversationThread,
@@ -17,6 +21,7 @@ import type {
   PilotStandInAnswerDetail,
   PrincipalId,
   ThreadMessage,
+  ThreadMessageAttachment,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -24,8 +29,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   addStandInToThread,
   concludeThread,
+  completeAttachmentUpload,
+  createAttachmentUpload,
   createConversationThread,
   getBootstrap,
+  getAttachmentDownload,
+  getThreadMessages,
   markThreadRead,
   getTeamPulse,
   getThreads,
@@ -34,6 +43,8 @@ import {
   type PrincipalSummary,
   type ThreadPayload,
 } from "../api.js";
+import { createClientUuid } from "../client-id.js";
+import { ChatMarkdown } from "../components/ChatMarkdown.js";
 import { useNotifications } from "../design/notifications.js";
 import { Avatar, cn } from "../design/primitives.js";
 import { initials, tintFor } from "../design/utils.js";
@@ -53,6 +64,7 @@ import {
   type PilotTeamPayload,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { useConversationRealtime } from "../realtime/context.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
 
 const THREAD_GROUPS: Array<{
@@ -67,6 +79,24 @@ const THREAD_GROUPS: Array<{
 const RELEVANT_KINDS = new Set(THREAD_GROUPS.map((group) => group.kind));
 const CHAT_REFRESH_INTERVAL_MS = 10_000;
 const DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
+const MAX_MESSAGE_IMAGES = 8;
+const MAX_MESSAGE_IMAGE_BYTES = 25 * 1024 * 1024;
+const MESSAGE_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+interface ComposerImage {
+  id: string;
+  fileName: string;
+  contentType: string;
+  byteSize: number;
+  previewUrl: string;
+  status: "uploading" | "available" | "failed";
+}
 
 export function buildGroupChatThreadInput(input: {
   currentPrincipalId: PrincipalId;
@@ -103,6 +133,11 @@ export function CommunicationsView({
   const notifications = useNotifications();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
+  const realtime = useConversationRealtime();
+  const canonicalRefreshInterval =
+    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
+  const pilotChatRefreshInterval =
+    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialThreadId,
   );
@@ -111,6 +146,16 @@ export function CommunicationsView({
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const previewUrlsRef = useRef(new Set<string>());
+  const [markdownPreview, setMarkdownPreview] = useState(false);
+  const [composerImages, setComposerImages] = useState<ComposerImage[]>([]);
+  const reservedImageSlotsRef = useRef(0);
+  const composerThreadIdRef = useRef<string | undefined>(initialThreadId);
+  const retryableSendRef = useRef<
+    { key: string; clientMessageId: string } | undefined
+  >(undefined);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionCursor, setMentionCursor] = useState(0);
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
@@ -119,11 +164,14 @@ export function CommunicationsView({
   const [concluding, setConcluding] = useState(false);
   const [conclusion, setConclusion] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [historyExhausted, setHistoryExhausted] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const threads = useQuery({
     queryKey: ["threads"],
     queryFn: ({ signal }) => getThreads(undefined, signal),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchInterval: canonicalRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
@@ -139,8 +187,10 @@ export function CommunicationsView({
   const pilotDms = useQuery({
     queryKey: ["pilot", "dms", pilot?.identityId],
     queryFn: ({ signal }) => getPilotDms(pilot!.identityId!, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    // Pilot DM routes now adapt onto canonical conversations. Reading them a
+    // second time would create duplicate UI state and duplicate polling.
+    enabled: false,
+    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotProject = pilot?.projects.data?.projects.find(
@@ -177,7 +227,7 @@ export function CommunicationsView({
       pilot.selectedProjectId &&
       activeStandInOwnerId,
     ),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
@@ -215,6 +265,7 @@ export function CommunicationsView({
           pilotPrincipal,
           activeStandInOwner,
           activeStandInPrincipal,
+          pilotStandIn.data?.threadId,
         )
       : undefined;
   const allItems = mergeCommunicationItems(
@@ -339,6 +390,13 @@ export function CommunicationsView({
         : current.thread.participantIds.find(
             (id) => !current.thread.standInIds.includes(id),
           );
+  const canAttachImages = Boolean(
+    current &&
+    currentSenderId &&
+    !currentIsPilot &&
+    !currentIsPilotStandIn &&
+    current.thread.accessMode === "agent_readable",
+  );
 
   function selectThread(threadId: string) {
     setSelectedStandInOwnerId(undefined);
@@ -357,7 +415,6 @@ export function CommunicationsView({
       conversationIdentity
         ? markThreadRead({
             threadId: input.threadId,
-            principalId: conversationIdentity.currentPrincipalId,
             sequence: input.sequence,
           })
         : Promise.reject(new Error(t("chat.identityUnavailable"))),
@@ -368,7 +425,6 @@ export function CommunicationsView({
       conversationIdentity
         ? concludeThread({
             threadId: input.threadId,
-            actorId: conversationIdentity.currentPrincipalId,
             conclusion: input.conclusion,
           })
         : Promise.reject(new Error(t("chat.identityUnavailable"))),
@@ -379,10 +435,52 @@ export function CommunicationsView({
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
+  const loadOlder = useMutation({
+    mutationFn: (input: { threadId: string; beforeSequence: number }) =>
+      getThreadMessages(input.threadId, {
+        beforeSequence: input.beforeSequence,
+        limit: 100,
+      }),
+    onSuccess: (page, input) => {
+      if (!page.hasMore) {
+        setHistoryExhausted((current) => {
+          const next = new Set(current);
+          next.add(input.threadId);
+          return next;
+        });
+      }
+      queryClient.setQueryData<{ items: ThreadPayload[] }>(
+        ["threads"],
+        (cached) => {
+          if (!cached) return cached;
+          return {
+            ...cached,
+            items: cached.items.map((item) => {
+              if (item.thread.id !== input.threadId) return item;
+              const messages = new Map(
+                [...page.items, ...item.messages].map((message) => [
+                  message.sequence,
+                  message,
+                ]),
+              );
+              return {
+                ...item,
+                historyExpanded: true,
+                messages: [...messages.values()].sort(
+                  (left, right) => left.sequence - right.sequence,
+                ),
+              };
+            }),
+          };
+        },
+      );
+    },
+  });
 
   // Opening a thread is what marks it read; nothing else moves the marker.
   const currentUnread = current?.unreadCount ?? 0;
   const currentLastSequence = current?.messages.at(-1)?.sequence ?? 0;
+  const currentLastRevision = current?.messages.at(-1)?.revision ?? 1;
   useEffect(() => {
     setSelectedStandInOwnerId(initialStandInOwnerId as PrincipalId | undefined);
     if (initialStandInOwnerId && pilotProject) {
@@ -402,6 +500,64 @@ export function CommunicationsView({
   useEffect(() => {
     setMentionPickerOpen(false);
   }, [current?.thread.id]);
+
+  useEffect(() => {
+    if (
+      composerThreadIdRef.current &&
+      composerThreadIdRef.current !== current?.thread.id
+    ) {
+      setComposerImages((images) => {
+        for (const image of images) {
+          URL.revokeObjectURL(image.previewUrl);
+          previewUrlsRef.current.delete(image.previewUrl);
+        }
+        return [];
+      });
+      reservedImageSlotsRef.current = 0;
+      setMarkdownPreview(false);
+    }
+    composerThreadIdRef.current = current?.thread.id;
+  }, [current?.thread.id]);
+
+  useEffect(
+    () => () => {
+      for (const previewUrl of previewUrlsRef.current) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      previewUrlsRef.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (
+      realtime.status !== "live" ||
+      !current ||
+      currentIsPilot ||
+      currentIsPilotStandIn
+    ) {
+      return;
+    }
+    let disposed = false;
+    let release: (() => void) | undefined;
+    void realtime
+      .watchThread(current.thread.id)
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else release = unsubscribe;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      release?.();
+    };
+  }, [
+    current?.thread.id,
+    currentIsPilot,
+    currentIsPilotStandIn,
+    realtime.status,
+    realtime.watchThread,
+  ]);
 
   useEffect(() => {
     if (
@@ -442,6 +598,17 @@ export function CommunicationsView({
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
+
+  useEffect(() => {
+    const node = messagesEndRef.current;
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({
+        block: "end",
+        behavior: currentLastRevision > 1 ? "auto" : "smooth",
+      });
+    }
+  }, [current?.thread.id, currentLastRevision, currentLastSequence]);
+
   const send = useMutation({
     mutationFn: async (input: {
       threadId: string;
@@ -450,12 +617,16 @@ export function CommunicationsView({
       mode: "canonical" | "pilot-dm" | "pilot-stand-in";
       standInOwnerId?: PrincipalId;
       mentionedStandIns?: MentionedStandIn[];
+      clientMessageId: string;
+      mentionedPrincipalIds: string[];
+      attachmentIds: string[];
     }) => {
       if (input.mode === "pilot-dm") {
         await sendPilotDm(
           input.senderId as PrincipalId,
           input.threadId,
           input.body,
+          input.clientMessageId,
         );
         return input;
       }
@@ -468,6 +639,7 @@ export function CommunicationsView({
           pilot!.selectedProjectId!,
           input.standInOwnerId,
           input.body,
+          input.clientMessageId,
         );
         return input;
       }
@@ -477,8 +649,18 @@ export function CommunicationsView({
       });
       return input;
     },
-    onSuccess: (input) => {
+    onSuccess: async (input) => {
+      retryableSendRef.current = undefined;
       setDraft("");
+      setMarkdownPreview(false);
+      setComposerImages((images) => {
+        for (const image of images) {
+          URL.revokeObjectURL(image.previewUrl);
+          previewUrlsRef.current.delete(image.previewUrl);
+        }
+        return [];
+      });
+      reservedImageSlotsRef.current = 0;
       if (
         input.mode === "canonical" &&
         (input.mentionedStandIns?.length ?? 0) > 0
@@ -493,7 +675,7 @@ export function CommunicationsView({
           mentionedStandIns: input.mentionedStandIns ?? [],
         });
       }
-      void Promise.all([
+      await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
         queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
         queryClient.invalidateQueries({
@@ -542,10 +724,22 @@ export function CommunicationsView({
     },
   });
   const addStandIn = useMutation({
-    mutationFn: (threadId: string) =>
-      addPilotStandIn(pilot!.identityId!, threadId),
+    mutationFn: async (threadId: string) => {
+      if (currentIsPilot) {
+        await addPilotStandIn(pilot!.identityId!, threadId);
+      } else {
+        await addStandInToThread({
+          threadId,
+          standInId: conversationIdentity!.standInPrincipalId,
+          actorId: conversationIdentity!.currentPrincipalId,
+        });
+      }
+    },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+        queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
+      ]);
     },
     onError: (error) => {
       notifications.error(
@@ -574,11 +768,102 @@ export function CommunicationsView({
     },
   });
 
+  async function addComposerImages(files: File[]) {
+    if (!canAttachImages || !current || !currentSenderId) return;
+    for (const file of files) {
+      if (reservedImageSlotsRef.current >= MAX_MESSAGE_IMAGES) break;
+      if (!MESSAGE_IMAGE_TYPES.has(file.type)) {
+        notifications.warning(t("chat.imageTypeUnsupported"));
+        continue;
+      }
+      if (file.size > MAX_MESSAGE_IMAGE_BYTES) {
+        notifications.warning(t("chat.imageTooLarge"));
+        continue;
+      }
+      reservedImageSlotsRef.current += 1;
+      const id = createClientUuid();
+      const previewUrl = URL.createObjectURL(file);
+      previewUrlsRef.current.add(previewUrl);
+      const image: ComposerImage = {
+        id,
+        fileName: file.name || "image",
+        contentType: file.type,
+        byteSize: file.size,
+        previewUrl,
+        status: "uploading",
+      };
+      setComposerImages((currentImages) => [...currentImages, image]);
+      try {
+        const checksumSha256 = await sha256Hex(file);
+        const upload = await createAttachmentUpload({
+          id,
+          threadId: current.thread.id,
+          ownerId: currentSenderId,
+          fileName: image.fileName,
+          contentType: file.type,
+          byteSize: file.size,
+          checksumSha256,
+          encryptionMode: "server_envelope",
+        });
+        const uploaded = await fetch(upload.uploadUrl, {
+          method: "PUT",
+          headers: {
+            "content-type": file.type,
+            "x-amz-meta-sha256": checksumSha256,
+            ...upload.requiredHeaders,
+          },
+          body: file,
+        });
+        if (!uploaded.ok) throw new Error("attachment_upload_failed");
+        const completed = await completeAttachmentUpload(id);
+        if (completed.state !== "available") {
+          throw new Error("attachment_scan_failed");
+        }
+        setComposerImages((currentImages) =>
+          currentImages.map((candidate) =>
+            candidate.id === id
+              ? { ...candidate, status: "available" }
+              : candidate,
+          ),
+        );
+      } catch {
+        setComposerImages((currentImages) =>
+          currentImages.map((candidate) =>
+            candidate.id === id
+              ? { ...candidate, status: "failed" }
+              : candidate,
+          ),
+        );
+      }
+    }
+  }
+
+  function removeComposerImage(id: string) {
+    if (composerImages.some((image) => image.id === id)) {
+      reservedImageSlotsRef.current = Math.max(
+        0,
+        reservedImageSlotsRef.current - 1,
+      );
+    }
+    setComposerImages((images) => {
+      const removed = images.find((image) => image.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+        previewUrlsRef.current.delete(removed.previewUrl);
+      }
+      return images.filter((image) => image.id !== id);
+    });
+  }
+
   function submit() {
+    const availableImages = composerImages.filter(
+      (image) => image.status === "available",
+    );
     if (
       !current ||
       !currentSenderId ||
-      !draft.trim() ||
+      (!draft.trim() && availableImages.length === 0) ||
+      composerImages.some((image) => image.status !== "available") ||
       current.thread.accessMode === "human_only_e2ee" ||
       send.isPending
     ) {
@@ -586,19 +871,40 @@ export function CommunicationsView({
     }
     setMentionPickerOpen(false);
     const body = draft.trim();
+    const mode = currentIsPilot
+      ? "pilot-dm"
+      : currentIsPilotStandIn
+        ? "pilot-stand-in"
+        : "canonical";
+    const sendKey = [
+      current.thread.id,
+      mode,
+      activeStandInOwnerId ?? "",
+      body,
+      availableImages.map((image) => image.id).join(","),
+    ].join("\u0000");
+    if (retryableSendRef.current?.key !== sendKey) {
+      retryableSendRef.current = {
+        key: sendKey,
+        clientMessageId: createClientUuid(),
+      };
+    }
     send.mutate({
       threadId: current.thread.id,
       senderId: currentSenderId,
       body,
       mentionedStandIns: mentionedStandIns(body, mentionCandidates),
+      clientMessageId: retryableSendRef.current.clientMessageId,
+      mentionedPrincipalIds: extractConversationMentionPrincipalIds(
+        body,
+        mentionCandidates,
+        currentSenderId,
+      ),
+      attachmentIds: availableImages.map((image) => image.id),
       ...(currentIsPilotStandIn && activeStandInOwnerId
         ? { standInOwnerId: activeStandInOwnerId }
         : {}),
-      mode: currentIsPilot
-        ? "pilot-dm"
-        : currentIsPilotStandIn
-          ? "pilot-stand-in"
-          : "canonical",
+      mode,
     });
   }
 
@@ -714,16 +1020,44 @@ export function CommunicationsView({
                 {formatTime(message.createdAt)}
               </time>
             </div>
-            <p className="text-[13px] leading-[1.75] text-ink [text-wrap:pretty]">
-              {message.serverReadable ? (
-                <MentionText
-                  body={message.body}
-                  candidates={mentionCandidates}
+            {message.streamState === "pending" && !message.body ? (
+              <div
+                data-testid={`stand-in-stream-${message.id}`}
+                className="flex items-center gap-2 py-1 text-[12px] text-ink-muted"
+              >
+                <span className="inline-flex gap-1" aria-hidden="true">
+                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong" />
+                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:140ms]" />
+                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:280ms]" />
+                </span>
+                {t("chat.standInThinking")}
+              </div>
+            ) : message.serverReadable ? (
+              <div className="relative">
+                <ChatMarkdown
+                  markdown={message.body}
+                  renderText={(text) => (
+                    <MentionText body={text} candidates={mentionCandidates} />
+                  )}
                 />
-              ) : (
-                t("chat.encryptedMessage")
-              )}
-            </p>
+                {message.streamState === "streaming" ? (
+                  <span
+                    aria-hidden="true"
+                    className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse bg-accent-strong align-[-0.15em]"
+                  />
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-[13px] text-ink">
+                {t("chat.encryptedMessage")}
+              </p>
+            )}
+            {message.streamState === "failed" ? (
+              <p className="mt-2 text-[11px] text-danger">
+                {t("chat.standInStreamFailed")}
+              </p>
+            ) : null}
+            <MessageAttachments attachments={message.attachments ?? []} />
             {groundedExchange?.structuredAnswer ? (
               <StandInAnswerContent
                 answer={groundedExchange.structuredAnswer}
@@ -799,19 +1133,27 @@ export function CommunicationsView({
               {formatTime(message.createdAt)}
             </time>
           </div>
-          <p
+          <div
             className={
               isOwn
-                ? "mt-[7px] max-w-[560px] rounded-card bg-accent-soft p-[12px_15px] text-[13px] leading-[1.7] text-ink [text-wrap:pretty]"
-                : "mt-[7px] max-w-[560px] rounded-card bg-bubble p-[12px_15px] text-[13px] leading-[1.7] text-ink [text-wrap:pretty]"
+                ? "mt-[7px] max-w-[560px] rounded-card bg-accent-soft p-[12px_15px]"
+                : "mt-[7px] max-w-[560px] rounded-card bg-bubble p-[12px_15px]"
             }
           >
             {message.serverReadable ? (
-              <MentionText body={message.body} candidates={mentionCandidates} />
+              <ChatMarkdown
+                markdown={message.body}
+                renderText={(text) => (
+                  <MentionText body={text} candidates={mentionCandidates} />
+                )}
+              />
             ) : (
-              t("chat.encryptedMessage")
+              <p className="text-[13px] leading-[1.7] text-ink">
+                {t("chat.encryptedMessage")}
+              </p>
             )}
-          </p>
+            <MessageAttachments attachments={message.attachments ?? []} />
+          </div>
         </div>
       </div>
     );
@@ -963,14 +1305,13 @@ export function CommunicationsView({
                       })}
               </small>
             </span>
-            {currentIsPilot &&
-            currentPilotItem &&
-            !currentPilotItem.thread.standInId ? (
+            {current.thread.kind === "human_direct" &&
+            current.thread.standInIds.length === 0 ? (
               <button
                 type="button"
                 data-testid="pilot-add-stand-in"
                 disabled={addStandIn.isPending}
-                onClick={() => addStandIn.mutate(currentPilotItem.thread.id)}
+                onClick={() => addStandIn.mutate(current.thread.id)}
                 className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
               >
                 {addStandIn.isPending ? (
@@ -980,7 +1321,8 @@ export function CommunicationsView({
                 )}
                 邀请替身
               </button>
-            ) : currentIsPilot && currentPilotItem?.thread.standInId ? (
+            ) : current.thread.kind === "human_direct" &&
+              current.thread.standInIds.length > 0 ? (
               <span className="ml-auto inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong">
                 <RobotIcon size={13} />
                 替身已加入
@@ -1066,6 +1408,34 @@ export function CommunicationsView({
 
           <div className="overflow-auto p-[22px_26px_30px]">
             <div className="mx-auto flex max-w-[800px] flex-col gap-4">
+              {!currentIsPilot &&
+              !currentIsPilotStandIn &&
+              (current.messages[0]?.sequence ?? 0) > 1 &&
+              !historyExhausted.has(current.thread.id) ? (
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={loadOlder.isPending}
+                    onClick={() =>
+                      loadOlder.mutate({
+                        threadId: current.thread.id,
+                        beforeSequence: current.messages[0]!.sequence,
+                      })
+                    }
+                    className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11px] text-ink-muted hover:border-accent-strong hover:text-accent-strong disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {loadOlder.isPending ? (
+                      <CircleNotchIcon size={13} className="animate-spin" />
+                    ) : null}
+                    {t("chat.loadOlder")}
+                  </button>
+                  {loadOlder.isError ? (
+                    <span role="alert" className="text-[10.5px] text-danger">
+                      {t("chat.loadOlderFailed")}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               {currentIsPilot && currentPilotItem?.thread.standInId ? (
                 <p className="rounded-inset bg-raise p-[12px_16px] text-center text-[11.5px] leading-[1.7] text-ink-muted">
                   替身只会看到加入后的消息，不会读取此前的私聊历史。
@@ -1093,12 +1463,23 @@ export function CommunicationsView({
                   </div>
                 ))
               )}
+              <div ref={messagesEndRef} aria-hidden="true" />
             </div>
           </div>
 
           <div className="p-[0_26px_22px]">
             <div className="mx-auto max-w-[800px]">
-              <div className="relative rounded-card border border-line2 bg-panel2 p-[11px_13px]">
+              <div
+                className="relative rounded-card border border-line2 bg-panel2 p-[11px_13px]"
+                onDragOver={(event) => {
+                  if (canAttachImages) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  if (!canAttachImages) return;
+                  event.preventDefault();
+                  void addComposerImages([...event.dataTransfer.files]);
+                }}
+              >
                 <div className="mb-[9px] flex items-center gap-[7px]">
                   <button
                     type="button"
@@ -1120,6 +1501,59 @@ export function CommunicationsView({
                   >
                     @
                   </button>
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      void addComposerImages([
+                        ...(event.currentTarget.files ?? []),
+                      ]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={t("chat.attachImage")}
+                    title={t("chat.attachImage")}
+                    disabled={
+                      !canAttachImages ||
+                      composerImages.length >= MAX_MESSAGE_IMAGES
+                    }
+                    onClick={() => imageInputRef.current?.click()}
+                    className="grid h-6 w-6 cursor-pointer place-items-center rounded-[8px] border border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    <PaperclipIcon size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={
+                      markdownPreview
+                        ? t("chat.markdownWrite")
+                        : t("chat.markdownPreview")
+                    }
+                    title={
+                      markdownPreview
+                        ? t("chat.markdownWrite")
+                        : t("chat.markdownPreview")
+                    }
+                    disabled={!draft.trim()}
+                    onClick={() => setMarkdownPreview((visible) => !visible)}
+                    className={cn(
+                      "grid h-6 w-6 cursor-pointer place-items-center rounded-[8px] border disabled:cursor-not-allowed disabled:opacity-35",
+                      markdownPreview
+                        ? "border-accent-strong bg-accent-soft text-accent-strong"
+                        : "border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong",
+                    )}
+                  >
+                    {markdownPreview ? (
+                      <PencilSimpleIcon size={13} />
+                    ) : (
+                      <EyeIcon size={13} />
+                    )}
+                  </button>
                   <span className="ml-auto inline-flex items-center gap-[5px] text-[10px] text-faint">
                     <LockSimpleIcon size={12} />
                     {currentIsPilot
@@ -1128,7 +1562,7 @@ export function CommunicationsView({
                         ? "不读取私聊历史、私有 Work State 或原始数据"
                         : current.thread.accessMode === "human_only_e2ee"
                           ? t("chat.e2ee")
-                          : t("chat.hint")}
+                          : t("chat.markdownHint")}
                   </span>
                 </div>
                 {mentionPickerOpen ? (
@@ -1175,74 +1609,152 @@ export function CommunicationsView({
                     )}
                   </div>
                 ) : null}
+                {composerImages.length > 0 ? (
+                  <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
+                    {composerImages.map((image) => (
+                      <div
+                        key={image.id}
+                        className="relative h-[72px] w-[88px] shrink-0 overflow-hidden rounded-[9px] bg-raise"
+                      >
+                        <img
+                          src={image.previewUrl}
+                          alt={image.fileName}
+                          className={cn(
+                            "h-full w-full object-cover",
+                            image.status === "available" ? "" : "opacity-45",
+                          )}
+                        />
+                        {image.status === "uploading" ? (
+                          <span
+                            className="absolute inset-0 grid place-items-center"
+                            title={t("chat.imageUploading")}
+                          >
+                            <CircleNotchIcon
+                              size={17}
+                              className="animate-spin text-on-tint"
+                            />
+                          </span>
+                        ) : null}
+                        {image.status === "failed" ? (
+                          <span
+                            className="absolute inset-x-1 bottom-1 rounded bg-danger/85 px-1 py-0.5 text-center text-[8px] text-white"
+                            title={t("chat.imageUploadFailed")}
+                          >
+                            {t("chat.imageUploadFailed")}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          aria-label={t("chat.removeImage")}
+                          onClick={() => removeComposerImage(image.id)}
+                          className="absolute right-1 top-1 grid h-5 w-5 cursor-pointer place-items-center rounded-full border-0 bg-black/65 text-white"
+                        >
+                          <XIcon size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-[1fr_34px] items-end gap-[9px]">
-                  <textarea
-                    ref={composerRef}
-                    data-testid="communications-composer"
-                    rows={1}
-                    value={draft}
-                    onChange={(event) => {
-                      const cursor =
-                        event.currentTarget.selectionStart ??
-                        event.currentTarget.value.length;
-                      setDraft(event.currentTarget.value);
-                      setMentionCursor(cursor);
-                      setMentionPickerOpen(
-                        Boolean(
-                          conversationMentionQuery(
-                            event.currentTarget.value,
-                            cursor,
+                  {markdownPreview ? (
+                    <div
+                      data-testid="communications-markdown-preview"
+                      className="min-h-[42px] max-h-[180px] overflow-auto rounded-[9px] bg-raise px-3 py-2"
+                    >
+                      <ChatMarkdown
+                        markdown={draft}
+                        renderText={(text) => (
+                          <MentionText
+                            body={text}
+                            candidates={mentionCandidates}
+                          />
+                        )}
+                      />
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={composerRef}
+                      data-testid="communications-composer"
+                      rows={1}
+                      value={draft}
+                      onChange={(event) => {
+                        const cursor =
+                          event.currentTarget.selectionStart ??
+                          event.currentTarget.value.length;
+                        setDraft(event.currentTarget.value);
+                        setMentionCursor(cursor);
+                        setMentionPickerOpen(
+                          Boolean(
+                            conversationMentionQuery(
+                              event.currentTarget.value,
+                              cursor,
+                            ),
                           ),
-                        ),
-                      );
-                    }}
-                    onSelect={(event) => {
-                      setMentionCursor(
-                        event.currentTarget.selectionStart ?? draft.length,
-                      );
-                    }}
-                    onKeyDown={(event) => {
-                      const isComposing =
-                        event.nativeEvent.isComposing ||
-                        event.nativeEvent.keyCode === 229;
-                      if (event.key === "Escape" && mentionPickerOpen) {
-                        event.preventDefault();
-                        setMentionPickerOpen(false);
-                        return;
+                        );
+                      }}
+                      onSelect={(event) => {
+                        setMentionCursor(
+                          event.currentTarget.selectionStart ?? draft.length,
+                        );
+                      }}
+                      onPaste={(event) => {
+                        const files = [...event.clipboardData.files].filter(
+                          (file) => file.type.startsWith("image/"),
+                        );
+                        if (files.length > 0 && canAttachImages) {
+                          event.preventDefault();
+                          void addComposerImages(files);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        const isComposing =
+                          event.nativeEvent.isComposing ||
+                          event.nativeEvent.keyCode === 229;
+                        if (event.key === "Escape" && mentionPickerOpen) {
+                          event.preventDefault();
+                          setMentionPickerOpen(false);
+                          return;
+                        }
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          !isComposing &&
+                          mentionPickerOpen &&
+                          visibleMentionCandidates[0]
+                        ) {
+                          event.preventDefault();
+                          selectMention(visibleMentionCandidates[0]);
+                          return;
+                        }
+                        if (
+                          shouldSubmitComposerKey({
+                            key: event.key,
+                            shiftKey: event.shiftKey,
+                            isComposing,
+                          })
+                        ) {
+                          event.preventDefault();
+                          submit();
+                        }
+                      }}
+                      placeholder={t("chat.placeholder")}
+                      disabled={
+                        !currentSenderId ||
+                        current.thread.accessMode === "human_only_e2ee"
                       }
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        !isComposing &&
-                        mentionPickerOpen &&
-                        visibleMentionCandidates[0]
-                      ) {
-                        event.preventDefault();
-                        selectMention(visibleMentionCandidates[0]);
-                        return;
-                      }
-                      if (
-                        shouldSubmitComposerKey({
-                          key: event.key,
-                          shiftKey: event.shiftKey,
-                          isComposing,
-                        })
-                      ) {
-                        event.preventDefault();
-                        submit();
-                      }
-                    }}
-                    placeholder={t("chat.placeholder")}
-                    disabled={
-                      !currentSenderId ||
-                      current.thread.accessMode === "human_only_e2ee"
-                    }
-                    className="min-h-[34px] max-h-[110px] resize-none border-0 bg-transparent px-1 py-2 text-[12.5px] leading-[1.55] outline-none placeholder:text-faint"
-                  />
+                      className="min-h-[34px] max-h-[110px] resize-none border-0 bg-transparent px-1 py-2 text-[12.5px] leading-[1.55] outline-none placeholder:text-faint"
+                    />
+                  )}
                   <button
                     type="button"
                     disabled={
-                      !draft.trim() ||
+                      (!draft.trim() &&
+                        !composerImages.some(
+                          (image) => image.status === "available",
+                        )) ||
+                      composerImages.some(
+                        (image) => image.status !== "available",
+                      ) ||
                       !currentSenderId ||
                       current.thread.accessMode === "human_only_e2ee" ||
                       send.isPending
@@ -1447,6 +1959,9 @@ export async function sendCanonicalConversationMessage(
     senderId: string;
     body: string;
     mentionedStandIns?: MentionedStandIn[];
+    clientMessageId?: string;
+    mentionedPrincipalIds?: string[];
+    attachmentIds?: string[];
   },
   dependencies: {
     addStandIn: (input: {
@@ -1458,6 +1973,9 @@ export async function sendCanonicalConversationMessage(
       threadId: string;
       senderId: string;
       body: string;
+      clientMessageId?: string;
+      mentionedPrincipalIds?: string[];
+      attachmentIds?: string[];
     }) => Promise<unknown>;
   },
 ): Promise<void> {
@@ -1466,6 +1984,11 @@ export async function sendCanonicalConversationMessage(
     threadId: input.threadId,
     senderId: input.senderId,
     body: input.body,
+    ...(input.clientMessageId
+      ? { clientMessageId: input.clientMessageId }
+      : {}),
+    mentionedPrincipalIds: input.mentionedPrincipalIds ?? [],
+    attachmentIds: input.attachmentIds ?? [],
   });
 }
 
@@ -1620,8 +2143,35 @@ export function splitConversationMentions(
   return parts.length > 0 ? parts : [{ text: body }];
 }
 
+export function extractConversationMentionPrincipalIds(
+  body: string,
+  candidates: ConversationMentionCandidate[],
+  senderId?: string,
+): string[] {
+  return [
+    ...new Set(
+      splitConversationMentions(body, candidates)
+        .map((part) => part.mention?.principalId)
+        .filter(
+          (principalId): principalId is PrincipalId =>
+            principalId !== undefined && principalId !== senderId,
+        ),
+    ),
+  ];
+}
+
 function escapeRegularExpression(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+async function sha256Hex(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await file.arrayBuffer(),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export interface PersonalStandInMentionCandidate {
@@ -1710,8 +2260,40 @@ export function mergeCommunicationItems(
   pilotItems: ThreadPayload[],
   hideCanonicalStandIns = Boolean(personalStandInItem),
 ): ThreadPayload[] {
+  const canonicalPersonalStandIn = personalStandInItem
+    ? canonicalItems.find(
+        (item) => item.thread.id === personalStandInItem.thread.id,
+      )
+    : undefined;
+  const mergedPersonalStandIn =
+    personalStandInItem && canonicalPersonalStandIn
+      ? {
+          ...personalStandInItem,
+          thread: canonicalPersonalStandIn.thread,
+          messages: canonicalPersonalStandIn.messages,
+          ...(canonicalPersonalStandIn.unreadCount !== undefined
+            ? { unreadCount: canonicalPersonalStandIn.unreadCount }
+            : {}),
+          ...(canonicalPersonalStandIn.mentionCount !== undefined
+            ? { mentionCount: canonicalPersonalStandIn.mentionCount }
+            : {}),
+          ...(canonicalPersonalStandIn.lastReadSequence !== undefined
+            ? {
+                lastReadSequence: canonicalPersonalStandIn.lastReadSequence,
+              }
+            : {}),
+          principals: [
+            ...new Map(
+              [
+                ...personalStandInItem.principals,
+                ...canonicalPersonalStandIn.principals,
+              ].map((principal) => [principal.id, principal]),
+            ).values(),
+          ],
+        }
+      : personalStandInItem;
   return [
-    ...(personalStandInItem ? [personalStandInItem] : []),
+    ...(mergedPersonalStandIn ? [mergedPersonalStandIn] : []),
     ...canonicalItems.filter(
       (item) => !(hideCanonicalStandIns && item.thread.kind === "stand_in"),
     ),
@@ -1738,6 +2320,61 @@ function MentionText({
     ) : (
       part.text
     ),
+  );
+}
+
+function MessageAttachments({
+  attachments,
+}: {
+  attachments: ThreadMessageAttachment[];
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <div
+      className={cn(
+        "mt-2 grid gap-2",
+        attachments.length > 1 ? "grid-cols-2" : "grid-cols-1",
+      )}
+    >
+      {attachments.map((attachment) => (
+        <MessageImage key={attachment.id} attachment={attachment} />
+      ))}
+    </div>
+  );
+}
+
+function MessageImage({ attachment }: { attachment: ThreadMessageAttachment }) {
+  const download = useQuery({
+    queryKey: ["conversation-attachment", attachment.id],
+    queryFn: ({ signal }) => getAttachmentDownload(attachment.id, signal),
+    staleTime: 4 * 60_000,
+  });
+  if (!download.data?.downloadUrl) {
+    return (
+      <div className="grid min-h-[96px] place-items-center rounded-[10px] bg-raise text-[10.5px] text-ink-muted">
+        {download.isError ? (
+          attachment.fileName
+        ) : (
+          <CircleNotchIcon className="animate-spin" />
+        )}
+      </div>
+    );
+  }
+  return (
+    <a
+      href={download.data.downloadUrl}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="group block min-w-0 overflow-hidden rounded-[10px] bg-raise"
+      title={attachment.fileName}
+    >
+      <img
+        src={download.data.downloadUrl}
+        alt={attachment.fileName}
+        loading="lazy"
+        className="max-h-[360px] w-full object-contain transition-transform duration-200 group-hover:scale-[1.01]"
+      />
+    </a>
   );
 }
 
@@ -1809,7 +2446,11 @@ function SidebarThreadItem({
   const lastMessage = item.messages.at(-1);
   const preview = lastMessage
     ? lastMessage.serverReadable
-      ? lastMessage.body
+      ? lastMessage.body ||
+        lastMessage.attachments?.[0]?.fileName ||
+        (lastMessage.streamState === "pending"
+          ? t("chat.standInThinking")
+          : "—")
       : t("chat.encryptedMessage")
     : "—";
   const time = formatRelative(lastMessage?.createdAt ?? item.thread.createdAt);
@@ -1817,6 +2458,7 @@ function SidebarThreadItem({
     (id) => !item.thread.standInIds.includes(id),
   );
   const unread = item.unreadCount ?? 0;
+  const mentions = item.mentionCount ?? 0;
   const teamName = item.thread.teamId
     ? teamNames.get(item.thread.teamId)
     : undefined;
@@ -1901,6 +2543,14 @@ function SidebarThreadItem({
       </span>
       <span className="grid justify-items-end gap-1.5">
         <time className="font-mono text-[9.5px] text-faint">{time}</time>
+        {mentions > 0 ? (
+          <span
+            className="animate-badge-bounce grid h-[17px] min-w-[22px] place-items-center rounded-[9px] bg-amber px-[5px] font-mono text-[9px] font-[700] text-white"
+            title={t("chat.mentionNotificationTitle")}
+          >
+            @{mentions > 9 ? "9+" : mentions}
+          </span>
+        ) : null}
         {unread > 0 ? (
           <span className="animate-badge-bounce grid h-[17px] min-w-[17px] place-items-center rounded-[9px] bg-accent-strong px-[5px] font-mono text-[9.5px] text-on-accent">
             {unread > 99 ? "99+" : unread}

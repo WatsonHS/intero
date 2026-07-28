@@ -77,7 +77,10 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
         [this.standInId],
       );
       const thread = await client.query<{ sequence: number }>(
-        `UPDATE threads SET sequence = sequence + 1, updated_at = now()
+        `UPDATE threads
+         SET sequence = sequence + 1,
+             latest_message_at = now(),
+             updated_at = now()
          WHERE id = $1
          RETURNING sequence`,
         [input.threadId],
@@ -86,9 +89,9 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
       if (!sequence) throw new Error("Stand-in Thread was not found.");
       await client.query(
         `INSERT INTO messages
-          (id, organization_id, thread_id, sender_id, operation_id, sequence,
-           kind, body, server_readable)
-         VALUES ($1, $2, $3, $4, $5, $6, 'message', $7, true)
+          (id, organization_id, thread_id, sender_id, client_message_id,
+           operation_id, sequence, kind, body, server_readable)
+         VALUES ($1, $2, $3, $4, $5, $5, $6, 'message', $7, true)
          ON CONFLICT (organization_id, operation_id) DO NOTHING`,
         [
           uuidv7(),
@@ -100,6 +103,60 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
           input.body,
         ],
       );
+      const participants = await client.query<{ principal_id: string }>(
+        `SELECT principal_id
+         FROM thread_participants
+         WHERE thread_id = $1 AND revoked_at IS NULL`,
+        [input.threadId],
+      );
+      const occurredAt = new Date().toISOString();
+      const event = {
+        schemaVersion: 1,
+        eventId: input.operationId,
+        type: "conversation.changed",
+        threadId: input.threadId,
+        headSequence: sequence,
+        accessVersion: 1,
+        reason: "message_appended",
+        occurredAt,
+      };
+      await client.query(
+        `INSERT INTO activity_events
+          (organization_id, event_id, operation_id, event_type, occurred_at,
+           received_at, actor_id, payload, idempotency_key)
+         VALUES ($1, $2, $2, 'conversation.changed', $3, $3, $4, $5, $6)
+         ON CONFLICT (operation_id) DO NOTHING`,
+        [
+          this.organizationId,
+          input.operationId,
+          occurredAt,
+          this.standInId,
+          event,
+          `conversation:${input.operationId}`,
+        ],
+      );
+      await client.query(
+        `INSERT INTO outbox
+          (operation_id, organization_id, topic, payload)
+         VALUES ($1, $2, 'conversation.changed', $3)
+         ON CONFLICT (operation_id) DO NOTHING`,
+        [input.operationId, this.organizationId, event],
+      );
+      const channels = new Set([
+        `intero:thread:${input.threadId}`,
+        ...participants.rows.map(
+          (participant) => `intero:user:${participant.principal_id}`,
+        ),
+      ]);
+      for (const channel of channels) {
+        await client.query(
+          `INSERT INTO outbox_publications
+            (operation_id, organization_id, channel)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (operation_id, channel) DO NOTHING`,
+          [input.operationId, this.organizationId, channel],
+        );
+      }
     });
   }
 

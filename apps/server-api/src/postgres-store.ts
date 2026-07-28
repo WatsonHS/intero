@@ -23,6 +23,8 @@ import {
   type SpecReviewResponse,
   type ThreadId,
   type ThreadMessage,
+  type ThreadMessageAttachment,
+  type ThreadMessageStreamState,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -43,6 +45,11 @@ import {
   claimFromEvent,
   type KanbanCardUpdate,
   type MutationResult,
+  normalizeMentionIds,
+  sameThreadCreation,
+  type StandInQuestionInput,
+  type ThreadMessagePage,
+  type ThreadMessagePageQuery,
 } from "./store.js";
 
 export class PostgresPlatformStore implements PlatformStore {
@@ -476,9 +483,12 @@ export class PostgresPlatformStore implements PlatformStore {
       if (thread.rows[0]) {
         await client.query(
           `INSERT INTO messages
-            (id, organization_id, thread_id, sender_id, operation_id, sequence,
-             kind, body, server_readable, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 'coordination_action', $7, true, $8)
+            (id, organization_id, thread_id, sender_id, operation_id,
+             client_message_id, sequence, kind, body, server_readable, created_at)
+           VALUES (
+             $1, $2, $3, $4, $5, $1, $6,
+             'coordination_action', $7, true, $8
+           )
            ON CONFLICT (organization_id, operation_id) DO NOTHING`,
           [
             uuidv7(),
@@ -503,24 +513,19 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
-  async createThread(thread: ConversationThread): Promise<ConversationThread> {
+  async createThread(
+    thread: ConversationThread,
+    actorId?: PrincipalId,
+  ): Promise<ConversationThread> {
     return this.write(async (client) => {
-      for (const principalId of new Set([
-        ...thread.participantIds,
-        ...thread.standInIds,
-      ])) {
-        await this.ensurePrincipal(
-          client,
-          principalId,
-          thread.standInIds.includes(principalId) ? "stand_in" : "human",
-        );
-      }
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO threads
           (id, organization_id, kind, title, access_mode, access_changed_at_sequence,
-           prior_history_granted, sequence, team_id, parent_thread_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (id) DO NOTHING`,
+           prior_history_granted, sequence, access_version, team_id,
+           parent_thread_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
         [
           thread.id,
           this.organizationId,
@@ -535,6 +540,28 @@ export class PostgresPlatformStore implements PlatformStore {
           thread.createdAt,
         ],
       );
+      if (inserted.rowCount === 0) {
+        const existing = await this.getThreadInTransaction(
+          client,
+          thread.id,
+          undefined,
+          0,
+        );
+        if (!existing || !sameThreadCreation(existing.thread, thread)) {
+          throw new Error("Thread ID was already used.");
+        }
+        return existing.thread;
+      }
+      for (const principalId of new Set([
+        ...thread.participantIds,
+        ...thread.standInIds,
+      ])) {
+        await this.ensurePrincipal(
+          client,
+          principalId,
+          thread.standInIds.includes(principalId) ? "stand_in" : "human",
+        );
+      }
       for (const principalId of new Set([
         ...thread.participantIds,
         ...thread.standInIds,
@@ -554,7 +581,21 @@ export class PostgresPlatformStore implements PlatformStore {
           ],
         );
       }
-      return (await this.getThreadInTransaction(client, thread.id))!.thread;
+      const stored = (await this.getThreadInTransaction(
+        client,
+        thread.id,
+        undefined,
+        0,
+      ))!.thread;
+      if (actorId) {
+        await this.recordConversationChange(client, {
+          eventId: thread.id as unknown as OperationId,
+          thread: stored,
+          actorId,
+          reason: "thread_created",
+        });
+      }
+      return stored;
     });
   }
 
@@ -565,22 +606,372 @@ export class PostgresPlatformStore implements PlatformStore {
       senderId: PrincipalId;
       body?: string;
       encryptedBody?: string;
+      mentionedPrincipalIds?: PrincipalId[];
+      attachmentIds?: ThreadMessageAttachment["id"][];
+      streamState?: ThreadMessageStreamState;
       createdAt: string;
     },
   ): Promise<ThreadMessage> {
     return this.write(async (client) => {
-      const current = await this.getThreadInTransaction(client, threadId);
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
       if (!current) throw new Error("Thread was not found.");
       if (!current.thread.participantIds.includes(input.senderId)) {
         throw new Error("Sender is not a Thread participant.");
       }
-      const message = buildThreadMessage(current.thread, input);
-      await client.query(
-        "UPDATE threads SET sequence = $2, updated_at = now() WHERE id = $1",
-        [threadId, message.sequence],
+      const mentionedPrincipalIds = normalizeMentionIds(
+        current.thread,
+        input.senderId,
+        input.mentionedPrincipalIds,
       );
-      await this.insertMessage(client, message);
-      return message;
+      const existingMessage = await client.query(
+        "SELECT * FROM messages WHERE thread_id = $1 AND id = $2",
+        [threadId, input.id],
+      );
+      const existing = existingMessage.rows[0]
+        ? messageFromRow(existingMessage.rows[0])
+        : undefined;
+      if (existing) {
+        if (
+          (existing.streamState === "pending" ||
+            existing.streamState === "streaming") &&
+          existing.senderId === input.senderId &&
+          input.body !== undefined &&
+          input.encryptedBody === undefined &&
+          !input.attachmentIds?.length
+        ) {
+          const finalized = await client.query(
+            `UPDATE messages
+             SET body = $3,
+                 stream_state = 'complete',
+                 revision = revision + 1,
+                 updated_at = now()
+             WHERE thread_id = $1 AND id = $2
+             RETURNING *`,
+            [threadId, input.id, input.body],
+          );
+          const completed = messageFromRow(finalized.rows[0]!);
+          await this.recordConversationChange(client, {
+            eventId: uuidv7() as OperationId,
+            thread: current.thread,
+            actorId: input.senderId,
+            reason: "message_updated",
+            messageId: completed.id,
+          });
+          return completed;
+        }
+        if (
+          existing.senderId !== input.senderId ||
+          existing.body !== (input.body ?? "") ||
+          existing.encryptedBody !== input.encryptedBody ||
+          !sameIds(
+            existing.mentionedPrincipalIds ?? [],
+            mentionedPrincipalIds,
+          ) ||
+          !sameIds(
+            (existing.attachments ?? []).map((attachment) => attachment.id),
+            input.attachmentIds ?? [],
+          )
+        ) {
+          throw new Error("Client message ID was already used.");
+        }
+        return existing;
+      }
+      const attachments = await this.resolveMessageAttachments(
+        client,
+        threadId,
+        input.senderId,
+        input.id,
+        input.attachmentIds ?? [],
+      );
+      const message = buildThreadMessage(current.thread, {
+        ...input,
+        mentionedPrincipalIds,
+        attachments,
+      });
+      const updated = await client.query<{
+        sequence: number;
+        access_version: number;
+      }>(
+        `UPDATE threads
+         SET sequence = sequence + 1,
+             latest_message_at = $2,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING sequence, access_version`,
+        [threadId, message.createdAt],
+      );
+      const stored = {
+        ...message,
+        sequence: updated.rows[0]!.sequence,
+      };
+      await this.insertMessage(client, stored);
+      if (attachments.length > 0) {
+        const claimed = await client.query(
+          `UPDATE attachments
+           SET message_id = $1, updated_at = now()
+           WHERE id = ANY($2::uuid[])
+             AND (message_id IS NULL OR message_id = $1)`,
+          [stored.id, attachments.map((attachment) => attachment.id)],
+        );
+        if ((claimed.rowCount ?? 0) !== attachments.length) {
+          throw new Error("One or more attachments were already sent.");
+        }
+      }
+      await this.recordConversationChange(client, {
+        eventId: stored.id as unknown as OperationId,
+        thread: {
+          ...current.thread,
+          sequence: stored.sequence,
+          accessVersion: updated.rows[0]!.access_version,
+          latestMessageAt: stored.createdAt,
+        },
+        actorId: input.senderId,
+        reason: "message_appended",
+      });
+      return stored;
+    });
+  }
+
+  async updateMessageStream(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    senderId: PrincipalId;
+    body: string;
+    streamState: ThreadMessageStreamState;
+  }): Promise<ThreadMessage> {
+    if (input.body.length > 16_000) {
+      throw new Error("Stream message exceeds the message size limit.");
+    }
+    return this.write(async (client) => {
+      const current = await client.query(
+        `SELECT * FROM messages
+         WHERE thread_id = $1 AND id = $2
+         FOR UPDATE`,
+        [input.threadId, input.messageId],
+      );
+      const message = current.rows[0]
+        ? messageFromRow(current.rows[0])
+        : undefined;
+      if (!message || message.senderId !== input.senderId) {
+        throw new Error("Stream message was not found.");
+      }
+      if (
+        (message.streamState ?? "complete") === "complete" &&
+        input.streamState !== "complete"
+      ) {
+        throw new Error("Completed stream messages are immutable.");
+      }
+      const result = await client.query(
+        `UPDATE messages
+         SET body = $3,
+             stream_state = $4,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [input.threadId, input.messageId, input.body, input.streamState],
+      );
+      const updated = messageFromRow(result.rows[0]!);
+      const thread = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: thread.thread,
+        actorId: input.senderId,
+        reason: "message_updated",
+        messageId: input.messageId,
+      });
+      return updated;
+    });
+  }
+
+  async enqueueStandInQuestion(
+    input: StandInQuestionInput,
+  ): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      for (const principalId of input.thread.participantIds) {
+        await this.ensurePrincipal(
+          client,
+          principalId,
+          input.thread.standInIds.includes(principalId) ? "stand_in" : "human",
+        );
+      }
+      const insertedThread = await client.query(
+        `INSERT INTO threads
+          (id, organization_id, kind, title, access_mode,
+           prior_history_granted, sequence, access_version, created_at)
+         VALUES ($1, $2, $3, $4, $5, false, 0, 1, $6)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+        [
+          input.thread.id,
+          this.organizationId,
+          input.thread.kind,
+          input.thread.title,
+          input.thread.accessMode,
+          input.thread.createdAt,
+        ],
+      );
+      if ((insertedThread.rowCount ?? 0) > 0) {
+        for (const principalId of input.thread.participantIds) {
+          await client.query(
+            `INSERT INTO thread_participants
+              (organization_id, thread_id, principal_id, stand_in)
+             VALUES ($1, $2, $3, $4)`,
+            [
+              this.organizationId,
+              input.thread.id,
+              principalId,
+              input.thread.standInIds.includes(principalId),
+            ],
+          );
+        }
+        await this.recordConversationChange(client, {
+          eventId: input.thread.id as unknown as OperationId,
+          thread: input.thread,
+          actorId: input.askedByPrincipalId,
+          reason: "thread_created",
+        });
+      } else {
+        const existingThread = await this.getThreadInTransaction(
+          client,
+          input.thread.id,
+          undefined,
+          0,
+        );
+        if (
+          !existingThread ||
+          !sameThreadCreation(existingThread.thread, input.thread)
+        ) {
+          throw new Error("Stand-in Thread ID was already used.");
+        }
+      }
+
+      const existingJob = await client.query<{ question_message_id: string }>(
+        `SELECT question_message_id
+         FROM stand_in_question_jobs
+         WHERE id = $1`,
+        [input.jobId],
+      );
+      if (existingJob.rows[0]) {
+        const existingMessage = await client.query(
+          "SELECT * FROM messages WHERE id = $1",
+          [existingJob.rows[0].question_message_id],
+        );
+        if (!existingMessage.rows[0]) {
+          throw new Error("Stand-in question job lost its source message.");
+        }
+        return messageFromRow(existingMessage.rows[0]);
+      }
+
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        input.thread.id,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        input.thread.id,
+        undefined,
+        0,
+      );
+      if (!current) throw new Error("Stand-in Thread was not found.");
+      const questionMessage = buildThreadMessage(current.thread, {
+        id: input.questionMessageId,
+        senderId: input.askedByPrincipalId,
+        body: input.question,
+        createdAt: input.createdAt,
+      });
+      const head = await client.query<{ sequence: number }>(
+        `UPDATE threads
+         SET sequence = sequence + 2,
+             latest_message_at = $2,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING sequence`,
+        [input.thread.id, input.createdAt],
+      );
+      const stored = {
+        ...questionMessage,
+        sequence: head.rows[0]!.sequence - 1,
+      };
+      const pendingAnswer = buildThreadMessage(
+        { ...current.thread, sequence: stored.sequence },
+        {
+          id: input.answerMessageId,
+          senderId: input.thread.standInIds[0]!,
+          body: "",
+          streamState: "pending",
+          createdAt: input.createdAt,
+        },
+      );
+      await this.insertMessage(client, stored);
+      await this.insertMessage(client, pendingAnswer);
+      await this.recordConversationChange(client, {
+        eventId: stored.id as unknown as OperationId,
+        thread: {
+          ...current.thread,
+          sequence: stored.sequence,
+          latestMessageAt: stored.createdAt,
+        },
+        actorId: input.askedByPrincipalId,
+        reason: "message_appended",
+      });
+      await this.recordConversationChange(client, {
+        eventId: pendingAnswer.id as unknown as OperationId,
+        thread: {
+          ...current.thread,
+          sequence: pendingAnswer.sequence,
+          latestMessageAt: pendingAnswer.createdAt,
+        },
+        actorId: pendingAnswer.senderId,
+        reason: "message_appended",
+      });
+      await client.query(
+        `INSERT INTO stand_in_question_jobs
+          (id, organization_id, thread_id, project_id, stand_in_owner_id,
+           asked_by_principal_id, question_message_id, answer_message_id,
+           status, available_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $9, $9)`,
+        [
+          input.jobId,
+          this.organizationId,
+          input.thread.id,
+          input.projectId,
+          input.standInOwnerId,
+          input.askedByPrincipalId,
+          input.questionMessageId,
+          input.answerMessageId,
+          input.createdAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO outbox
+         (operation_id, organization_id, topic, payload, available_at)
+         VALUES (
+           $1::uuid, $2::uuid, 'pilot.stand_in.question.enqueue',
+           jsonb_build_object(
+             'schemaVersion', 1,
+             'organizationId', $2::uuid::text,
+             'jobId', $1::uuid::text,
+             'projectId', $3::uuid::text
+           ),
+           $4
+         )`,
+        [input.jobId, this.organizationId, input.projectId, input.createdAt],
+      );
+      return stored;
     });
   }
 
@@ -592,16 +983,141 @@ export class PostgresPlatformStore implements PlatformStore {
     sequence: number,
   ): Promise<void> {
     await this.write(async (client) => {
-      await client.query(
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        principalId,
+        0,
+      );
+      if (!current) throw new Error("Thread was not found.");
+      if (sequence > current.thread.sequence) {
+        throw new Error("Read sequence exceeds the Thread head.");
+      }
+      const changed = await client.query(
         `INSERT INTO thread_reads
           (organization_id, thread_id, principal_id, last_read_sequence)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (thread_id, principal_id) DO UPDATE SET
-           last_read_sequence = GREATEST(
-             thread_reads.last_read_sequence, EXCLUDED.last_read_sequence),
-           updated_at = now()`,
+           last_read_sequence = EXCLUDED.last_read_sequence,
+           updated_at = now()
+         WHERE thread_reads.last_read_sequence < EXCLUDED.last_read_sequence
+         RETURNING last_read_sequence`,
         [this.organizationId, threadId, principalId, sequence],
       );
+      if ((changed.rowCount ?? 0) > 0) {
+        await this.recordConversationChange(client, {
+          eventId: uuidv7() as OperationId,
+          thread: current.thread,
+          actorId: principalId,
+          reason: "read_cursor_changed",
+          channels: [`intero:user:${principalId}`],
+        });
+      }
+    });
+  }
+
+  async listThreadMessages(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    query: ThreadMessagePageQuery,
+  ): Promise<ThreadMessagePage | undefined> {
+    return this.read(async (client) => {
+      const thread = await client.query<{
+        sequence: number;
+        access_version: number;
+        visible_from_sequence: number;
+      }>(
+        `SELECT t.sequence, t.access_version, tp.visible_from_sequence
+         FROM threads t
+         JOIN thread_participants tp
+           ON tp.thread_id = t.id
+          AND tp.principal_id = $2
+          AND tp.revoked_at IS NULL
+         WHERE t.id = $1`,
+        [threadId, principalId],
+      );
+      const metadata = thread.rows[0];
+      if (!metadata) return undefined;
+
+      const limit = query.tail ?? query.limit;
+      const result =
+        query.afterSequence !== undefined
+          ? await client.query(
+              `SELECT * FROM messages
+               WHERE thread_id = $1
+                 AND sequence >= $2
+                 AND sequence > $3
+               ORDER BY sequence
+               LIMIT $4`,
+              [
+                threadId,
+                metadata.visible_from_sequence,
+                query.afterSequence,
+                query.limit + 1,
+              ],
+            )
+          : query.beforeSequence !== undefined
+            ? await client.query(
+                `SELECT * FROM (
+                   SELECT * FROM messages
+                   WHERE thread_id = $1
+                     AND sequence >= $2
+                     AND sequence < $3
+                   ORDER BY sequence DESC
+                   LIMIT $4
+                 ) page
+                 ORDER BY sequence`,
+                [
+                  threadId,
+                  metadata.visible_from_sequence,
+                  query.beforeSequence,
+                  query.limit + 1,
+                ],
+              )
+            : await client.query(
+                `SELECT * FROM (
+                   SELECT * FROM messages
+                   WHERE thread_id = $1
+                     AND sequence >= $2
+                   ORDER BY sequence DESC
+                   LIMIT $3
+                 ) page
+                 ORDER BY sequence`,
+                [threadId, metadata.visible_from_sequence, limit + 1],
+              );
+      const hasMore = result.rows.length > limit;
+      const rows =
+        query.beforeSequence !== undefined || query.afterSequence === undefined
+          ? result.rows.slice(hasMore ? 1 : 0)
+          : result.rows.slice(0, limit);
+      return {
+        items: rows.map(messageFromRow),
+        headSequence: metadata.sequence,
+        accessVersion: metadata.access_version,
+        hasMore,
+      };
+    });
+  }
+
+  async getThreadMessage(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    messageId: ThreadMessage["id"],
+  ): Promise<ThreadMessage | undefined> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT m.*
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         WHERE m.thread_id = $1
+           AND m.id = $3
+           AND m.sequence >= viewer.visible_from_sequence`,
+        [threadId, principalId, messageId],
+      );
+      return result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
     });
   }
 
@@ -636,43 +1152,101 @@ export class PostgresPlatformStore implements PlatformStore {
     at: string;
   }): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
     return this.write(async (client) => {
-      const current = await this.getThreadInTransaction(client, input.threadId);
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        input.threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
       if (!current) throw new Error("Thread was not found.");
       if (!current.thread.parentThreadId) {
         throw new Error("Thread did not branch from another conversation.");
       }
-      if (current.thread.concludedAt) {
-        throw new Error("Thread was already concluded.");
-      }
       if (!current.thread.participantIds.includes(input.actorId)) {
         throw new Error("Only a participant can conclude the Thread.");
       }
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        current.thread.parentThreadId,
+      ]);
       const parent = await this.getThreadInTransaction(
         client,
         current.thread.parentThreadId,
+        undefined,
+        0,
       );
       if (!parent) throw new Error("Parent Thread was not found.");
       if (!parent.thread.participantIds.includes(input.actorId)) {
         throw new Error("Only a participant of the parent can conclude.");
       }
+      const existingMessage = await client.query(
+        "SELECT * FROM messages WHERE thread_id = $1 AND id = $2",
+        [parent.thread.id, input.messageId],
+      );
+      const existing = existingMessage.rows[0]
+        ? messageFromRow(existingMessage.rows[0])
+        : undefined;
+      if (current.thread.concludedAt) {
+        if (
+          existing &&
+          existing.senderId === input.actorId &&
+          existing.body === input.conclusion
+        ) {
+          return { thread: current.thread, parentMessage: existing };
+        }
+        throw new Error("Thread was already concluded.");
+      }
+      if (existing) throw new Error("Client message ID was already used.");
 
-      const parentMessage = buildThreadMessage(parent.thread, {
+      const candidate = buildThreadMessage(parent.thread, {
         id: input.messageId,
         senderId: input.actorId,
         body: input.conclusion,
         createdAt: input.at,
       });
-      await client.query(
-        "UPDATE threads SET sequence = $2, updated_at = now() WHERE id = $1",
-        [parent.thread.id, parentMessage.sequence],
+      const parentHead = await client.query<{ sequence: number }>(
+        `UPDATE threads
+         SET sequence = sequence + 1,
+             latest_message_at = $2,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING sequence`,
+        [parent.thread.id, candidate.createdAt],
       );
+      const parentMessage = {
+        ...candidate,
+        sequence: parentHead.rows[0]!.sequence,
+      };
       await this.insertMessage(client, parentMessage);
       await client.query(
         `UPDATE threads SET concluded_at = $2, concluded_by = $3, updated_at = now()
          WHERE id = $1`,
         [input.threadId, input.at, input.actorId],
       );
-      const updated = await this.getThreadInTransaction(client, input.threadId);
+      const updated = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      await this.recordConversationChange(client, {
+        eventId: parentMessage.id as unknown as OperationId,
+        thread: {
+          ...parent.thread,
+          sequence: parentMessage.sequence,
+          latestMessageAt: parentMessage.createdAt,
+        },
+        actorId: input.actorId,
+        reason: "message_appended",
+      });
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: updated!.thread,
+        actorId: input.actorId,
+        reason: "thread_concluded",
+      });
       return { thread: updated!.thread, parentMessage };
     });
   }
@@ -683,7 +1257,12 @@ export class PostgresPlatformStore implements PlatformStore {
     actorId: PrincipalId,
   ): Promise<{ thread: ConversationThread; event: ThreadMessage }> {
     return this.write(async (client) => {
-      const current = await this.getThreadInTransaction(client, threadId);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
       if (!current) throw new Error("Thread was not found.");
       await this.ensurePrincipal(client, standInId, "stand_in");
       await this.ensurePrincipal(client, actorId);
@@ -694,6 +1273,8 @@ export class PostgresPlatformStore implements PlatformStore {
            access_changed_at_sequence = $3,
            prior_history_granted = $4,
            sequence = $5,
+           access_version = access_version + 1,
+           latest_message_at = $6,
            updated_at = now()
          WHERE id = $1`,
         [
@@ -702,18 +1283,39 @@ export class PostgresPlatformStore implements PlatformStore {
           transition.thread.accessChangedAtSequence ?? null,
           transition.thread.priorHistoryGranted,
           transition.thread.sequence,
+          transition.event.createdAt,
         ],
       );
       await client.query(
         `INSERT INTO thread_participants
-          (organization_id, thread_id, principal_id, stand_in)
-         VALUES ($1, $2, $3, true)
+          (organization_id, thread_id, principal_id, stand_in,
+           visible_from_sequence, revoked_at)
+         VALUES ($1, $2, $3, true, $4, NULL)
          ON CONFLICT (thread_id, principal_id)
-         DO UPDATE SET stand_in = true, updated_at = now()`,
-        [this.organizationId, threadId, standInId],
+         DO UPDATE SET
+           stand_in = true,
+           visible_from_sequence = LEAST(
+             thread_participants.visible_from_sequence,
+             EXCLUDED.visible_from_sequence
+           ),
+           revoked_at = NULL,
+           updated_at = now()`,
+        [this.organizationId, threadId, standInId, transition.event.sequence],
       );
       await this.insertMessage(client, transition.event);
-      return transition;
+      const updated = (await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      ))!.thread;
+      await this.recordConversationChange(client, {
+        eventId: transition.event.id as unknown as OperationId,
+        thread: updated,
+        actorId,
+        reason: "access_changed",
+      });
+      return { ...transition, thread: updated };
     });
   }
 
@@ -923,29 +1525,186 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
-  async listThreads(kind?: ConversationThread["kind"]) {
+  async listThreads(
+    kind?: ConversationThread["kind"],
+    principalId?: PrincipalId,
+  ) {
     return this.read(async (client) => {
-      const result = await client.query<{ id: ThreadId }>(
-        `SELECT id FROM threads
-         WHERE ($1::text IS NULL OR kind = $1)
-         ORDER BY created_at DESC
+      const result = await client.query<{
+        id: ThreadId;
+        unread_count: number;
+        mention_count: number;
+      }>(
+        `SELECT t.id,
+                CASE
+                  WHEN $2::uuid IS NULL THEN 0
+                  ELSE (
+                    SELECT count(*)::integer
+                    FROM messages m
+                    JOIN thread_participants viewer
+                      ON viewer.thread_id = m.thread_id
+                     AND viewer.principal_id = $2
+                     AND viewer.revoked_at IS NULL
+                    LEFT JOIN thread_reads tr
+                      ON tr.thread_id = m.thread_id
+                     AND tr.principal_id = $2
+                    WHERE m.thread_id = t.id
+                      AND m.sequence >= viewer.visible_from_sequence
+                      AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+                      AND m.sender_id <> $2
+                  )
+                END AS unread_count,
+                CASE
+                  WHEN $2::uuid IS NULL THEN 0
+                  ELSE (
+                    SELECT count(*)::integer
+                    FROM messages m
+                    JOIN thread_participants viewer
+                      ON viewer.thread_id = m.thread_id
+                     AND viewer.principal_id = $2
+                     AND viewer.revoked_at IS NULL
+                    LEFT JOIN thread_reads tr
+                      ON tr.thread_id = m.thread_id
+                     AND tr.principal_id = $2
+                    WHERE m.thread_id = t.id
+                      AND m.sequence >= viewer.visible_from_sequence
+                      AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+                      AND m.sender_id <> $2
+                      AND $2 = ANY(m.mentioned_principal_ids)
+                  )
+                END AS mention_count
+         FROM threads t
+         WHERE ($1::text IS NULL OR t.kind = $1)
+           AND (
+             $2::uuid IS NULL OR EXISTS (
+               SELECT 1
+               FROM thread_participants tp
+               WHERE tp.thread_id = t.id
+                 AND tp.principal_id = $2
+                 AND tp.revoked_at IS NULL
+             )
+           )
+         ORDER BY COALESCE(t.latest_message_at, t.created_at) DESC
          LIMIT 50`,
-        [kind ?? null],
+        [kind ?? null, principalId ?? null],
       );
       const items = await Promise.all(
-        result.rows.map((row) => this.getThreadInTransaction(client, row.id)),
+        result.rows.map(async (row) => {
+          const item = await this.getThreadInTransaction(
+            client,
+            row.id,
+            principalId,
+            100,
+          );
+          return item
+            ? {
+                ...item,
+                unreadCount: row.unread_count,
+                mentionCount: row.mention_count,
+              }
+            : undefined;
+        }),
       );
       return items.filter(
         (
           item,
-        ): item is { thread: ConversationThread; messages: ThreadMessage[] } =>
-          item !== undefined,
+        ): item is {
+          thread: ConversationThread;
+          messages: ThreadMessage[];
+          unreadCount: number;
+          mentionCount: number;
+        } => item !== undefined,
       );
     });
   }
 
-  async getThread(threadId: ThreadId) {
-    return this.read((client) => this.getThreadInTransaction(client, threadId));
+  async getThread(threadId: ThreadId, principalId?: PrincipalId) {
+    return this.read(async (client) => {
+      const item = await this.getThreadInTransaction(
+        client,
+        threadId,
+        principalId,
+        100,
+      );
+      if (!item) return undefined;
+      if (!principalId) {
+        return { ...item, unreadCount: 0, mentionCount: 0 };
+      }
+      const unread = await client.query<{ unread_count: number }>(
+        `SELECT count(*)::integer AS unread_count
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         LEFT JOIN thread_reads tr
+           ON tr.thread_id = m.thread_id
+          AND tr.principal_id = $2
+         WHERE m.thread_id = $1
+           AND m.sequence >= viewer.visible_from_sequence
+           AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+           AND m.sender_id <> $2`,
+        [threadId, principalId],
+      );
+      const mentions = await client.query<{ mention_count: number }>(
+        `SELECT count(*)::integer AS mention_count
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         LEFT JOIN thread_reads tr
+           ON tr.thread_id = m.thread_id
+          AND tr.principal_id = $2
+         WHERE m.thread_id = $1
+           AND m.sequence >= viewer.visible_from_sequence
+           AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+           AND m.sender_id <> $2
+           AND $2 = ANY(m.mentioned_principal_ids)`,
+        [threadId, principalId],
+      );
+      return {
+        ...item,
+        unreadCount: unread.rows[0]?.unread_count ?? 0,
+        mentionCount: mentions.rows[0]?.mention_count ?? 0,
+      };
+    });
+  }
+
+  async hasThreadAccess(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): Promise<boolean> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT 1
+         FROM thread_participants
+         WHERE thread_id = $1
+           AND principal_id = $2
+           AND revoked_at IS NULL`,
+        [threadId, principalId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+
+  async getThreadAccessVersion(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): Promise<number | undefined> {
+    return this.read(async (client) => {
+      const result = await client.query<{ access_version: number }>(
+        `SELECT t.access_version
+         FROM threads t
+         JOIN thread_participants tp
+           ON tp.thread_id = t.id
+          AND tp.principal_id = $2
+          AND tp.revoked_at IS NULL
+         WHERE t.id = $1`,
+        [threadId, principalId],
+      );
+      return result.rows[0]?.access_version;
+    });
   }
 
   async getSpec(specId: SpecId) {
@@ -1192,6 +1951,8 @@ export class PostgresPlatformStore implements PlatformStore {
   private async getThreadInTransaction(
     client: PoolClient,
     threadId: ThreadId,
+    viewerId?: PrincipalId,
+    messageLimit?: number,
   ): Promise<
     { thread: ConversationThread; messages: ThreadMessage[] } | undefined
   > {
@@ -1204,14 +1965,37 @@ export class PostgresPlatformStore implements PlatformStore {
     const participants = await client.query<{
       principal_id: PrincipalId;
       stand_in: boolean;
+      visible_from_sequence: number;
     }>(
-      "SELECT principal_id, stand_in FROM thread_participants WHERE thread_id = $1",
+      `SELECT principal_id, stand_in, visible_from_sequence
+       FROM thread_participants
+       WHERE thread_id = $1 AND revoked_at IS NULL`,
       [threadId],
     );
-    const messages = await client.query(
-      "SELECT * FROM messages WHERE thread_id = $1 ORDER BY sequence",
-      [threadId],
-    );
+    const viewer = viewerId
+      ? participants.rows.find((item) => item.principal_id === viewerId)
+      : undefined;
+    if (viewerId && !viewer) return undefined;
+    const messages =
+      messageLimit === undefined
+        ? await client.query(
+            `SELECT * FROM messages
+             WHERE thread_id = $1
+               AND ($2::integer IS NULL OR sequence >= $2)
+             ORDER BY sequence`,
+            [threadId, viewer?.visible_from_sequence ?? null],
+          )
+        : await client.query(
+            `SELECT * FROM (
+               SELECT * FROM messages
+               WHERE thread_id = $1
+                 AND ($2::integer IS NULL OR sequence >= $2)
+               ORDER BY sequence DESC
+               LIMIT $3
+             ) tail
+             ORDER BY sequence`,
+            [threadId, viewer?.visible_from_sequence ?? null, messageLimit],
+          );
     return {
       thread: {
         id: row.id,
@@ -1227,6 +2011,10 @@ export class PostgresPlatformStore implements PlatformStore {
           : {}),
         priorHistoryGranted: row.prior_history_granted,
         sequence: row.sequence,
+        accessVersion: row.access_version,
+        ...(row.latest_message_at
+          ? { latestMessageAt: asIso(row.latest_message_at) }
+          : {}),
         ...(row.team_id ? { teamId: row.team_id } : {}),
         ...(row.parent_thread_id
           ? { parentThreadId: row.parent_thread_id }
@@ -1306,22 +2094,86 @@ export class PostgresPlatformStore implements PlatformStore {
   ): Promise<void> {
     await client.query(
       `INSERT INTO messages
-        (id, organization_id, thread_id, sender_id, sequence, kind, body,
-         encrypted_body, server_readable, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        (id, organization_id, thread_id, sender_id, client_message_id,
+         sequence, kind, body, encrypted_body, server_readable,
+         mentioned_principal_ids, attachments, stream_state, revision, created_at)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15
+       )`,
       [
         message.id,
         this.organizationId,
         message.threadId,
         message.senderId,
+        message.id,
         message.sequence,
         message.kind,
         message.body,
         message.encryptedBody ?? null,
         message.serverReadable,
+        message.mentionedPrincipalIds ?? [],
+        json(message.attachments ?? []),
+        message.streamState ?? "complete",
+        message.revision ?? 1,
         message.createdAt,
       ],
     );
+  }
+
+  private async resolveMessageAttachments(
+    client: PoolClient,
+    threadId: ThreadId,
+    senderId: PrincipalId,
+    messageId: ThreadMessage["id"],
+    attachmentIds: ThreadMessageAttachment["id"][],
+  ): Promise<ThreadMessageAttachment[]> {
+    const uniqueIds = [...new Set(attachmentIds)];
+    if (uniqueIds.length !== attachmentIds.length) {
+      throw new Error("Attachment IDs must be unique.");
+    }
+    if (uniqueIds.length === 0) return [];
+    const result = await client.query<{
+      id: ThreadMessageAttachment["id"];
+      thread_id: ThreadId;
+      owner_id: PrincipalId;
+      file_name: string;
+      content_type: string;
+      byte_size: number;
+      state: string;
+      message_id: ThreadMessage["id"] | null;
+    }>(
+      `SELECT id, thread_id, owner_id, file_name, content_type, byte_size,
+              state, message_id
+       FROM attachments
+       WHERE id = ANY($1::uuid[])
+       FOR UPDATE`,
+      [uniqueIds],
+    );
+    if (result.rows.length !== uniqueIds.length) {
+      throw new Error("One or more attachments were not found.");
+    }
+    const byId = new Map(result.rows.map((row) => [row.id, row]));
+    return uniqueIds.map((id) => {
+      const row = byId.get(id)!;
+      if (
+        row.thread_id !== threadId ||
+        row.owner_id !== senderId ||
+        row.state !== "available" ||
+        (row.message_id !== null && row.message_id !== messageId)
+      ) {
+        throw new Error("An attachment is not available for this message.");
+      }
+      if (!row.content_type.startsWith("image/")) {
+        throw new Error("Conversation attachments must be images.");
+      }
+      return {
+        id: row.id,
+        fileName: row.file_name,
+        contentType: row.content_type,
+        byteSize: Number(row.byte_size),
+      };
+    });
   }
 
   private async createInboxItem(
@@ -1391,6 +2243,83 @@ export class PostgresPlatformStore implements PlatformStore {
         kind,
       ],
     );
+  }
+
+  private async recordConversationChange(
+    client: PoolClient,
+    input: {
+      eventId: OperationId;
+      thread: ConversationThread;
+      actorId: PrincipalId;
+      reason:
+        | "thread_created"
+        | "message_appended"
+        | "message_updated"
+        | "read_cursor_changed"
+        | "access_changed"
+        | "thread_concluded";
+      channels?: string[];
+      messageId?: ThreadMessage["id"];
+    },
+  ): Promise<void> {
+    const occurredAt = new Date().toISOString();
+    const activity = await client.query(
+      `INSERT INTO activity_events
+        (organization_id, operation_id, actor_id, aggregate_type, aggregate_id,
+         event_type, metadata, occurred_at)
+       VALUES ($1, $2, $3, 'conversation', $4, 'conversation.changed', $5, $6)
+       ON CONFLICT (operation_id) DO NOTHING
+       RETURNING operation_id`,
+      [
+        this.organizationId,
+        input.eventId,
+        input.actorId,
+        input.thread.id,
+        json({
+          reason: input.reason,
+          headSequence: input.thread.sequence,
+          accessVersion: input.thread.accessVersion ?? 1,
+          ...(input.messageId ? { messageId: input.messageId } : {}),
+        }),
+        occurredAt,
+      ],
+    );
+    if (activity.rowCount === 0) return;
+
+    const payload = {
+      schemaVersion: 1,
+      eventId: input.eventId,
+      type: "conversation.changed",
+      threadId: input.thread.id,
+      headSequence: input.thread.sequence,
+      accessVersion: input.thread.accessVersion ?? 1,
+      reason: input.reason,
+      ...(input.messageId ? { messageId: input.messageId } : {}),
+      occurredAt,
+    };
+    await client.query(
+      `INSERT INTO outbox
+        (operation_id, organization_id, topic, payload, attempts, available_at)
+       VALUES ($1, $2, 'conversation.changed', $3, 0, $4)`,
+      [input.eventId, this.organizationId, json(payload), occurredAt],
+    );
+    const channels = new Set(
+      input.channels ?? [
+        `intero:thread:${input.thread.id}`,
+        ...input.thread.participantIds.map(
+          (principalId) => `intero:user:${principalId}`,
+        ),
+      ],
+    );
+    for (const channel of channels) {
+      await client.query(
+        `INSERT INTO outbox_publications
+          (operation_id, organization_id, channel, available_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (operation_id, channel) DO NOTHING`,
+        [input.eventId, this.organizationId, channel, occurredAt],
+      );
+    }
   }
 
   private async commit<T extends object>(
@@ -1563,7 +2492,23 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     serverReadable: row.server_readable,
     ...(row.encrypted_body ? { encryptedBody: row.encrypted_body } : {}),
     ...(row.operation_id ? { operationId: row.operation_id } : {}),
+    ...((row.mentioned_principal_ids as PrincipalId[] | undefined)?.length
+      ? { mentionedPrincipalIds: row.mentioned_principal_ids as PrincipalId[] }
+      : {}),
+    ...((row.attachments as ThreadMessageAttachment[] | undefined)?.length
+      ? { attachments: row.attachments as ThreadMessageAttachment[] }
+      : {}),
+    streamState:
+      (row.stream_state as ThreadMessageStreamState | undefined) ?? "complete",
+    revision: Number(row.revision ?? 1),
   };
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].toSorted();
+  const sortedRight = [...right].toSorted();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function revisionFromRow(row: QueryResultRow): SpecRevision {

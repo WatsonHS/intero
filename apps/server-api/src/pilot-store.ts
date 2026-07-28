@@ -423,6 +423,9 @@ export interface PilotStore {
     standInOwnerId: PrincipalId,
   ): Promise<PilotStandInExchange[]>;
   recordStandInExchange(input: {
+    id?: string;
+    questionMessageId?: string;
+    answerMessageId?: string;
     projectId: ProjectId;
     standInOwnerId: PrincipalId;
     askedByPrincipalId: PrincipalId;
@@ -2519,6 +2522,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
   }
 
   async recordStandInExchange(input: {
+    id?: string;
+    questionMessageId?: string;
+    answerMessageId?: string;
     projectId: ProjectId;
     standInOwnerId: PrincipalId;
     askedByPrincipalId: PrincipalId;
@@ -2533,10 +2539,16 @@ export abstract class SnapshotPilotStore implements PilotStore {
         const project = requireProject(snapshot, input.projectId);
         requireParticipant(snapshot, project, input.askedByPrincipalId);
         requireParticipant(snapshot, project, input.standInOwnerId);
+        const existing = input.id
+          ? (snapshot.standInExchanges ?? []).find(
+              (exchange) => exchange.id === input.id,
+            )
+          : undefined;
+        if (existing) return existing;
         const exchange: PilotStandInExchange = {
-          id: uuidv7(),
-          questionMessageId: uuidv7(),
-          answerMessageId: uuidv7(),
+          id: input.id ?? uuidv7(),
+          questionMessageId: input.questionMessageId ?? uuidv7(),
+          answerMessageId: input.answerMessageId ?? uuidv7(),
           projectId: input.projectId,
           principalId: input.standInOwnerId,
           askedByPrincipalId: input.askedByPrincipalId,

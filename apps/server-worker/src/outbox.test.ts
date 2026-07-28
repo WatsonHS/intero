@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CentrifugoRealtime,
@@ -94,6 +94,42 @@ describe("Outbox dispatcher", () => {
         },
       },
     ]);
+  });
+
+  it("publishes conversation hints without adding content or envelope fields", async () => {
+    const event = {
+      schemaVersion: 1,
+      eventId: "019b5ac0-7600-7000-8000-000000000101",
+      type: "conversation.changed",
+      threadId: "019b5ac0-7600-7000-8000-000000000102",
+      headSequence: 7,
+      accessVersion: 2,
+      reason: "message_appended",
+      occurredAt: "2026-07-28T08:00:00.000Z",
+    };
+    const repository = new MemoryOutbox([
+      {
+        operationId: event.eventId,
+        channel: `intero:thread:${event.threadId}`,
+        topic: "conversation.changed",
+        payload: event,
+        attempts: 1,
+      },
+    ]);
+    const publish = vi.fn(
+      async (_channel: string, _event: Record<string, unknown>) => undefined,
+    );
+    const dispatcher = new OutboxDispatcher("organization-1", repository, {
+      publish,
+    });
+
+    await expect(dispatcher.dispatch()).resolves.toBe(1);
+    expect(publish).toHaveBeenCalledWith(
+      `intero:thread:${event.threadId}`,
+      event,
+    );
+    expect(publish.mock.calls[0]?.[1]).not.toHaveProperty("topic");
+    expect(publish.mock.calls[0]?.[1]).not.toHaveProperty("operationId");
   });
 
   it("retains failed publications for retry", async () => {

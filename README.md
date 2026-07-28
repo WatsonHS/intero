@@ -69,6 +69,8 @@ The accepted post-Pilot product model and delivery order live in
 [`ADR-0007`](docs/adr/0007-post-pilot-product-model-and-delivery-sequence.md).
 The bounded Phase 7 automation target lives in
 [`ADR-0008`](docs/adr/0008-phase-7-bounded-stand-in-and-agent-automation.md).
+The proposed production realtime conversation target lives in
+[`ADR-0009`](docs/adr/0009-durable-authorized-realtime-conversations.md).
 The product requirements live in
 [`docs/brainstorms/2026-07-24-intero-product-requirements.md`](docs/brainstorms/2026-07-24-intero-product-requirements.md).
 

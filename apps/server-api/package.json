@@ -15,7 +15,7 @@
     "demo:seed": "tsx src/demo-data-cli.ts seed",
     "demo:reset": "tsx src/demo-data-cli.ts reset",
     "demo:reset-and-seed": "tsx src/demo-data-cli.ts reset-and-seed",
-    "test:database": "vitest run --root ../.. apps/server-api/src/database/rls.integration.test.ts apps/server-api/src/postgres-store.integration.test.ts",
+    "test:database": "vitest run --no-file-parallelism --root ../.. apps/server-api/src/database/rls.integration.test.ts apps/server-api/src/postgres-store.integration.test.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -35,6 +35,7 @@
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.4.0",
     "fastify-type-provider-zod": "^6.0.0",
+    "jose": "^6.2.4",
     "pg": "^8.22.0",
     "pino": "^9.7.0",
     "zod": "^4.0.0"
