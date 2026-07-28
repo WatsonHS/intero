@@ -13,7 +13,12 @@ import type {
   PilotWorkNarrative,
   PublicWorkProjection,
 } from "@intero/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -61,10 +66,9 @@ import {
   type WorkLine,
 } from "./work-lines.js";
 import {
-  PULSE_MAX_ITEMS,
-  PULSE_PAGE_SIZE,
   isInDetailWindow,
-  pulseDetailOnlyCount,
+  isInPulseDay,
+  selectPulseProjectWork,
 } from "./work-visibility.js";
 import {
   ProjectAgentConnectionBadge,
@@ -107,10 +111,10 @@ function CanonicalTeamPulseView({
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
   const [openOwners, setOpenOwners] = useState<Set<string>>(new Set());
+  const pilotProjects = pilot?.projects.data?.projects ?? [];
   const pilotProject =
-    pilot?.projects.data?.projects.find(
-      (project) => project.id === pilot.selectedProjectId,
-    ) ?? pilot?.projects.data?.projects[0];
+    pilotProjects.find((project) => project.id === pilot?.selectedProjectId) ??
+    pilotProjects[0];
 
   const pulse = useQuery({
     queryKey: ["team-pulse"],
@@ -126,30 +130,32 @@ function CanonicalTeamPulseView({
     queryKey: ["threads", "stand_in"],
     queryFn: ({ signal }) => getThreads("stand_in", signal),
   });
-  const pilotOverview = useQuery({
-    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
-    queryFn: ({ signal }) =>
-      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
-    refetchInterval: 1_500,
+  const pilotOverviewQueries = useQueries({
+    queries: pilotProjects.map((project) => ({
+      queryKey: ["pilot", "overview", pilot?.identityId, project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getPilotOverview(pilot!.identityId!, project.id, signal),
+      enabled: Boolean(pilot?.enabled && pilot.identityId),
+      refetchInterval: 4_000,
+    })),
   });
-  const projectWork = useQuery({
-    queryKey: ["project-work", pilotProject?.id],
-    queryFn: ({ signal }) => getProjectWork(pilotProject!.id, signal),
-    enabled: Boolean(
-      pilotProject &&
-      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-    ),
-    refetchInterval: 4_000,
+  const projectWorkQueries = useQueries({
+    queries: pilotProjects.map((project) => ({
+      queryKey: ["project-work", project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getProjectWork(project.id, signal),
+      enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+      refetchInterval: 4_000,
+    })),
   });
-  const projectSpecs = useQuery({
-    queryKey: ["project-specs", pilotProject?.id],
-    queryFn: ({ signal }) => getProjectSpecs(pilotProject!.id, signal),
-    enabled: Boolean(
-      pilotProject &&
-      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-    ),
-    refetchInterval: 4_000,
+  const projectSpecQueries = useQueries({
+    queries: pilotProjects.map((project) => ({
+      queryKey: ["project-specs", project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getProjectSpecs(project.id, signal),
+      enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+      refetchInterval: 4_000,
+    })),
   });
   const invalidatePilot = async () => {
     await Promise.all([
@@ -173,24 +179,37 @@ function CanonicalTeamPulseView({
     onSuccess: invalidatePilot,
   });
 
-  const pilotEntries = pilotOverview.data?.pulse ?? [];
+  const pilotOverviews = pilotOverviewQueries.flatMap((query) =>
+    query.data ? [query.data] : [],
+  );
+  const projectWorkPayloads = projectWorkQueries.flatMap((query) =>
+    query.data ? [query.data] : [],
+  );
+  const pilotEntries = pilotOverviews.flatMap((overview) => overview.pulse);
   const agentConnections = summarizeProjectAgentConnections(
-    pilotOverview.data?.bindings ?? [],
+    pilotOverviews.flatMap((overview) => overview.bindings),
     pilot?.identityId,
   );
   const pilotEntryByProjectionId = new Map(
     pilotEntries.map((entry) => [entry.workStateId, entry]),
   );
-  const projectPulse = projectWork.data
-    ? projectWorkToPulse(projectWork.data)
-    : { projections: [], contexts: new Map<string, ProjectPulseContext>() };
+  const projectPulses = projectWorkPayloads.map(projectWorkToPulse);
+  const projectContexts = new Map<string, ProjectPulseContext>();
+  for (const projectPulse of projectPulses) {
+    for (const [projectionId, context] of projectPulse.contexts) {
+      projectContexts.set(projectionId, context);
+    }
+  }
   const allProjections = mergeProjections(
     pulse.data?.projections ?? [],
     pilotEntries.map(pilotPulseEntryToProjection),
-    projectPulse.projections,
+    projectPulses.flatMap((projectPulse) => projectPulse.projections),
   );
-  const projections = allProjections.filter((projection) =>
+  const detailProjections = allProjections.filter((projection) =>
     isInDetailWindow(projection.freshnessAt),
+  );
+  const projections = detailProjections.filter((projection) =>
+    isInPulseDay(projection.freshnessAt),
   );
   const staleAfterSeconds = pulse.data?.staleAfterSeconds;
   const principalNames = new Map(
@@ -199,42 +218,62 @@ function CanonicalTeamPulseView({
       principal.displayName,
     ]) ?? [],
   );
-  for (const principal of pilotOverview.data?.principals ?? []) {
-    principalNames.set(principal.id, principal.displayName);
+  for (const overview of pilotOverviews) {
+    for (const principal of overview.principals) {
+      principalNames.set(principal.id, principal.displayName);
+    }
   }
   const projectNames = new Map<string, string>(
-    pilot?.projects.data?.projects.map((project) => [
-      project.id,
-      project.name,
-    ]) ?? [],
+    pilotProjects.map((project) => [project.id, project.name]),
   );
-  if (projectWork.data) {
-    projectNames.set(
-      projectWork.data.project.id,
-      projectWork.data.project.name,
-    );
+  for (const projectWork of projectWorkPayloads) {
+    projectNames.set(projectWork.project.id, projectWork.project.name);
   }
   const people = groupByOwner(projections);
-  const specsInReview =
-    projectSpecs.data?.items.filter((item) => item.spec.status === "in_review")
-      .length ?? 0;
+  const detailCountByOwner = new Map<string, number>();
+  for (const projection of detailProjections) {
+    detailCountByOwner.set(
+      projection.ownerId,
+      (detailCountByOwner.get(projection.ownerId) ?? 0) + 1,
+    );
+  }
+  const specsInReview = projectSpecQueries.reduce(
+    (total, query) =>
+      total +
+      (query.data?.items.filter((item) => item.spec.status === "in_review")
+        .length ?? 0),
+    0,
+  );
   const staleProjections = projections.filter((item) =>
     isStale(item.freshnessAt, staleAfterSeconds),
   );
 
   const pilotActive = Boolean(
-    pilot?.enabled && pilot.identityId && pilotProject,
+    pilot?.enabled && pilot.identityId && pilotProjects.length > 0,
   );
-  const pulseReady =
-    pulse.isSuccess || (pilotActive && pilotOverview.isSuccess);
+  const hasPilotSuccess =
+    pilotOverviewQueries.some((query) => query.isSuccess) ||
+    projectWorkQueries.some((query) => query.isSuccess);
+  const pilotSourcesPending = [
+    ...pilotOverviewQueries,
+    ...projectWorkQueries,
+  ].some((query) => query.isPending);
+  const pilotSourcesErrored = [
+    ...pilotOverviewQueries,
+    ...projectWorkQueries,
+  ].some((query) => query.isError);
+  const pulseReady = pulse.isSuccess || hasPilotSuccess;
   const isLoadingState =
-    pulse.isPending && (!pilotActive || pilotOverview.isPending);
+    pulse.isPending &&
+    !hasPilotSuccess &&
+    (!pilotActive || pilotSourcesPending);
   const isEmptyState = pulseReady && projections.length === 0;
-  const isErrorState = pulse.isError && (!pilotActive || pilotOverview.isError);
+  const isErrorState =
+    pulse.isError && !hasPilotSuccess && (!pilotActive || !pilotSourcesPending);
   const showCards = pulseReady && projections.length > 0;
 
   const freshPill =
-    staleProjections.length > 0
+    staleProjections.length > 0 || pilotSourcesErrored
       ? { tone: "amber" as Tone, text: t("pulse.fresh.partial") }
       : { tone: "green" as Tone, text: t("pulse.fresh.live") };
   const freshPillClasses = TONE_CLASSES[freshPill.tone];
@@ -269,11 +308,11 @@ function CanonicalTeamPulseView({
               {t("pulse.lede")}
             </p>
           </div>
-          {pilotProject && pilotOverview.data ? (
+          {pilotActive && pilotOverviews.length > 0 ? (
             <ProjectAgentConnectionBadge
-              bindings={pilotOverview.data.bindings}
+              bindings={pilotOverviews.flatMap((overview) => overview.bindings)}
               identityId={pilot?.identityId}
-              onOpen={() => onOpenAgentConnections(pilotProject.id)}
+              onOpen={() => onOpenAgentConnections()}
             />
           ) : null}
         </header>
@@ -370,28 +409,28 @@ function CanonicalTeamPulseView({
               <PlantIcon size={19} />
             </span>
             <h2 className="mt-[18px] text-[19px] font-semibold tracking-[-0.025em]">
-              {allProjections.length > 0
+              {detailProjections.length > 0
                 ? t("pulse.empty.recentTitle")
                 : agentConnections.connected.length > 0
                   ? "Coding Agent 已连接，等待第一条工作更新"
                   : t("pulse.empty.title")}
             </h2>
             <p className="mt-2.5 max-w-[480px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
-              {allProjections.length > 0
+              {detailProjections.length > 0
                 ? t("pulse.empty.recentBody")
                 : agentConnections.connected.length > 0
-                  ? `已验证的 Agent 会把 ${pilotProject?.name ?? "当前 Project"} 中允许共享的结构化 checkpoint 显示在这里。`
+                  ? "已验证的 Agent 会把所有已连接 Project 中允许共享的结构化 checkpoint 显示在这里。"
                   : t("pulse.empty.body")}
             </p>
             <div className="mt-5 flex gap-[9px]">
               <button
                 type="button"
-                onClick={() => onOpenAgentConnections(pilotProject?.id)}
+                onClick={() => onOpenAgentConnections()}
                 className="h-[34px] cursor-pointer rounded-btn border-0 bg-accent-strong px-3.5 text-[12.5px] font-[620] text-on-accent"
               >
                 {agentConnections.connected.length > 0
                   ? "查看连接状态"
-                  : `为 ${pilotProject?.name ?? "当前 Project"} 连接 Coding Agent`}
+                  : "管理 Coding Agent 连接"}
               </button>
             </div>
           </div>
@@ -435,6 +474,10 @@ function CanonicalTeamPulseView({
                 ownerId={ownerId}
                 name={principalNames.get(ownerId) ?? ownerId.slice(0, 8)}
                 workstreams={workstreams}
+                detailOnlyCount={Math.max(
+                  (detailCountByOwner.get(ownerId) ?? 0) - workstreams.length,
+                  0,
+                )}
                 index={index}
                 staleAfterSeconds={staleAfterSeconds}
                 open={openOwners.has(ownerId)}
@@ -454,7 +497,7 @@ function CanonicalTeamPulseView({
                   })
                 }
                 projectNames={projectNames}
-                projectContextByProjectionId={projectPulse.contexts}
+                projectContextByProjectionId={projectContexts}
               />
             )}
           />
@@ -581,6 +624,7 @@ function PersonCard({
   ownerId,
   name,
   workstreams,
+  detailOnlyCount,
   index,
   staleAfterSeconds,
   open,
@@ -596,6 +640,7 @@ function PersonCard({
   ownerId: string;
   name: string;
   workstreams: PublicWorkProjection[];
+  detailOnlyCount: number;
   index: number;
   staleAfterSeconds: number | undefined;
   open: boolean;
@@ -613,12 +658,7 @@ function PersonCard({
   const load = loadSummary(workstreams);
   const lead = freshest(workstreams) ?? ordered[0]!;
   const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
-  const visible = ordered.slice(0, open ? PULSE_MAX_ITEMS : PULSE_PAGE_SIZE);
-  const nextCount = Math.min(
-    PULSE_PAGE_SIZE,
-    Math.max(ordered.length - PULSE_PAGE_SIZE, 0),
-  );
-  const detailOnlyCount = pulseDetailOnlyCount(ordered.length);
+  const { visible, hiddenProjectCount } = selectPulseProjectWork(ordered, open);
 
   const loadLabel =
     load.blocked > 0
@@ -709,7 +749,7 @@ function PersonCard({
         })}
       </div>
 
-      {ordered.length > PULSE_PAGE_SIZE ? (
+      {hiddenProjectCount > 0 ? (
         <button
           type="button"
           onClick={onToggle}
@@ -719,10 +759,12 @@ function PersonCard({
           {open ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
           {open
             ? t("pulse.card.collapse")
-            : t("pulse.card.more", { count: nextCount })}
+            : `${t("pulse.card.more", {
+                count: hiddenProjectCount,
+              })} · Project`}
         </button>
       ) : null}
-      {open && detailOnlyCount > 0 ? (
+      {detailOnlyCount > 0 ? (
         <button
           type="button"
           onClick={onOpen}

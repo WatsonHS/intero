@@ -4,7 +4,7 @@ import type {
   PrincipalId,
   PublicWorkProjection,
 } from "@intero/domain";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 
 import {
   getActivity,
@@ -79,10 +79,7 @@ export function PersonView({
 }) {
   const { t, formatRelative, formatTime } = useI18n();
   const pilot = usePilotOptional();
-  const pilotProject =
-    pilot?.projects.data?.projects.find(
-      (project) => project.id === pilot.selectedProjectId,
-    ) ?? pilot?.projects.data?.projects[0];
+  const pilotProjects = pilot?.projects.data?.projects ?? [];
 
   const pulse = useQuery({
     queryKey: ["team-pulse"],
@@ -97,23 +94,25 @@ export function PersonView({
     queryKey: ["activity"],
     queryFn: ({ signal }) => getActivity(0, 500, signal),
   });
-  const pilotOverview = useQuery({
-    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
-    queryFn: ({ signal }) =>
-      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
-    refetchInterval: 10_000,
-    refetchOnWindowFocus: true,
+  const pilotOverviewQueries = useQueries({
+    queries: pilotProjects.map((project) => ({
+      queryKey: ["pilot", "overview", pilot?.identityId, project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getPilotOverview(pilot!.identityId!, project.id, signal),
+      enabled: Boolean(pilot?.enabled && pilot.identityId),
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    })),
   });
-  const projectWork = useQuery({
-    queryKey: ["project-work", pilotProject?.id],
-    queryFn: ({ signal }) => getProjectWork(pilotProject!.id, signal),
-    enabled: Boolean(
-      pilotProject &&
-      pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-    ),
-    refetchInterval: 10_000,
-    refetchOnWindowFocus: true,
+  const projectWorkQueries = useQueries({
+    queries: pilotProjects.map((project) => ({
+      queryKey: ["project-work", project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getProjectWork(project.id, signal),
+      enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    })),
   });
   const teams = pilot?.teams.data?.teams ?? [];
   const team = findContactTeam(teams, ownerId);
@@ -134,14 +133,24 @@ export function PersonView({
 
   // Same three sources Team Pulse merges. Dropping one here would show fewer
   // parallel workstreams on the detail page than the card the reader came from.
-  const pilotEntries = pilotOverview.data?.pulse ?? [];
-  const projectPulse = projectWork.data
-    ? projectWorkToPulse(projectWork.data)
-    : { projections: [], contexts: new Map<string, ProjectPulseContext>() };
+  const pilotOverviews = pilotOverviewQueries.flatMap((query) =>
+    query.data ? [query.data] : [],
+  );
+  const projectWorkPayloads = projectWorkQueries.flatMap((query) =>
+    query.data ? [query.data] : [],
+  );
+  const pilotEntries = pilotOverviews.flatMap((overview) => overview.pulse);
+  const projectPulses = projectWorkPayloads.map(projectWorkToPulse);
+  const projectContexts = new Map<string, ProjectPulseContext>();
+  for (const projectPulse of projectPulses) {
+    for (const [projectionId, context] of projectPulse.contexts) {
+      projectContexts.set(projectionId, context);
+    }
+  }
   const projections = [
     ...(pulse.data?.projections ?? []),
     ...pilotEntries.map(pilotPulseEntryToProjection),
-    ...projectPulse.projections,
+    ...projectPulses.flatMap((projectPulse) => projectPulse.projections),
   ];
   const workstreams = [
     ...new Map(
@@ -154,33 +163,37 @@ export function PersonView({
     pilotEntries.map((entry) => [entry.workStateId, entry]),
   );
   const projectNames = new Map<string, string>(
-    pilot?.projects.data?.projects.map((project) => [
-      project.id,
-      project.name,
-    ]) ?? [],
+    pilotProjects.map((project) => [project.id, project.name]),
   );
-  if (projectWork.data) {
-    projectNames.set(
-      projectWork.data.project.id,
-      projectWork.data.project.name,
-    );
+  for (const projectWork of projectWorkPayloads) {
+    projectNames.set(projectWork.project.id, projectWork.project.name);
   }
+  const pilotPrincipal = pilotOverviews
+    .flatMap((overview) => overview.principals)
+    .find((principal) => principal.id === ownerId);
   const principalName =
     teamMember?.displayName ??
-    pilotOverview.data?.principals.find((principal) => principal.id === ownerId)
-      ?.displayName ??
+    pilotPrincipal?.displayName ??
     pulse.data?.principals.find((principal) => principal.id === ownerId)
       ?.displayName ??
     ownerId.slice(0, 8);
   const profileKnown = Boolean(
     teamMember ??
-    pilotOverview.data?.principals.find(
-      (principal) => principal.id === ownerId,
-    ) ??
+    pilotPrincipal ??
     pulse.data?.principals.find((principal) => principal.id === ownerId),
   );
-  const pulseReady = pulse.isSuccess || pilotOverview.isSuccess;
-  const pulsePending = pulse.isPending && pilotOverview.isPending;
+  const hasPilotSuccess =
+    pilotOverviewQueries.some((query) => query.isSuccess) ||
+    projectWorkQueries.some((query) => query.isSuccess);
+  const pilotSourcesPending = [
+    ...pilotOverviewQueries,
+    ...projectWorkQueries,
+  ].some((query) => query.isPending);
+  const pulseReady = pulse.isSuccess || hasPilotSuccess;
+  const pulsePending =
+    pulse.isPending &&
+    !hasPilotSuccess &&
+    (pilotSourcesPending || pilotProjects.length === 0);
   if (!profileKnown && (!pulseReady || workstreams.length === 0)) {
     return (
       <div className="grid h-full grid-cols-[minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)] animate-view-enter">
@@ -416,11 +429,7 @@ export function PersonView({
               <WorkstreamCard
                 key={workstream.id}
                 workstream={workstream}
-                line={lineFor(
-                  workstream,
-                  entryByProjectionId,
-                  projectPulse.contexts,
-                )}
+                line={lineFor(workstream, entryByProjectionId, projectContexts)}
                 projectName={projectNameFor(workstream, projectNames, t)}
                 stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
               />
@@ -459,7 +468,7 @@ export function PersonView({
                     line={lineFor(
                       workstream,
                       entryByProjectionId,
-                      projectPulse.contexts,
+                      projectContexts,
                     )}
                     projectName={projectNameFor(workstream, projectNames, t)}
                     stale
