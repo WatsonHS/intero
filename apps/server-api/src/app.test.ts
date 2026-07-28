@@ -18,6 +18,7 @@ import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
 const STAND_IN = personalStandInId(ALEX);
 const PRIYA = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
+const MORGAN = "019b5ac0-7600-7000-8000-000000000005" as PrincipalId;
 
 function auth(principalId: PrincipalId = ALEX) {
   return { "x-intero-dev-principal-id": principalId };
@@ -29,7 +30,15 @@ describe("Intero API vertical slice", () => {
 
   beforeEach(async () => {
     store = new InMemoryPlatformStore();
-    app = await buildTestApp({ store, logger: false });
+    app = await buildTestApp({
+      store,
+      logger: false,
+      pilotIdentities: [
+        { id: ALEX, displayName: "Alex Rivera", kind: "human" },
+        { id: PRIYA, displayName: "Priya Shah", kind: "human" },
+        { id: MORGAN, displayName: "Morgan Chen", kind: "human" },
+      ],
+    });
   });
 
   afterEach(async () => {
@@ -303,6 +312,149 @@ describe("Intero API vertical slice", () => {
         body: "Committed once.",
       }),
     ]);
+  });
+
+  it("persists same-thread quote replies and rejects cross-thread references", async () => {
+    const threadId = uuidv7();
+    const otherThreadId = uuidv7();
+    const originalMessageId = uuidv7();
+    const otherMessageId = uuidv7();
+    for (const [id, title] of [
+      [threadId, "Reply thread"],
+      [otherThreadId, "Other thread"],
+    ]) {
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/threads",
+        headers: auth(ALEX),
+        payload: {
+          id,
+          kind: "human_direct",
+          title,
+          participantIds: [ALEX],
+          standInIds: [],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          createdAt: new Date().toISOString(),
+        },
+      });
+      expect(created.statusCode).toBe(201);
+    }
+    for (const [targetThreadId, clientMessageId, body] of [
+      [threadId, originalMessageId, "Original message"],
+      [otherThreadId, otherMessageId, "Outside this conversation"],
+    ]) {
+      const sent = await app.inject({
+        method: "POST",
+        url: `/v1/threads/${targetThreadId}/messages`,
+        headers: auth(ALEX),
+        payload: { clientMessageId, body },
+      });
+      expect(sent.statusCode).toBe(201);
+    }
+
+    const replyId = uuidv7();
+    const sendReply = (replyToMessageId?: string) =>
+      app.inject({
+        method: "POST",
+        url: `/v1/threads/${threadId}/messages`,
+        headers: auth(ALEX),
+        payload: {
+          clientMessageId: replyId,
+          body: "Quoted reply",
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        },
+      });
+    const first = await sendReply(originalMessageId);
+    const retry = await sendReply(originalMessageId);
+    const drift = await sendReply();
+    const crossThread = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: uuidv7(),
+        body: "Invalid quote",
+        replyToMessageId: otherMessageId,
+      },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({
+      id: replyId,
+      replyToMessageId: originalMessageId,
+    });
+    expect(retry.json()).toEqual(first.json());
+    expect(drift.statusCode).toBe(400);
+    expect(crossThread.statusCode).toBe(404);
+    expect(crossThread.json()).toMatchObject({
+      code: "DOMAIN_ERROR",
+      message: "Reply message was not found.",
+    });
+  });
+
+  it("adds, deduplicates, and removes durable message reactions", async () => {
+    const threadId = uuidv7();
+    const messageId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "room",
+        title: "Reaction room",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(ALEX),
+      payload: { clientMessageId: messageId, body: "Ship it." },
+    });
+    const react = (principalId: PrincipalId, emoji: string, reacted: boolean) =>
+      app.inject({
+        method: "PUT",
+        url: `/v1/threads/${threadId}/messages/${messageId}/reaction`,
+        headers: auth(principalId),
+        payload: { emoji, reacted },
+      });
+
+    const added = await react(ALEX, "👍", true);
+    expect(added.statusCode).toBe(200);
+    expect(added.json()).toMatchObject({
+      revision: 2,
+      reactions: [{ emoji: "👍", principalIds: [ALEX] }],
+    });
+
+    const exactRetry = await react(ALEX, "👍", true);
+    expect(exactRetry.json()).toMatchObject({
+      revision: 2,
+      reactions: [{ emoji: "👍", principalIds: [ALEX] }],
+    });
+
+    const joined = await react(PRIYA, "👍", true);
+    expect(joined.json()).toMatchObject({
+      revision: 3,
+      reactions: [{ emoji: "👍", principalIds: [ALEX, PRIYA] }],
+    });
+
+    const removed = await react(ALEX, "👍", false);
+    expect(removed.json()).toMatchObject({
+      revision: 4,
+      reactions: [{ emoji: "👍", principalIds: [PRIYA] }],
+    });
+
+    const invalid = await react(ALEX, "not-an-emoji", true);
+    expect(invalid.statusCode).toBe(400);
+
+    const hidden = await react(MORGAN, "🎉", true);
+    expect(hidden.statusCode).toBe(404);
   });
 
   it("counts unread as other people's messages past your read marker", async () => {

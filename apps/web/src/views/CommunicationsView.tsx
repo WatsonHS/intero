@@ -1,5 +1,6 @@
 import {
   ArrowBendDownRightIcon,
+  ArrowBendUpLeftIcon,
   ArrowUpIcon,
   CheckCircleIcon,
   CircleNotchIcon,
@@ -13,6 +14,8 @@ import {
   PencilSimpleIcon,
   PlusIcon,
   RobotIcon,
+  SmileyIcon,
+  SmileyStickerIcon,
   UserPlusIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -42,6 +45,7 @@ import {
   getTeamPulse,
   getThreads,
   sendThreadMessage,
+  setThreadMessageReaction,
   uploadAttachmentContent,
   updateConversationThread,
   type BootstrapPayload,
@@ -49,7 +53,11 @@ import {
   type ThreadPayload,
 } from "../api.js";
 import { createClientUuid } from "../client-id.js";
-import { ChatMarkdown } from "../components/ChatMarkdown.js";
+import {
+  ChatMarkdown,
+  isEmojiOnlyMessage,
+} from "../components/ChatMarkdown.js";
+import { FluentEmoji, FluentEmojiText } from "../components/FluentEmoji.js";
 import { useNotifications } from "../design/notifications.js";
 import { Avatar, cn } from "../design/primitives.js";
 import { initials, tintFor } from "../design/utils.js";
@@ -70,6 +78,7 @@ import {
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { useConversationRealtime } from "../realtime/context.js";
+import { EmojiPicker } from "./chat/EmojiPicker.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
 import { GroupChatManagementModal } from "./chat/GroupChatManagementModal.js";
 
@@ -87,6 +96,7 @@ const DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
 const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 25 * 1024 * 1024;
 const MENTION_LISTBOX_ID = "communications-mention-listbox";
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀"];
 const MESSAGE_IMAGE_TYPES = new Set([
   "image/avif",
   "image/gif",
@@ -123,6 +133,26 @@ export function markCachedThreadRead(
     }
     changed = true;
     return { ...item, unreadCount: 0, mentionCount: 0 };
+  });
+  return changed ? { ...cached, items } : cached;
+}
+
+export function replaceCachedThreadMessage(
+  cached: ThreadListCache | undefined,
+  updated: ThreadMessage,
+): ThreadListCache | undefined {
+  if (!cached) return cached;
+  let changed = false;
+  const items = cached.items.map((item) => {
+    if (item.thread.id !== updated.threadId) return item;
+    let itemChanged = false;
+    const messages = item.messages.map((message) => {
+      if (message.id !== updated.id) return message;
+      changed = true;
+      itemChanged = true;
+      return updated;
+    });
+    return itemChanged ? { ...item, messages } : item;
   });
   return changed ? { ...cached, items } : cached;
 }
@@ -183,6 +213,7 @@ export function CommunicationsView({
   const [showManage, setShowManage] = useState(false);
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerMirrorRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const previewUrlsRef = useRef(new Set<string>());
@@ -195,6 +226,13 @@ export function CommunicationsView({
   >(undefined);
   const [failedReadKey, setFailedReadKey] = useState<string | undefined>();
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState<
+    string | undefined
+  >();
+  const [replyingToMessageId, setReplyingToMessageId] = useState<
+    string | undefined
+  >();
   const [mentionCursor, setMentionCursor] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const mentionOptionRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -324,6 +362,9 @@ export function CommunicationsView({
     : items;
   const current =
     items.find((item) => item.thread.id === selectedThreadId) ?? items[0];
+  const replyingToMessage = current?.messages.find(
+    (message) => message.id === replyingToMessageId,
+  );
   const currentPilotItem = pilotDms.data?.items.find(
     (item) => item.thread.id === current?.thread.id,
   );
@@ -608,6 +649,9 @@ export function CommunicationsView({
 
   useEffect(() => {
     setMentionPickerOpen(false);
+    setEmojiPickerOpen(false);
+    setReactionPickerMessageId(undefined);
+    setReplyingToMessageId(undefined);
     setShowManage(false);
   }, [current?.thread.id]);
 
@@ -729,6 +773,7 @@ export function CommunicationsView({
       clientMessageId: string;
       mentionedPrincipalIds: string[];
       attachmentIds: string[];
+      replyToMessageId?: string;
     }) => {
       if (input.mode === "pilot-dm") {
         await sendPilotDm(
@@ -765,6 +810,7 @@ export function CommunicationsView({
     onSuccess: async (input) => {
       retryableSendRef.current = undefined;
       setDraft("");
+      setReplyingToMessageId(undefined);
       setMarkdownPreview(false);
       setComposerImages((images) => {
         for (const image of images) {
@@ -799,6 +845,24 @@ export function CommunicationsView({
         error instanceof Error ? error.message : t("chat.sendFailed"),
         { title: t("chat.sendFailed") },
       );
+    },
+  });
+  const reaction = useMutation({
+    mutationFn: setThreadMessageReaction,
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ThreadListCache>(["threads"], (cached) =>
+        replaceCachedThreadMessage(cached, updated),
+      );
+      setReactionPickerMessageId(undefined);
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.reactionFailed"),
+        { title: t("chat.reactionFailed") },
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
   const create = useMutation({
@@ -1001,6 +1065,7 @@ export function CommunicationsView({
       return;
     }
     setMentionPickerOpen(false);
+    setEmojiPickerOpen(false);
     const body = draft.trim();
     const mode = currentIsPilot
       ? "pilot-dm"
@@ -1013,6 +1078,7 @@ export function CommunicationsView({
       activeStandInOwnerId ?? "",
       body,
       availableImages.map((image) => image.id).join(","),
+      replyingToMessageId ?? "",
     ].join("\u0000");
     if (retryableSendRef.current?.key !== sendKey) {
       retryableSendRef.current = {
@@ -1043,6 +1109,9 @@ export function CommunicationsView({
         ]),
       ],
       attachmentIds: availableImages.map((image) => image.id),
+      ...(mode === "canonical" && replyingToMessageId
+        ? { replyToMessageId: replyingToMessageId }
+        : {}),
       ...(currentIsPilotStandIn && activeStandInOwnerId
         ? { standInOwnerId: activeStandInOwnerId }
         : {}),
@@ -1069,6 +1138,68 @@ export function CommunicationsView({
     });
   }
 
+  function selectEmoji(emoji: string) {
+    const result = insertEmojiAtCursor(draft, mentionCursor, emoji);
+    setDraft(result.draft);
+    setMentionCursor(result.cursor);
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(result.cursor, result.cursor);
+    });
+  }
+
+  function toggleMessageReaction(message: ThreadMessage, emoji: string) {
+    if (
+      !currentSenderId ||
+      currentIsPilot ||
+      currentIsPilotStandIn ||
+      reaction.isPending
+    ) {
+      return;
+    }
+    const reacted = !message.reactions?.some(
+      (candidate) =>
+        candidate.emoji === emoji &&
+        candidate.principalIds.includes(currentSenderId),
+    );
+    reaction.mutate({
+      threadId: message.threadId,
+      messageId: message.id,
+      emoji,
+      reacted,
+    });
+  }
+
+  function toggleReactionPicker(messageId: string) {
+    setMentionPickerOpen(false);
+    setEmojiPickerOpen(false);
+    setReactionPickerMessageId((current) =>
+      current === messageId ? undefined : messageId,
+    );
+  }
+
+  function beginReply(message: ThreadMessage) {
+    if (
+      currentIsPilot ||
+      currentIsPilotStandIn ||
+      current?.thread.accessMode === "human_only_e2ee" ||
+      message.kind !== "message"
+    ) {
+      return;
+    }
+    setMentionPickerOpen(false);
+    setEmojiPickerOpen(false);
+    setReactionPickerMessageId(undefined);
+    setReplyingToMessageId(message.id);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function navigateToMessage(messageId: string) {
+    document
+      .querySelector<HTMLElement>(`[data-message-id="${messageId}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   function toggleExpanded(messageId: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -1081,6 +1212,11 @@ export function CommunicationsView({
   function renderMessage(message: ThreadMessage) {
     if (!current) return null;
     const thread = current.thread;
+    const canReply =
+      Boolean(currentSenderId) &&
+      !currentIsPilot &&
+      !currentIsPilotStandIn &&
+      thread.accessMode !== "human_only_e2ee";
 
     if (message.kind === "system_access_change") {
       return (
@@ -1153,114 +1289,154 @@ export function CommunicationsView({
           )
         : undefined;
       return (
-        <div className="grid grid-cols-[30px_minmax(0,1fr)] gap-3">
+        <div
+          data-message-id={message.id}
+          className="group/message grid grid-cols-[30px_minmax(0,1fr)] gap-3"
+        >
           <StandInAvatar
             ownerId={avatarIdentity.ownerId}
             ownerName={avatarIdentity.ownerName}
           />
-          <div className="min-w-0 max-w-[620px] rounded-card border border-line2 bg-panel2 p-[15px_17px]">
-            <div className="mb-[9px] flex items-center gap-[9px]">
-              <strong className="text-[12px] font-[620]">{senderName}</strong>
-              <span className="rounded-pill bg-accent-soft px-[7px] py-0.5 text-[9.5px] font-[620] text-accent-strong">
-                {t("chat.agentOf", { name: ownerName })}
-              </span>
-              <time className="ml-auto font-mono text-[9.5px] text-faint">
-                {formatTime(message.createdAt)}
-              </time>
-            </div>
-            {message.streamState === "pending" && !message.body ? (
-              <div
-                data-testid={`stand-in-stream-${message.id}`}
-                className="flex items-center gap-2 py-1 text-[12px] text-ink-muted"
-              >
-                <span className="inline-flex gap-1" aria-hidden="true">
-                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong" />
-                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:140ms]" />
-                  <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:280ms]" />
+          <div className="min-w-0 max-w-[620px]">
+            <div className="rounded-card border border-line2 bg-panel2 p-[15px_17px]">
+              <div className="mb-[9px] flex items-center gap-[9px]">
+                <strong className="text-[12px] font-[620]">{senderName}</strong>
+                <span className="rounded-pill bg-accent-soft px-[7px] py-0.5 text-[9.5px] font-[620] text-accent-strong">
+                  {t("chat.agentOf", { name: ownerName })}
                 </span>
-                {t("chat.standInThinking")}
+                <time className="ml-auto font-mono text-[9.5px] text-faint">
+                  {formatTime(message.createdAt)}
+                </time>
               </div>
-            ) : message.serverReadable ? (
-              <div className="relative">
-                <ChatMarkdown
-                  markdown={message.body}
-                  renderText={(text) => (
-                    <MentionText body={text} candidates={mentionCandidates} />
+              {message.replyToMessageId ? (
+                <QuotedMessagePreview
+                  message={current.messages.find(
+                    (candidate) => candidate.id === message.replyToMessageId,
                   )}
+                  principalNames={principalNames}
+                  onNavigate={navigateToMessage}
                 />
-                {message.streamState === "streaming" ? (
-                  <span
-                    aria-hidden="true"
-                    className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse bg-accent-strong align-[-0.15em]"
+              ) : null}
+              {message.streamState === "pending" && !message.body ? (
+                <div
+                  data-testid={`stand-in-stream-${message.id}`}
+                  className="flex items-center gap-2 py-1 text-[12px] text-ink-muted"
+                >
+                  <span className="inline-flex gap-1" aria-hidden="true">
+                    <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong" />
+                    <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:140ms]" />
+                    <i className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-strong [animation-delay:280ms]" />
+                  </span>
+                  {t("chat.standInThinking")}
+                </div>
+              ) : message.serverReadable ? (
+                <div className="relative">
+                  <ChatMarkdown
+                    markdown={message.body}
+                    enlargeEmojiOnly={(message.attachments?.length ?? 0) === 0}
+                    renderText={(text) => (
+                      <MentionText body={text} candidates={mentionCandidates} />
+                    )}
                   />
-                ) : null}
-              </div>
-            ) : (
-              <p className="text-[13px] text-ink">
-                {t("chat.encryptedMessage")}
-              </p>
-            )}
-            {message.streamState === "failed" ? (
-              <p className="mt-2 text-[11px] text-danger">
-                {t("chat.standInStreamFailed")}
-              </p>
-            ) : null}
-            <MessageAttachments attachments={message.attachments ?? []} />
-            {groundedExchange?.structuredAnswer ? (
-              <StandInAnswerContent
-                answer={groundedExchange.structuredAnswer}
-                testId={`pilot-stand-in-answer-${message.id}`}
-              />
-            ) : null}
-            <button
-              type="button"
-              className="mt-[13px] flex w-full items-center gap-2 border-0 border-t border-line bg-transparent pt-[11px] text-[10.5px] text-green cursor-pointer"
-              onClick={() => toggleExpanded(message.id)}
-            >
-              <CheckCircleIcon size={13} weight="fill" />
-              <span>
-                {t("chat.durableSequence", { sequence: message.sequence })} ·{" "}
-                {message.serverReadable
-                  ? t("chat.agentReadable")
-                  : t("chat.encrypted")}
-              </span>
-              <span className="ml-auto text-faint">
-                {isOpen ? t("chat.collapseBasis") : t("chat.expandBasis")}
-              </span>
-            </button>
-            {isOpen ? (
-              <div className="mt-[11px] grid gap-2 rounded-[10px] bg-raise p-[12px_14px]">
-                {groundedExchange?.sources.map((source) => (
-                  <div
-                    key={source.workStateId}
-                    data-testid={`pilot-stand-in-source-${source.workStateId}`}
-                    className="grid gap-1 text-[10.5px] leading-[1.55] text-ink-muted"
-                  >
-                    <strong className="font-[620] text-ink">
-                      来源 · {source.title}
-                    </strong>
-                    <span>
-                      {source.provenance.client} /{" "}
-                      {source.provenance.connectionName} · 新鲜度{" "}
-                      {formatRelative(source.freshnessAt)}
-                    </span>
-                    <span className="font-mono text-[9.5px] text-faint">
-                      Work State {source.workStateId.slice(0, 8)} ·{" "}
-                      {source.eventType}
-                    </span>
-                  </div>
-                ))}
-                <p className="font-mono text-[10px] leading-[1.6] text-faint">
-                  seq {message.sequence} · {thread.accessMode}
+                  {message.streamState === "streaming" ? (
+                    <span
+                      aria-hidden="true"
+                      className="ml-0.5 inline-block h-[1em] w-[2px] animate-pulse bg-accent-strong align-[-0.15em]"
+                    />
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-[13px] text-ink">
+                  {t("chat.encryptedMessage")}
                 </p>
-              </div>
-            ) : null}
+              )}
+              {message.streamState === "failed" ? (
+                <p className="mt-2 text-[11px] text-danger">
+                  {t("chat.standInStreamFailed")}
+                </p>
+              ) : null}
+              <MessageAttachments attachments={message.attachments ?? []} />
+              {groundedExchange?.structuredAnswer ? (
+                <StandInAnswerContent
+                  answer={groundedExchange.structuredAnswer}
+                  testId={`pilot-stand-in-answer-${message.id}`}
+                />
+              ) : null}
+              <button
+                type="button"
+                className="mt-[13px] flex w-full items-center gap-2 border-0 border-t border-line bg-transparent pt-[11px] text-[10.5px] text-green cursor-pointer"
+                onClick={() => toggleExpanded(message.id)}
+              >
+                <CheckCircleIcon size={13} weight="fill" />
+                <span>
+                  {t("chat.durableSequence", {
+                    sequence: message.sequence,
+                  })}{" "}
+                  ·{" "}
+                  {message.serverReadable
+                    ? t("chat.agentReadable")
+                    : t("chat.encrypted")}
+                </span>
+                <span className="ml-auto text-faint">
+                  {isOpen ? t("chat.collapseBasis") : t("chat.expandBasis")}
+                </span>
+              </button>
+              {isOpen ? (
+                <div className="mt-[11px] grid gap-2 rounded-[10px] bg-raise p-[12px_14px]">
+                  {groundedExchange?.sources.map((source) => (
+                    <div
+                      key={source.workStateId}
+                      data-testid={`pilot-stand-in-source-${source.workStateId}`}
+                      className="grid gap-1 text-[10.5px] leading-[1.55] text-ink-muted"
+                    >
+                      <strong className="font-[620] text-ink">
+                        来源 · {source.title}
+                      </strong>
+                      <span>
+                        {source.provenance.client} /{" "}
+                        {source.provenance.connectionName} · 新鲜度{" "}
+                        {formatRelative(source.freshnessAt)}
+                      </span>
+                      <span className="font-mono text-[9.5px] text-faint">
+                        Work State {source.workStateId.slice(0, 8)} ·{" "}
+                        {source.eventType}
+                      </span>
+                    </div>
+                  ))}
+                  <p className="font-mono text-[10px] leading-[1.6] text-faint">
+                    seq {message.sequence} · {thread.accessMode}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+            <MessageReactionBar
+              message={message}
+              currentPrincipalId={currentSenderId}
+              principalNames={principalNames}
+              canReact={
+                Boolean(currentSenderId) &&
+                !currentIsPilot &&
+                !currentIsPilotStandIn
+              }
+              canReply={canReply}
+              pickerOpen={reactionPickerMessageId === message.id}
+              pending={
+                reaction.isPending &&
+                reaction.variables?.messageId === message.id
+              }
+              align="left"
+              onToggle={(emoji) => toggleMessageReaction(message, emoji)}
+              onTogglePicker={() => toggleReactionPicker(message.id)}
+              onClosePicker={() => setReactionPickerMessageId(undefined)}
+              onReply={() => beginReply(message)}
+            />
           </div>
         </div>
       );
     }
 
     const isOwn = message.senderId === currentSenderId;
+    const bubblelessEmoji = isBubblelessEmojiMessage(message);
     const avatar = (
       <span
         className="grid h-[30px] w-[30px] place-items-center rounded-full text-[9.5px] font-[650] text-on-tint"
@@ -1288,14 +1464,30 @@ export function CommunicationsView({
           </time>
         </div>
         <div
+          data-emoji-bubbleless={bubblelessEmoji ? "true" : undefined}
           className={cn(
-            "mt-[7px] w-fit max-w-[560px] rounded-card p-[12px_15px] text-left",
-            isOwn ? "bg-accent-soft" : "bg-bubble",
+            "mt-[7px] w-fit max-w-[560px] text-left",
+            bubblelessEmoji
+              ? "bg-transparent p-0"
+              : cn(
+                  "rounded-card p-[12px_15px]",
+                  isOwn ? "bg-accent-soft" : "bg-bubble",
+                ),
           )}
         >
+          {message.replyToMessageId ? (
+            <QuotedMessagePreview
+              message={current.messages.find(
+                (candidate) => candidate.id === message.replyToMessageId,
+              )}
+              principalNames={principalNames}
+              onNavigate={navigateToMessage}
+            />
+          ) : null}
           {message.serverReadable ? (
             <ChatMarkdown
               markdown={message.body}
+              enlargeEmojiOnly={(message.attachments?.length ?? 0) === 0}
               renderText={(text) => (
                 <MentionText body={text} candidates={mentionCandidates} />
               )}
@@ -1307,17 +1499,38 @@ export function CommunicationsView({
           )}
           <MessageAttachments attachments={message.attachments ?? []} />
         </div>
+        <MessageReactionBar
+          message={message}
+          currentPrincipalId={currentSenderId}
+          principalNames={principalNames}
+          canReact={
+            Boolean(currentSenderId) &&
+            !currentIsPilot &&
+            !currentIsPilotStandIn
+          }
+          canReply={canReply}
+          pickerOpen={reactionPickerMessageId === message.id}
+          pending={
+            reaction.isPending && reaction.variables?.messageId === message.id
+          }
+          align={isOwn ? "right" : "left"}
+          onToggle={(emoji) => toggleMessageReaction(message, emoji)}
+          onTogglePicker={() => toggleReactionPicker(message.id)}
+          onClosePicker={() => setReactionPickerMessageId(undefined)}
+          onReply={() => beginReply(message)}
+        />
       </div>
     );
     return (
       <div
         className={cn(
-          "grid gap-3",
+          "group/message grid gap-3",
           isOwn
             ? "grid-cols-[minmax(0,1fr)_30px]"
             : "grid-cols-[30px_minmax(0,1fr)]",
         )}
         data-message-side={isOwn ? "right" : "left"}
+        data-message-id={message.id}
         data-testid={
           currentIsPilot ? `pilot-dm-message-${message.sequence}` : undefined
         }
@@ -1763,6 +1976,7 @@ export function CommunicationsView({
                         composerRef.current?.selectionStart ?? draft.length;
                       setMentionCursor(cursor);
                       setActiveMentionIndex(0);
+                      setEmojiPickerOpen(false);
                       setMentionPickerOpen((open) => !open);
                     }}
                     className={cn(
@@ -1774,6 +1988,41 @@ export function CommunicationsView({
                   >
                     @
                   </button>
+                  <div className="relative" data-emoji-picker-container="true">
+                    <button
+                      type="button"
+                      aria-label={t("chat.emoji")}
+                      title={t("chat.emoji")}
+                      aria-haspopup="dialog"
+                      aria-expanded={emojiPickerOpen}
+                      data-testid="communications-emoji-trigger"
+                      disabled={
+                        !currentSenderId ||
+                        current.thread.accessMode === "human_only_e2ee"
+                      }
+                      onClick={() => {
+                        const cursor =
+                          composerRef.current?.selectionStart ?? draft.length;
+                        setMentionCursor(cursor);
+                        setMentionPickerOpen(false);
+                        setEmojiPickerOpen((open) => !open);
+                      }}
+                      className={cn(
+                        "grid h-6 w-6 cursor-pointer place-items-center rounded-[8px] border disabled:cursor-not-allowed disabled:opacity-35",
+                        emojiPickerOpen
+                          ? "border-accent-strong bg-accent-soft text-accent-strong"
+                          : "border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong",
+                      )}
+                    >
+                      <SmileyIcon size={13} />
+                    </button>
+                    {emojiPickerOpen ? (
+                      <EmojiPicker
+                        onClose={() => setEmojiPickerOpen(false)}
+                        onSelect={selectEmoji}
+                      />
+                    ) : null}
+                  </div>
                   <input
                     ref={imageInputRef}
                     type="file"
@@ -1909,6 +2158,43 @@ export function CommunicationsView({
                     )}
                   </div>
                 ) : null}
+                {replyingToMessageId ? (
+                  <div
+                    data-testid="communications-reply-preview"
+                    className="mb-2.5 flex items-center gap-2 rounded-[9px] border-l-2 border-accent-strong bg-raise px-3 py-2"
+                  >
+                    <ArrowBendUpLeftIcon
+                      size={14}
+                      className="shrink-0 text-accent-strong"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <strong className="block truncate text-[10.5px] font-[620] text-accent-strong">
+                        {t("chat.replyingTo", {
+                          name: replyingToMessage
+                            ? (principalNames.get(replyingToMessage.senderId) ??
+                              replyingToMessage.senderId.slice(0, 8))
+                            : t("chat.replyUnavailable"),
+                        })}
+                      </strong>
+                      <span className="block truncate text-[11px] text-ink-muted">
+                        {replyMessageSummary(replyingToMessage, {
+                          attachment: t("chat.replyAttachment"),
+                          encrypted: t("chat.encryptedMessage"),
+                          unavailable: t("chat.replyUnavailable"),
+                        })}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={t("chat.cancelReply")}
+                      title={t("chat.cancelReply")}
+                      onClick={() => setReplyingToMessageId(undefined)}
+                      className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-ink-muted hover:bg-panel hover:text-ink"
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  </div>
+                ) : null}
                 {composerImages.length > 0 ? (
                   <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
                     {composerImages.map((image) => (
@@ -1972,107 +2258,134 @@ export function CommunicationsView({
                       />
                     </div>
                   ) : (
-                    <textarea
-                      ref={composerRef}
-                      data-testid="communications-composer"
-                      rows={1}
-                      value={draft}
-                      onChange={(event) => {
-                        const cursor =
-                          event.currentTarget.selectionStart ??
-                          event.currentTarget.value.length;
-                        setDraft(event.currentTarget.value);
-                        setMentionCursor(cursor);
-                        setActiveMentionIndex(0);
-                        setMentionPickerOpen(
-                          Boolean(
-                            conversationMentionQuery(
-                              event.currentTarget.value,
-                              cursor,
+                    <div className="relative min-h-[34px] max-h-[110px]">
+                      <div
+                        ref={composerMirrorRef}
+                        aria-hidden="true"
+                        data-testid="communications-composer-fluent-layer"
+                        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap px-1 py-2 text-[12.5px] leading-[1.55] text-ink [overflow-wrap:anywhere]"
+                      >
+                        <FluentEmojiText text={draft} renderText={undefined} />
+                      </div>
+                      <textarea
+                        ref={composerRef}
+                        data-testid="communications-composer"
+                        rows={1}
+                        value={draft}
+                        onChange={(event) => {
+                          const cursor =
+                            event.currentTarget.selectionStart ??
+                            event.currentTarget.value.length;
+                          setDraft(event.currentTarget.value);
+                          setMentionCursor(cursor);
+                          setActiveMentionIndex(0);
+                          setEmojiPickerOpen(false);
+                          setMentionPickerOpen(
+                            Boolean(
+                              conversationMentionQuery(
+                                event.currentTarget.value,
+                                cursor,
+                              ),
                             ),
-                          ),
-                        );
-                      }}
-                      onSelect={(event) => {
-                        setMentionCursor(
-                          event.currentTarget.selectionStart ?? draft.length,
-                        );
-                      }}
-                      onPaste={(event) => {
-                        const files = [...event.clipboardData.files].filter(
-                          (file) => file.type.startsWith("image/"),
-                        );
-                        if (files.length > 0 && canAttachImages) {
-                          event.preventDefault();
-                          void addComposerImages(files);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        const isComposing =
-                          event.nativeEvent.isComposing ||
-                          event.nativeEvent.keyCode === 229;
-                        if (
-                          mentionPickerOpen &&
-                          visibleMentionCandidates.length > 0 &&
-                          !isComposing &&
-                          (event.key === "ArrowDown" || event.key === "ArrowUp")
-                        ) {
-                          event.preventDefault();
-                          setActiveMentionIndex((currentIndex) =>
-                            moveMentionCandidateIndex({
-                              currentIndex,
-                              direction:
-                                event.key === "ArrowDown" ? "next" : "previous",
-                              candidateCount: visibleMentionCandidates.length,
-                            }),
                           );
-                          return;
+                        }}
+                        onScroll={(event) => {
+                          if (!composerMirrorRef.current) return;
+                          composerMirrorRef.current.scrollTop =
+                            event.currentTarget.scrollTop;
+                          composerMirrorRef.current.scrollLeft =
+                            event.currentTarget.scrollLeft;
+                        }}
+                        onSelect={(event) => {
+                          setMentionCursor(
+                            event.currentTarget.selectionStart ?? draft.length,
+                          );
+                        }}
+                        onPaste={(event) => {
+                          const files = [...event.clipboardData.files].filter(
+                            (file) => file.type.startsWith("image/"),
+                          );
+                          if (files.length > 0 && canAttachImages) {
+                            event.preventDefault();
+                            void addComposerImages(files);
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          const isComposing =
+                            event.nativeEvent.isComposing ||
+                            event.nativeEvent.keyCode === 229;
+                          if (
+                            mentionPickerOpen &&
+                            visibleMentionCandidates.length > 0 &&
+                            !isComposing &&
+                            (event.key === "ArrowDown" ||
+                              event.key === "ArrowUp")
+                          ) {
+                            event.preventDefault();
+                            setActiveMentionIndex((currentIndex) =>
+                              moveMentionCandidateIndex({
+                                currentIndex,
+                                direction:
+                                  event.key === "ArrowDown"
+                                    ? "next"
+                                    : "previous",
+                                candidateCount: visibleMentionCandidates.length,
+                              }),
+                            );
+                            return;
+                          }
+                          if (
+                            event.key === "Escape" &&
+                            (mentionPickerOpen || emojiPickerOpen)
+                          ) {
+                            event.preventDefault();
+                            setMentionPickerOpen(false);
+                            setEmojiPickerOpen(false);
+                            return;
+                          }
+                          if (
+                            event.key === "Enter" &&
+                            !event.shiftKey &&
+                            !isComposing &&
+                            mentionPickerOpen &&
+                            activeMentionCandidate
+                          ) {
+                            event.preventDefault();
+                            selectMention(activeMentionCandidate);
+                            return;
+                          }
+                          if (
+                            shouldSubmitComposerKey({
+                              key: event.key,
+                              shiftKey: event.shiftKey,
+                              isComposing,
+                            })
+                          ) {
+                            event.preventDefault();
+                            submit();
+                          }
+                        }}
+                        placeholder={t("chat.placeholder")}
+                        role="combobox"
+                        aria-autocomplete="list"
+                        aria-expanded={mentionPickerOpen}
+                        aria-controls={
+                          mentionPickerOpen ? MENTION_LISTBOX_ID : undefined
                         }
-                        if (event.key === "Escape" && mentionPickerOpen) {
-                          event.preventDefault();
-                          setMentionPickerOpen(false);
-                          return;
+                        aria-activedescendant={
+                          mentionPickerOpen && activeMentionCandidate
+                            ? mentionOptionId(
+                                activeMentionCandidate.principalId,
+                              )
+                            : undefined
                         }
-                        if (
-                          event.key === "Enter" &&
-                          !event.shiftKey &&
-                          !isComposing &&
-                          mentionPickerOpen &&
-                          activeMentionCandidate
-                        ) {
-                          event.preventDefault();
-                          selectMention(activeMentionCandidate);
-                          return;
+                        disabled={
+                          !currentSenderId ||
+                          current.thread.accessMode === "human_only_e2ee"
                         }
-                        if (
-                          shouldSubmitComposerKey({
-                            key: event.key,
-                            shiftKey: event.shiftKey,
-                            isComposing,
-                          })
-                        ) {
-                          event.preventDefault();
-                          submit();
-                        }
-                      }}
-                      placeholder={t("chat.placeholder")}
-                      role="combobox"
-                      aria-autocomplete="list"
-                      aria-expanded={mentionPickerOpen}
-                      aria-controls={
-                        mentionPickerOpen ? MENTION_LISTBOX_ID : undefined
-                      }
-                      aria-activedescendant={
-                        mentionPickerOpen && activeMentionCandidate
-                          ? mentionOptionId(activeMentionCandidate.principalId)
-                          : undefined
-                      }
-                      disabled={
-                        !currentSenderId ||
-                        current.thread.accessMode === "human_only_e2ee"
-                      }
-                      className="min-h-[34px] max-h-[110px] resize-none border-0 bg-transparent px-1 py-2 text-[12.5px] leading-[1.55] outline-none placeholder:text-faint"
-                    />
+                        className="relative z-10 min-h-[34px] max-h-[110px] w-full resize-none border-0 bg-transparent px-1 py-2 text-[12.5px] leading-[1.55] text-transparent caret-accent-strong outline-none selection:text-transparent placeholder:text-faint"
+                      />
+                    </div>
                   )}
                   <button
                     type="button"
@@ -2301,6 +2614,7 @@ export async function sendCanonicalConversationMessage(
     clientMessageId?: string;
     mentionedPrincipalIds?: string[];
     attachmentIds?: string[];
+    replyToMessageId?: string;
   },
   dependencies: {
     sendMessage: (input: {
@@ -2310,6 +2624,7 @@ export async function sendCanonicalConversationMessage(
       clientMessageId?: string;
       mentionedPrincipalIds?: string[];
       attachmentIds?: string[];
+      replyToMessageId?: string;
     }) => Promise<ThreadMessage>;
   },
 ): Promise<ThreadMessage> {
@@ -2322,6 +2637,9 @@ export async function sendCanonicalConversationMessage(
       : {}),
     mentionedPrincipalIds: input.mentionedPrincipalIds ?? [],
     attachmentIds: input.attachmentIds ?? [],
+    ...(input.replyToMessageId
+      ? { replyToMessageId: input.replyToMessageId }
+      : {}),
   });
 }
 
@@ -2382,6 +2700,32 @@ export function conversationMentionQuery(
     end: cursor,
     query: match[1] ?? "",
   };
+}
+
+export function insertEmojiAtCursor(
+  draft: string,
+  cursor: number,
+  emoji: string,
+): { draft: string; cursor: number } {
+  const insertionPoint = Math.max(0, Math.min(cursor, draft.length));
+  return {
+    draft: draft.slice(0, insertionPoint) + emoji + draft.slice(insertionPoint),
+    cursor: insertionPoint + emoji.length,
+  };
+}
+
+export function isBubblelessEmojiMessage(
+  message: Pick<
+    ThreadMessage,
+    "attachments" | "body" | "replyToMessageId" | "serverReadable"
+  >,
+): boolean {
+  return (
+    message.serverReadable &&
+    (message.attachments?.length ?? 0) === 0 &&
+    !message.replyToMessageId &&
+    isEmojiOnlyMessage(message.body)
+  );
 }
 
 export function filterConversationMentionCandidates(
@@ -2651,6 +2995,244 @@ function MentionText({
     ) : (
       part.text
     ),
+  );
+}
+
+export function replyMessageSummary(
+  message: ThreadMessage | undefined,
+  labels: {
+    attachment: string;
+    encrypted: string;
+    unavailable: string;
+  },
+): string {
+  if (!message) return labels.unavailable;
+  if (!message.serverReadable) return labels.encrypted;
+  const body = message.body.replaceAll(/\s+/gu, " ").trim();
+  if (body) return body;
+  return message.attachments?.length ? labels.attachment : labels.unavailable;
+}
+
+export function QuotedMessagePreview({
+  message,
+  principalNames,
+  onNavigate,
+}: {
+  message: ThreadMessage | undefined;
+  principalNames: Map<string, string>;
+  onNavigate(messageId: string): void;
+}) {
+  const { t } = useI18n();
+  const senderName = message
+    ? (principalNames.get(message.senderId) ?? message.senderId.slice(0, 8))
+    : t("chat.replyUnavailable");
+  return (
+    <button
+      type="button"
+      data-testid="quoted-message-preview"
+      disabled={!message}
+      onClick={() => {
+        if (message) onNavigate(message.id);
+      }}
+      className="mb-2 grid w-full cursor-pointer gap-0.5 rounded-[8px] border-0 border-l-2 border-accent-strong bg-black/[0.04] px-2.5 py-2 text-left disabled:cursor-default dark:bg-white/[0.05]"
+    >
+      <strong className="truncate text-[10.5px] font-[620] text-accent-strong">
+        {senderName}
+      </strong>
+      <span className="truncate text-[11px] leading-[1.45] text-ink-muted">
+        {replyMessageSummary(message, {
+          attachment: t("chat.replyAttachment"),
+          encrypted: t("chat.encryptedMessage"),
+          unavailable: t("chat.replyUnavailable"),
+        })}
+      </span>
+    </button>
+  );
+}
+
+export function MessageReactionBar({
+  message,
+  currentPrincipalId,
+  principalNames,
+  canReact,
+  canReply,
+  pickerOpen,
+  pending,
+  align,
+  onToggle,
+  onTogglePicker,
+  onClosePicker,
+  onReply,
+}: {
+  message: ThreadMessage;
+  currentPrincipalId: PrincipalId | undefined;
+  principalNames: Map<string, string>;
+  canReact: boolean;
+  canReply: boolean;
+  pickerOpen: boolean;
+  pending: boolean;
+  align: "left" | "right";
+  onToggle(emoji: string): void;
+  onTogglePicker(): void;
+  onClosePicker(): void;
+  onReply(): void;
+}) {
+  const { t } = useI18n();
+  const reactions = message.reactions ?? [];
+  if (reactions.length === 0 && !canReact && !canReply) return null;
+
+  return (
+    <div
+      data-testid={`message-reactions-${message.id}`}
+      className={cn(
+        "mt-1.5 flex min-h-6 flex-wrap items-center gap-1",
+        align === "right" ? "justify-end" : "justify-start",
+      )}
+    >
+      {reactions.map((reaction) => {
+        const selected = Boolean(
+          currentPrincipalId &&
+          reaction.principalIds.includes(currentPrincipalId),
+        );
+        const names = reaction.principalIds.map(
+          (principalId) =>
+            principalNames.get(principalId) ?? principalId.slice(0, 8),
+        );
+        return (
+          <button
+            key={reaction.emoji}
+            type="button"
+            aria-label={t("chat.reactionSummary", {
+              emoji: reaction.emoji,
+              count: reaction.principalIds.length,
+            })}
+            aria-pressed={selected}
+            title={names.join("、")}
+            disabled={!canReact || pending}
+            onClick={() => onToggle(reaction.emoji)}
+            className={cn(
+              "inline-flex h-6 cursor-pointer items-center gap-1 rounded-pill border px-2 text-[11px] transition-colors disabled:cursor-default disabled:opacity-70",
+              selected
+                ? "border-accent-strong bg-accent-soft text-accent-strong"
+                : "border-line2 bg-panel2 text-ink-muted hover:border-accent-strong",
+            )}
+          >
+            <FluentEmoji
+              emoji={reaction.emoji}
+              decorative
+              className="text-[15px]"
+            />
+            <span className="font-mono text-[9.5px]">
+              {reaction.principalIds.length}
+            </span>
+          </button>
+        );
+      })}
+      {canReply ? (
+        <button
+          type="button"
+          data-message-reply-trigger="true"
+          aria-label={t("chat.reply")}
+          title={t("chat.reply")}
+          onClick={onReply}
+          className="pointer-events-none grid h-6 w-6 cursor-pointer place-items-center rounded-full border border-line2 bg-transparent text-ink-muted opacity-0 transition-all duration-150 hover:border-accent-strong hover:text-accent-strong group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100"
+        >
+          <ArrowBendUpLeftIcon size={13} />
+        </button>
+      ) : null}
+      {canReact ? (
+        <div
+          data-reaction-trigger="true"
+          data-reaction-picker-container="true"
+          className={cn(
+            "relative pointer-events-none opacity-0 transition-opacity duration-150 group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100",
+            pickerOpen ? "pointer-events-auto opacity-100" : undefined,
+          )}
+        >
+          <button
+            type="button"
+            aria-label={t("chat.addReaction")}
+            title={t("chat.addReaction")}
+            aria-haspopup="menu"
+            aria-expanded={pickerOpen}
+            disabled={pending}
+            onClick={onTogglePicker}
+            className={cn(
+              "grid h-6 w-6 cursor-pointer place-items-center rounded-full border text-ink-muted transition-colors disabled:cursor-wait disabled:opacity-50",
+              pickerOpen
+                ? "border-accent-strong bg-accent-soft text-accent-strong"
+                : "border-line2 bg-transparent hover:border-accent-strong hover:text-accent-strong",
+            )}
+          >
+            <SmileyStickerIcon size={13} />
+          </button>
+          {pickerOpen ? (
+            <QuickReactionPicker
+              align={align}
+              onClose={onClosePicker}
+              onSelect={onToggle}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function QuickReactionPicker({
+  align,
+  onClose,
+  onSelect,
+}: {
+  align: "left" | "right";
+  onClose(): void;
+  onSelect(emoji: string): void;
+}) {
+  const { t } = useI18n();
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        !target.closest('[data-reaction-picker-container="true"]')
+      ) {
+        onClose();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [onClose]);
+
+  return (
+    <div
+      role="menu"
+      aria-label={t("chat.addReaction")}
+      data-testid="message-reaction-picker"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        onClose();
+      }}
+      className={cn(
+        "absolute bottom-[30px] z-30 flex items-center gap-0.5 rounded-pill border border-line bg-panel p-1 shadow-[0_12px_34px_rgba(0,0,0,0.2)]",
+        align === "right" ? "right-0" : "left-0",
+      )}
+    >
+      {QUICK_REACTIONS.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          role="menuitem"
+          aria-label={t("chat.reactWith", { emoji })}
+          title={t("chat.reactWith", { emoji })}
+          onClick={() => onSelect(emoji)}
+          className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent text-[19px] hover:bg-raise focus-visible:bg-raise focus-visible:outline-2 focus-visible:outline-accent-strong"
+        >
+          <FluentEmoji emoji={emoji} decorative className="text-[21px]" />
+        </button>
+      ))}
+    </div>
   );
 }
 

@@ -18,6 +18,7 @@ import {
   type Project,
   type ProjectId,
   type PublicWorkProjection,
+  type ReactionEmoji,
   type Spec,
   type SpecId,
   type SpecRevision,
@@ -51,6 +52,7 @@ import {
   type StandInQuestionInput,
   type ThreadMessagePage,
   type ThreadMessagePageQuery,
+  updateMessageReactions,
 } from "./store.js";
 
 export class PostgresPlatformStore implements PlatformStore {
@@ -716,6 +718,7 @@ export class PostgresPlatformStore implements PlatformStore {
       encryptedBody?: string;
       mentionedPrincipalIds?: PrincipalId[];
       attachmentIds?: ThreadMessageAttachment["id"][];
+      replyToMessageId?: ThreadMessage["id"];
       streamState?: ThreadMessageStreamState;
       createdAt: string;
     },
@@ -753,6 +756,7 @@ export class PostgresPlatformStore implements PlatformStore {
           existing.senderId === input.senderId &&
           input.body !== undefined &&
           input.encryptedBody === undefined &&
+          existing.replyToMessageId === input.replyToMessageId &&
           !input.attachmentIds?.length
         ) {
           const finalized = await client.query(
@@ -779,6 +783,7 @@ export class PostgresPlatformStore implements PlatformStore {
           existing.senderId !== input.senderId ||
           existing.body !== (input.body ?? "") ||
           existing.encryptedBody !== input.encryptedBody ||
+          existing.replyToMessageId !== input.replyToMessageId ||
           !sameIds(
             existing.mentionedPrincipalIds ?? [],
             mentionedPrincipalIds,
@@ -791,6 +796,24 @@ export class PostgresPlatformStore implements PlatformStore {
           throw new Error("Client message ID was already used.");
         }
         return existing;
+      }
+      if (input.replyToMessageId) {
+        const replyTarget = await client.query(
+          `SELECT message.id
+           FROM messages AS message
+           JOIN thread_participants AS participant
+             ON participant.thread_id = message.thread_id
+            AND participant.principal_id = $3
+            AND participant.revoked_at IS NULL
+           WHERE message.thread_id = $1
+             AND message.id = $2
+             AND message.kind = 'message'
+             AND message.sequence >= participant.visible_from_sequence`,
+          [threadId, input.replyToMessageId, input.senderId],
+        );
+        if (!replyTarget.rows[0]) {
+          throw new Error("Reply message was not found.");
+        }
       }
       const attachments = await this.resolveMessageAttachments(
         client,
@@ -899,6 +922,66 @@ export class PostgresPlatformStore implements PlatformStore {
         eventId: uuidv7() as OperationId,
         thread: thread.thread,
         actorId: input.senderId,
+        reason: "message_updated",
+        messageId: input.messageId,
+      });
+      return updated;
+    });
+  }
+
+  async setMessageReaction(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+    emoji: ReactionEmoji;
+    reacted: boolean;
+  }): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `SELECT m.*
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         WHERE m.thread_id = $1
+           AND m.id = $3
+           AND m.sequence >= viewer.visible_from_sequence
+         FOR UPDATE OF m`,
+        [input.threadId, input.principalId, input.messageId],
+      );
+      const current = result.rows[0]
+        ? messageFromRow(result.rows[0])
+        : undefined;
+      if (!current) throw new Error("Message was not found.");
+
+      const reactionUpdate = updateMessageReactions(
+        current.reactions ?? [],
+        input,
+      );
+      if (!reactionUpdate.changed) return current;
+
+      const updatedRow = await client.query(
+        `UPDATE messages
+         SET reactions = $3,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [input.threadId, input.messageId, json(reactionUpdate.reactions)],
+      );
+      const updated = messageFromRow(updatedRow.rows[0]!);
+      const thread = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: thread.thread,
+        actorId: input.principalId,
         reason: "message_updated",
         messageId: input.messageId,
       });
@@ -2256,10 +2339,11 @@ export class PostgresPlatformStore implements PlatformStore {
       `INSERT INTO messages
         (id, organization_id, thread_id, sender_id, client_message_id,
          sequence, kind, body, encrypted_body, server_readable,
-         mentioned_principal_ids, attachments, stream_state, revision, created_at)
+         mentioned_principal_ids, attachments, stream_state, revision,
+         reply_to_message_id, created_at)
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15
+         $11, $12, $13, $14, $15, $16
        )`,
       [
         message.id,
@@ -2276,6 +2360,7 @@ export class PostgresPlatformStore implements PlatformStore {
         json(message.attachments ?? []),
         message.streamState ?? "complete",
         message.revision ?? 1,
+        message.replyToMessageId ?? null,
         message.createdAt,
       ],
     );
@@ -2653,6 +2738,9 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     serverReadable: row.server_readable,
     ...(row.encrypted_body ? { encryptedBody: row.encrypted_body } : {}),
     ...(row.operation_id ? { operationId: row.operation_id } : {}),
+    ...(row.reply_to_message_id
+      ? { replyToMessageId: row.reply_to_message_id }
+      : {}),
     ...((row.mentioned_principal_ids as PrincipalId[] | undefined)?.length
       ? { mentionedPrincipalIds: row.mentioned_principal_ids as PrincipalId[] }
       : {}),
@@ -2662,6 +2750,9 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     streamState:
       (row.stream_state as ThreadMessageStreamState | undefined) ?? "complete",
     revision: Number(row.revision ?? 1),
+    ...((row.reactions as ThreadMessage["reactions"] | undefined)?.length
+      ? { reactions: row.reactions as NonNullable<ThreadMessage["reactions"]> }
+      : {}),
   };
 }
 

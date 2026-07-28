@@ -1,11 +1,30 @@
 import { Fragment, type ReactNode } from "react";
 
+import { FluentEmojiText } from "./FluentEmoji.js";
+
 type ChatMarkdownBlock =
   | { kind: "heading"; level: 1 | 2 | 3; text: string }
   | { kind: "paragraph"; text: string }
   | { kind: "quote"; text: string }
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "code"; language?: string; text: string };
+
+const EMOJI_COMPONENT = String.raw`(?:\p{Emoji_Presentation}\uFE0F?|\p{Extended_Pictographic}\uFE0F)(?:\p{Emoji_Modifier})?`;
+const EMOJI_SEQUENCE = new RegExp(
+  String.raw`^(?:` +
+    String.raw`\s*(?:` +
+    `${EMOJI_COMPONENT}[\\u{E0020}-\\u{E007E}]+\\u{E007F}|` +
+    String.raw`\p{Regional_Indicator}{2}|` +
+    String.raw`[#*0-9]\uFE0F?\u20E3|` +
+    `${EMOJI_COMPONENT}(?:\\u200D${EMOJI_COMPONENT})*` +
+    String.raw`)\s*` +
+    String.raw`)+$`,
+  "u",
+);
+
+export function isEmojiOnlyMessage(message: string): boolean {
+  return message.trim().length > 0 && EMOJI_SEQUENCE.test(message);
+}
 
 export function parseChatMarkdown(markdown: string): ChatMarkdownBlock[] {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -186,12 +205,14 @@ function InlineMarkdown({
         </a>
       ) : (
         <Fragment key={key}>
-          {renderText ? renderText(link[1]!) : link[1]}
+          <FluentEmojiText text={link[1]!} renderText={renderText} />
         </Fragment>
       );
     }
     return (
-      <Fragment key={key}>{renderText ? renderText(part) : part}</Fragment>
+      <Fragment key={key}>
+        <FluentEmojiText text={part} renderText={renderText} />
+      </Fragment>
     );
   });
 }
@@ -215,13 +236,18 @@ export function ChatMarkdown({
   markdown,
   renderText,
   className = "",
+  enlargeEmojiOnly = true,
 }: {
   markdown: string;
   renderText?: (text: string) => ReactNode;
   className?: string;
+  enlargeEmojiOnly?: boolean;
 }) {
+  const emojiOnly = enlargeEmojiOnly && isEmojiOnlyMessage(markdown);
   return (
     <div
+      data-emoji-only={emojiOnly ? "true" : undefined}
+      style={emojiOnly ? { fontSize: "32px", lineHeight: 1.3 } : undefined}
       className={`chat-markdown grid gap-2 text-[13px] leading-[1.75] text-ink [overflow-wrap:anywhere] [text-wrap:pretty] ${className}`}
     >
       {parseChatMarkdown(markdown).map((block, index) => {

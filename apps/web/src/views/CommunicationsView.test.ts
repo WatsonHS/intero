@@ -1,11 +1,14 @@
-import { PrincipalId, ProjectId } from "@intero/domain";
+import { MessageId, PrincipalId, ProjectId } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
 import {
   buildGroupChatThreadInput,
+  insertEmojiAtCursor,
+  isBubblelessEmojiMessage,
   markCachedThreadRead,
   mergeCommunicationItems,
   personalStandInPrincipalId,
+  replaceCachedThreadMessage,
   resolveConversationIdentity,
   resolveConversationProjectId,
   resolvePilotCommunicationPrincipal,
@@ -22,6 +25,59 @@ const sessionPrincipal = {
   timezone: "Asia/Shanghai",
   capabilities: [],
 };
+
+describe("conversation emoji insertion", () => {
+  it("inserts a multi-codepoint emoji at the active textarea cursor", () => {
+    expect(insertEmojiAtCursor("准备发布", 2, "👩🏽‍💻")).toEqual({
+      draft: "准备👩🏽‍💻发布",
+      cursor: 2 + "👩🏽‍💻".length,
+    });
+  });
+
+  it("clamps a stale cursor to the current draft", () => {
+    expect(insertEmojiAtCursor("完成", 99, "✅")).toEqual({
+      draft: "完成✅",
+      cursor: "完成✅".length,
+    });
+  });
+});
+
+describe("emoji-only message bubbles", () => {
+  it("removes the bubble only for readable emoji without attachments", () => {
+    expect(
+      isBubblelessEmojiMessage({
+        body: "👋🏽  🎉",
+        serverReadable: true,
+      }),
+    ).toBe(true);
+    expect(
+      isBubblelessEmojiMessage({
+        body: "完成 👋🏽",
+        serverReadable: true,
+      }),
+    ).toBe(false);
+    expect(
+      isBubblelessEmojiMessage({
+        body: "👋🏽",
+        serverReadable: true,
+        attachments: [{} as never],
+      }),
+    ).toBe(false);
+    expect(
+      isBubblelessEmojiMessage({
+        body: "👋🏽",
+        serverReadable: true,
+        replyToMessageId: MessageId.parse(crypto.randomUUID()),
+      }),
+    ).toBe(false);
+    expect(
+      isBubblelessEmojiMessage({
+        body: "👋🏽",
+        serverReadable: false,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("conversation image hashing", () => {
   it("hashes images without Web Crypto on a LAN HTTP origin", async () => {
@@ -206,6 +262,41 @@ describe("conversation unread state", () => {
     expect(markCachedThreadRead({ items: [item, other] }, threadId)).toEqual({
       items: [{ ...item, unreadCount: 0, mentionCount: 0 }, other],
     });
+  });
+});
+
+describe("conversation reaction cache", () => {
+  it("replaces the revised message without disturbing adjacent history", () => {
+    const threadId = crypto.randomUUID();
+    const first = {
+      id: crypto.randomUUID(),
+      threadId,
+      revision: 1,
+    } as ThreadPayload["messages"][number];
+    const second = {
+      id: crypto.randomUUID(),
+      threadId,
+      revision: 1,
+    } as ThreadPayload["messages"][number];
+    const updated = {
+      ...second,
+      revision: 2,
+      reactions: [
+        {
+          emoji: "👍",
+          principalIds: [sessionPrincipal.id],
+        },
+      ],
+    };
+    const item = {
+      thread: { id: threadId },
+      messages: [first, second],
+    } as ThreadPayload;
+
+    expect(
+      replaceCachedThreadMessage({ items: [item] }, updated)?.items[0]
+        ?.messages,
+    ).toEqual([first, updated]);
   });
 });
 

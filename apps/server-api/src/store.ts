@@ -17,6 +17,7 @@ import {
   type Project,
   type ProjectId,
   type PublicWorkProjection,
+  type ReactionEmoji,
   type Spec,
   type SpecId,
   type SpecRevision,
@@ -24,6 +25,7 @@ import {
   type ThreadId,
   type ThreadMessage,
   type ThreadMessageAttachment,
+  type ThreadMessageReaction,
   type ThreadMessageStreamState,
   type Workstream,
   type WorkstreamId,
@@ -457,6 +459,7 @@ export class InMemoryPlatformStore {
       encryptedBody?: string;
       mentionedPrincipalIds?: PrincipalId[];
       attachmentIds?: ThreadMessageAttachment["id"][];
+      replyToMessageId?: ThreadMessage["id"];
       streamState?: ThreadMessageStreamState;
       createdAt: string;
     },
@@ -479,6 +482,7 @@ export class InMemoryPlatformStore {
         existing.senderId === input.senderId &&
         input.body !== undefined &&
         input.encryptedBody === undefined &&
+        existing.replyToMessageId === input.replyToMessageId &&
         !input.attachmentIds?.length
       ) {
         return this.updateMessageStream({
@@ -493,6 +497,7 @@ export class InMemoryPlatformStore {
         existing.senderId !== input.senderId ||
         existing.body !== (input.body ?? "") ||
         existing.encryptedBody !== input.encryptedBody ||
+        existing.replyToMessageId !== input.replyToMessageId ||
         !sameIds(
           existing.mentionedPrincipalIds ?? [],
           input.mentionedPrincipalIds ?? [],
@@ -501,6 +506,13 @@ export class InMemoryPlatformStore {
         throw new Error("Client message ID was already used.");
       }
       return existing;
+    }
+    if (
+      input.replyToMessageId &&
+      this.getThreadMessage(threadId, input.senderId, input.replyToMessageId)
+        ?.kind !== "message"
+    ) {
+      throw new Error("Reply message was not found.");
     }
     const message = buildThreadMessage(thread, {
       ...input,
@@ -599,6 +611,56 @@ export class InMemoryPlatformStore {
     this.recordConversationChange(
       thread,
       input.senderId,
+      "message_updated",
+      uuidv7(),
+      input.messageId,
+    );
+    return updated;
+  }
+
+  setMessageReaction(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+    emoji: ReactionEmoji;
+    reacted: boolean;
+  }): ThreadMessage {
+    const thread = this.threads.get(input.threadId);
+    const visibleFrom =
+      this.threadVisibility.get(`${input.threadId}:${input.principalId}`) ?? 1;
+    if (!thread?.participantIds.includes(input.principalId)) {
+      throw new Error("Thread was not found.");
+    }
+    const messages = this.messages.get(input.threadId) ?? [];
+    const messageIndex = messages.findIndex(
+      (message) =>
+        message.id === input.messageId && message.sequence >= visibleFrom,
+    );
+    const current = messages[messageIndex];
+    if (!current) throw new Error("Message was not found.");
+
+    const reactionUpdate = updateMessageReactions(current.reactions ?? [], {
+      principalId: input.principalId,
+      emoji: input.emoji,
+      reacted: input.reacted,
+    });
+    if (!reactionUpdate.changed) return current;
+
+    const updated: ThreadMessage = {
+      ...current,
+      revision: (current.revision ?? 1) + 1,
+    };
+    if (reactionUpdate.reactions.length > 0) {
+      updated.reactions = reactionUpdate.reactions;
+    } else {
+      delete updated.reactions;
+    }
+    const nextMessages = [...messages];
+    nextMessages[messageIndex] = updated;
+    this.messages.set(input.threadId, nextMessages);
+    this.recordConversationChange(
+      thread,
+      input.principalId,
       "message_updated",
       uuidv7(),
       input.messageId,
@@ -1253,6 +1315,7 @@ export function buildThreadMessage(
     encryptedBody?: string;
     mentionedPrincipalIds?: PrincipalId[];
     attachments?: ThreadMessageAttachment[];
+    replyToMessageId?: ThreadMessage["id"];
     streamState?: ThreadMessageStreamState;
     createdAt: string;
   },
@@ -1273,6 +1336,9 @@ export function buildThreadMessage(
       encryptedBody: input.encryptedBody,
       createdAt: input.createdAt,
       serverReadable: false,
+      ...(input.replyToMessageId
+        ? { replyToMessageId: input.replyToMessageId }
+        : {}),
       streamState: "complete",
       revision: 1,
     };
@@ -1300,10 +1366,57 @@ export function buildThreadMessage(
     ...(input.mentionedPrincipalIds?.length
       ? { mentionedPrincipalIds: input.mentionedPrincipalIds }
       : {}),
+    ...(input.replyToMessageId
+      ? { replyToMessageId: input.replyToMessageId }
+      : {}),
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     streamState,
     revision: 1,
   };
+}
+
+export function updateMessageReactions(
+  current: readonly ThreadMessageReaction[],
+  input: {
+    principalId: PrincipalId;
+    emoji: ReactionEmoji;
+    reacted: boolean;
+  },
+): { changed: boolean; reactions: ThreadMessageReaction[] } {
+  const reactions = current.map((reaction) => ({
+    ...reaction,
+    principalIds: [...reaction.principalIds],
+  }));
+  const reactionIndex = reactions.findIndex(
+    (reaction) => reaction.emoji === input.emoji,
+  );
+  const reaction = reactions[reactionIndex];
+  const alreadyReacted =
+    reaction?.principalIds.includes(input.principalId) ?? false;
+  if (alreadyReacted === input.reacted) {
+    return { changed: false, reactions };
+  }
+
+  if (reaction && input.reacted) {
+    if (reaction.principalIds.length >= 100) {
+      throw new Error("This reaction has reached its participant limit.");
+    }
+    reaction.principalIds.push(input.principalId);
+  } else if (reaction) {
+    reaction.principalIds = reaction.principalIds.filter(
+      (principalId) => principalId !== input.principalId,
+    );
+    if (reaction.principalIds.length === 0) reactions.splice(reactionIndex, 1);
+  } else {
+    if (reactions.length >= 40) {
+      throw new Error("This message has reached its reaction limit.");
+    }
+    reactions.push({
+      emoji: input.emoji,
+      principalIds: [input.principalId],
+    });
+  }
+  return { changed: true, reactions };
 }
 
 export function normalizeMentionIds(

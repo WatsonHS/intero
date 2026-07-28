@@ -89,6 +89,53 @@ export const ThreadMessageStreamState = z.enum([
 ]);
 export type ThreadMessageStreamState = z.infer<typeof ThreadMessageStreamState>;
 
+const EmojiComponent = String.raw`(?:\p{Emoji_Presentation}\uFE0F?|\p{Extended_Pictographic}\uFE0F)(?:\p{Emoji_Modifier})?`;
+const SingleEmojiSequence = new RegExp(
+  String.raw`^(?:` +
+    `${EmojiComponent}[\\u{E0020}-\\u{E007E}]+\\u{E007F}|` +
+    String.raw`\p{Regional_Indicator}{2}|` +
+    String.raw`[#*0-9]\uFE0F?\u20E3|` +
+    `${EmojiComponent}(?:\\u200D${EmojiComponent})*` +
+    String.raw`)$`,
+  "u",
+);
+
+export function isSingleEmojiSequence(value: string): boolean {
+  return SingleEmojiSequence.test(value);
+}
+
+export const ReactionEmoji = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(isSingleEmojiSequence, "Use exactly one emoji.");
+export type ReactionEmoji = z.infer<typeof ReactionEmoji>;
+
+export const ThreadMessageReaction = z
+  .object({
+    emoji: ReactionEmoji,
+    principalIds: z
+      .array(PrincipalId)
+      .min(1)
+      .max(100)
+      .refine(
+        (ids) => new Set(ids).size === ids.length,
+        "Reaction principals must be unique.",
+      ),
+  })
+  .strict();
+export type ThreadMessageReaction = z.infer<typeof ThreadMessageReaction>;
+
+const ThreadMessageReactions = z
+  .array(ThreadMessageReaction)
+  .max(40)
+  .refine(
+    (reactions) =>
+      new Set(reactions.map((reaction) => reaction.emoji)).size ===
+      reactions.length,
+    "Reaction emojis must be unique per message.",
+  );
+
 export const ThreadMessage = z
   .object({
     id: MessageId,
@@ -103,11 +150,15 @@ export const ThreadMessage = z
     operationId: OperationId.optional(),
     /** Stable identities, separate from the human-readable Markdown body. */
     mentionedPrincipalIds: z.array(PrincipalId).max(20).optional(),
+    /** Message quoted by this reply. The target must belong to the same thread. */
+    replyToMessageId: MessageId.optional(),
     /** Safe immutable metadata; object keys and signed URLs never enter history. */
     attachments: z.array(ThreadMessageAttachment).max(8).optional(),
     /** Present for durable Stand-in streams; omitted legacy rows are complete. */
     streamState: ThreadMessageStreamState.optional(),
     revision: z.number().int().positive().optional(),
+    /** Aggregated participant reactions; omitted when the message has none. */
+    reactions: ThreadMessageReactions.optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;

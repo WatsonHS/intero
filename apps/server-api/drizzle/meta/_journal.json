@@ -239,6 +239,20 @@
       "when": 1786464000000,
       "tag": "0033_optional_stand_in_context",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1786550400000,
+      "tag": "0034_message_reactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1786636800000,
+      "tag": "0035_message_replies",
+      "breakpoints": true
     }
   ]
 }

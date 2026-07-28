@@ -614,6 +614,7 @@ export async function sendThreadMessage(input: {
   body?: string;
   mentionedPrincipalIds?: string[];
   attachmentIds?: string[];
+  replyToMessageId?: string;
   clientMessageId?: string;
 }): Promise<ThreadMessage> {
   return postJson(`/v1/threads/${input.threadId}/messages`, {
@@ -621,6 +622,9 @@ export async function sendThreadMessage(input: {
     body: input.body ?? "",
     mentionedPrincipalIds: input.mentionedPrincipalIds ?? [],
     attachmentIds: input.attachmentIds ?? [],
+    ...(input.replyToMessageId
+      ? { replyToMessageId: input.replyToMessageId }
+      : {}),
   });
 }
 
@@ -652,6 +656,23 @@ export async function getThreadMessage(
       messageId,
     )}`,
     signal,
+  );
+}
+
+export async function setThreadMessageReaction(input: {
+  threadId: string;
+  messageId: string;
+  emoji: string;
+  reacted: boolean;
+}): Promise<ThreadMessage> {
+  return putJson(
+    `/v1/threads/${encodeURIComponent(input.threadId)}/messages/${encodeURIComponent(
+      input.messageId,
+    )}/reaction`,
+    {
+      emoji: input.emoji,
+      reacted: input.reacted,
+    },
   );
 }
 

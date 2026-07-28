@@ -13,6 +13,7 @@ import {
   KanbanWorkstreamLinks,
   Project,
   PublicWorkProjection,
+  ReactionEmoji,
   Spec,
   SpecRevision,
   SpecReviewResponse,
@@ -140,6 +141,7 @@ export const SendThreadMessageRequest = z
     encryptedBody: z.string().max(100_000).optional(),
     mentionedPrincipalIds: z.array(z.string().uuid()).max(20).default([]),
     attachmentIds: z.array(z.string().uuid()).max(8).default([]),
+    replyToMessageId: z.string().uuid().optional(),
   })
   .strict()
   .refine((input) => {
@@ -151,6 +153,12 @@ export const SendThreadMessageRequest = z
       (input.body.trim().length > 0 || input.attachmentIds.length > 0)
     );
   }, "Send ciphertext alone, or a server-readable body and/or attachments.");
+export const SetMessageReactionRequest = z
+  .object({
+    emoji: ReactionEmoji,
+    reacted: z.boolean(),
+  })
+  .strict();
 export const AddStandInRequest = z.object({}).strict();
 export const UpdateThreadRequest = z
   .object({

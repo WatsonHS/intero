@@ -17,6 +17,7 @@ import {
   IngestEventRequest,
   MarkThreadReadRequest,
   SendThreadMessageRequest,
+  SetMessageReactionRequest,
   ThreadMessagesQuery,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
@@ -983,6 +984,27 @@ export async function buildApp(
     },
   );
 
+  app.put<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId/reaction",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const input = parse(SetMessageReactionRequest, request.body);
+      const message = await store.getThreadMessage(
+        request.params.threadId as ThreadId,
+        principal!.id,
+        request.params.messageId as MessageId,
+      );
+      if (!message) return notFound(reply, "Message");
+      return store.setMessageReaction({
+        threadId: request.params.threadId as ThreadId,
+        messageId: request.params.messageId as MessageId,
+        principalId: principal!.id,
+        emoji: input.emoji,
+        reacted: input.reacted,
+      });
+    },
+  );
+
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/conclusion",
     async (request, reply) => {
@@ -1122,6 +1144,15 @@ export async function buildApp(
           attachmentIds: input.attachmentIds as NonNullable<
             Parameters<PlatformStore["appendMessage"]>[1]["attachmentIds"]
           >,
+          ...(input.replyToMessageId
+            ? {
+                replyToMessageId: input.replyToMessageId as NonNullable<
+                  Parameters<
+                    PlatformStore["appendMessage"]
+                  >[1]["replyToMessageId"]
+                >,
+              }
+            : {}),
           createdAt: new Date().toISOString(),
         }),
       );

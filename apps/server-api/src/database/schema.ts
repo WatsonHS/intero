@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   date,
   index,
@@ -343,6 +344,10 @@ export const messages = pgTable(
       .notNull()
       .default("complete"),
     revision: integer("revision").notNull().default(1),
+    reactions: jsonb("reactions").notNull().default([]),
+    replyToMessageId: uuid("reply_to_message_id").references(
+      (): AnyPgColumn => messages.id,
+    ),
     ...timestamps,
   },
   (table) => [
@@ -365,6 +370,7 @@ export const messages = pgTable(
     ),
     index("messages_org_idx").on(table.organizationId),
     index("messages_mentions_idx").using("gin", table.mentionedPrincipalIds),
+    index("messages_reply_to_message_idx").on(table.replyToMessageId),
   ],
 );
 

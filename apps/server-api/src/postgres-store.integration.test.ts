@@ -530,4 +530,40 @@ databaseSuite("PostgreSQL platform store", () => {
       claims.rows.every((attachment) => attachment.message_id === messageId),
     ).toBe(true);
   });
+
+  it("round-trips a quoted message reference", async () => {
+    const threadId = uuidv7() as ActionEnvelope["threadId"];
+    const originalMessageId = uuidv7() as MessageId;
+    const replyMessageId = uuidv7() as MessageId;
+    await store.createThread({
+      id: threadId,
+      kind: "human_direct",
+      title: "Reply fixture",
+      participantIds: [ownerId],
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      sequence: 0,
+      accessVersion: 1,
+      createdAt: new Date().toISOString(),
+    });
+    await store.appendMessage(threadId, {
+      id: originalMessageId,
+      senderId: ownerId,
+      body: "Original",
+      createdAt: new Date().toISOString(),
+    });
+    const reply = await store.appendMessage(threadId, {
+      id: replyMessageId,
+      senderId: ownerId,
+      body: "Reply",
+      replyToMessageId: originalMessageId,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(reply.replyToMessageId).toBe(originalMessageId);
+    await expect(
+      store.getThreadMessage(threadId, ownerId, replyMessageId),
+    ).resolves.toMatchObject({ replyToMessageId: originalMessageId });
+  });
 });

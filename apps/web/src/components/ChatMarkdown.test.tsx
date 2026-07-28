@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ChatMarkdown, parseChatMarkdown } from "./ChatMarkdown";
+import {
+  ChatMarkdown,
+  isEmojiOnlyMessage,
+  parseChatMarkdown,
+} from "./ChatMarkdown";
 
 describe("ChatMarkdown", () => {
   it("renders common chat Markdown without accepting raw HTML", () => {
@@ -45,5 +49,37 @@ describe("ChatMarkdown", () => {
         (block) => block.kind,
       ),
     ).toEqual(["quote", "list", "code"]);
+  });
+
+  it("recognizes complete emoji sequences without treating decorated text as emoji-only", () => {
+    for (const message of [
+      "😀",
+      "😀  🚀",
+      "👩🏽‍💻",
+      "❤️",
+      "1️⃣",
+      "🇨🇳",
+      "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+      "👍\n🔥",
+    ]) {
+      expect(isEmojiOnlyMessage(message)).toBe(true);
+    }
+
+    for (const message of ["", "完成 ✅", "*😀*", "😀!", "©"]) {
+      expect(isEmojiOnlyMessage(message)).toBe(false);
+    }
+  });
+
+  it("enlarges emoji-only content and supports opting out for attached messages", () => {
+    const enlarged = renderToStaticMarkup(<ChatMarkdown markdown="👋🏻" />);
+    const attached = renderToStaticMarkup(
+      <ChatMarkdown markdown="👋🏻" enlargeEmojiOnly={false} />,
+    );
+
+    expect(enlarged).toContain('data-emoji-only="true"');
+    expect(enlarged).toContain('data-fluent-emoji="👋🏻"');
+    expect(enlarged).toContain("font-size:32px");
+    expect(attached).not.toContain("data-emoji-only");
+    expect(attached).not.toContain("font-size:32px");
   });
 });

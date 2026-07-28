@@ -404,6 +404,7 @@ describe("Communications personal Stand-in routing", () => {
 
   it("never changes Stand-in membership while sending a group message", async () => {
     const threadId = "019f9f20-0000-7000-8000-000000000099";
+    const replyToMessageId = "019f9f20-0000-7000-8000-000000000097";
     const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000002");
     const sendMessage = vi.fn(async () => {
       return { id: "019f9f20-0000-7000-8000-000000000098" } as never;
@@ -414,6 +415,7 @@ describe("Communications personal Stand-in routing", () => {
         threadId,
         senderId: SESSION_PRINCIPAL_ID,
         body: "@Development Member 的替身 请同步。",
+        replyToMessageId,
         mentionedStandIns: [
           {
             principalId: standInId,
@@ -427,6 +429,9 @@ describe("Communications personal Stand-in routing", () => {
     );
 
     expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ replyToMessageId }),
+    );
   });
 
   it("enqueues a group reply against the durable source message", async () => {
