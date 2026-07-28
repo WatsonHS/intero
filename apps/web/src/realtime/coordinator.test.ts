@@ -196,4 +196,41 @@ describe("ConversationRealtimeCoordinator", () => {
     expect(onRecoveryGap).toHaveBeenCalledWith(threadId);
     coordinator.stop();
   });
+
+  it("creates a fresh Centrifugo session after a terminal disconnect", async () => {
+    const statuses: string[] = [];
+    const createSession = vi.fn(async () => ({
+      token: "connection-token",
+      expiresAt: new Date().toISOString(),
+      transports: [
+        { transport: "websocket" as const, endpoint: "wss://example.test/ws" },
+      ],
+      emulationEndpoint: "https://example.test/emulation",
+    }));
+    const coordinator = new ConversationRealtimeCoordinator({
+      createSession,
+      createSubscription: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+      onChange: vi.fn(),
+      onRecoveryGap: vi.fn(),
+    });
+
+    coordinator.start();
+    await vi.waitFor(() =>
+      expect(fakeTransport.Centrifuge.instances).toHaveLength(1),
+    );
+
+    vi.useFakeTimers();
+    fakeTransport.Centrifuge.instances[0]!.emit("disconnected", {
+      code: 3500,
+      reason: "invalid token",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.useRealTimers();
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(fakeTransport.Centrifuge.instances).toHaveLength(2);
+    expect(statuses).toEqual(["connecting", "live", "degraded", "live"]);
+    coordinator.stop();
+  });
 });

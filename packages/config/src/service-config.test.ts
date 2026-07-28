@@ -46,6 +46,7 @@ describe("service environment schemas", () => {
       pilot: {
         persistence: "postgres",
         centrifugoApiUrl: "http://localhost:8000",
+        centrifugoApiKey: "intero-development-realtime-api-key-v1",
       },
       realtime: {
         publicUrl: "http://localhost:4311",
@@ -64,6 +65,7 @@ describe("service environment schemas", () => {
       metricsPort: 9464,
       pilot: {
         centrifugoApiUrl: "http://localhost:8000",
+        centrifugoApiKey: "intero-development-realtime-api-key-v1",
       },
     });
   });

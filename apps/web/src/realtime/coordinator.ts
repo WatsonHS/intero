@@ -152,14 +152,23 @@ export class ConversationRealtimeCoordinator {
       });
       this.#client = client;
       client.on("connected", () => {
+        if (client !== this.#client || this.#stopped) return;
+        if (this.#retryTimer) {
+          clearTimeout(this.#retryTimer);
+          this.#retryTimer = undefined;
+        }
         this.#retryAttempt = 0;
         this.#dependencies.onStatus("live");
       });
       client.on("connecting", () => {
+        if (client !== this.#client || this.#stopped) return;
         this.#dependencies.onStatus(this.#online() ? "connecting" : "offline");
       });
       client.on("disconnected", () => {
+        if (client !== this.#client || this.#stopped) return;
+        this.#client = undefined;
         this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
+        this.#scheduleRetry();
       });
       client.on("publication", (context) => this.#publication(context));
       client.on("subscribed", (context) => {

@@ -13,6 +13,7 @@ const RuntimeMode = z.enum(["development", "product"]);
 export type RuntimeMode = z.infer<typeof RuntimeMode>;
 const DevelopmentRealtimeTokenSecret =
   "intero-development-realtime-token-secret-v1";
+const DevelopmentRealtimeApiKey = "intero-development-realtime-api-key-v1";
 const DevelopmentCentrifugoApiUrl = "http://localhost:8000";
 const DevelopmentCentrifugoPublicUrl = "http://localhost:4311";
 
@@ -352,6 +353,8 @@ function withDevelopmentCentrifugoDefaults(
     ...environment,
     INTERO_CENTRIFUGO_API_URL:
       environment.INTERO_CENTRIFUGO_API_URL ?? DevelopmentCentrifugoApiUrl,
+    INTERO_CENTRIFUGO_API_KEY:
+      environment.INTERO_CENTRIFUGO_API_KEY ?? DevelopmentRealtimeApiKey,
   };
 }
 
