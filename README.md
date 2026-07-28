@@ -1,7 +1,5 @@
 # Intero
 
-[![CI](https://github.com/WatsonHS/intero/actions/workflows/ci.yml/badge.svg)](https://github.com/WatsonHS/intero/actions/workflows/ci.yml)
-
 Intero is a coordination layer for software teams working with Coding Agents.
 It turns structured Agent checkpoints into durable, privacy-aware team context:
 current work, blockers, decisions, review state, and the next coordination
