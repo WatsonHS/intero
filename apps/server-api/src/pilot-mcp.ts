@@ -199,14 +199,19 @@ function createPilotMcpServer(
             "Reconnect this repository from the Intero Project connection center.",
         });
       }
-      const status = binding.validatedAt
-        ? "connected"
-        : binding.mcpInitializedAt
-          ? "mcp_initialized"
-          : "awaiting_initialization";
+      const status =
+        binding.validatedAt && binding.activityUpdatedAt
+          ? "connected"
+          : binding.validatedAt
+            ? "lifecycle_pending"
+            : binding.mcpInitializedAt
+              ? "mcp_initialized"
+              : "awaiting_initialization";
       return toolResult({
         status,
         connected: status === "connected",
+        mcpConnected: Boolean(binding.validatedAt),
+        lifecycleReady: Boolean(binding.activityUpdatedAt),
         bindingId: binding.id,
         projectId: binding.projectId,
         client: binding.client,
@@ -214,10 +219,14 @@ function createPilotMcpServer(
         workspaceId: binding.workspaceId,
         mcpInitializedAt: binding.mcpInitializedAt,
         validatedAt: binding.validatedAt,
+        activityStatus: binding.activityStatus,
+        activityUpdatedAt: binding.activityUpdatedAt,
         action:
           status === "connected"
             ? "Use Project-scoped Intero tools."
-            : "Call intero.validate_connection with the temporary verification code.",
+            : status === "lifecycle_pending"
+              ? "Complete the Codex Hook review, then start a fresh GUI task in this repository and call intero.connection_status again."
+              : "Call intero.validate_connection with the temporary verification code.",
       });
     },
   );
@@ -242,7 +251,10 @@ function createPilotMcpServer(
               new Date().toISOString(),
             );
       return toolResult({
-        status: "connected",
+        status: binding.activityUpdatedAt ? "connected" : "lifecycle_pending",
+        connected: Boolean(binding.activityUpdatedAt),
+        mcpConnected: true,
+        lifecycleReady: Boolean(binding.activityUpdatedAt),
         bindingId: binding.id,
         projectId: binding.projectId,
         ownerId: binding.ownerId,
@@ -251,6 +263,11 @@ function createPilotMcpServer(
         workspaceId: binding.workspaceId,
         mcpInitializedAt: binding.mcpInitializedAt,
         validatedAt: binding.validatedAt,
+        activityStatus: binding.activityStatus,
+        activityUpdatedAt: binding.activityUpdatedAt,
+        action: binding.activityUpdatedAt
+          ? "Use Project-scoped Intero tools."
+          : "Complete the Codex Hook review, then start a fresh GUI task in this repository.",
       });
     },
   );
@@ -267,11 +284,17 @@ function createPilotMcpServer(
         (await options.store.findAgentBindingById(initialBinding.id)) ??
         initialBinding;
       return toolResult({
-        status: binding.validatedAt
-          ? "connected"
-          : binding.mcpInitializedAt
-            ? "mcp_initialized"
-            : "awaiting_initialization",
+        status:
+          binding.validatedAt && binding.activityUpdatedAt
+            ? "connected"
+            : binding.validatedAt
+              ? "lifecycle_pending"
+              : binding.mcpInitializedAt
+                ? "mcp_initialized"
+                : "awaiting_initialization",
+        connected: Boolean(binding.validatedAt && binding.activityUpdatedAt),
+        mcpConnected: Boolean(binding.validatedAt),
+        lifecycleReady: Boolean(binding.activityUpdatedAt),
         bindingId: binding.id,
         projectId: binding.projectId,
         ownerId: binding.ownerId,
@@ -281,6 +304,8 @@ function createPilotMcpServer(
         preferredLanguage: binding.preferredLanguage,
         mcpInitializedAt: binding.mcpInitializedAt,
         validatedAt: binding.validatedAt,
+        activityStatus: binding.activityStatus,
+        activityUpdatedAt: binding.activityUpdatedAt,
         lastSeenAt: binding.lastSeenAt,
       });
     },

@@ -157,13 +157,15 @@ export function AgentConnectionsSettings({
     );
   }, [issued, overview.data?.bindings]);
 
-  const progress = issuedBinding?.validatedAt
-    ? 3
-    : issuedBinding?.mcpInitializedAt
-      ? 2
-      : issued
-        ? 1
-        : 0;
+  const progress = issuedBinding?.activityUpdatedAt
+    ? 4
+    : issuedBinding?.validatedAt
+      ? 3
+      : issuedBinding?.mcpInitializedAt
+        ? 2
+        : issued
+          ? 1
+          : 0;
 
   async function launchCodex(prompt: string) {
     setLaunchError(undefined);
@@ -277,16 +279,20 @@ export function AgentConnectionsSettings({
                   "rounded-pill px-2.5 py-1 text-[10px]",
                   summary.connected.length > 0
                     ? "bg-green-soft text-green"
-                    : summary.pending.length > 0
-                      ? "bg-accent-soft text-accent-strong"
-                      : "bg-amber-soft text-amber",
+                    : summary.lifecyclePending.length > 0
+                      ? "bg-amber-soft text-amber"
+                      : summary.pending.length > 0
+                        ? "bg-accent-soft text-accent-strong"
+                        : "bg-amber-soft text-amber",
                 ].join(" ")}
               >
                 {summary.connected.length > 0
-                  ? `${summary.connected.length} 个已验证连接`
-                  : summary.pending.length > 0
-                    ? `${summary.pending.length} 个连接正在配置`
-                    : "尚未连接"}
+                  ? `${summary.connected.length} 个完整连接`
+                  : summary.lifecyclePending.length > 0
+                    ? `${summary.lifecyclePending.length} 个 MCP 已验证，Hook 待确认`
+                    : summary.pending.length > 0
+                      ? `${summary.pending.length} 个连接正在配置`
+                      : "尚未连接"}
               </span>
             </div>
 
@@ -304,14 +310,16 @@ export function AgentConnectionsSettings({
                       <span
                         className={[
                           "grid h-[34px] w-[34px] place-items-center rounded-[10px]",
-                          binding.validatedAt
+                          binding.validatedAt && binding.activityUpdatedAt
                             ? "bg-green-soft text-green"
-                            : binding.mcpInitializedAt
-                              ? "bg-accent-soft text-accent-strong"
-                              : "bg-amber-soft text-amber",
+                            : binding.validatedAt
+                              ? "bg-amber-soft text-amber"
+                              : binding.mcpInitializedAt
+                                ? "bg-accent-soft text-accent-strong"
+                                : "bg-amber-soft text-amber",
                         ].join(" ")}
                       >
-                        {binding.validatedAt ? (
+                        {binding.validatedAt && binding.activityUpdatedAt ? (
                           <CheckCircleIcon size={16} weight="fill" />
                         ) : (
                           <PlugsIcon size={16} />
@@ -325,11 +333,13 @@ export function AgentConnectionsSettings({
                           {binding.client} ·{" "}
                           {binding.authMode === "oauth"
                             ? "旧 OAuth 连接已停用，请重新连接"
-                            : binding.validatedAt
-                              ? "Bearer credential 与原生 MCP 已验证"
-                              : binding.mcpInitializedAt
-                                ? "MCP 已加载"
-                                : "等待连接任务写入配置"}
+                            : binding.validatedAt && binding.activityUpdatedAt
+                              ? "原生 MCP 与 SessionStart Hook 已验证"
+                              : binding.validatedAt
+                                ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
+                                : binding.mcpInitializedAt
+                                  ? "MCP 已加载"
+                                  : "等待连接任务写入配置"}
                           {binding.lastSeenAt
                             ? ` · 最后活跃 ${new Date(
                                 binding.lastSeenAt,
@@ -357,6 +367,16 @@ export function AgentConnectionsSettings({
                 这个 Project 还没有经过真实 MCP 验证的 Coding Agent。
               </p>
             )}
+            {summary.lifecyclePending.length > 0 ? (
+              <div className="mt-4 flex items-start gap-2 rounded-card border border-amber-soft bg-amber-soft px-3.5 py-3 text-[11px] leading-[1.65] text-amber">
+                <WarningCircleIcon size={15} className="mt-0.5 shrink-0" />
+                <span>
+                  MCP 已经可用，但 SessionStart 还没有到达。请在 Codex GUI 的
+                  Hook 审核提示中确认当前仓库的 Intero
+                  Hook，然后在该仓库新建一个任务；页面会在首次生命周期上报后自动变为完整连接。
+                </span>
+              </div>
+            ) : null}
           </section>
 
           <section className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3">
@@ -365,6 +385,9 @@ export function AgentConnectionsSettings({
                 (binding) => binding.client === client.id,
               ).length;
               const pending = summary.minePending.some(
+                (binding) => binding.client === client.id,
+              );
+              const lifecyclePending = summary.mineLifecyclePending.some(
                 (binding) => binding.client === client.id,
               );
               return (
@@ -385,15 +408,17 @@ export function AgentConnectionsSettings({
                   <button
                     type="button"
                     data-testid={`connect-agent-${client.id}`}
-                    disabled={startConnection.isPending}
+                    disabled={startConnection.isPending || lifecyclePending}
                     onClick={() => startConnection.mutate(client.id)}
                     className="mt-auto h-9 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                   >
-                    {pending
-                      ? `重新生成 ${client.label} 连接`
-                      : mine > 0
-                        ? `连接另一个 ${client.label} 仓库`
-                        : `连接 ${client.label}`}
+                    {lifecyclePending
+                      ? `等待 ${client.label} Hook 首次上报`
+                      : pending
+                        ? `重新生成 ${client.label} 连接`
+                        : mine > 0
+                          ? `连接另一个 ${client.label} 仓库`
+                          : `连接 ${client.label}`}
                   </button>
                 </article>
               );
@@ -424,11 +449,12 @@ export function AgentConnectionsSettings({
             </span>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
               "单次连接 ticket 已创建",
               "等待原生 MCP 加载",
               "MCP + Project credential 已验证",
+              "SessionStart Hook 已验证",
             ].map((label, index) => (
               <span
                 key={label}

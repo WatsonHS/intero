@@ -219,13 +219,20 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain(
       "直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话",
     );
-    expect(chineseConnectPrompt).toContain("新对话报告 MCP 验证结果");
+    expect(chineseConnectPrompt).toContain("新对话报告 MCP 与 Hook 验证结果");
+    expect(chineseConnectPrompt).toContain(".worktreeinclude");
+    expect(chineseConnectPrompt).toContain(
+      'node \\"$(git rev-parse --show-toplevel)/.intero/hook.mjs\\"',
+    );
+    expect(chineseConnectPrompt).toContain(
+      "connected=true 且 lifecycleReady=true",
+    );
     expect(chineseConnectPrompt).not.toContain("codex://threads/new");
     expect(chineseConnectPrompt).toContain("移除本地 verification 字段");
     expect(chineseConnectPrompt).not.toContain("以下 JSON 是声明式期望状态");
     expect(chineseConnectPrompt).not.toContain("intero-mcp");
     expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
-    expect(chineseConnectPrompt.length).toBeLessThan(4_200);
+    expect(chineseConnectPrompt.length).toBeLessThan(5_200);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
@@ -1183,7 +1190,7 @@ describe("pilot cloud-first vertical slice", () => {
       validationText?.type === "text" && validationText.text
         ? JSON.parse(validationText.text).status
         : undefined,
-    ).toBe("connected");
+    ).toBe("lifecycle_pending");
     const firstValidatedAt =
       validationText?.type === "text" && validationText.text
         ? JSON.parse(validationText.text).validatedAt
@@ -1210,8 +1217,10 @@ describe("pilot cloud-first vertical slice", () => {
     expect(
       connectedStatusText ? JSON.parse(connectedStatusText) : undefined,
     ).toMatchObject({
-      status: "connected",
-      connected: true,
+      status: "lifecycle_pending",
+      connected: false,
+      mcpConnected: true,
+      lifecycleReady: false,
       projectId: fixture.project.id,
       validatedAt: firstValidatedAt,
     });
@@ -1268,6 +1277,33 @@ describe("pilot cloud-first vertical slice", () => {
     expect(afterStarted.bindings[0]).toMatchObject({
       activityStatus: "active",
       activityUpdatedAt: expect.any(String),
+    });
+    const lifecycleReady = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/mcp",
+      headers: {
+        authorization: `Bearer ${connected.json().credential as string}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: "lifecycle-ready",
+        method: "tools/call",
+        params: {
+          name: "intero.connection_status",
+          arguments: {},
+        },
+      },
+    });
+    expect(
+      JSON.parse(lifecycleReady.json().result.content[0].text),
+    ).toMatchObject({
+      status: "connected",
+      connected: true,
+      mcpConnected: true,
+      lifecycleReady: true,
+      projectId: fixture.project.id,
     });
 
     const endedAt = new Date(
@@ -2078,9 +2114,12 @@ async function connectAgent(
     },
   });
   expect(validation.statusCode).toBe(200);
-  expect(JSON.parse(validation.json().result.content[0].text).status).toBe(
-    "connected",
-  );
+  expect(JSON.parse(validation.json().result.content[0].text)).toMatchObject({
+    status: "lifecycle_pending",
+    connected: false,
+    mcpConnected: true,
+    lifecycleReady: false,
+  });
   const connectReuse = await app.inject({
     method: "POST",
     url: "/v1/pilot/agent/connect",
