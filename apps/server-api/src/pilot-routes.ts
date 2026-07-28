@@ -2160,6 +2160,8 @@ function buildConnectPrompt(
     projectInstructions: {
       preferredLanguage,
       checkpointTool: "stand_in.report_checkpoint",
+      checkpointStatusTool: "stand_in.checkpoint_status",
+      checkpointTerminalStatuses: ["published", "private", "failed"],
       initialIntent: {
         trigger: "first_user_request_understood",
         timing: "before_substantive_work",
@@ -2195,7 +2197,7 @@ function buildConnectPrompt(
         "2. 用候选 credential 请求 authorization.reuseProbeUrl；HTTP 200 且 projectId、client 匹配时复用，否则进入兑换。",
         "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前可重试；每次 HTTP 201 以最新 credential、verification 为准，原子写入 artifacts.localCredential 并设置 0600。",
         `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 Hook；Authorization 使用已保存 credential。SessionStart Hook 发送 hooks.allowedPayload，以原生 session ID 的本地哈希生成 clientEventId 并上报 active 状态；Hook 采用 fail-open。${client === "codex" ? " Hook 命令从 git rev-parse --show-toplevel 定位实现，并把 artifacts.worktreePatterns 合并到仓库根目录 .worktreeinclude。" : ""}`,
-        "5. 在项目 instructions 维护 intero-managed 规则：每个新对话理解首条用户请求后、开始实质工作前，按 projectInstructions.initialIntent 调用 stand_in.report_checkpoint，用安全摘要上报正在做的工作；后续 semanticBranchPoints 继续上报，定向协作填写当前项目成员 ID。",
+        "5. 在项目 instructions 维护 intero-managed 规则：每个新对话理解首条用户请求后、开始实质工作前，按 projectInstructions.initialIntent 调用 stand_in.report_checkpoint，用安全摘要上报正在做的工作；保存返回的 workStateId，并按 statusTool 查询直到 projectInstructions.checkpointTerminalStatuses 之一，依据 action 处理重试或失败。后续 semanticBranchPoints 继续上报，定向协作填写当前项目成员 ID。",
         `6. 校验配置语法与 ${clientLabel} 原生 MCP 注册状态。`,
         client === "codex"
           ? "7. HTTP 201 的 credential 与 verification 落盘后，直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话并跟进结果。按 Codex GUI 的 Hook 审核提示确认当前仓库的 Intero Hook；确认后新建任务。验证任务依次调用 intero.connection_status、用本地 verification.code 调用 intero.validate_connection、再次调用 intero.connection_status；以 connected=true 且 lifecycleReady=true 为完成信号，随后移除本地 verification 字段。若状态为 lifecycle_pending，再新建一次任务并回读。本配置任务报告 pending_gui_validation，新对话报告 MCP 与 Hook 验证结果。"
@@ -2215,7 +2217,7 @@ function buildConnectPrompt(
         "2. Probe authorization.reuseProbeUrl with the candidate credential. Reuse an HTTP 200 binding matching projectId and client; otherwise exchange.",
         "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable until connected or expiresAt; each HTTP 201 makes its latest credential and verification authoritative. Atomically save them to artifacts.localCredential with mode 0600.",
         `4. Minimally merge native ${clientLabel} MCP and hooks per nativeConfiguration. Use the saved credential for Authorization. The SessionStart hook sends hooks.allowedPayload, hashes the native session ID into clientEventId, reports active status, and fails open.${client === "codex" ? " Resolve the hook implementation from git rev-parse --show-toplevel and merge artifacts.worktreePatterns into the repository-root .worktreeinclude." : ""}`,
-        "5. Maintain intero-managed Project instructions: after understanding the first user request in every new conversation and before substantive work, follow projectInstructions.initialIntent and call stand_in.report_checkpoint with a safe summary of the current work. Continue reporting later semanticBranchPoints and route collaboration to a current Project member.",
+        "5. Maintain intero-managed Project instructions: after understanding the first user request in every new conversation and before substantive work, follow projectInstructions.initialIntent and call stand_in.report_checkpoint with a safe summary of the current work. Save the returned workStateId and use statusTool until reaching a projectInstructions.checkpointTerminalStatuses value, following action for retries or failures. Continue reporting later semanticBranchPoints and route collaboration to a current Project member.",
         `6. Validate syntax and ${clientLabel} native MCP registration.`,
         client === "codex"
           ? "7. As soon as the HTTP 201 credential and verification are persisted, use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository and follow its result. Confirm the repository Intero Hook in the Codex GUI review flow, then start a fresh task. The validation task calls intero.connection_status, intero.validate_connection with local verification.code, then intero.connection_status again; connected=true and lifecycleReady=true are the completion signal, after which it removes the local verification field. If status is lifecycle_pending, start one more task and read status again. This setup task reports pending_gui_validation, and the new conversation reports both MCP and Hook verification."

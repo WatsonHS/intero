@@ -204,6 +204,10 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain("intero.connection_status");
     expect(chineseConnectPrompt).toContain("intero.validate_connection");
     expect(chineseConnectPrompt).toContain("stand_in.report_checkpoint");
+    expect(chineseConnectPrompt).toContain("stand_in.checkpoint_status");
+    expect(chineseConnectPrompt).toContain(
+      '"checkpointTerminalStatuses":["published","private","failed"]',
+    );
     expect(chineseConnectPrompt).toContain(
       '"initialIntent":{"trigger":"first_user_request_understood","timing":"before_substantive_work","eventType":"work_started","fields":["workstreamKey","workstreamTitle","narrative.currentFocus"]}',
     );
@@ -1155,6 +1159,7 @@ describe("pilot cloud-first vertical slice", () => {
         "intero.validate_connection",
         "stand_in.current_context",
         "stand_in.report_checkpoint",
+        "stand_in.checkpoint_status",
       ]),
     );
     const pendingStatus = (await mcpClient.callTool({
@@ -1429,10 +1434,11 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(unauthorized.statusCode).toBe(401);
 
+    const checkpointInput = checkpoint(fixture.project.id);
     const accepted = await sendCheckpoint(
       app,
       connection.credential,
-      checkpoint(fixture.project.id),
+      checkpointInput,
     );
     expect(accepted.statusCode).toBe(202);
     expect(accepted.json()).toMatchObject({
@@ -1440,10 +1446,48 @@ describe("pilot cloud-first vertical slice", () => {
       duplicate: false,
       published: true,
     });
+    expect(
+      await callMcpTool(
+        app,
+        connection.credential,
+        "stand_in.checkpoint_status",
+        { workStateId: accepted.json().workStateId },
+      ),
+    ).toMatchObject({
+      workStateId: accepted.json().workStateId,
+      status: "published",
+      terminal: true,
+      published: true,
+      pulseEntryId: expect.any(String),
+    });
+    expect(
+      await callMcpTool(
+        app,
+        connection.credential,
+        "stand_in.report_checkpoint",
+        {
+          eventType: checkpointInput.eventType,
+          narrative: checkpointInput.narrative,
+          evidenceRefs: checkpointInput.evidenceRefs,
+          clientEventId: checkpointInput.clientEventId,
+          workstreamKey: checkpointInput.workstream.key,
+          workstreamTitle: checkpointInput.workstream.title,
+          phase: checkpointInput.workstream.phase,
+        },
+      ),
+    ).toMatchObject({
+      accepted: true,
+      duplicate: true,
+      published: true,
+      status: "published",
+      terminal: true,
+      workStateId: accepted.json().workStateId,
+      statusTool: "stand_in.checkpoint_status",
+    });
     const duplicate = await sendCheckpoint(
       app,
       connection.credential,
-      checkpoint(fixture.project.id),
+      checkpointInput,
     );
     expect(duplicate.json().duplicate).toBe(true);
 
@@ -1890,6 +1934,21 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     expect(
+      await callMcpTool(
+        app,
+        connection.credential,
+        "stand_in.checkpoint_status",
+        { workStateId: failed.json().workStateId },
+      ),
+    ).toMatchObject({
+      workStateId: failed.json().workStateId,
+      status: "failed",
+      terminal: true,
+      published: false,
+      lastErrorCode: "MODEL_GATEWAY_UNAVAILABLE",
+      deadLetteredAt: expect.any(String),
+    });
+    expect(
       (await overview(app, fixture.project.id, A)).privateWorkState,
     ).toHaveLength(1);
     expect((await overview(app, fixture.project.id, B)).pulse).toEqual([]);
@@ -2186,6 +2245,36 @@ async function sendCheckpoint(
     headers: { authorization: `Bearer ${credential}` },
     payload,
   });
+}
+
+async function callMcpTool(
+  app: FastifyInstance,
+  credential: string,
+  name: string,
+  args: object,
+) {
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/pilot/mcp",
+    headers: {
+      authorization: `Bearer ${credential}`,
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    payload: {
+      jsonrpc: "2.0",
+      id: `tool-${name}`,
+      method: "tools/call",
+      params: {
+        name,
+        arguments: args,
+      },
+    },
+  });
+  expect(response.statusCode).toBe(200);
+  const result = response.json().result;
+  expect(result?.isError).not.toBe(true);
+  return JSON.parse(result.content[0].text);
 }
 
 async function overview(

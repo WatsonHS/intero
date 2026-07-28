@@ -198,7 +198,10 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
     expect(
       JSON.parse(validationResult.result.content[0]?.text ?? "{}"),
     ).toMatchObject({
-      status: "connected",
+      status: "lifecycle_pending",
+      connected: false,
+      mcpConnected: true,
+      lifecycleReady: false,
       bindingId: ticketId,
       projectId,
     });

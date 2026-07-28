@@ -380,7 +380,63 @@ function createPilotMcpServer(
         duplicate: result.duplicate,
         published: result.published,
         standIn: result.standIn,
+        status: result.standInJob.status,
+        terminal: isTerminalCheckpointStatus(result.standInJob.status),
         workStateId: result.workState.id,
+        statusTool: "stand_in.checkpoint_status",
+      });
+    },
+  );
+
+  server.registerTool(
+    "stand_in.checkpoint_status",
+    {
+      description:
+        initialBinding.preferredLanguage === "zh-CN"
+          ? "查询当前连接所提交检查点的异步处理终态、重试与失败原因。"
+          : "Read the asynchronous terminal state, retry state, or failure reason for a checkpoint submitted by this connection.",
+      inputSchema: {
+        workStateId: z.uuid(),
+      },
+    },
+    async ({ workStateId }) => {
+      const binding = await requireValidatedBinding(
+        initialBinding,
+        options.store,
+      );
+      const result = await options.store.getIngestResult(workStateId);
+      if (
+        result.workState.bindingId !== binding.id ||
+        result.workState.projectId !== binding.projectId
+      ) {
+        throw new PilotStoreError(
+          "CHECKPOINT_NOT_FOUND",
+          404,
+          "Checkpoint was not found for this Agent connection.",
+        );
+      }
+      const job = result.standInJob;
+      return toolResult({
+        workStateId,
+        status: job.status,
+        terminal: isTerminalCheckpointStatus(job.status),
+        published: result.published,
+        attempts: job.attempts,
+        maxAttempts: job.maxAttempts,
+        queuedAt: job.queuedAt,
+        updatedAt: job.updatedAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        nextAttemptAt: job.nextAttemptAt,
+        lastErrorCode: job.lastErrorCode,
+        deadLetteredAt: job.deadLetteredAt,
+        pulseEntryId: result.pulseEntry?.id,
+        coordinationThreadId: result.coordinationThread?.id,
+        action: checkpointStatusAction(
+          job.status,
+          job.nextAttemptAt,
+          job.lastErrorCode,
+        ),
       });
     },
   );
@@ -426,6 +482,32 @@ async function requireValidatedBinding(
     );
   }
   return current;
+}
+
+function isTerminalCheckpointStatus(status: string): boolean {
+  return status === "published" || status === "private" || status === "failed";
+}
+
+function checkpointStatusAction(
+  status: string,
+  nextAttemptAt?: string,
+  lastErrorCode?: string,
+): string {
+  if (status === "published") {
+    return "Checkpoint processing completed and its safe projection is visible in Team Pulse.";
+  }
+  if (status === "private") {
+    return "Checkpoint processing completed and remains private under the current Project posture or policy.";
+  }
+  if (status === "failed") {
+    return `Checkpoint processing failed (${lastErrorCode ?? "STAND_IN_JOB_FAILED"}). Address the cause, then submit a new checkpoint with a new clientEventId.`;
+  }
+  if (status === "retrying") {
+    return nextAttemptAt
+      ? `A retry is scheduled for ${nextAttemptAt}; call stand_in.checkpoint_status again afterward.`
+      : "A retry is scheduled; call stand_in.checkpoint_status again after a short delay.";
+  }
+  return "Processing is still in progress; call stand_in.checkpoint_status again after a short delay.";
 }
 
 async function requireValidatedAgentBinding(
