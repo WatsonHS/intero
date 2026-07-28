@@ -18,7 +18,6 @@ import type {
   JobDispatchResult,
   JobEnvelope,
   JobRunnerPort,
-  ObjectStorePort,
 } from "./ports.js";
 
 export interface StandInModelInput {
@@ -187,61 +186,6 @@ export class InlineJobRunner implements JobRunnerPort<PilotStandInJob> {
             : "STAND_IN_JOB_FAILED",
       };
     }
-  }
-}
-
-export class DisabledObjectStoreAdapter implements ObjectStorePort {
-  readonly mode = "disabled";
-
-  async createUpload(_input: {
-    objectId: string;
-    purpose: "artifact" | "authorized_raw";
-    checksumSha256: string;
-    byteSize: number;
-    contentType: string;
-    encrypted: boolean;
-  }): Promise<never> {
-    throw new PilotPortUnavailableError(
-      "OBJECT_STORAGE_DISABLED",
-      "Attachments and raw-content storage are disabled for this pilot.",
-    );
-  }
-
-  async markScanned(
-    _objectId: string,
-    _result: "clean" | "infected" | "failed",
-  ): Promise<never> {
-    throw new PilotPortUnavailableError(
-      "OBJECT_STORAGE_DISABLED",
-      "Attachments and raw-content storage are disabled for this pilot.",
-    );
-  }
-
-  async completeUpload(_objectId: string): Promise<never> {
-    throw new PilotPortUnavailableError(
-      "OBJECT_STORAGE_DISABLED",
-      "Attachments and raw-content storage are disabled for this pilot.",
-    );
-  }
-
-  async cleanup(_now?: Date): Promise<number> {
-    return 0;
-  }
-
-  async checkReadiness(): Promise<{
-    status: "ready" | "unavailable";
-    detail?: string;
-  }> {
-    return { status: "ready" };
-  }
-}
-
-export class PilotPortUnavailableError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
   }
 }
 

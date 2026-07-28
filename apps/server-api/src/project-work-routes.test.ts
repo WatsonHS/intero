@@ -1,7 +1,7 @@
 import { PrincipalId, ProjectId, type WorkActor, uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import { PilotStoreError, type PilotStore } from "./pilot-store.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 
@@ -12,7 +12,7 @@ const teamId = "019b5ac0-7600-7000-8000-000000000021";
 
 describe("Phase 5 Project Work routes", () => {
   let signedIn = true;
-  let app: Awaited<ReturnType<typeof buildApp>>;
+  let app: Awaited<ReturnType<typeof buildTestApp>>;
   let createdActor: WorkActor | undefined;
   let createdIdempotencyKey: string | undefined;
   let createdInput: Record<string, unknown> | undefined;
@@ -97,7 +97,7 @@ describe("Phase 5 Project Work routes", () => {
     createdIdempotencyKey = undefined;
     createdInput = undefined;
     vi.clearAllMocks();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       metrics: false,
       projectWorkStore: projectStore as unknown as PostgresProjectWorkStore,

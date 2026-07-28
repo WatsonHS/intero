@@ -6,25 +6,26 @@ filters=(
   "--filter=@intero/server-api"
 )
 
-if [[ "${INTERO_OBJECT_STORAGE:-minio}" == "minio" ]]; then
-  export INTERO_OBJECT_STORAGE="minio"
-
-  if [[ -z "${INTERO_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
-    export INTERO_MINIO_API_PORT="${INTERO_MINIO_API_PORT:-29000}"
-    export INTERO_MINIO_CONSOLE_PORT="${INTERO_MINIO_CONSOLE_PORT:-29001}"
-    export INTERO_OBJECT_STORAGE_ENDPOINT="http://127.0.0.1:${INTERO_MINIO_API_PORT}"
-    export INTERO_OBJECT_STORAGE_ACCESS_KEY_ID="${INTERO_OBJECT_STORAGE_ACCESS_KEY_ID:-intero}"
-    export INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY="${INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY:-intero-development}"
-
-    docker compose \
-      --project-name "${INTERO_DEV_COMPOSE_PROJECT:-intero-codex}" \
-      up -d --wait minio
-  fi
-
-  export INTERO_OBJECT_STORAGE_REGION="${INTERO_OBJECT_STORAGE_REGION:-us-east-1}"
-  export INTERO_OBJECT_STORAGE_BUCKET="${INTERO_OBJECT_STORAGE_BUCKET:-intero-objects}"
-  export INTERO_OBJECT_STORAGE_ENCRYPTION="${INTERO_OBJECT_STORAGE_ENCRYPTION:-AES256}"
+if [[ "${INTERO_OBJECT_STORAGE:-minio}" != "minio" ]]; then
+  echo "INTERO_OBJECT_STORAGE must be minio." >&2
+  exit 1
 fi
+export INTERO_OBJECT_STORAGE="minio"
+
+if [[ -z "${INTERO_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
+  export INTERO_MINIO_API_PORT="${INTERO_MINIO_API_PORT:-29000}"
+  export INTERO_MINIO_CONSOLE_PORT="${INTERO_MINIO_CONSOLE_PORT:-29001}"
+  export INTERO_OBJECT_STORAGE_ENDPOINT="http://127.0.0.1:${INTERO_MINIO_API_PORT}"
+  export INTERO_OBJECT_STORAGE_ACCESS_KEY_ID="${INTERO_OBJECT_STORAGE_ACCESS_KEY_ID:-intero}"
+  export INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY="${INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY:-intero-development}"
+
+  docker compose \
+    --project-name "${INTERO_DEV_COMPOSE_PROJECT:-intero-codex}" \
+    up -d --wait minio
+fi
+export INTERO_OBJECT_STORAGE_REGION="${INTERO_OBJECT_STORAGE_REGION:-us-east-1}"
+export INTERO_OBJECT_STORAGE_BUCKET="${INTERO_OBJECT_STORAGE_BUCKET:-intero-objects}"
+export INTERO_OBJECT_STORAGE_ENCRYPTION="${INTERO_OBJECT_STORAGE_ENCRYPTION:-AES256}"
 
 if [[ "${INTERO_RUNTIME_MODE:-development}" == "development" ]]; then
   export INTERO_CENTRIFUGO_API_URL="${INTERO_CENTRIFUGO_API_URL:-http://localhost:8000}"
@@ -35,16 +36,14 @@ if [[ "${INTERO_RUNTIME_MODE:-development}" == "development" ]]; then
   docker compose -f compose.proxy.yaml up -d
 fi
 
-if [[ -n "${INTERO_DATABASE_URL:-}" || "${INTERO_PILOT_PERSISTENCE:-}" == "postgres" ]]; then
-  : "${DATABASE_URL:?Persistent Pilot requires DATABASE_URL so migrations run before startup.}"
-  : "${INTERO_DATABASE_URL:?Persistent Pilot requires INTERO_DATABASE_URL.}"
-  : "${INTERO_WORKER_DATABASE_URL:?Persistent Pilot requires INTERO_WORKER_DATABASE_URL so Team Pulse jobs can run.}"
-  : "${INTERO_PROVIDER_ENCRYPTION_KEY:?Persistent Pilot requires INTERO_PROVIDER_ENCRYPTION_KEY.}"
-  pnpm --filter @intero/server-api migrate
-  # Keep the administrator migration URL available to the API's dev-only
-  # supervisor. It reruns the idempotent migrator before every hot restart;
-  # runtime database access still uses INTERO_DATABASE_URL.
-  filters+=("--filter=@intero/server-worker")
-fi
+: "${DATABASE_URL:?Intero requires DATABASE_URL so migrations run before startup.}"
+: "${INTERO_DATABASE_URL:?Intero requires INTERO_DATABASE_URL for persistent MinIO metadata.}"
+: "${INTERO_WORKER_DATABASE_URL:?Intero requires INTERO_WORKER_DATABASE_URL so Team Pulse jobs can run.}"
+: "${INTERO_PROVIDER_ENCRYPTION_KEY:?Intero requires INTERO_PROVIDER_ENCRYPTION_KEY.}"
+pnpm --filter @intero/server-api migrate
+# Keep the administrator migration URL available to the API's dev-only
+# supervisor. It reruns the idempotent migrator before every hot restart;
+# runtime database access still uses INTERO_DATABASE_URL.
+filters+=("--filter=@intero/server-worker")
 
 exec pnpm turbo run dev:pilot "${filters[@]}"

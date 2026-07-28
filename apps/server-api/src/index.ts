@@ -25,16 +25,17 @@ import { PostgresPlatformStore } from "./postgres-store.js";
 import { PostgresProjectWorkStore } from "./project-work-store.js";
 import { SpiceDbAuthorization } from "./spicedb-authorization.js";
 import { SpiceDbPilotAuthorization } from "./spicedb-pilot-authorization.js";
-import {
-  demoSeedingEnabled,
-  InMemoryPlatformStore,
-  seedDemoStore,
-} from "./store.js";
+import { demoSeedingEnabled } from "./store.js";
 
 const serviceConfig = loadApiServiceConfig();
 const config = serviceConfig.runtime;
 const pilotAdapterConfig = serviceConfig.pilot;
 const databaseUrl = pilotAdapterConfig.databaseUrl;
+if (!databaseUrl) {
+  throw new Error(
+    "Intero API requires INTERO_DATABASE_URL because MinIO object metadata is persisted in PostgreSQL.",
+  );
+}
 const providerEncryptionSecret = pilotAdapterConfig.providerEncryptionKey;
 const ATTACHMENT_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 const organizationId = OrganizationId.parse(serviceConfig.organizationId);
@@ -55,15 +56,15 @@ const standInPrincipal = {
   displayName: process.env.INTERO_STAND_IN_NAME ?? "Intero Stand-in",
   kind: "stand_in" as const,
 };
-let authDatabase: Pool | undefined;
-let databasePool: Pool | undefined;
-let objectStore: MinioObjectStore | undefined;
-let attachmentService: AttachmentService | undefined;
+let authDatabase: Pool;
+let databasePool: Pool;
+let objectStore: MinioObjectStore;
+let attachmentService: AttachmentService;
 let store: PlatformStore;
 let pilotStore: PilotStore;
-let projectWorkStore: PostgresProjectWorkStore | undefined;
-let actionInboxEvents: PostgresActionInboxEventSource | undefined;
-if (databaseUrl) {
+let projectWorkStore: PostgresProjectWorkStore;
+let actionInboxEvents: PostgresActionInboxEventSource;
+{
   const pool = new Pool({ connectionString: databaseUrl });
   try {
     await assertDatabaseMigrationReadiness(pool);
@@ -92,49 +93,41 @@ if (databaseUrl) {
   projectWorkStore = new PostgresProjectWorkStore(pool, organizationId);
   actionInboxEvents = new PostgresActionInboxEventSource(pool, organizationId);
   await actionInboxEvents.start();
-  if (serviceConfig.objectStorage.mode === "minio") {
-    const storage = serviceConfig.objectStorage;
-    objectStore = new MinioObjectStore(
-      new Pool({ connectionString: databaseUrl }),
-      organizationId,
-      {
-        endpoint: storage.endpoint,
-        region: storage.region,
-        accessKeyId: storage.accessKeyId,
-        secretAccessKey: storage.secretAccessKey,
-        bucket: storage.bucket,
-        tenantPrefix: storage.tenantPrefix,
-        maxObjectBytes: storage.maxObjectBytes,
-        pendingUploadTtlSeconds: storage.pendingUploadTtlSeconds,
-        quarantineRetentionDays: storage.quarantineRetentionDays,
-        abortIncompleteMultipartDays: storage.abortIncompleteMultipartDays,
-        encryption: storage.encryption,
-        ...(storage.kmsKeyId ? { kmsKeyId: storage.kmsKeyId } : {}),
-        forcePathStyle: true,
-      },
-    );
-    await objectStore.initialize().catch(() => undefined);
-    attachmentService = new AttachmentService(
-      new Pool({ connectionString: databaseUrl }),
-      organizationId,
-      {
-        endpoint: storage.endpoint,
-        region: storage.region,
-        accessKeyId: storage.accessKeyId,
-        secretAccessKey: storage.secretAccessKey,
-        bucket: storage.bucket,
-        forcePathStyle: true,
-        serverSideEncryption: storage.encryption === "AES256",
-      },
-    );
-    await attachmentService.ensureBucket().catch(() => undefined);
-  }
-} else {
-  const memoryStore = new InMemoryPlatformStore();
-  if (demoSeedingEnabled(process.env.INTERO_SEED_DEMO))
-    seedDemoStore(memoryStore);
-  store = memoryStore;
-  pilotStore = new InMemoryPilotStore();
+  const storage = serviceConfig.objectStorage;
+  objectStore = new MinioObjectStore(
+    new Pool({ connectionString: databaseUrl }),
+    organizationId,
+    {
+      endpoint: storage.endpoint,
+      region: storage.region,
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
+      bucket: storage.bucket,
+      tenantPrefix: storage.tenantPrefix,
+      maxObjectBytes: storage.maxObjectBytes,
+      pendingUploadTtlSeconds: storage.pendingUploadTtlSeconds,
+      quarantineRetentionDays: storage.quarantineRetentionDays,
+      abortIncompleteMultipartDays: storage.abortIncompleteMultipartDays,
+      encryption: storage.encryption,
+      ...(storage.kmsKeyId ? { kmsKeyId: storage.kmsKeyId } : {}),
+      forcePathStyle: true,
+    },
+  );
+  await objectStore.initialize();
+  attachmentService = new AttachmentService(
+    new Pool({ connectionString: databaseUrl }),
+    organizationId,
+    {
+      endpoint: storage.endpoint,
+      region: storage.region,
+      accessKeyId: storage.accessKeyId,
+      secretAccessKey: storage.secretAccessKey,
+      bucket: storage.bucket,
+      forcePathStyle: true,
+      serverSideEncryption: storage.encryption === "AES256",
+    },
+  );
+  await attachmentService.ensureBucket();
 }
 const auth = serviceConfig.auth
   ? createInteroAuth({
@@ -160,8 +153,8 @@ const authorization =
 const app = await buildApp({
   store,
   pilotStore,
-  ...(projectWorkStore ? { projectWorkStore } : {}),
-  ...(actionInboxEvents ? { actionInboxEvents } : {}),
+  projectWorkStore,
+  actionInboxEvents,
   ...(pilotAdapterConfig.standInJobs === "transactional-outbox"
     ? { pilotJobs: new TransactionalOutboxJobRunner() }
     : {}),
@@ -169,7 +162,7 @@ const app = await buildApp({
   currentPrincipal,
   standInPrincipal,
   allowDevelopmentIdentity: serviceConfig.allowDevelopmentIdentity,
-  ...(authDatabase ? { authDatabase } : {}),
+  authDatabase,
   ...(providerEncryptionSecret ? { providerEncryptionSecret } : {}),
   readinessDependencies: [
     pilotStore instanceof NormalizedPostgresPilotStore
@@ -204,20 +197,11 @@ const app = await buildApp({
           },
         ]
       : []),
-    objectStore
-      ? {
-          name: "object_store",
-          critical: false,
-          check: () => objectStore.checkReadiness(),
-        }
-      : {
-          name: "object_store",
-          critical: false,
-          check: async () => ({
-            status: "disabled" as const,
-            detail: "policy_disabled",
-          }),
-        },
+    {
+      name: "object_store",
+      critical: true,
+      check: () => objectStore.checkReadiness(),
+    },
   ],
   metrics: serviceConfig.metricsEnabled ? new PrivacySafeMetrics() : false,
   ...(auth ? { auth } : {}),
@@ -237,45 +221,41 @@ const app = await buildApp({
         ),
       }
     : {}),
-  ...(objectStore ? { pilotObjectStore: objectStore } : {}),
-  ...(attachmentService ? { attachments: attachmentService } : {}),
+  attachments: attachmentService,
   realtimeConfig: serviceConfig.realtime,
 });
 if (authorization) app.addHook("onClose", async () => authorization.close());
-if (objectStore) app.addHook("onClose", async () => objectStore.close());
-if (attachmentService) {
-  const service = attachmentService;
-  let cleanupRunning = false;
-  const cleanupExpiredAttachments = async () => {
-    if (cleanupRunning) return;
-    cleanupRunning = true;
-    try {
-      let removed = 0;
-      do {
-        removed = await service.cleanupOrphans();
-      } while (removed === 100);
-    } catch (error) {
-      app.log.error({ err: error }, "Attachment orphan cleanup failed.");
-    } finally {
-      cleanupRunning = false;
-    }
-  };
-  void cleanupExpiredAttachments();
-  const cleanupTimer = setInterval(
-    () => void cleanupExpiredAttachments(),
-    ATTACHMENT_CLEANUP_INTERVAL_MS,
-  );
-  cleanupTimer.unref();
-  app.addHook("onClose", async () => {
-    clearInterval(cleanupTimer);
-    await service.close();
-  });
-}
-if (databasePool)
-  app.addHook("onClose", async () => {
-    await actionInboxEvents?.close();
-    await databasePool.end();
-  });
+app.addHook("onClose", async () => objectStore.close());
+const service = attachmentService;
+let cleanupRunning = false;
+const cleanupExpiredAttachments = async () => {
+  if (cleanupRunning) return;
+  cleanupRunning = true;
+  try {
+    let removed = 0;
+    do {
+      removed = await service.cleanupOrphans();
+    } while (removed === 100);
+  } catch (error) {
+    app.log.error({ err: error }, "Attachment orphan cleanup failed.");
+  } finally {
+    cleanupRunning = false;
+  }
+};
+void cleanupExpiredAttachments();
+const cleanupTimer = setInterval(
+  () => void cleanupExpiredAttachments(),
+  ATTACHMENT_CLEANUP_INTERVAL_MS,
+);
+cleanupTimer.unref();
+app.addHook("onClose", async () => {
+  clearInterval(cleanupTimer);
+  await service.close();
+});
+app.addHook("onClose", async () => {
+  await actionInboxEvents.close();
+  await databasePool.end();
+});
 
 await app.listen({ host: config.host, port: config.port });
 let resolveStopRequested: ((signal: "SIGINT" | "SIGTERM") => void) | undefined;

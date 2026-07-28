@@ -12,7 +12,6 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DisabledObjectStoreAdapter,
   InlineJobRunner,
   MembershipAuthorizationAdapter,
   ProjectInternalCoordinationTransport,
@@ -132,20 +131,6 @@ describe("pilot adapter contracts", () => {
         outsiderId: OUTSIDER,
       }),
     ).resolves.toEqual(expectedPilotAuthorizationContract);
-  });
-
-  it("exposes disabled object storage behind its stable port", async () => {
-    const objectStore = new DisabledObjectStoreAdapter();
-    await expect(
-      objectStore.createUpload({
-        objectId: uuidv7(),
-        purpose: "artifact",
-        checksumSha256: "0".repeat(64),
-        byteSize: 1,
-        contentType: "text/plain",
-        encrypted: true,
-      }),
-    ).rejects.toMatchObject({ code: "OBJECT_STORAGE_DISABLED" });
   });
 
   it("runs jobs inline and reports failures without throwing through ingress", async () => {

@@ -4,7 +4,7 @@ import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import { ACTIVATION_BOOTSTRAP_HEADER, createInteroAuth } from "./auth.js";
 import { migrateDatabase } from "./database/migrate.js";
 import { InMemoryPilotStore } from "./pilot-store.js";
@@ -20,7 +20,7 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
   const email = `bearer-mcp-${suffix}@intero.test`;
   let authUserId: string | undefined;
   let principalId: string | undefined;
-  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let app: Awaited<ReturnType<typeof buildTestApp>> | undefined;
   let baseUrl = "";
 
   beforeAll(async () => {
@@ -34,7 +34,7 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
       database: pool,
       trustedOrigins: [baseUrl],
     });
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       auth,
       authDatabase: pool,

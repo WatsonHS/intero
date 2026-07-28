@@ -73,7 +73,6 @@ import {
 import { registerPilotMcpRoutes } from "./pilot-mcp.js";
 import {
   type CoordinationTransport,
-  DisabledObjectStoreAdapter,
   InstrumentedModelGateway,
   InlineJobRunner,
   MembershipAuthorizationAdapter,
@@ -97,7 +96,6 @@ import {
   type AuthorizationPort,
   evaluateReadiness,
   type JobRunnerPort,
-  type ObjectStorePort,
   type ReadinessDependency,
 } from "./ports.js";
 import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
@@ -129,7 +127,7 @@ const CONVERSATION_IMAGE_TYPES = new Set([
 ]);
 const CONVERSATION_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 
-type ConversationAttachmentService = Pick<
+export type ConversationAttachmentService = Pick<
   AttachmentService,
   | "completeUpload"
   | "createDownload"
@@ -155,7 +153,7 @@ export interface BuildAppOptions {
   principalDirectory?: PrincipalDirectory;
   requestAuth?: RequestAuth;
   authorization?: AuthorizationPort;
-  attachments?: ConversationAttachmentService;
+  attachments: ConversationAttachmentService;
   organization?: { id: string; name: string };
   currentPrincipal?: PrincipalSummary;
   standInPrincipal?: PrincipalSummary;
@@ -166,7 +164,6 @@ export interface BuildAppOptions {
   deploymentProbe?: (baseUrl: string) => Promise<boolean>;
   providerEncryptionSecret?: string;
   pilotAuthorization?: AuthorizationPort;
-  pilotObjectStore?: ObjectStorePort;
   pilotCoordination?: CoordinationTransport;
   pilotModelGateway?: ModelGateway;
   pilotJobs?: JobRunnerPort<PilotStandInJob>;
@@ -180,7 +177,7 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(
-  options: BuildAppOptions = {},
+  options: BuildAppOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
@@ -285,8 +282,6 @@ export async function buildApp(
   const pilotAuthorization =
     options.pilotAuthorization ??
     new MembershipAuthorizationAdapter(pilotStore);
-  const pilotObjectStore =
-    options.pilotObjectStore ?? new DisabledObjectStoreAdapter();
   const pilotCoordination =
     options.pilotCoordination ??
     new ProjectInternalCoordinationTransport(pilotStore);
@@ -431,10 +426,7 @@ export async function buildApp(
     modelGateway: pilotModelGateway,
     adapters: {
       realtime: "centrifugo",
-      objectStorage:
-        pilotObjectStore instanceof DisabledObjectStoreAdapter
-          ? pilotObjectStore.mode
-          : "disabled",
+      objectStorage: "minio",
       jobs:
         pilotJobs instanceof TransactionalOutboxJobRunner
           ? "transactional-outbox"
@@ -495,14 +487,8 @@ export async function buildApp(
     });
   });
 
+  const attachments = options.attachments;
   app.post("/v1/attachments/uploads", async (request, reply) => {
-    if (!options.attachments) {
-      return reply.status(503).send({
-        code: "ATTACHMENTS_UNAVAILABLE",
-        message: "Attachment storage is not configured.",
-        requestId: request.id,
-      });
-    }
     const principal = await requestAuth.resolve(request);
     const input = parse(CreateAttachmentUploadRequest, request.body);
     if (input.ownerId !== principal!.id) {
@@ -522,7 +508,7 @@ export async function buildApp(
     if (!(await store.hasThreadAccess(input.threadId, principal!.id))) {
       return notFound(reply, "Thread");
     }
-    const upload = await options.attachments.createUpload(input);
+    const upload = await attachments.createUpload(input);
     const contentUrl = attachmentContentUrl(
       request,
       input.id,
@@ -540,17 +526,8 @@ export async function buildApp(
     "/v1/attachments/:attachmentId/content",
     { bodyLimit: CONVERSATION_IMAGE_MAX_BYTES },
     async (request, reply) => {
-      if (!options.attachments) {
-        return reply.status(503).send({
-          code: "ATTACHMENTS_UNAVAILABLE",
-          message: "Attachment storage is not configured.",
-          requestId: request.id,
-        });
-      }
       const principal = await requestAuth.resolve(request);
-      const attachment = await options.attachments.get(
-        request.params.attachmentId,
-      );
+      const attachment = await attachments.get(request.params.attachmentId);
       if (
         !attachment ||
         attachment.ownerId !== principal!.id ||
@@ -571,7 +548,7 @@ export async function buildApp(
           "Attachment content does not match the upload reservation.",
         );
       }
-      await options.attachments.uploadContent(
+      await attachments.uploadContent(
         request.params.attachmentId,
         request.body,
       );
@@ -582,17 +559,8 @@ export async function buildApp(
   app.post<{ Params: { attachmentId: string } }>(
     "/v1/attachments/:attachmentId/complete",
     async (request, reply) => {
-      if (!options.attachments) {
-        return reply.status(503).send({
-          code: "ATTACHMENTS_UNAVAILABLE",
-          message: "Attachment storage is not configured.",
-          requestId: request.id,
-        });
-      }
       const principal = await requestAuth.resolve(request);
-      const attachment = await options.attachments.get(
-        request.params.attachmentId,
-      );
+      const attachment = await attachments.get(request.params.attachmentId);
       if (
         !attachment ||
         attachment.ownerId !== principal!.id ||
@@ -600,12 +568,12 @@ export async function buildApp(
       ) {
         return notFound(reply, "Attachment");
       }
-      await options.attachments.completeUpload(request.params.attachmentId);
+      await attachments.completeUpload(request.params.attachmentId);
       return reply
         .status(202)
         .send(
           presentAttachment(
-            await options.attachments.scan(request.params.attachmentId),
+            await attachments.scan(request.params.attachmentId),
           ),
         );
     },
@@ -614,17 +582,8 @@ export async function buildApp(
   app.get<{ Params: { attachmentId: string } }>(
     "/v1/attachments/:attachmentId",
     async (request, reply) => {
-      if (!options.attachments) {
-        return reply.status(503).send({
-          code: "ATTACHMENTS_UNAVAILABLE",
-          message: "Attachment storage is not configured.",
-          requestId: request.id,
-        });
-      }
       const principal = await requestAuth.resolve(request);
-      const attachment = await options.attachments.get(
-        request.params.attachmentId,
-      );
+      const attachment = await attachments.get(request.params.attachmentId);
       if (
         !attachment ||
         (!attachment.messageId && attachment.ownerId !== principal!.id) ||
@@ -632,7 +591,7 @@ export async function buildApp(
       ) {
         return notFound(reply, "Attachment");
       }
-      const download = await options.attachments.createDownload(
+      const download = await attachments.createDownload(
         request.params.attachmentId,
       );
       return {
@@ -650,17 +609,8 @@ export async function buildApp(
   app.get<{ Params: { attachmentId: string } }>(
     "/v1/attachments/:attachmentId/content",
     async (request, reply) => {
-      if (!options.attachments) {
-        return reply.status(503).send({
-          code: "ATTACHMENTS_UNAVAILABLE",
-          message: "Attachment storage is not configured.",
-          requestId: request.id,
-        });
-      }
       const principal = await requestAuth.resolve(request);
-      const attachment = await options.attachments.get(
-        request.params.attachmentId,
-      );
+      const attachment = await attachments.get(request.params.attachmentId);
       if (
         !attachment ||
         attachment.state !== "available" ||
@@ -669,7 +619,7 @@ export async function buildApp(
       ) {
         return notFound(reply, "Attachment");
       }
-      const content = await options.attachments.readContent(attachment.id);
+      const content = await attachments.readContent(attachment.id);
       return reply
         .header("content-type", attachment.contentType)
         .header("cache-control", "private, no-store")

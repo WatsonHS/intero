@@ -7,7 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PostgresAutomationStore } from "./automation-store.js";
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import type { PilotStore } from "./pilot-store.js";
 
 const principalId = PrincipalId.parse(uuidv7());
@@ -18,7 +18,7 @@ const teamId = uuidv7();
 describe("Phase 7 automation routes", () => {
   let organizationRole: "admin" | "member" = "member";
   let teamRole: "leader" | "member" = "member";
-  let app: Awaited<ReturnType<typeof buildApp>>;
+  let app: Awaited<ReturnType<typeof buildTestApp>>;
   const policy: ProjectAutomationPolicy = {
     projectId,
     enabled: false,
@@ -56,7 +56,7 @@ describe("Phase 7 automation routes", () => {
     organizationRole = "member";
     teamRole = "member";
     vi.clearAllMocks();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       metrics: false,
       automationStore: automationStore as unknown as PostgresAutomationStore,

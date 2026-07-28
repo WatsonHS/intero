@@ -6,7 +6,7 @@ import type {
   ActionInboxEventListener,
   ActionInboxEventSource,
 } from "./action-inbox-events.js";
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import { InMemoryPlatformStore } from "./store.js";
 
 class ManualActionInboxEvents implements ActionInboxEventSource {
@@ -31,7 +31,7 @@ class ManualActionInboxEvents implements ActionInboxEventSource {
 }
 
 describe("Action Inbox SSE route", () => {
-  let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let app: Awaited<ReturnType<typeof buildTestApp>> | undefined;
 
   afterEach(async () => {
     await app?.close();
@@ -40,7 +40,7 @@ describe("Action Inbox SSE route", () => {
   it("streams only a wake-up signal to the authenticated principal", async () => {
     const events = new ManualActionInboxEvents();
     const principalId = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
-    app = await buildApp({
+    app = await buildTestApp({
       store: new InMemoryPlatformStore(),
       actionInboxEvents: events,
       logger: false,

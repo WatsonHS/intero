@@ -3,20 +3,18 @@ import { uuidv7 } from "@intero/domain";
 import { decodeJwt, jwtVerify } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import { InMemoryPlatformStore } from "./store.js";
 
-const ALEX =
-  "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
-const PRIYA =
-  "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
+const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
+const PRIYA = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
 const TOKEN_SECRET = "production-realtime-test-secret-32-bytes";
 
 describe("Realtime authorization routes", () => {
-  let app: Awaited<ReturnType<typeof buildApp>>;
+  let app: Awaited<ReturnType<typeof buildTestApp>>;
 
   beforeEach(async () => {
-    app = await buildApp({
+    app = await buildTestApp({
       store: new InMemoryPlatformStore(),
       logger: false,
       realtimeConfig: {

@@ -49,7 +49,7 @@ export interface PilotBootstrapPayload {
   };
   adapters: {
     realtime: "centrifugo";
-    objectStorage: "disabled";
+    objectStorage: "minio";
     jobs: "inline";
     coordination: "project-internal-v1";
     projectWork: "postgres" | "unavailable";

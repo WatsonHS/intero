@@ -17,10 +17,6 @@ const DevelopmentRealtimeApiKey = "intero-development-realtime-api-key-v1";
 const DevelopmentCentrifugoApiUrl = "http://localhost:8000";
 const DevelopmentCentrifugoPublicUrl = "http://localhost:4311";
 
-const DisabledObjectStorageConfig = z.object({
-  mode: z.literal("disabled"),
-});
-
 const MinioObjectStorageConfig = z
   .object({
     mode: z.literal("minio"),
@@ -60,10 +56,7 @@ const MinioObjectStorageConfig = z
     }
   });
 
-export const ObjectStorageConfig = z.discriminatedUnion("mode", [
-  DisabledObjectStorageConfig,
-  MinioObjectStorageConfig,
-]);
+export const ObjectStorageConfig = MinioObjectStorageConfig;
 export type ObjectStorageConfig = z.infer<typeof ObjectStorageConfig>;
 
 export interface ApiServiceConfig {
@@ -114,35 +107,29 @@ export type SpiceDbMigratorConfig = NonNullable<
 export function loadObjectStorageConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ObjectStorageConfig {
-  const mode = environment.INTERO_OBJECT_STORAGE ?? "disabled";
-  return ObjectStorageConfig.parse(
-    mode === "disabled"
-      ? { mode }
-      : {
-          mode,
-          endpoint: environment.INTERO_OBJECT_STORAGE_ENDPOINT,
-          region: environment.INTERO_OBJECT_STORAGE_REGION ?? "us-east-1",
-          accessKeyId: environment.INTERO_OBJECT_STORAGE_ACCESS_KEY_ID,
-          secretAccessKey: environment.INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY,
-          bucket: environment.INTERO_OBJECT_STORAGE_BUCKET,
-          tenantPrefix:
-            environment.INTERO_OBJECT_STORAGE_TENANT_PREFIX ?? "tenants",
-          maxObjectBytes: Number(
-            environment.INTERO_OBJECT_STORAGE_MAX_BYTES ?? 25 * 1024 * 1024,
-          ),
-          pendingUploadTtlSeconds: Number(
-            environment.INTERO_OBJECT_STORAGE_PENDING_TTL_SECONDS ?? 3_600,
-          ),
-          quarantineRetentionDays: Number(
-            environment.INTERO_OBJECT_STORAGE_QUARANTINE_DAYS ?? 30,
-          ),
-          abortIncompleteMultipartDays: Number(
-            environment.INTERO_OBJECT_STORAGE_ABORT_MULTIPART_DAYS ?? 1,
-          ),
-          encryption: environment.INTERO_OBJECT_STORAGE_ENCRYPTION ?? "AES256",
-          kmsKeyId: environment.INTERO_OBJECT_STORAGE_KMS_KEY_ID,
-        },
-  );
+  return ObjectStorageConfig.parse({
+    mode: environment.INTERO_OBJECT_STORAGE,
+    endpoint: environment.INTERO_OBJECT_STORAGE_ENDPOINT,
+    region: environment.INTERO_OBJECT_STORAGE_REGION ?? "us-east-1",
+    accessKeyId: environment.INTERO_OBJECT_STORAGE_ACCESS_KEY_ID,
+    secretAccessKey: environment.INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    bucket: environment.INTERO_OBJECT_STORAGE_BUCKET,
+    tenantPrefix: environment.INTERO_OBJECT_STORAGE_TENANT_PREFIX ?? "tenants",
+    maxObjectBytes: Number(
+      environment.INTERO_OBJECT_STORAGE_MAX_BYTES ?? 25 * 1024 * 1024,
+    ),
+    pendingUploadTtlSeconds: Number(
+      environment.INTERO_OBJECT_STORAGE_PENDING_TTL_SECONDS ?? 3_600,
+    ),
+    quarantineRetentionDays: Number(
+      environment.INTERO_OBJECT_STORAGE_QUARANTINE_DAYS ?? 30,
+    ),
+    abortIncompleteMultipartDays: Number(
+      environment.INTERO_OBJECT_STORAGE_ABORT_MULTIPART_DAYS ?? 1,
+    ),
+    encryption: environment.INTERO_OBJECT_STORAGE_ENCRYPTION ?? "AES256",
+    kmsKeyId: environment.INTERO_OBJECT_STORAGE_KMS_KEY_ID,
+  });
 }
 
 export function loadApiServiceConfig(

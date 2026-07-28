@@ -24,9 +24,9 @@ the Stand-in worker that turns MCP checkpoints into Team Pulse updates. Run
 The launcher also starts the persistent local MinIO service and enables object
 storage by default. Its API and console use host ports `29000` and `29001`, and
 its bytes remain in the `intero-codex_intero-minio` Docker volume across
-restarts. Set `INTERO_OBJECT_STORAGE=disabled` to opt out, or provide
-`INTERO_OBJECT_STORAGE_ENDPOINT` and credentials to use another S3-compatible
-service without starting the local MinIO container.
+restarts. MinIO object storage is mandatory. Provide
+`INTERO_OBJECT_STORAGE_ENDPOINT` and credentials to use another compatible
+MinIO deployment without starting the local container.
 
 For a copied invitation or MCP URL, configure one canonical external origin.
 A LAN pilot can use the host's private IP or mDNS name over HTTP:

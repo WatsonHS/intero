@@ -69,7 +69,7 @@ export interface PilotRoutesOptions {
   modelGateway: ModelGateway;
   adapters: {
     realtime: "centrifugo";
-    objectStorage: "disabled";
+    objectStorage: "minio";
     jobs: "inline" | "transactional-outbox";
     coordination: "project-internal-v1";
     projectWork: "postgres" | "unavailable";

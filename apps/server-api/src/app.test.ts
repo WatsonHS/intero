@@ -12,7 +12,7 @@ import type {
 import { personalStandInId, uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
 
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
@@ -25,11 +25,11 @@ function auth(principalId: PrincipalId = ALEX) {
 
 describe("Intero API vertical slice", () => {
   let store: InMemoryPlatformStore;
-  let app: Awaited<ReturnType<typeof buildApp>>;
+  let app: Awaited<ReturnType<typeof buildTestApp>>;
 
   beforeEach(async () => {
     store = new InMemoryPlatformStore();
-    app = await buildApp({ store, logger: false });
+    app = await buildTestApp({ store, logger: false });
   });
 
   afterEach(async () => {
@@ -396,23 +396,13 @@ describe("Intero API vertical slice", () => {
     expect(demoSeedingEnabled("true")).toBe(true);
   });
 
-  it("reports liveness and privacy-safe request metrics without enabling attachments", async () => {
+  it("reports liveness and privacy-safe request metrics in isolated tests", async () => {
     await app.inject({ method: "GET", url: "/health" });
     const metrics = await app.inject({ method: "GET", url: "/metrics" });
     expect(metrics.statusCode).toBe(200);
     expect(metrics.body).toContain("intero_http_requests_total");
     expect(metrics.body).not.toContain("prompt");
     expect(metrics.body).not.toContain("principalId");
-
-    const attachmentRoute = await app.inject({
-      method: "POST",
-      url: "/v1/attachments/uploads",
-      payload: {},
-    });
-    expect(attachmentRoute.statusCode).toBe(503);
-    expect(attachmentRoute.json()).toMatchObject({
-      code: "ATTACHMENTS_UNAVAILABLE",
-    });
   });
 
   it("keeps conversation image bytes behind the authenticated API boundary", async () => {
@@ -461,7 +451,7 @@ describe("Intero API vertical slice", () => {
         return content;
       },
     };
-    app = await buildApp({ store, attachments, logger: false });
+    app = await buildTestApp({ store, attachments, logger: false });
     const createdThread = await app.inject({
       method: "POST",
       url: "/v1/threads",
@@ -723,7 +713,7 @@ describe("Intero API vertical slice", () => {
 
   it("separates liveness from critical dependency readiness", async () => {
     await app.close();
-    app = await buildApp({
+    app = await buildTestApp({
       store: new InMemoryPlatformStore(),
       logger: false,
       readinessDependencies: [
@@ -1159,7 +1149,7 @@ describe("Intero API vertical slice", () => {
 });
 
 async function createWorkstream(
-  app: Awaited<ReturnType<typeof buildApp>>,
+  app: Awaited<ReturnType<typeof buildTestApp>>,
   ownerId = uuidv7() as PrincipalId,
 ): Promise<Workstream> {
   const payload = {

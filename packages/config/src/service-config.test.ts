@@ -12,14 +12,22 @@ const postgresEnvironment = {
   INTERO_PROVIDER_ENCRYPTION_KEY: "provider-encryption-secret",
   INTERO_PILOT_PERSISTENCE: "postgres",
   INTERO_PILOT_STAND_IN_JOBS: "transactional-outbox",
+  INTERO_OBJECT_STORAGE: "minio",
+  INTERO_OBJECT_STORAGE_ENDPOINT: "http://minio.internal:9000",
+  INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: "intero",
+  INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: "server-only-minio-secret",
+  INTERO_OBJECT_STORAGE_BUCKET: "intero-objects",
 } as const;
 
 describe("service environment schemas", () => {
-  it("keeps object storage disabled without explicit policy", () => {
-    expect(loadObjectStorageConfig({})).toEqual({ mode: "disabled" });
+  it("requires MinIO object storage", () => {
+    expect(() => loadObjectStorageConfig({})).toThrow();
+    expect(() =>
+      loadObjectStorageConfig({ INTERO_OBJECT_STORAGE: "disabled" }),
+    ).toThrow();
   });
 
-  it("requires all server-only MinIO settings when enabled", () => {
+  it("requires all server-only MinIO settings", () => {
     expect(() =>
       loadObjectStorageConfig({ INTERO_OBJECT_STORAGE: "minio" }),
     ).toThrow();
@@ -41,7 +49,7 @@ describe("service environment schemas", () => {
 
   it("loads typed API and worker settings", () => {
     expect(loadApiServiceConfig(postgresEnvironment)).toMatchObject({
-      objectStorage: { mode: "disabled" },
+      objectStorage: { mode: "minio", bucket: "intero-objects" },
       metricsEnabled: true,
       pilot: {
         persistence: "postgres",

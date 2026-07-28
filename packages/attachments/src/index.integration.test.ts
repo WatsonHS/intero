@@ -14,7 +14,7 @@ import { AttachmentService } from "./index.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const databaseAppUrl = process.env.DATABASE_APP_URL;
-const s3Endpoint = process.env.INTERO_S3_ENDPOINT;
+const s3Endpoint = process.env.INTERO_OBJECT_STORAGE_ENDPOINT;
 const integrationSuite =
   databaseUrl && databaseAppUrl && s3Endpoint ? describe : describe.skip;
 
@@ -28,9 +28,12 @@ integrationSuite("S3 attachment scan gate", () => {
   const service = new AttachmentService(appPool, organizationId, {
     endpoint: s3Endpoint!,
     region: "us-east-1",
-    accessKeyId: "intero",
-    secretAccessKey: "intero-development",
-    bucket: "intero-attachments-test",
+    accessKeyId: process.env.INTERO_OBJECT_STORAGE_ACCESS_KEY_ID ?? "intero",
+    secretAccessKey:
+      process.env.INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY ??
+      "intero-development",
+    bucket:
+      process.env.INTERO_OBJECT_STORAGE_BUCKET ?? "intero-attachments-test",
     forcePathStyle: true,
     serverSideEncryption: false,
   });

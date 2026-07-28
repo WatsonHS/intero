@@ -8,8 +8,7 @@ export interface AuthorizationPort {
   }): Promise<{ allowed: boolean; consistencyToken?: string }>;
 }
 
-export type DependencyReadinessStatus =
-  "ready" | "degraded" | "unavailable" | "disabled";
+export type DependencyReadinessStatus = "ready" | "degraded" | "unavailable";
 
 export interface DependencyReadinessResult {
   name: string;
@@ -75,37 +74,6 @@ export interface QueuePort {
 
 export interface RealtimePort {
   publish(channel: string, event: Record<string, unknown>): Promise<void>;
-}
-
-export interface ObjectStorePort {
-  createUpload(input: {
-    objectId: string;
-    purpose: "artifact" | "authorized_raw";
-    checksumSha256: string;
-    byteSize: number;
-    contentType: string;
-    encrypted: boolean;
-  }): Promise<{
-    object: {
-      objectId: string;
-      objectKey: string;
-      state: string;
-      expiresAt: string;
-    };
-    uploadUrl: string;
-    expiresAt: string;
-    requiredHeaders: Record<string, string>;
-  }>;
-  completeUpload(objectId: string): Promise<{ state: string }>;
-  markScanned(
-    objectId: string,
-    result: "clean" | "infected" | "failed",
-  ): Promise<{ state: string }>;
-  cleanup(now?: Date): Promise<number>;
-  checkReadiness(): Promise<{
-    status: "ready" | "unavailable";
-    detail?: string;
-  }>;
 }
 
 export interface JobEnvelope<Payload = unknown> {

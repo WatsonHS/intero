@@ -13,7 +13,7 @@ import {
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { buildApp } from "./app";
+import { buildTestApp } from "./test-app";
 import { migrateDatabase } from "./database/migrate";
 import { PostgresPlatformStore } from "./postgres-store";
 
@@ -30,7 +30,7 @@ databaseSuite("PostgreSQL platform store", () => {
   const workspaceId = uuidv7() as Workstream["workspaceId"];
   const admin = new Client({ connectionString: databaseUrl });
   let store: PostgresPlatformStore;
-  let app: Awaited<ReturnType<typeof buildApp>>;
+  let app: Awaited<ReturnType<typeof buildTestApp>>;
 
   beforeAll(async () => {
     await migrateDatabase(databaseUrl!);
@@ -47,7 +47,7 @@ databaseSuite("PostgreSQL platform store", () => {
       organizationId,
     );
     await store.initializeOrganization("Postgres store fixture");
-    app = await buildApp({
+    app = await buildTestApp({
       store,
       logger: false,
       currentPrincipal: {

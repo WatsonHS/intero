@@ -22,8 +22,8 @@ The authoritative services are:
 3. Graphile Worker: durable Stand-in and outbox processing.
 4. Centrifugo: non-authoritative realtime acceleration. Polling repairs missed
    delivery.
-5. MinIO/S3: optional object bytes. The adapter and schema exist, but policy is
-   `disabled` by default and no product upload route is enabled.
+5. MinIO: required persistent object bytes. Conversation-image upload and
+   download are exposed through authenticated, same-origin API routes.
 
 The API and worker consume server-side environment variables directly. No
 provider, database, SpiceDB, Centrifugo, or object-store secret is returned to
@@ -55,8 +55,8 @@ Authentication is enabled only when both `INTERO_AUTH_SECRET` and
 `INTERO_MAGIC_LINK_WEBHOOK` are present. GitHub OAuth likewise requires both
 client ID and client secret.
 
-Object storage remains off unless `INTERO_OBJECT_STORAGE=minio`. Enabling it
-requires endpoint, access key, server-only secret key, and bucket. Supported
+Object storage requires `INTERO_OBJECT_STORAGE=minio`, endpoint, access key,
+server-only secret key, and bucket. Supported
 encryption modes are `AES256` and `aws:kms`; KMS mode also requires
 `INTERO_OBJECT_STORAGE_KMS_KEY_ID`. The local Compose stack uses a development
 static KMS key only. Production must use MinIO KMS/KES or an equivalent managed
@@ -191,8 +191,8 @@ reconnect or a recovery gap.
 - SpiceDB unavailable: authorization fails closed and readiness is unavailable.
 - Centrifugo unavailable: outbox retries and clients remain degraded while the
   SDK reconnects; there is no polling delivery fallback.
-- optional MinIO unavailable: readiness is degraded; core collaboration and MCP
-  remain available, and no upload route is exposed.
+- MinIO unavailable: API startup fails, or readiness becomes unavailable if the
+  dependency fails after startup.
 
 The local Compose validation is a dependency and recovery proof, not a
 production HA, TLS, DNS, certificate, or infrastructure deployment claim.

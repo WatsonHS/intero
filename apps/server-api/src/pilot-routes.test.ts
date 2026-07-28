@@ -15,7 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildTestApp } from "./test-app.js";
 import type { ModelGateway } from "./pilot-ports.js";
 import { ModelGatewayUnavailableError } from "./pilot-ports.js";
 import { teamConversationThreadId } from "./pilot-routes.js";
@@ -92,7 +92,7 @@ describe("pilot cloud-first vertical slice", () => {
   beforeEach(async () => {
     pilotStore = new InMemoryPilotStore();
     conversationStore = new InMemoryPlatformStore();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       pilotStore,
       store: conversationStore,
@@ -403,7 +403,7 @@ describe("pilot cloud-first vertical slice", () => {
   it("uses one configured public origin for bootstrap, invitations, and MCP links", async () => {
     await app.close();
     pilotStore = new InMemoryPilotStore();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       pilotStore,
       pilotIdentities: [
@@ -503,7 +503,7 @@ describe("pilot cloud-first vertical slice", () => {
 
   it("uses the session principal and ignores a spoofed development identity", async () => {
     await app.close();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       pilotStore: new InMemoryPilotStore(),
       pilotIdentities: [
@@ -843,7 +843,7 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     conversationStore = new InMemoryPlatformStore();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       pilotStore,
       store: conversationStore,
@@ -2131,7 +2131,7 @@ describe("pilot cloud-first vertical slice", () => {
     const answerStandInQuestion = vi.fn(async () => {
       throw new Error("The API process must not invoke the model.");
     });
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       store: new InMemoryPlatformStore(),
       pilotStore,
@@ -2197,7 +2197,7 @@ describe("pilot cloud-first vertical slice", () => {
       throw new Error("The API process must not invoke the model.");
     });
     conversationStore = new InMemoryPlatformStore();
-    app = await buildApp({
+    app = await buildTestApp({
       logger: false,
       store: conversationStore,
       pilotStore,
