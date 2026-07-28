@@ -29,7 +29,7 @@ jobs:
       - run: pnpm lint
       - run: docker compose up -d --wait
       - run: DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero pnpm --filter @intero/server-api migrate
-      - run: INTERO_WORKER_DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero pnpm --filter @intero/server-worker migrate
+      - run: DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero pnpm --filter @intero/server-worker migrate
       - run: INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development pnpm --filter @intero/server-api migrate:spicedb
       - name: Test TypeScript with real dependencies
         run: pnpm test:ts
