@@ -933,6 +933,17 @@ and sequence information and use cursor-based API reads to repair gaps.
 Subscription authorization follows object visibility. Realtime fanout cannot
 widen disclosure.
 
+Action Inbox freshness uses a narrower wake-up path. Committed changes to
+`action_inbox`, `notification_preferences`, and completed portfolio summaries
+emit a PostgreSQL `NOTIFY` containing only Organization ID, Principal ID,
+reason, and timestamp. Each API process holds one `LISTEN` connection, filters
+the Organization, and fans the signal out through an authenticated,
+Principal-scoped SSE endpoint. The signal contains no Inbox title, detail, or
+other domain content; the Web client re-reads the authorized HTTP projection.
+SSE reconnects with bounded exponential backoff, while a 60-second poll and
+window-focus refresh repair missed ephemeral notifications. PostgreSQL and the
+HTTP read model remain authoritative.
+
 ### 11.2 Identifiers and ordering
 
 - Clients may generate UUIDv7 identifiers.

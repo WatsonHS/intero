@@ -51,6 +51,10 @@ import {
   type PrincipalDirectory,
   type RequestAuth,
 } from "./auth.js";
+import {
+  type ActionInboxEventSource,
+  NoopActionInboxEventSource,
+} from "./action-inbox-events.js";
 import { registerAutomationRoutes } from "./automation-routes.js";
 import { PostgresAutomationStore } from "./automation-store.js";
 import { PostgresInformationStore } from "./information-store.js";
@@ -119,6 +123,7 @@ export interface BuildAppOptions {
   authPublicUrl?: string;
   informationStore?: PostgresInformationStore;
   automationStore?: PostgresAutomationStore;
+  actionInboxEvents?: ActionInboxEventSource;
   allowDevelopmentIdentity?: boolean;
   principalDirectory?: PrincipalDirectory;
   requestAuth?: RequestAuth;
@@ -215,6 +220,8 @@ export async function buildApp(
           >[1],
         )
       : undefined);
+  const actionInboxEvents =
+    options.actionInboxEvents ?? new NoopActionInboxEventSource();
   const project = options.project ?? {
     id: "019b5ac0-7600-7000-8000-000000000011" as ProjectId,
     name: "Intero",
@@ -613,6 +620,50 @@ export async function buildApp(
         (await automationStore.summarizeForPrincipal(principal!.id)))
       : [];
     return { items, preferences, unreadCount, automationSummary };
+  });
+
+  app.get("/v1/action-inbox/events", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
+    const responseHeaders = reply.getHeaders();
+    reply.hijack();
+    for (const [name, value] of Object.entries(responseHeaders)) {
+      if (value !== undefined) reply.raw.setHeader(name, value);
+    }
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    reply.raw.flushHeaders();
+
+    let closed = false;
+    const send = (event: string, data: Record<string, unknown>) => {
+      if (closed || reply.raw.destroyed) return;
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    const unsubscribe = actionInboxEvents.subscribe(principal!.id, (event) => {
+      send("inbox-changed", {
+        reason: event.reason,
+        occurredAt: event.occurredAt,
+      });
+    });
+    const heartbeat = setInterval(() => {
+      if (!closed && !reply.raw.destroyed) reply.raw.write(": heartbeat\n\n");
+    }, 25_000);
+    heartbeat.unref();
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    reply.raw.once("close", cleanup);
+    reply.raw.once("error", cleanup);
+
+    reply.raw.write("retry: 3000\n\n");
+    send("ready", { connectedAt: new Date().toISOString() });
+    return reply;
   });
 
   app.patch<{ Params: { itemId: string } }>(

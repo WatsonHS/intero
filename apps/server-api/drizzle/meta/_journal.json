@@ -197,6 +197,13 @@
       "when": 1785945600000,
       "tag": "0027_phase7_durable_portfolio_summaries",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1786032000000,
+      "tag": "0028_action_inbox_sse_notifications",
+      "breakpoints": true
     }
   ]
 }

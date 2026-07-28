@@ -12,6 +12,7 @@ import {
 } from "@intero/domain";
 import { Pool } from "pg";
 
+import { PostgresActionInboxEventSource } from "./action-inbox-events.js";
 import { buildApp } from "./app.js";
 import { createInteroAuth } from "./auth.js";
 import { NormalizedPostgresPilotStore } from "./normalized-postgres-pilot-store.js";
@@ -58,6 +59,7 @@ let objectStore: MinioObjectStore | undefined;
 let store: PlatformStore;
 let pilotStore: PilotStore;
 let projectWorkStore: PostgresProjectWorkStore | undefined;
+let actionInboxEvents: PostgresActionInboxEventSource | undefined;
 if (databaseUrl) {
   const pool = new Pool({ connectionString: databaseUrl });
   databasePool = pool;
@@ -79,6 +81,8 @@ if (databaseUrl) {
       ? new NormalizedPostgresPilotStore(pool, organizationId)
       : new InMemoryPilotStore();
   projectWorkStore = new PostgresProjectWorkStore(pool, organizationId);
+  actionInboxEvents = new PostgresActionInboxEventSource(pool, organizationId);
+  await actionInboxEvents.start();
   if (serviceConfig.objectStorage.mode === "minio") {
     const storage = serviceConfig.objectStorage;
     objectStore = new MinioObjectStore(
@@ -134,6 +138,7 @@ const app = await buildApp({
   store,
   pilotStore,
   ...(projectWorkStore ? { projectWorkStore } : {}),
+  ...(actionInboxEvents ? { actionInboxEvents } : {}),
   ...(pilotAdapterConfig.standInJobs === "transactional-outbox"
     ? { pilotJobs: new TransactionalOutboxJobRunner() }
     : {}),
@@ -215,6 +220,7 @@ if (authorization) app.addHook("onClose", async () => authorization.close());
 if (objectStore) app.addHook("onClose", async () => objectStore.close());
 if (databasePool)
   app.addHook("onClose", async () => {
+    await actionInboxEvents?.close();
     await databasePool.end();
   });
 

@@ -42,6 +42,7 @@ import {
 } from "./pilot/auth-state.js";
 import { INTERO_API_URL } from "./api-url.js";
 import { createClientUuid } from "./client-id.js";
+import { consumeServerSentEvents } from "./sse.js";
 
 const API_URL = INTERO_API_URL;
 
@@ -439,6 +440,45 @@ export async function getActionInbox(signal?: AbortSignal): Promise<{
   }>;
 }> {
   return getJson("/v1/action-inbox", signal);
+}
+
+export async function streamActionInboxEvents(
+  onChanged: (event: {
+    reason: "action_inbox" | "notification_preferences" | "automation_summary";
+    occurredAt: string;
+  }) => void,
+  options: { signal: AbortSignal; onOpen?: () => void },
+): Promise<void> {
+  const response = await fetch(`${API_URL}/v1/action-inbox/events`, {
+    signal: options.signal,
+    credentials: "include",
+    headers: {
+      accept: "text/event-stream",
+      ...developmentIdentityHeaders(),
+    },
+  });
+  await ensureResponseOk(response);
+  if (!response.body) throw new Error("Intero SSE response has no body.");
+  options.onOpen?.();
+  await consumeServerSentEvents(response.body, (event) => {
+    if (event.event !== "inbox-changed") return;
+    try {
+      const payload = JSON.parse(event.data) as Record<string, unknown>;
+      if (
+        ![
+          "action_inbox",
+          "notification_preferences",
+          "automation_summary",
+        ].includes(String(payload.reason)) ||
+        typeof payload.occurredAt !== "string"
+      ) {
+        return;
+      }
+      onChanged(payload as Parameters<typeof onChanged>[0]);
+    } catch {
+      // A malformed wake-up signal is safe to ignore; polling remains active.
+    }
+  });
 }
 
 export async function updateActionInbox(

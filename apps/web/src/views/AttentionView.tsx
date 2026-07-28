@@ -37,7 +37,6 @@ export function AttentionView({
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
-    refetchInterval: 5_000,
     enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
   const update = useMutation({
@@ -142,7 +141,7 @@ export function AttentionView({
       <section className="mt-6 grid gap-2.5">
         {inbox.isLoading ? (
           <EmptyState title="正在同步 Inbox…" />
-        ) : inbox.isError ? (
+        ) : inbox.isError && !inbox.data ? (
           <EmptyState
             title="收件箱读取失败"
             detail="请重新登录，或稍后重试。"

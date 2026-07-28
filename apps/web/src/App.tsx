@@ -10,7 +10,7 @@ import {
   ShieldCheckIcon,
   SidebarSimpleIcon,
 } from "@phosphor-icons/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Outlet,
   useMatchRoute,
@@ -20,7 +20,11 @@ import {
 } from "@tanstack/react-router";
 import { createContext, useContext, useEffect, useState } from "react";
 
-import { getActionInbox, getBootstrap } from "./api.js";
+import {
+  getActionInbox,
+  getBootstrap,
+  streamActionInboxEvents,
+} from "./api.js";
 import { useI18n } from "./i18n/index.js";
 import type { TranslationKey } from "./i18n/locales/zh-CN.js";
 import {
@@ -195,6 +199,7 @@ export function App() {
 function InteroApp() {
   const { t } = useI18n();
   const pilot = usePilotOptional();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const matchRoute = useMatchRoute();
   const pathname = useRouterState({
@@ -221,10 +226,47 @@ function InteroApp() {
   const inbox = useQuery({
     queryKey: ["action-inbox"],
     queryFn: ({ signal }) => getActionInbox(signal),
-    refetchInterval: 5_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
+  const inboxEventsEnabled =
+    !pilot?.enabled || Boolean(pilot.effectiveIdentity);
+
+  useEffect(() => {
+    if (!inboxEventsEnabled) return;
+    const abort = new AbortController();
+    let retryDelay = 1_000;
+
+    const connect = async () => {
+      while (!abort.signal.aborted) {
+        let openedAt: number | undefined;
+        try {
+          await streamActionInboxEvents(
+            () => {
+              void queryClient.invalidateQueries({
+                queryKey: ["action-inbox"],
+              });
+            },
+            {
+              signal: abort.signal,
+              onOpen: () => {
+                openedAt = Date.now();
+              },
+            },
+          );
+        } catch {
+          if (abort.signal.aborted) return;
+        }
+        if (openedAt && Date.now() - openedAt >= 30_000) retryDelay = 1_000;
+        await waitForRetry(retryDelay, abort.signal);
+        retryDelay = Math.min(retryDelay * 2, 30_000);
+      }
+    };
+
+    void connect();
+    return () => abort.abort();
+  }, [inboxEventsEnabled, pilot?.identityId, queryClient]);
 
   const identity = pilot?.enabled
     ? pilot.effectiveIdentity
@@ -627,6 +669,27 @@ function InteroApp() {
       </main>
     </div>
   );
+}
+
+function waitForRetry(
+  milliseconds: number,
+  signal: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function RoutedWorkspace() {
