@@ -7,6 +7,7 @@ import { NotificationProvider } from "./design/notifications.js";
 import { ThemeProvider } from "./design/theme.js";
 import { I18nProvider } from "./i18n/index.js";
 import { PilotProvider } from "./pilot/context.js";
+import { ConversationRealtimeProvider } from "./realtime/context.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -23,13 +24,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <PilotProvider>
-        <I18nProvider>
-          <ThemeProvider>
-            <NotificationProvider>
-              <App />
-            </NotificationProvider>
-          </ThemeProvider>
-        </I18nProvider>
+        <ConversationRealtimeProvider>
+          <I18nProvider>
+            <ThemeProvider>
+              <NotificationProvider>
+                <App />
+              </NotificationProvider>
+            </ThemeProvider>
+          </I18nProvider>
+        </ConversationRealtimeProvider>
       </PilotProvider>
     </QueryClientProvider>
   </React.StrictMode>,

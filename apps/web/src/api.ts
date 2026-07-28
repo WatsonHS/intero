@@ -62,6 +62,26 @@ export interface BootstrapPayload {
   organization: { id: string; name: string };
   currentPrincipal: PrincipalSummary;
   standInPrincipal: PrincipalSummary;
+  adapters?: {
+    realtime: "polling" | "centrifugo";
+  };
+}
+
+export interface RealtimeSessionPayload {
+  token: string;
+  expiresAt: string;
+  transports: Array<{
+    transport: "websocket" | "sse";
+    endpoint: string;
+  }>;
+  emulationEndpoint: string;
+}
+
+export interface RealtimeSubscriptionPayload {
+  channel: string;
+  token: string;
+  expiresAt: string;
+  accessVersion: number;
 }
 
 export interface ThreadPayload {
@@ -70,6 +90,8 @@ export interface ThreadPayload {
   /** Messages after your read marker that you did not send. */
   unreadCount?: number;
   lastReadSequence?: number;
+  /** Client-only marker: the user explicitly paged beyond the bounded tail. */
+  historyExpanded?: boolean;
   principals: PrincipalSummary[];
   actions: Array<{ envelope: ActionEnvelope; status: "resolved" }>;
 }
@@ -426,6 +448,16 @@ export async function getThreads(
   );
 }
 
+export async function createRealtimeSession(): Promise<RealtimeSessionPayload> {
+  return postJson("/v1/realtime/session", {});
+}
+
+export async function createRealtimeSubscription(
+  threadId: string,
+): Promise<RealtimeSubscriptionPayload> {
+  return postJson("/v1/realtime/subscriptions", { threadId });
+}
+
 export async function getKanban(
   projectId?: string,
   signal?: AbortSignal,
@@ -471,15 +503,43 @@ export async function updateKanbanCard(
 
 export async function sendThreadMessage(input: {
   threadId: string;
-  senderId: string;
   body: string;
+  clientMessageId?: string;
 }): Promise<ThreadMessage> {
   return postJson(`/v1/threads/${input.threadId}/messages`, {
-    id: createClientUuid(),
-    senderId: input.senderId,
+    clientMessageId: input.clientMessageId ?? createClientUuid(),
     body: input.body,
-    createdAt: new Date().toISOString(),
   });
+}
+
+export async function getThreadMessages(
+  threadId: string,
+  input: {
+    afterSequence?: number;
+    beforeSequence?: number;
+    tail?: number;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<{
+  items: ThreadMessage[];
+  headSequence: number;
+  accessVersion: number;
+  hasMore: boolean;
+}> {
+  const query = new URLSearchParams();
+  if (input.afterSequence !== undefined) {
+    query.set("afterSequence", String(input.afterSequence));
+  }
+  if (input.beforeSequence !== undefined) {
+    query.set("beforeSequence", String(input.beforeSequence));
+  }
+  if (input.tail !== undefined) query.set("tail", String(input.tail));
+  if (input.limit !== undefined) query.set("limit", String(input.limit));
+  return getJson(
+    `/v1/threads/${encodeURIComponent(threadId)}/messages?${query}`,
+    signal,
+  );
 }
 
 export async function createConversationThread(input: {
@@ -503,26 +563,28 @@ export async function createConversationThread(input: {
 
 export async function markThreadRead(input: {
   threadId: string;
-  principalId: string;
   sequence: number;
 }): Promise<void> {
   await postJson(`/v1/threads/${input.threadId}/read`, {
-    principalId: input.principalId,
     sequence: input.sequence,
   });
+}
+
+export async function addStandInToThread(
+  threadId: string,
+  standInId: string,
+): Promise<{ thread: ConversationThread; event: ThreadMessage }> {
+  return postJson(`/v1/threads/${threadId}/stand-ins`, { standInId });
 }
 
 /** Post the branch's conclusion into its parent and close the branch. */
 export async function concludeThread(input: {
   threadId: string;
-  actorId: string;
   conclusion: string;
 }): Promise<{ thread: ConversationThread; parentMessage: ThreadMessage }> {
   return postJson(`/v1/threads/${input.threadId}/conclusion`, {
-    messageId: createClientUuid(),
-    actorId: input.actorId,
+    clientMessageId: createClientUuid(),
     conclusion: input.conclusion,
-    createdAt: new Date().toISOString(),
   });
 }
 

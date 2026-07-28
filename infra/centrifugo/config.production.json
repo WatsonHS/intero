@@ -1,23 +1,18 @@
 {
   "client": {
-    "insecure": true,
-    "allowed_origins": ["http://localhost:5173"]
+    "allowed_origins": ["https://intero.example.com"]
   },
   "admin": {
-    "enabled": true,
-    "insecure": true
-  },
-  "http_api": {
-    "insecure": true
+    "enabled": false
   },
   "channel": {
     "namespaces": [
       {
         "name": "intero",
-        "allow_subscribe_for_client": true,
         "history_size": 1000,
         "history_ttl": "5m",
-        "force_recovery": true
+        "force_recovery": true,
+        "force_positioning": true
       }
     ]
   },

@@ -17,6 +17,7 @@ import {
   IngestEventRequest,
   MarkThreadReadRequest,
   SendThreadMessageRequest,
+  ThreadMessagesQuery,
   UpdateKanbanCardRequest,
 } from "@intero/api-contracts";
 import type { AttachmentService } from "@intero/attachments";
@@ -73,10 +74,12 @@ import {
 } from "./pilot-ports.js";
 import { registerPilotRoutes } from "./pilot-routes.js";
 import { registerProjectWorkRoutes } from "./project-work-routes.js";
+import { registerRealtimeRoutes } from "./realtime-routes.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 import {
   PilotCheckpointService,
   PilotStandInJobHandler,
+  TransactionalOutboxJobRunner,
 } from "./pilot-service.js";
 import type { PlatformStore } from "./platform-store.js";
 import type { PrincipalSummary } from "./platform-store.js";
@@ -141,6 +144,11 @@ export interface BuildAppOptions {
   pilotJobs?: JobRunnerPort<PilotStandInJob>;
   readinessDependencies?: ReadinessDependency[];
   metrics?: PrivacySafeMetrics | false;
+  realtimeConfig?: {
+    publicUrl: string;
+    tokenSecret: string;
+    tokenTtlSeconds?: number;
+  };
 }
 
 export async function buildApp(
@@ -345,6 +353,9 @@ export async function buildApp(
     const resolvedPrincipal = await requestAuth.resolve(request, false);
     return {
       organization,
+      adapters: {
+        realtime: options.realtimeConfig ? "centrifugo" : "polling",
+      },
       ...(resolvedPrincipal
         ? {
             currentPrincipal: resolvedPrincipal,
@@ -360,6 +371,7 @@ export async function buildApp(
 
   await registerPilotRoutes(app, {
     store: pilotStore,
+    conversations: store,
     organizationId: organization.id as Parameters<
       typeof registerPilotRoutes
     >[1]["organizationId"],
@@ -379,15 +391,19 @@ export async function buildApp(
     coordination: pilotCoordination,
     modelGateway: pilotModelGateway,
     adapters: {
-      realtime:
-        pilotRealtime instanceof PollingRealtimeAdapter
+      realtime: options.realtimeConfig
+        ? "centrifugo"
+        : pilotRealtime instanceof PollingRealtimeAdapter
           ? pilotRealtime.mode
           : "polling",
       objectStorage:
         pilotObjectStore instanceof DisabledObjectStoreAdapter
           ? pilotObjectStore.mode
           : "disabled",
-      jobs: pilotJobs instanceof InlineJobRunner ? pilotJobs.mode : "inline",
+      jobs:
+        pilotJobs instanceof TransactionalOutboxJobRunner
+          ? "transactional-outbox"
+          : "inline",
       coordination:
         pilotCoordination instanceof ProjectInternalCoordinationTransport
           ? pilotCoordination.protocol
@@ -402,6 +418,13 @@ export async function buildApp(
     store: pilotStore,
     checkpointService: pilotCheckpointService,
   });
+  if (options.realtimeConfig) {
+    await registerRealtimeRoutes(app, {
+      store,
+      requestAuth,
+      ...options.realtimeConfig,
+    });
+  }
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {
       store: options.projectWorkStore,
@@ -731,34 +754,52 @@ export async function buildApp(
   });
 
   app.post("/v1/threads", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
     const input = parse(CreateThreadRequest, request.body);
+    if (!input.participantIds.includes(principal!.id)) {
+      throw new PilotStoreError(
+        "THREAD_PARTICIPANT_REQUIRED",
+        403,
+        "The creator must be a Thread participant.",
+      );
+    }
+    if (input.priorHistoryGranted || input.accessChangedAtSequence) {
+      throw new PilotStoreError(
+        "THREAD_ACCESS_STATE_INVALID",
+        400,
+        "Access history state is managed by the server.",
+      );
+    }
+    if (input.parentThreadId) {
+      const canAccessParent = await store.hasThreadAccess(
+        input.parentThreadId,
+        principal!.id,
+      );
+      if (!canAccessParent) return notFound(reply, "Parent Thread");
+    }
     return reply
       .status(201)
-      .send(await store.createThread({ ...input, sequence: 0 }));
+      .send(await store.createThread({ ...input, sequence: 0 }, principal!.id));
   });
 
   app.get("/v1/threads", async (request) => {
+    const viewer = await requestAuth.resolve(request);
     const query = parse(
       z.object({
         kind: ThreadKind.optional(),
       }),
       request.query,
     );
-    const items = await store.listThreads(query.kind);
-    const viewer = await requestAuth.resolve(request, false);
-    const reads = viewer
-      ? new Map(
-          (await store.listThreadReads(viewer.id)).map((entry) => [
-            entry.threadId as string,
-            entry.lastReadSequence,
-          ]),
-        )
-      : undefined;
+    const items = await store.listThreads(query.kind, viewer!.id);
+    const reads = new Map(
+      (await store.listThreadReads(viewer!.id)).map((entry) => [
+        entry.threadId as string,
+        entry.lastReadSequence,
+      ]),
+    );
     return {
       items: await Promise.all(
-        items.map((item) =>
-          presentThread(store, item, reads, viewer?.id as PrincipalId),
-        ),
+        items.map((item) => presentThread(store, item, reads, viewer!.id)),
       ),
     };
   });
@@ -766,10 +807,11 @@ export async function buildApp(
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/read",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const input = parse(MarkThreadReadRequest, request.body);
       await store.markThreadRead(
         request.params.threadId as ThreadId,
-        input.principalId as PrincipalId,
+        principal!.id,
         input.sequence,
       );
       return reply.status(204).send();
@@ -779,16 +821,22 @@ export async function buildApp(
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/conclusion",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const input = parse(ConcludeThreadRequest, request.body);
+      const visible = await store.hasThreadAccess(
+        request.params.threadId as ThreadId,
+        principal!.id,
+      );
+      if (!visible) return notFound(reply, "Thread");
       try {
         const result = await store.concludeThreadIntoParent({
           threadId: request.params.threadId as ThreadId,
-          actorId: input.actorId as PrincipalId,
+          actorId: principal!.id,
           conclusion: input.conclusion,
-          messageId: input.messageId as Parameters<
+          messageId: input.clientMessageId as Parameters<
             PlatformStore["appendMessage"]
           >[1]["id"],
-          at: input.createdAt,
+          at: new Date().toISOString(),
         });
         return reply.status(201).send(result);
       } catch (error) {
@@ -808,26 +856,56 @@ export async function buildApp(
   app.get<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const threadId = request.params.threadId as ThreadId;
-      const result = await store.getThread(threadId);
+      const result = await store.getThread(threadId, principal!.id);
       if (!result) return notFound(reply, "Thread");
-      return presentThread(store, result);
+      const reads = new Map(
+        (await store.listThreadReads(principal!.id)).map((entry) => [
+          entry.threadId as string,
+          entry.lastReadSequence,
+        ]),
+      );
+      return presentThread(store, result, reads, principal!.id);
+    },
+  );
+
+  app.get<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/messages",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const query = parse(ThreadMessagesQuery, request.query);
+      const page = await store.listThreadMessages(
+        request.params.threadId as ThreadId,
+        principal!.id,
+        query,
+      );
+      if (!page) return notFound(reply, "Thread");
+      return page;
     },
   );
 
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/messages",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const input = parse(SendThreadMessageRequest, request.body);
+      const visible = await store.hasThreadAccess(
+        request.params.threadId as ThreadId,
+        principal!.id,
+      );
+      if (!visible) return notFound(reply, "Thread");
       return reply.status(201).send(
         await store.appendMessage(request.params.threadId as ThreadId, {
-          id: input.id as Parameters<PlatformStore["appendMessage"]>[1]["id"],
-          senderId: input.senderId as PrincipalId,
+          id: input.clientMessageId as Parameters<
+            PlatformStore["appendMessage"]
+          >[1]["id"],
+          senderId: principal!.id,
           ...(input.body !== undefined ? { body: input.body } : {}),
           ...(input.encryptedBody !== undefined
             ? { encryptedBody: input.encryptedBody }
             : {}),
-          createdAt: input.createdAt,
+          createdAt: new Date().toISOString(),
         }),
       );
     },
@@ -836,14 +914,20 @@ export async function buildApp(
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/stand-ins",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const input = parse(AddStandInRequest, request.body);
+      const visible = await store.hasThreadAccess(
+        request.params.threadId as ThreadId,
+        principal!.id,
+      );
+      if (!visible) return notFound(reply, "Thread");
       return reply
         .status(201)
         .send(
           await store.addStandInToThread(
             request.params.threadId as ThreadId,
             input.standInId as PrincipalId,
-            input.actorId as PrincipalId,
+            principal!.id,
           ),
         );
     },
@@ -967,7 +1051,9 @@ export async function buildApp(
 
 async function presentThread(
   store: PlatformStore,
-  item: Awaited<ReturnType<PlatformStore["getThread"]>> & {},
+  item: NonNullable<Awaited<ReturnType<PlatformStore["getThread"]>>> & {
+    unreadCount?: number;
+  },
   reads?: Map<string, number>,
   viewerId?: PrincipalId,
 ) {
@@ -976,12 +1062,14 @@ async function presentThread(
     .filter((id): id is OperationId => id !== undefined);
   // Unread is what arrived after your marker that you did not send yourself.
   const lastRead = reads?.get(item.thread.id) ?? 0;
-  const unreadCount = viewerId
-    ? item.messages.filter(
-        (message) =>
-          message.sequence > lastRead && message.senderId !== viewerId,
-      ).length
-    : 0;
+  const unreadCount =
+    item.unreadCount ??
+    (viewerId
+      ? item.messages.filter(
+          (message) =>
+            message.sequence > lastRead && message.senderId !== viewerId,
+        ).length
+      : 0);
   return {
     ...item,
     unreadCount,

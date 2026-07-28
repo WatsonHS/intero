@@ -184,6 +184,8 @@ export const zhCN = {
   "chat.empty.body": "替身、私聊、讨论组和群聊会统一出现在这里。",
   "chat.empty.start": "开始对话",
   "chat.loading": "正在加载会话…",
+  "chat.loadOlder": "加载更早消息",
+  "chat.loadOlderFailed": "更早消息加载失败，请重试。",
   "chat.unavailable": "通讯暂不可用。",
   "chat.emptyThread": "会话已经建立",
   "chat.emptyThreadDetail": "第一条消息会持久保存在这个 Thread 中。",

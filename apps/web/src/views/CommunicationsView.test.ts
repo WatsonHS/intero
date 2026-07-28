@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGroupChatThreadInput,
+  mergeCommunicationItems,
   resolveConversationIdentity,
   resolvePilotCommunicationPrincipal,
 } from "./CommunicationsView.js";
+import type { ThreadPayload } from "../api.js";
 
 const sessionPrincipal = {
   id: PrincipalId.parse("019f9ba4-3108-7000-8000-000000000001"),
@@ -130,5 +132,48 @@ describe("manual group chat creation", () => {
       participantIds: [sessionPrincipal.id, standInId, peerId],
       standInIds: [standInId],
     });
+  });
+});
+
+describe("personal Stand-in canonical convergence", () => {
+  it("shows a durably queued question before the async answer is available", () => {
+    const threadId = crypto.randomUUID();
+    const question = {
+      id: crypto.randomUUID(),
+      threadId,
+      senderId: sessionPrincipal.id,
+      sequence: 1,
+      kind: "message" as const,
+      body: "What changed?",
+      serverReadable: true,
+      createdAt: new Date().toISOString(),
+    };
+    const base = {
+      thread: {
+        id: threadId,
+        kind: "stand_in" as const,
+        title: "Stand-in",
+        participantIds: [sessionPrincipal.id],
+        standInIds: [],
+        accessMode: "agent_readable" as const,
+        priorHistoryGranted: false,
+        sequence: 0,
+        createdAt: question.createdAt,
+      },
+      messages: [],
+      principals: [sessionPrincipal],
+      actions: [],
+    } as unknown as ThreadPayload;
+    const canonical = {
+      ...base,
+      thread: { ...base.thread, sequence: 1 },
+      messages: [question],
+      unreadCount: 0,
+    } as ThreadPayload;
+
+    const [merged] = mergeCommunicationItems(base, [canonical], []);
+
+    expect(merged?.messages).toEqual([question]);
+    expect(merged?.thread.sequence).toBe(1);
   });
 });

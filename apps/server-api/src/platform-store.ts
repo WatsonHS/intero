@@ -14,6 +14,7 @@ import type {
 } from "@intero/domain";
 
 import type { InMemoryPlatformStore, KanbanCardUpdate } from "./store.js";
+import type { StandInQuestionInput } from "./store.js";
 
 type Awaitable<T> = T | Promise<T>;
 type StoreMethod<Name extends keyof InMemoryPlatformStore> =
@@ -38,9 +39,13 @@ export interface PlatformStore {
   coordinate: StoreMethod<"coordinate">;
   createThread: StoreMethod<"createThread">;
   appendMessage: StoreMethod<"appendMessage">;
+  enqueueStandInQuestion(
+    input: StandInQuestionInput,
+  ): Awaitable<import("@intero/domain").ThreadMessage>;
   addStandInToThread: StoreMethod<"addStandInToThread">;
   markThreadRead: StoreMethod<"markThreadRead">;
   listThreadReads: StoreMethod<"listThreadReads">;
+  listThreadMessages: StoreMethod<"listThreadMessages">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;
@@ -50,6 +55,8 @@ export interface PlatformStore {
   listProjections(): Awaitable<PublicWorkProjection[]>;
   listInbox(principalId?: PrincipalId): Awaitable<ActionInboxItem[]>;
   listThreads: StoreMethod<"listThreads">;
+  hasThreadAccess: StoreMethod<"hasThreadAccess">;
+  getThreadAccessVersion: StoreMethod<"getThreadAccessVersion">;
   getThread: StoreMethod<"getThread">;
   getSpec: StoreMethod<"getSpec">;
   listSpecs: StoreMethod<"listSpecs">;

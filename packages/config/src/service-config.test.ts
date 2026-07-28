@@ -183,6 +183,38 @@ describe("service environment schemas", () => {
     });
   });
 
+  it("requires both browser-token and publish credentials for product realtime", () => {
+    const productRealtime = {
+      ...postgresEnvironment,
+      INTERO_RUNTIME_MODE: "product",
+      INTERO_AUTH_SECRET:
+        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      INTERO_PUBLIC_URL: "https://intero.example.com",
+      INTERO_PILOT_REALTIME: "centrifugo",
+      INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
+    } as const;
+    expect(() => loadApiServiceConfig(productRealtime)).toThrow(
+      "INTERO_CENTRIFUGO_TOKEN_SECRET",
+    );
+    expect(() =>
+      loadApiServiceConfig({
+        ...productRealtime,
+        INTERO_CENTRIFUGO_TOKEN_SECRET:
+          "realtime-token-secret-at-least-thirty-two-bytes",
+      }),
+    ).toThrow("INTERO_CENTRIFUGO_API_KEY");
+    expect(
+      loadApiServiceConfig({
+        ...productRealtime,
+        INTERO_CENTRIFUGO_TOKEN_SECRET:
+          "realtime-token-secret-at-least-thirty-two-bytes",
+        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+      }).realtime,
+    ).toMatchObject({
+      publicUrl: "https://intero.example.com",
+    });
+  });
+
   it("validates ordered migrator dependencies", () => {
     expect(
       loadMigratorServiceConfig({

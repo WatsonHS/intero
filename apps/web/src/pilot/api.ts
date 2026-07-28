@@ -18,6 +18,7 @@ import type {
 
 import type { PrincipalSummary } from "../api.js";
 import { INTERO_API_URL } from "../api-url.js";
+import { createClientUuid } from "../client-id.js";
 import { handleAuthenticationFailure } from "./auth-state.js";
 
 export {
@@ -47,7 +48,7 @@ export interface PilotBootstrapPayload {
     modelUse: string;
   };
   adapters: {
-    realtime: "polling";
+    realtime: "polling" | "centrifugo";
     objectStorage: "disabled";
     jobs: "inline";
     coordination: "project-internal-v1";
@@ -127,6 +128,7 @@ export interface PilotDmPayload {
 }
 
 export interface PilotStandInPayload {
+  threadId: string;
   exchanges: PilotStandInExchange[];
   standInOwner: PrincipalSummary;
   standIn: PrincipalSummary;
@@ -580,10 +582,15 @@ export function sendPilotDm(
   identityId: PrincipalId,
   threadId: string,
   body: string,
+  clientMessageId = createClientUuid(),
 ) {
   return request<{ message: PilotDirectMessage }>(
     `/v1/pilot/dms/${threadId}/messages`,
-    { method: "POST", identityId, body: { body } },
+    {
+      method: "POST",
+      identityId,
+      body: { clientMessageId, body },
+    },
   );
 }
 
@@ -613,15 +620,22 @@ export function askPilotStandIn(
   projectId: string,
   standInOwnerId: PrincipalId,
   question: string,
+  clientMessageId = createClientUuid(),
 ) {
   return request<{
-    exchange: PilotStandInExchange;
+    status?: "pending";
+    exchange?: PilotStandInExchange;
+    threadId?: string;
     standInOwner: PrincipalSummary;
     standIn: PrincipalSummary;
   }>(`/v1/pilot/projects/${projectId}/stand-in`, {
     method: "POST",
     identityId,
-    body: { question, standInOwnerId },
+    body: {
+      clientMessageId,
+      question,
+      standInOwnerId,
+    },
   });
 }
 

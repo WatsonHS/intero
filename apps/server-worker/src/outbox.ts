@@ -2,6 +2,7 @@ import { Pool, type PoolClient } from "pg";
 
 export interface OutboxPublication {
   operationId: string;
+  channel?: string;
   topic: string;
   payload: Record<string, unknown>;
   attempts: number;
@@ -9,8 +10,12 @@ export interface OutboxPublication {
 
 export interface OutboxRepository {
   claim(limit: number): Promise<OutboxPublication[]>;
-  markCompleted(operationId: string): Promise<void>;
-  markFailed(operationId: string, errorCode: string): Promise<void>;
+  markCompleted(operationId: string, channel?: string): Promise<void>;
+  markFailed(
+    operationId: string,
+    errorCode: string,
+    channel?: string,
+  ): Promise<void>;
 }
 
 export interface RealtimePublisher {
@@ -25,7 +30,44 @@ export class PostgresOutboxRepository implements OutboxRepository {
 
   async claim(limit: number): Promise<OutboxPublication[]> {
     return this.write(async (client) => {
-      const result = await client.query<{
+      const boundedLimit = Math.max(1, Math.min(limit, 100));
+      const publications = await client.query<{
+        operation_id: string;
+        channel: string;
+        topic: string;
+        payload: Record<string, unknown>;
+        attempts: number;
+      }>(
+        `WITH candidates AS (
+           SELECT p.operation_id, p.channel
+           FROM outbox_publications p
+           WHERE p.completed_at IS NULL
+             AND p.available_at <= now()
+           ORDER BY p.available_at, p.operation_id, p.channel
+           FOR UPDATE SKIP LOCKED
+           LIMIT $1
+         )
+         UPDATE outbox_publications p
+         SET attempts = p.attempts + 1,
+             available_at = now() + interval '30 seconds'
+         FROM candidates, outbox o
+         WHERE p.operation_id = candidates.operation_id
+           AND p.channel = candidates.channel
+           AND o.operation_id = p.operation_id
+         RETURNING p.operation_id, p.channel, o.topic, o.payload, p.attempts`,
+        [boundedLimit],
+      );
+      const remaining = boundedLimit - publications.rows.length;
+      if (remaining === 0) {
+        return publications.rows.map((row) => ({
+          operationId: row.operation_id,
+          channel: row.channel,
+          topic: row.topic,
+          payload: row.payload,
+          attempts: row.attempts,
+        }));
+      }
+      const legacy = await client.query<{
         operation_id: string;
         topic: string;
         payload: Record<string, unknown>;
@@ -38,7 +80,9 @@ export class PostgresOutboxRepository implements OutboxRepository {
              AND available_at <= now()
              AND topic NOT IN (
                'pilot.stand_in.enqueue',
-               'project.automation.enqueue'
+               'pilot.stand_in.question.enqueue',
+               'project.automation.enqueue',
+               'conversation.changed'
              )
            ORDER BY available_at, operation_id
            FOR UPDATE SKIP LOCKED
@@ -50,19 +94,49 @@ export class PostgresOutboxRepository implements OutboxRepository {
          FROM candidates
          WHERE outbox.operation_id = candidates.operation_id
          RETURNING outbox.operation_id, outbox.topic, outbox.payload, outbox.attempts`,
-        [Math.max(1, Math.min(limit, 100))],
+        [remaining],
       );
-      return result.rows.map((row) => ({
-        operationId: row.operation_id,
-        topic: row.topic,
-        payload: row.payload,
-        attempts: row.attempts,
-      }));
+      return [
+        ...publications.rows.map((row) => ({
+          operationId: row.operation_id,
+          channel: row.channel,
+          topic: row.topic,
+          payload: row.payload,
+          attempts: row.attempts,
+        })),
+        ...legacy.rows.map((row) => ({
+          operationId: row.operation_id,
+          topic: row.topic,
+          payload: row.payload,
+          attempts: row.attempts,
+        })),
+      ];
     });
   }
 
-  async markCompleted(operationId: string): Promise<void> {
+  async markCompleted(operationId: string, channel?: string): Promise<void> {
     await this.write(async (client) => {
+      if (channel) {
+        await client.query(
+          `UPDATE outbox_publications
+           SET completed_at = now(), last_error_code = NULL
+           WHERE operation_id = $1 AND channel = $2`,
+          [operationId, channel],
+        );
+        await client.query(
+          `UPDATE outbox o
+           SET completed_at = now(), last_error_code = NULL
+           WHERE o.operation_id = $1
+             AND NOT EXISTS (
+               SELECT 1
+               FROM outbox_publications p
+               WHERE p.operation_id = o.operation_id
+                 AND p.completed_at IS NULL
+             )`,
+          [operationId],
+        );
+        return;
+      }
       await client.query(
         `UPDATE outbox SET completed_at = now(), last_error_code = NULL
          WHERE operation_id = $1`,
@@ -71,8 +145,27 @@ export class PostgresOutboxRepository implements OutboxRepository {
     });
   }
 
-  async markFailed(operationId: string, errorCode: string): Promise<void> {
+  async markFailed(
+    operationId: string,
+    errorCode: string,
+    channel?: string,
+  ): Promise<void> {
     await this.write(async (client) => {
+      if (channel) {
+        await client.query(
+          `UPDATE outbox_publications
+           SET last_error_code = $3,
+               available_at = now() + make_interval(
+                 secs => LEAST(
+                   300,
+                   GREATEST(1, power(2, LEAST(attempts, 8))::integer)
+                 )
+               )
+           WHERE operation_id = $1 AND channel = $2`,
+          [operationId, channel, errorCode.slice(0, 120)],
+        );
+        return;
+      }
       await client.query(
         `UPDATE outbox
          SET last_error_code = $2,
@@ -180,23 +273,32 @@ export class OutboxDispatcher {
           typeof publication.payload.projectId === "string"
             ? publication.payload.projectId
             : undefined;
+        const event =
+          publication.topic === "conversation.changed"
+            ? publication.payload
+            : {
+                operationId: publication.operationId,
+                topic: publication.topic,
+                ...publication.payload,
+              };
         await this.realtime.publish(
-          projectId
-            ? `intero:project:${projectId}`
-            : `intero:organization:${this.organizationId}`,
-          {
-            operationId: publication.operationId,
-            topic: publication.topic,
-            ...publication.payload,
-          },
+          publication.channel ??
+            (projectId
+              ? `intero:project:${projectId}`
+              : `intero:organization:${this.organizationId}`),
+          event,
         );
-        await this.repository.markCompleted(publication.operationId);
+        await this.repository.markCompleted(
+          publication.operationId,
+          publication.channel,
+        );
       } catch (error) {
         const normalized =
           error instanceof Error ? error : new Error("realtime_publish_failed");
         await this.repository.markFailed(
           publication.operationId,
           normalized.message.split(":")[0] ?? "realtime_publish_failed",
+          publication.channel,
         );
         firstError ??= normalized;
       }

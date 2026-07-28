@@ -191,6 +191,8 @@ export const enUS: Record<TranslationKey, string> = {
     "Your Stand-in, direct messages, temporary groups, and group chats all live here.",
   "chat.empty.start": "Start the thread",
   "chat.loading": "Loading conversations…",
+  "chat.loadOlder": "Load older messages",
+  "chat.loadOlderFailed": "Older messages could not be loaded; try again.",
   "chat.unavailable": "Messages are unavailable.",
   "chat.emptyThread": "The thread is ready",
   "chat.emptyThreadDetail": "The first message will persist in this thread.",

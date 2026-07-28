@@ -176,6 +176,13 @@
       "when": 1785686400000,
       "tag": "0024_better_auth_oauth_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1785772800000,
+      "tag": "0025_production_realtime_conversations",
+      "breakpoints": true
     }
   ]
 }

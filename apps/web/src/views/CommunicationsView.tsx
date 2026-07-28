@@ -24,7 +24,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   concludeThread,
   createConversationThread,
+  addStandInToThread,
   getBootstrap,
+  getThreadMessages,
   markThreadRead,
   getTeamPulse,
   getThreads,
@@ -33,6 +35,7 @@ import {
   type PrincipalSummary,
   type ThreadPayload,
 } from "../api.js";
+import { createClientUuid } from "../client-id.js";
 import { useNotifications } from "../design/notifications.js";
 import { Avatar, cn } from "../design/primitives.js";
 import { initials, tintFor } from "../design/utils.js";
@@ -51,6 +54,7 @@ import {
   type PilotTeamPayload,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { useConversationRealtime } from "../realtime/context.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
 
 const THREAD_GROUPS: Array<{
@@ -97,6 +101,11 @@ export function CommunicationsView({
   const notifications = useNotifications();
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
+  const realtime = useConversationRealtime();
+  const canonicalRefreshInterval =
+    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
+  const pilotChatRefreshInterval =
+    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialThreadId,
   );
@@ -105,6 +114,9 @@ export function CommunicationsView({
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const retryableSendRef = useRef<
+    { key: string; clientMessageId: string } | undefined
+  >(undefined);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionCursor, setMentionCursor] = useState(0);
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
@@ -113,11 +125,14 @@ export function CommunicationsView({
   const [concluding, setConcluding] = useState(false);
   const [conclusion, setConclusion] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [historyExhausted, setHistoryExhausted] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const threads = useQuery({
     queryKey: ["threads"],
     queryFn: ({ signal }) => getThreads(undefined, signal),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchInterval: canonicalRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
@@ -133,8 +148,10 @@ export function CommunicationsView({
   const pilotDms = useQuery({
     queryKey: ["pilot", "dms", pilot?.identityId],
     queryFn: ({ signal }) => getPilotDms(pilot!.identityId!, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    // Pilot DM routes now adapt onto canonical conversations. Reading them a
+    // second time would create duplicate UI state and duplicate polling.
+    enabled: false,
+    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotProject = pilot?.projects.data?.projects.find(
@@ -171,7 +188,7 @@ export function CommunicationsView({
       pilot.selectedProjectId &&
       activeStandInOwnerId,
     ),
-    refetchInterval: CHAT_REFRESH_INTERVAL_MS,
+    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
@@ -209,6 +226,7 @@ export function CommunicationsView({
           pilotPrincipal,
           activeStandInOwner,
           activeStandInPrincipal,
+          pilotStandIn.data?.threadId,
         )
       : undefined;
   const allItems = mergeCommunicationItems(
@@ -323,7 +341,6 @@ export function CommunicationsView({
       conversationIdentity
         ? markThreadRead({
             threadId: input.threadId,
-            principalId: conversationIdentity.currentPrincipalId,
             sequence: input.sequence,
           })
         : Promise.reject(new Error(t("chat.identityUnavailable"))),
@@ -334,7 +351,6 @@ export function CommunicationsView({
       conversationIdentity
         ? concludeThread({
             threadId: input.threadId,
-            actorId: conversationIdentity.currentPrincipalId,
             conclusion: input.conclusion,
           })
         : Promise.reject(new Error(t("chat.identityUnavailable"))),
@@ -343,6 +359,47 @@ export function CommunicationsView({
       setConclusion("");
       if (thread.parentThreadId) setSelectedThreadId(thread.parentThreadId);
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+  const loadOlder = useMutation({
+    mutationFn: (input: { threadId: string; beforeSequence: number }) =>
+      getThreadMessages(input.threadId, {
+        beforeSequence: input.beforeSequence,
+        limit: 100,
+      }),
+    onSuccess: (page, input) => {
+      if (!page.hasMore) {
+        setHistoryExhausted((current) => {
+          const next = new Set(current);
+          next.add(input.threadId);
+          return next;
+        });
+      }
+      queryClient.setQueryData<{ items: ThreadPayload[] }>(
+        ["threads"],
+        (cached) => {
+          if (!cached) return cached;
+          return {
+            ...cached,
+            items: cached.items.map((item) => {
+              if (item.thread.id !== input.threadId) return item;
+              const messages = new Map(
+                [...page.items, ...item.messages].map((message) => [
+                  message.sequence,
+                  message,
+                ]),
+              );
+              return {
+                ...item,
+                historyExpanded: true,
+                messages: [...messages.values()].sort(
+                  (left, right) => left.sequence - right.sequence,
+                ),
+              };
+            }),
+          };
+        },
+      );
     },
   });
 
@@ -371,6 +428,36 @@ export function CommunicationsView({
 
   useEffect(() => {
     if (
+      realtime.status !== "live" ||
+      !current ||
+      currentIsPilot ||
+      currentIsPilotStandIn
+    ) {
+      return;
+    }
+    let disposed = false;
+    let release: (() => void) | undefined;
+    void realtime
+      .watchThread(current.thread.id)
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else release = unsubscribe;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      release?.();
+    };
+  }, [
+    current?.thread.id,
+    currentIsPilot,
+    currentIsPilotStandIn,
+    realtime.status,
+    realtime.watchThread,
+  ]);
+
+  useEffect(() => {
+    if (
       !current ||
       currentIsPilot ||
       currentIsPilotStandIn ||
@@ -393,12 +480,14 @@ export function CommunicationsView({
       body: string;
       mode: "canonical" | "pilot-dm" | "pilot-stand-in";
       standInOwnerId?: PrincipalId;
+      clientMessageId: string;
     }) => {
       if (input.mode === "pilot-dm") {
         await sendPilotDm(
           input.senderId as PrincipalId,
           input.threadId,
           input.body,
+          input.clientMessageId,
         );
         return;
       }
@@ -411,12 +500,18 @@ export function CommunicationsView({
           pilot!.selectedProjectId!,
           input.standInOwnerId,
           input.body,
+          input.clientMessageId,
         );
         return;
       }
-      await sendThreadMessage(input);
+      await sendThreadMessage({
+        threadId: input.threadId,
+        body: input.body,
+        clientMessageId: input.clientMessageId,
+      });
     },
     onSuccess: async () => {
+      retryableSendRef.current = undefined;
       setDraft("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["threads"] }),
@@ -461,10 +556,21 @@ export function CommunicationsView({
     },
   });
   const addStandIn = useMutation({
-    mutationFn: (threadId: string) =>
-      addPilotStandIn(pilot!.identityId!, threadId),
+    mutationFn: async (threadId: string) => {
+      if (currentIsPilot) {
+        await addPilotStandIn(pilot!.identityId!, threadId);
+      } else {
+        await addStandInToThread(
+          threadId,
+          conversationIdentity!.standInPrincipalId,
+        );
+      }
+    },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+        queryClient.invalidateQueries({ queryKey: ["pilot", "dms"] }),
+      ]);
     },
   });
   const createStandIn = useMutation({
@@ -498,18 +604,33 @@ export function CommunicationsView({
       return;
     }
     setMentionPickerOpen(false);
+    const body = draft.trim();
+    const mode = currentIsPilot
+      ? "pilot-dm"
+      : currentIsPilotStandIn
+        ? "pilot-stand-in"
+        : "canonical";
+    const sendKey = [
+      current.thread.id,
+      mode,
+      activeStandInOwnerId ?? "",
+      body,
+    ].join("\u0000");
+    if (retryableSendRef.current?.key !== sendKey) {
+      retryableSendRef.current = {
+        key: sendKey,
+        clientMessageId: createClientUuid(),
+      };
+    }
     send.mutate({
       threadId: current.thread.id,
       senderId: currentSenderId,
-      body: draft.trim(),
+      body,
+      clientMessageId: retryableSendRef.current.clientMessageId,
       ...(currentIsPilotStandIn && activeStandInOwnerId
         ? { standInOwnerId: activeStandInOwnerId }
         : {}),
-      mode: currentIsPilot
-        ? "pilot-dm"
-        : currentIsPilotStandIn
-          ? "pilot-stand-in"
-          : "canonical",
+      mode,
     });
   }
 
@@ -865,14 +986,13 @@ export function CommunicationsView({
                       })}
               </small>
             </span>
-            {currentIsPilot &&
-            currentPilotItem &&
-            !currentPilotItem.thread.standInId ? (
+            {current.thread.kind === "human_direct" &&
+            current.thread.standInIds.length === 0 ? (
               <button
                 type="button"
                 data-testid="pilot-add-stand-in"
                 disabled={addStandIn.isPending}
-                onClick={() => addStandIn.mutate(currentPilotItem.thread.id)}
+                onClick={() => addStandIn.mutate(current.thread.id)}
                 className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
               >
                 {addStandIn.isPending ? (
@@ -882,7 +1002,8 @@ export function CommunicationsView({
                 )}
                 邀请替身
               </button>
-            ) : currentIsPilot && currentPilotItem?.thread.standInId ? (
+            ) : current.thread.kind === "human_direct" &&
+              current.thread.standInIds.length > 0 ? (
               <span className="ml-auto inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong">
                 <RobotIcon size={13} />
                 替身已加入
@@ -970,6 +1091,34 @@ export function CommunicationsView({
 
           <div className="overflow-auto p-[22px_26px_30px]">
             <div className="mx-auto flex max-w-[800px] flex-col gap-4">
+              {!currentIsPilot &&
+              !currentIsPilotStandIn &&
+              (current.messages[0]?.sequence ?? 0) > 1 &&
+              !historyExhausted.has(current.thread.id) ? (
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={loadOlder.isPending}
+                    onClick={() =>
+                      loadOlder.mutate({
+                        threadId: current.thread.id,
+                        beforeSequence: current.messages[0]!.sequence,
+                      })
+                    }
+                    className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11px] text-ink-muted hover:border-accent-strong hover:text-accent-strong disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {loadOlder.isPending ? (
+                      <CircleNotchIcon size={13} className="animate-spin" />
+                    ) : null}
+                    {t("chat.loadOlder")}
+                  </button>
+                  {loadOlder.isError ? (
+                    <span role="alert" className="text-[10.5px] text-danger">
+                      {t("chat.loadOlderFailed")}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               {currentIsPilot && currentPilotItem?.thread.standInId ? (
                 <p className="rounded-inset bg-raise p-[12px_16px] text-center text-[11.5px] leading-[1.7] text-ink-muted">
                   替身只会看到加入后的消息，不会读取此前的私聊历史。
@@ -1473,8 +1622,37 @@ export function mergeCommunicationItems(
   pilotItems: ThreadPayload[],
   hideCanonicalStandIns = Boolean(personalStandInItem),
 ): ThreadPayload[] {
+  const canonicalPersonalStandIn = personalStandInItem
+    ? canonicalItems.find(
+        (item) => item.thread.id === personalStandInItem.thread.id,
+      )
+    : undefined;
+  const mergedPersonalStandIn =
+    personalStandInItem && canonicalPersonalStandIn
+      ? {
+          ...personalStandInItem,
+          thread: canonicalPersonalStandIn.thread,
+          messages: canonicalPersonalStandIn.messages,
+          ...(canonicalPersonalStandIn.unreadCount !== undefined
+            ? { unreadCount: canonicalPersonalStandIn.unreadCount }
+            : {}),
+          ...(canonicalPersonalStandIn.lastReadSequence !== undefined
+            ? {
+                lastReadSequence: canonicalPersonalStandIn.lastReadSequence,
+              }
+            : {}),
+          principals: [
+            ...new Map(
+              [
+                ...personalStandInItem.principals,
+                ...canonicalPersonalStandIn.principals,
+              ].map((principal) => [principal.id, principal]),
+            ).values(),
+          ],
+        }
+      : personalStandInItem;
   return [
-    ...(personalStandInItem ? [personalStandInItem] : []),
+    ...(mergedPersonalStandIn ? [mergedPersonalStandIn] : []),
     ...canonicalItems.filter(
       (item) => !(hideCanonicalStandIns && item.thread.kind === "stand_in"),
     ),

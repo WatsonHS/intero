@@ -13,6 +13,7 @@ import { Pool } from "pg";
 
 import { NormalizedPostgresPilotStore } from "../../server-api/src/normalized-postgres-pilot-store.js";
 import { PostgresAutomationStore } from "../../server-api/src/automation-store.js";
+import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
   InstrumentedModelGateway,
   MembershipAuthorizationAdapter,
@@ -49,6 +50,14 @@ import {
 } from "./pilot-jobs.js";
 import { PostgresPublicStandInRepository } from "./postgres-repository.js";
 import { PublicStandInWorker, type PublicStandInRun } from "./runtime.js";
+import {
+  PILOT_STAND_IN_QUESTION_DISPATCH_TASK,
+  PILOT_STAND_IN_QUESTION_TASK,
+  PostgresStandInQuestionRepository,
+  StandInQuestionHandler,
+  StandInQuestionOutboxDispatcher,
+  type StandInQuestionReference,
+} from "./stand-in-questions.js";
 
 const serviceConfig = loadWorkerServiceConfig();
 const pilotAdapterConfig = serviceConfig.pilot;
@@ -109,6 +118,27 @@ const pilotJobRepository = new PostgresPilotJobRepository(
 const workerUtils = await makeWorkerUtils({
   connectionString: queueConnectionString,
 });
+const conversationPool = new Pool({ connectionString });
+const conversations = new PostgresPlatformStore(
+  conversationPool,
+  organizationId,
+);
+const standInQuestionRepository = new PostgresStandInQuestionRepository(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const standInQuestionHandler = new StandInQuestionHandler(
+  standInQuestionRepository,
+  pilotStore,
+  conversations,
+  model,
+  organizationId,
+);
+const standInQuestionOutbox = new StandInQuestionOutboxDispatcher(
+  standInQuestionRepository,
+  workerUtils,
+  organizationId,
+);
 const graphileJobs = new GraphileJobRunner(workerUtils, organizationId);
 const pilotOutbox = new PilotJobOutboxDispatcher(
   pilotJobRepository,
@@ -128,6 +158,29 @@ const automationOutbox = new AutomationOutboxDispatcher(
 );
 
 const tasks: TaskList = {
+  [PILOT_STAND_IN_QUESTION_TASK]: async (payload, helpers) => {
+    await standInQuestionHandler.handle(
+      payload as StandInQuestionReference,
+      {
+        workerId,
+        attempt: helpers.job.attempts,
+        maxAttempts: helpers.job.max_attempts,
+      },
+    );
+  },
+  [PILOT_STAND_IN_QUESTION_DISPATCH_TASK]: async (_payload, helpers) => {
+    await standInQuestionOutbox.dispatch();
+    await helpers.addJob(
+      PILOT_STAND_IN_QUESTION_DISPATCH_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 1_000),
+        maxAttempts: 25,
+        jobKey: "intero-stand-in-question-dispatch-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
   [AUTOMATION_SIGNAL_TASK]: async (payload: unknown) => {
     const reference = payload as AutomationJobReference;
     if (reference.organizationId !== organizationId || !reference.signalId) {
@@ -277,6 +330,15 @@ await pilotJobRepository.heartbeat({
   metadata: { runtime: "graphile-worker", concurrency: workerConcurrency() },
 });
 await Promise.all([
+  workerUtils.addJob(
+    PILOT_STAND_IN_QUESTION_DISPATCH_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-stand-in-question-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
   workerUtils.addJob(
     AUTOMATION_DETECT_TASK,
     {},
@@ -442,6 +504,8 @@ try {
   );
   await publicRepository?.close();
   await realtimeOutboxRepository?.close();
+  await standInQuestionRepository.close();
+  await conversationPool.end();
   await automationStore.close();
   spiceDb?.close();
   await pilotStore.close();

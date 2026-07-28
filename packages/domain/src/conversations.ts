@@ -28,6 +28,10 @@ export const ConversationThread = z
     accessChangedAtSequence: z.number().int().positive().optional(),
     priorHistoryGranted: z.boolean(),
     sequence: z.number().int().nonnegative(),
+    /** Changes whenever participants or their visibility boundary changes. */
+    accessVersion: z.number().int().positive().optional(),
+    /** Denormalized ordering field; message history remains authoritative. */
+    latestMessageAt: z.iso.datetime().optional(),
     /** Owning team. Optional on purpose: a thread may span teams or none. */
     teamId: z.uuid().optional(),
     /** The conversation this one was branched out of, if any. */
@@ -69,3 +73,34 @@ export const ThreadMessage = z
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;
+
+export const ConversationChangeReason = z.enum([
+  "thread_created",
+  "message_appended",
+  "read_cursor_changed",
+  "access_changed",
+  "thread_concluded",
+]);
+export type ConversationChangeReason = z.infer<
+  typeof ConversationChangeReason
+>;
+
+/**
+ * Realtime carries only a pointer to authoritative conversation state. Message
+ * content is deliberately absent so Centrifugo history is not a content store.
+ */
+export const ConversationChangedEvent = z
+  .object({
+    schemaVersion: z.literal(1),
+    eventId: OperationId,
+    type: z.literal("conversation.changed"),
+    threadId: ThreadId,
+    headSequence: z.number().int().nonnegative(),
+    accessVersion: z.number().int().positive(),
+    reason: ConversationChangeReason,
+    occurredAt: z.iso.datetime(),
+  })
+  .strict();
+export type ConversationChangedEvent = z.infer<
+  typeof ConversationChangedEvent
+>;

@@ -97,8 +97,9 @@ export function pilotStandInToThreadPayload(
   viewer: PrincipalSummary,
   standInOwner: PrincipalSummary,
   standIn: PrincipalSummary,
+  canonicalThreadId?: string,
 ): ThreadPayload {
-  const threadId = project.id as unknown as ThreadId;
+  const threadId = (canonicalThreadId ?? project.id) as ThreadId;
   const viewerId = viewer.id as PrincipalId;
   const standInOwnerId = standInOwner.id as PrincipalId;
   const standInId = standIn.id as PrincipalId;
