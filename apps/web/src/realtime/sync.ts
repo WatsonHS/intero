@@ -1,7 +1,11 @@
 import type { ConversationChangedEvent, ThreadMessage } from "@intero/domain";
 import type { QueryClient } from "@tanstack/react-query";
 
-import { getThreadMessages, type ThreadPayload } from "../api.js";
+import {
+  getThreadMessage,
+  getThreadMessages,
+  type ThreadPayload,
+} from "../api.js";
 
 interface ThreadListPayload {
   items: ThreadPayload[];
@@ -11,14 +15,14 @@ export async function repairConversationChange(
   queryClient: QueryClient,
   event: ConversationChangedEvent,
   viewerId?: string,
-): Promise<void> {
+): Promise<ThreadMessage[]> {
   if (
     event.reason === "thread_created" ||
     event.reason === "access_changed" ||
     event.reason === "thread_concluded"
   ) {
     await queryClient.invalidateQueries({ queryKey: ["threads"] });
-    return;
+    return [];
   }
 
   const cached = queryClient.getQueryData<ThreadListPayload>(["threads"]);
@@ -27,7 +31,19 @@ export async function repairConversationChange(
   );
   if (!item) {
     await queryClient.invalidateQueries({ queryKey: ["threads"] });
-    return;
+    return [];
+  }
+  if (event.reason === "message_updated" && event.messageId) {
+    const message = await getThreadMessage(event.threadId, event.messageId);
+    mergeThreadMessages(
+      queryClient,
+      event.threadId,
+      [message],
+      event.headSequence,
+      event.accessVersion,
+      viewerId,
+    );
+    return [message];
   }
   let afterSequence = Math.max(
     item.thread.sequence,
@@ -37,9 +53,10 @@ export async function repairConversationChange(
     if (event.reason === "read_cursor_changed") {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
     }
-    return;
+    return [];
   }
 
+  const repaired: ThreadMessage[] = [];
   while (afterSequence < event.headSequence) {
     const page = await getThreadMessages(event.threadId, {
       afterSequence,
@@ -47,7 +64,7 @@ export async function repairConversationChange(
     });
     if (page.items.length === 0) {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
-      return;
+      return repaired;
     }
     mergeThreadMessages(
       queryClient,
@@ -57,14 +74,16 @@ export async function repairConversationChange(
       page.accessVersion,
       viewerId,
     );
+    repaired.push(...page.items);
     const nextSequence = page.items.at(-1)!.sequence;
     if (nextSequence <= afterSequence) {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
-      return;
+      return repaired;
     }
     afterSequence = nextSequence;
     if (!page.hasMore && afterSequence >= page.headSequence) break;
   }
+  return repaired;
 }
 
 export function mergeThreadMessages(
@@ -91,6 +110,16 @@ export function mergeThreadMessages(
                 message.senderId !== viewerId,
             ).length
           : 0;
+        const newlyMentioned = viewerId
+          ? incoming.filter(
+              (message) =>
+                !existingSequences.has(message.sequence) &&
+                message.senderId !== viewerId &&
+                message.mentionedPrincipalIds?.includes(
+                  viewerId as ThreadMessage["senderId"],
+                ),
+            ).length
+          : 0;
         const messages = new Map(
           item.messages.map((message) => [message.sequence, message]),
         );
@@ -113,6 +142,9 @@ export function mergeThreadMessages(
             : orderedMessages.slice(-200),
           ...(viewerId
             ? { unreadCount: (item.unreadCount ?? 0) + newlyUnread }
+            : {}),
+          ...(viewerId
+            ? { mentionCount: (item.mentionCount ?? 0) + newlyMentioned }
             : {}),
         };
       }),

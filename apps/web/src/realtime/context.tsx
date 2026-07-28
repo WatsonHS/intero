@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { PrincipalId } from "@intero/domain";
 import {
   createContext,
   useCallback,
@@ -15,6 +16,8 @@ import {
   createRealtimeSubscription,
   getBootstrap,
 } from "../api.js";
+import { useNotifications } from "../design/notifications.js";
+import { useI18n } from "../i18n/index.js";
 import { usePilotOptional } from "../pilot/context.js";
 import {
   ConversationRealtimeCoordinator,
@@ -39,11 +42,14 @@ export function ConversationRealtimeProvider({
   children: ReactNode;
 }) {
   const pilot = usePilotOptional();
+  const notifications = useNotifications();
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<ConversationRealtimeStatus>("disabled");
   const coordinatorRef = useRef<ConversationRealtimeCoordinator | undefined>(
     undefined,
   );
+  const notifiedMentionIds = useRef(new Set<string>());
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
     queryFn: ({ signal }) => getBootstrap(signal),
@@ -74,18 +80,79 @@ export function ConversationRealtimeProvider({
       createSubscription: createRealtimeSubscription,
       onStatus: setStatus,
       onChange: (event) => {
-        void queryClient.invalidateQueries({
-          queryKey: ["pilot", "stand_in"],
-        });
-        void repairConversationChange(queryClient, event, identityId).catch(
-          () => {
+        void repairConversationChange(queryClient, event, identityId)
+          .then((messages) => {
+            if (
+              event.reason !== "message_updated" ||
+              messages.some(
+                (message) =>
+                  message.streamState === "complete" ||
+                  message.streamState === "failed",
+              )
+            ) {
+              void queryClient.invalidateQueries({
+                queryKey: ["pilot", "stand_in"],
+              });
+            }
+            for (const message of messages) {
+              if (
+                message.senderId === identityId ||
+                !message.mentionedPrincipalIds?.includes(
+                  identityId as PrincipalId,
+                ) ||
+                notifiedMentionIds.current.has(message.id)
+              ) {
+                continue;
+              }
+              notifiedMentionIds.current.add(message.id);
+              if (notifiedMentionIds.current.size > 500) {
+                notifiedMentionIds.current = new Set([message.id]);
+              }
+              const cached = queryClient.getQueryData<{
+                items: Array<{
+                  thread: { id: string; title: string };
+                  principals: Array<{ id: string; displayName: string }>;
+                }>;
+              }>(["threads"]);
+              const thread = cached?.items.find(
+                (item) => item.thread.id === message.threadId,
+              );
+              const sender = thread?.principals.find(
+                (principal) => principal.id === message.senderId,
+              );
+              notifications.info(
+                t("chat.mentionNotificationBody", {
+                  sender: sender?.displayName ?? t("chat.someone"),
+                  thread: thread?.thread.title ?? t("chat.title"),
+                }),
+                { title: t("chat.mentionNotificationTitle") },
+              );
+              if (
+                typeof Notification !== "undefined" &&
+                Notification.permission === "granted" &&
+                document.visibilityState === "hidden"
+              ) {
+                try {
+                  new Notification(t("chat.mentionNotificationTitle"), {
+                    body: t("chat.mentionNotificationNativeBody", {
+                      thread: thread?.thread.title ?? t("chat.title"),
+                    }),
+                    tag: `intero-mention-${message.id}`,
+                  });
+                } catch {
+                  // The in-app reminder remains authoritative when the host
+                  // declines a native notification despite granted permission.
+                }
+              }
+            }
+          })
+          .catch(() => {
             setStatus(
               typeof navigator !== "undefined" && !navigator.onLine
                 ? "offline"
                 : "degraded",
             );
-          },
-        );
+          });
       },
       onRecoveryGap: () => {
         void queryClient.invalidateQueries({ queryKey: ["threads"] });
@@ -107,7 +174,7 @@ export function ConversationRealtimeProvider({
         coordinatorRef.current = undefined;
       }
     };
-  }, [enabled, identityId, queryClient]);
+  }, [enabled, identityId, notifications, queryClient, t]);
 
   const watchThread = useCallback(async (threadId: string) => {
     const coordinator = coordinatorRef.current;

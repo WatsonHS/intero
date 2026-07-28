@@ -44,8 +44,9 @@ export const ApplyPublicProjectionRequest = z.object({
 });
 
 export const CreateAttachmentUploadRequest = CreateAttachmentUpload;
+export const AttachmentView = Attachment.omit({ objectKey: true });
 export const AttachmentUploadResponse = z.object({
-  attachment: Attachment,
+  attachment: AttachmentView,
   uploadUrl: z.url(),
   requiredHeaders: z.record(z.string(), z.string()),
 });
@@ -137,13 +138,19 @@ export const SendThreadMessageRequest = z
     clientMessageId: z.string().uuid(),
     body: z.string().max(16_000).optional(),
     encryptedBody: z.string().max(100_000).optional(),
+    mentionedPrincipalIds: z.array(z.string().uuid()).max(20).default([]),
+    attachmentIds: z.array(z.string().uuid()).max(8).default([]),
   })
   .strict()
-  .refine(
-    (input) =>
-      (input.body === undefined) !== (input.encryptedBody === undefined),
-    "Exactly one of body or encryptedBody is required.",
-  );
+  .refine((input) => {
+    if (input.encryptedBody !== undefined) {
+      return input.body === undefined && input.attachmentIds.length === 0;
+    }
+    return (
+      input.body !== undefined &&
+      (input.body.trim().length > 0 || input.attachmentIds.length > 0)
+    );
+  }, "Send ciphertext alone, or a server-readable body and/or attachments.");
 export const AddStandInRequest = z
   .object({
     standInId: z.string().uuid(),
@@ -175,6 +182,9 @@ export const ThreadMessagesResponse = z
 export const ThreadResponse = z.object({
   thread: ConversationThread,
   messages: z.array(ThreadMessage),
+  unreadCount: z.number().int().nonnegative().default(0),
+  mentionCount: z.number().int().nonnegative().default(0),
+  lastReadSequence: z.number().int().nonnegative().default(0),
   principals: z.array(PrincipalSummary),
   actions: z.array(
     z.object({

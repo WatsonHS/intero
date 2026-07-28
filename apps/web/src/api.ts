@@ -1,6 +1,7 @@
 import type {
   ActionEnvelope,
   ActionInboxItem,
+  Attachment,
   AuthorizedSearchResult,
   ActivityEvent,
   ConversationThread,
@@ -43,6 +44,7 @@ import { INTERO_API_URL } from "./api-url.js";
 import { createClientUuid } from "./client-id.js";
 
 const API_URL = INTERO_API_URL;
+type ConversationAttachment = Omit<Attachment, "objectKey">;
 
 export interface TeamPulsePayload {
   generatedAt: string;
@@ -89,6 +91,8 @@ export interface ThreadPayload {
   messages: ThreadMessage[];
   /** Messages after your read marker that you did not send. */
   unreadCount?: number;
+  /** Unread messages that explicitly target the current principal. */
+  mentionCount?: number;
   lastReadSequence?: number;
   /** Client-only marker: the user explicitly paged beyond the bounded tail. */
   historyExpanded?: boolean;
@@ -503,13 +507,63 @@ export async function updateKanbanCard(
 
 export async function sendThreadMessage(input: {
   threadId: string;
-  body: string;
+  body?: string;
+  mentionedPrincipalIds?: string[];
+  attachmentIds?: string[];
   clientMessageId?: string;
 }): Promise<ThreadMessage> {
   return postJson(`/v1/threads/${input.threadId}/messages`, {
     clientMessageId: input.clientMessageId ?? createClientUuid(),
-    body: input.body,
+    body: input.body ?? "",
+    mentionedPrincipalIds: input.mentionedPrincipalIds ?? [],
+    attachmentIds: input.attachmentIds ?? [],
   });
+}
+
+export async function getThreadMessage(
+  threadId: string,
+  messageId: string,
+  signal?: AbortSignal,
+): Promise<ThreadMessage> {
+  return getJson(
+    `/v1/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(
+      messageId,
+    )}`,
+    signal,
+  );
+}
+
+export async function createAttachmentUpload(input: {
+  id: string;
+  threadId: string;
+  ownerId: string;
+  fileName: string;
+  contentType: string;
+  byteSize: number;
+  checksumSha256: string;
+  encryptionMode: "client_e2ee" | "server_envelope";
+}): Promise<{
+  attachment: ConversationAttachment;
+  uploadUrl: string;
+  requiredHeaders: Record<string, string>;
+}> {
+  return postJson("/v1/attachments/uploads", input);
+}
+
+export async function completeAttachmentUpload(
+  attachmentId: string,
+): Promise<ConversationAttachment> {
+  return postJson(
+    `/v1/attachments/${encodeURIComponent(attachmentId)}/complete`,
+    {},
+  );
+}
+
+export async function getAttachmentDownload(
+  attachmentId: string,
+  signal?: AbortSignal,
+): Promise<{ attachment: ConversationAttachment; downloadUrl: string }> {
+  return getJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, signal);
 }
 
 export async function getThreadMessages(

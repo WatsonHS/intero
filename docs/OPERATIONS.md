@@ -86,6 +86,13 @@ node apps/server-worker/dist/index.js
 node apps/server-api/dist/index.js
 ```
 
+For the durable chat-stream migration (`0026_chat_experience`), preserve that
+order during a rolling release: migrate first, roll every worker, then roll the
+API and Web processes. The new worker can finish questions enqueued by the
+previous API without a stream placeholder; starting the new API against an old
+worker is intentionally not supported because the old worker cannot revise the
+placeholder message.
+
 Both processes handle graceful shutdown. Stop new traffic, send `SIGTERM`, wait
 for the worker heartbeat to become `stopped`, then stop dependencies.
 

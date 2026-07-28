@@ -1787,6 +1787,12 @@ describe("pilot cloud-first vertical slice", () => {
         body: "What is the current implementation status?",
         sequence: 1,
       }),
+      expect.objectContaining({
+        body: "",
+        sequence: 2,
+        streamState: "pending",
+        revision: 1,
+      }),
     ]);
   });
 

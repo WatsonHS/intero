@@ -29,6 +29,7 @@ import {
 import {
   personalStandInId,
   ThreadKind,
+  type MessageId,
   type KanbanCard,
   type KanbanCardId,
   type OperationId,
@@ -110,6 +111,14 @@ const GOVERNANCE_EVENT_TYPES = new Set([
   "pilot.project.created",
   "pilot.project.updated",
   "pilot.organization.renamed",
+]);
+
+const CONVERSATION_IMAGE_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
 ]);
 
 export interface BuildAppOptions {
@@ -470,10 +479,30 @@ export async function buildApp(
         requestId: request.id,
       });
     }
+    const principal = await requestAuth.resolve(request);
     const input = parse(CreateAttachmentUploadRequest, request.body);
-    return reply
-      .status(201)
-      .send(await options.attachments.createUpload(input));
+    if (input.ownerId !== principal!.id) {
+      throw new PilotStoreError(
+        "ATTACHMENT_OWNER_INVALID",
+        403,
+        "Attachments can only be uploaded as the current principal.",
+      );
+    }
+    if (!CONVERSATION_IMAGE_TYPES.has(input.contentType)) {
+      throw new PilotStoreError(
+        "ATTACHMENT_TYPE_UNSUPPORTED",
+        415,
+        "Conversation attachments must be JPEG, PNG, GIF, WebP, or AVIF images.",
+      );
+    }
+    if (!(await store.hasThreadAccess(input.threadId, principal!.id))) {
+      return notFound(reply, "Thread");
+    }
+    const upload = await options.attachments.createUpload(input);
+    return reply.status(201).send({
+      ...upload,
+      attachment: presentAttachment(upload.attachment),
+    });
   });
 
   app.post<{ Params: { attachmentId: string } }>(
@@ -486,10 +515,25 @@ export async function buildApp(
           requestId: request.id,
         });
       }
+      const principal = await requestAuth.resolve(request);
+      const attachment = await options.attachments.get(
+        request.params.attachmentId,
+      );
+      if (
+        !attachment ||
+        attachment.ownerId !== principal!.id ||
+        !(await store.hasThreadAccess(attachment.threadId, principal!.id))
+      ) {
+        return notFound(reply, "Attachment");
+      }
       await options.attachments.completeUpload(request.params.attachmentId);
       return reply
         .status(202)
-        .send(await options.attachments.scan(request.params.attachmentId));
+        .send(
+          presentAttachment(
+            await options.attachments.scan(request.params.attachmentId),
+          ),
+        );
     },
   );
 
@@ -503,7 +547,24 @@ export async function buildApp(
           requestId: request.id,
         });
       }
-      return options.attachments.createDownload(request.params.attachmentId);
+      const principal = await requestAuth.resolve(request);
+      const attachment = await options.attachments.get(
+        request.params.attachmentId,
+      );
+      if (
+        !attachment ||
+        (!attachment.messageId && attachment.ownerId !== principal!.id) ||
+        !(await store.hasThreadAccess(attachment.threadId, principal!.id))
+      ) {
+        return notFound(reply, "Attachment");
+      }
+      const download = await options.attachments.createDownload(
+        request.params.attachmentId,
+      );
+      return {
+        ...download,
+        attachment: presentAttachment(download.attachment),
+      };
     },
   );
 
@@ -870,6 +931,19 @@ export async function buildApp(
     },
   );
 
+  app.get<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const message = await store.getThreadMessage(
+        request.params.threadId as ThreadId,
+        principal!.id,
+        request.params.messageId as MessageId,
+      );
+      return message ?? notFound(reply, "Message");
+    },
+  );
+
   app.get<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/messages",
     async (request, reply) => {
@@ -905,6 +979,10 @@ export async function buildApp(
           ...(input.encryptedBody !== undefined
             ? { encryptedBody: input.encryptedBody }
             : {}),
+          mentionedPrincipalIds: input.mentionedPrincipalIds as PrincipalId[],
+          attachmentIds: input.attachmentIds as NonNullable<
+            Parameters<PlatformStore["appendMessage"]>[1]["attachmentIds"]
+          >,
           createdAt: new Date().toISOString(),
         }),
       );
@@ -1053,6 +1131,7 @@ async function presentThread(
   store: PlatformStore,
   item: NonNullable<Awaited<ReturnType<PlatformStore["getThread"]>>> & {
     unreadCount?: number;
+    mentionCount?: number;
   },
   reads?: Map<string, number>,
   viewerId?: PrincipalId,
@@ -1073,6 +1152,7 @@ async function presentThread(
   return {
     ...item,
     unreadCount,
+    mentionCount: item.mentionCount ?? 0,
     lastReadSequence: lastRead,
     principals: await store.listPrincipals(item.thread.participantIds),
     actions: (await store.listActionEnvelopes(operationIds)).map(
@@ -1107,6 +1187,13 @@ function notFound(reply: FastifyReply, resource: string) {
     message: `${resource} was not found.`,
     requestId: reply.request.id,
   });
+}
+
+function presentAttachment<T extends { objectKey: string }>(
+  attachment: T,
+): Omit<T, "objectKey"> {
+  const { objectKey: _objectKey, ...safe } = attachment;
+  return safe;
 }
 
 declare module "fastify" {

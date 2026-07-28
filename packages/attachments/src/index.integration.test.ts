@@ -157,9 +157,9 @@ integrationSuite("S3 attachment scan gate", () => {
     ).rejects.toThrow("client-side ciphertext");
   });
 
-  it("cleans expired orphan reservations", async () => {
+  it("cleans expired unclaimed reservations before and after scanning", async () => {
     const content = Buffer.from("x");
-    const upload = await service.createUpload({
+    const pending = await service.createUpload({
       id: uuidv7() as ArtifactId,
       threadId: readableThreadId,
       ownerId,
@@ -169,12 +169,32 @@ integrationSuite("S3 attachment scan gate", () => {
       checksumSha256: sha256(content),
       encryptionMode: "server_envelope",
     });
+    const available = await service.createUpload({
+      id: uuidv7() as ArtifactId,
+      threadId: readableThreadId,
+      ownerId,
+      fileName: "unclaimed.txt",
+      contentType: "text/plain",
+      byteSize: 1,
+      checksumSha256: sha256(content),
+      encryptionMode: "server_envelope",
+    });
+    const uploaded = await fetch(available.uploadUrl, {
+      method: "PUT",
+      headers: available.requiredHeaders,
+      body: content,
+    });
+    expect(uploaded.ok).toBe(true);
+    await service.completeUpload(available.attachment.id);
+    await service.scan(available.attachment.id);
     await adminPool.query(
-      "UPDATE attachments SET expires_at = now() - interval '1 second' WHERE id = $1",
-      [upload.attachment.id],
+      `UPDATE attachments SET expires_at = now() - interval '1 second'
+       WHERE id = ANY($1::uuid[])`,
+      [[pending.attachment.id, available.attachment.id]],
     );
-    await expect(service.cleanupOrphans(new Date())).resolves.toBe(1);
-    await expect(service.get(upload.attachment.id)).resolves.toBeUndefined();
+    await expect(service.cleanupOrphans(new Date())).resolves.toBe(2);
+    await expect(service.get(pending.attachment.id)).resolves.toBeUndefined();
+    await expect(service.get(available.attachment.id)).resolves.toBeUndefined();
   });
 });
 

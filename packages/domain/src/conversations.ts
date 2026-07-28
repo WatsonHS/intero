@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { MessageId, OperationId, PrincipalId, ThreadId } from "./ids.js";
+import {
+  ArtifactId,
+  MessageId,
+  OperationId,
+  PrincipalId,
+  ThreadId,
+} from "./ids.js";
 
 export const ThreadKind = z.enum([
   "human_direct",
@@ -58,6 +64,28 @@ export const ThreadReadState = z
   .strict();
 export type ThreadReadState = z.infer<typeof ThreadReadState>;
 
+export const ThreadMessageAttachment = z
+  .object({
+    id: ArtifactId,
+    fileName: z.string().min(1).max(240),
+    contentType: z.string().min(1).max(160),
+    byteSize: z
+      .number()
+      .int()
+      .positive()
+      .max(25 * 1024 * 1024),
+  })
+  .strict();
+export type ThreadMessageAttachment = z.infer<typeof ThreadMessageAttachment>;
+
+export const ThreadMessageStreamState = z.enum([
+  "pending",
+  "streaming",
+  "complete",
+  "failed",
+]);
+export type ThreadMessageStreamState = z.infer<typeof ThreadMessageStreamState>;
+
 export const ThreadMessage = z
   .object({
     id: MessageId,
@@ -70,6 +98,13 @@ export const ThreadMessage = z
     serverReadable: z.boolean(),
     encryptedBody: z.string().max(100_000).optional(),
     operationId: OperationId.optional(),
+    /** Stable identities, separate from the human-readable Markdown body. */
+    mentionedPrincipalIds: z.array(PrincipalId).max(20).optional(),
+    /** Safe immutable metadata; object keys and signed URLs never enter history. */
+    attachments: z.array(ThreadMessageAttachment).max(8).optional(),
+    /** Present for durable Stand-in streams; omitted legacy rows are complete. */
+    streamState: ThreadMessageStreamState.optional(),
+    revision: z.number().int().positive().optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;
@@ -77,13 +112,12 @@ export type ThreadMessage = z.infer<typeof ThreadMessage>;
 export const ConversationChangeReason = z.enum([
   "thread_created",
   "message_appended",
+  "message_updated",
   "read_cursor_changed",
   "access_changed",
   "thread_concluded",
 ]);
-export type ConversationChangeReason = z.infer<
-  typeof ConversationChangeReason
->;
+export type ConversationChangeReason = z.infer<typeof ConversationChangeReason>;
 
 /**
  * Realtime carries only a pointer to authoritative conversation state. Message
@@ -98,9 +132,18 @@ export const ConversationChangedEvent = z
     headSequence: z.number().int().nonnegative(),
     accessVersion: z.number().int().positive(),
     reason: ConversationChangeReason,
+    /** Pointer used to repair an in-place message revision. */
+    messageId: MessageId.optional(),
     occurredAt: z.iso.datetime(),
   })
-  .strict();
-export type ConversationChangedEvent = z.infer<
-  typeof ConversationChangedEvent
->;
+  .strict()
+  .superRefine((event, context) => {
+    if (event.reason === "message_updated" && !event.messageId) {
+      context.addIssue({
+        code: "custom",
+        path: ["messageId"],
+        message: "message_updated events require a messageId pointer.",
+      });
+    }
+  });
+export type ConversationChangedEvent = z.infer<typeof ConversationChangedEvent>;

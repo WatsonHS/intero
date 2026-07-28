@@ -24,15 +24,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <PilotProvider>
-        <ConversationRealtimeProvider>
-          <I18nProvider>
-            <ThemeProvider>
-              <NotificationProvider>
+        <I18nProvider>
+          <ThemeProvider>
+            <NotificationProvider>
+              <ConversationRealtimeProvider>
                 <App />
-              </NotificationProvider>
-            </ThemeProvider>
-          </I18nProvider>
-        </ConversationRealtimeProvider>
+              </ConversationRealtimeProvider>
+            </NotificationProvider>
+          </ThemeProvider>
+        </I18nProvider>
       </PilotProvider>
     </QueryClientProvider>
   </React.StrictMode>,

@@ -42,10 +42,12 @@ export interface PlatformStore {
   enqueueStandInQuestion(
     input: StandInQuestionInput,
   ): Awaitable<import("@intero/domain").ThreadMessage>;
+  updateMessageStream: StoreMethod<"updateMessageStream">;
   addStandInToThread: StoreMethod<"addStandInToThread">;
   markThreadRead: StoreMethod<"markThreadRead">;
   listThreadReads: StoreMethod<"listThreadReads">;
   listThreadMessages: StoreMethod<"listThreadMessages">;
+  getThreadMessage: StoreMethod<"getThreadMessage">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;

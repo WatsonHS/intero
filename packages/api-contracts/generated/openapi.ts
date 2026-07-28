@@ -357,6 +357,8 @@ export interface components {
     CreateSpecRequest: {
       /** Format: uuid */
       id: string;
+      /** Format: uuid */
+      projectId?: string;
       title: string;
       /** Format: uuid */
       reviewThreadId?: string;
@@ -364,6 +366,10 @@ export interface components {
       /** @enum {string} */
       status:
         "draft" | "in_review" | "approved" | "changes_requested" | "superseded";
+      /** Format: date-time */
+      reviewRequestedAt?: string;
+      /** Format: uuid */
+      confirmedRevisionId?: string;
       markdown: string;
       changeSummary: string;
       affectedScopes: string[];
@@ -565,6 +571,8 @@ export interface components {
         spec: {
           /** Format: uuid */
           id: string;
+          /** Format: uuid */
+          projectId?: string;
           title: string;
           /** Format: uuid */
           currentRevisionId: string;
@@ -580,6 +588,10 @@ export interface components {
             | "superseded";
           /** Format: date-time */
           createdAt: string;
+          /** Format: date-time */
+          reviewRequestedAt?: string;
+          /** Format: uuid */
+          confirmedRevisionId?: string;
         };
         revisions: {
           /** Format: uuid */
@@ -601,6 +613,8 @@ export interface components {
           createdBy: string;
           /** Format: date-time */
           createdAt: string;
+          /** Format: date-time */
+          revokedAt?: string;
         }[];
         reviews: {
           /** Format: uuid */
@@ -705,6 +719,17 @@ export interface components {
         accessChangedAtSequence?: number;
         priorHistoryGranted: boolean;
         sequence: number;
+        accessVersion?: number;
+        /** Format: date-time */
+        latestMessageAt?: string;
+        /** Format: uuid */
+        teamId?: string;
+        /** Format: uuid */
+        parentThreadId?: string;
+        /** Format: date-time */
+        concludedAt?: string;
+        /** Format: uuid */
+        concludedBy?: string;
         /** Format: date-time */
         createdAt: string;
       };
@@ -725,7 +750,24 @@ export interface components {
         encryptedBody?: string;
         /** Format: uuid */
         operationId?: string;
+        mentionedPrincipalIds?: string[];
+        attachments?: {
+          /** Format: uuid */
+          id: string;
+          fileName: string;
+          contentType: string;
+          byteSize: number;
+        }[];
+        /** @enum {string} */
+        streamState?: "pending" | "streaming" | "complete" | "failed";
+        revision?: number;
       }[];
+      /** @default 0 */
+      unreadCount: number;
+      /** @default 0 */
+      mentionCount: number;
+      /** @default 0 */
+      lastReadSequence: number;
       principals: {
         /** Format: uuid */
         id: string;

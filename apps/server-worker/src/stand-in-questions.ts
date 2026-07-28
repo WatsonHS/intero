@@ -10,7 +10,10 @@ import { personalStandInId } from "@intero/domain";
 import type { WorkerUtils } from "graphile-worker";
 import { Pool, type PoolClient } from "pg";
 
-import type { ModelGateway } from "../../server-api/src/pilot-ports.js";
+import type {
+  ModelGateway,
+  StandInQuestionInput,
+} from "../../server-api/src/pilot-ports.js";
 import type { PilotStore } from "../../server-api/src/pilot-store.js";
 import type { PlatformStore } from "../../server-api/src/platform-store.js";
 
@@ -317,6 +320,9 @@ export class StandInQuestionHandler {
       throw new Error("stand_in_question_already_processing");
     }
     const job = claimed.job;
+    const standInSenderId = personalStandInId(job.standInOwnerId);
+    let streamStarted = false;
+    let lastPersistedAnswer = "";
     try {
       const project = (
         await this.pilotStore.listProjects(job.askedByPrincipalId)
@@ -336,7 +342,28 @@ export class StandInQuestionHandler {
       if (pulse.length === 0) {
         throw new Error("stand_in_question_context_unavailable");
       }
-      const answer = await this.model.answerStandInQuestion({
+      if (typeof this.conversations.updateMessageStream === "function") {
+        try {
+          await this.conversations.updateMessageStream({
+            threadId: job.threadId,
+            messageId: job.answerMessageId,
+            senderId: standInSenderId,
+            body: "",
+            streamState: "streaming",
+          });
+          streamStarted = true;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "Stream message was not found."
+          ) {
+            throw error;
+          }
+          // A job enqueued by the previous API version has no placeholder.
+          // Finish it through the legacy append path during rolling deployment.
+        }
+      }
+      const modelInput: StandInQuestionInput = {
         organizationId: project.organizationId,
         project: {
           id: project.id,
@@ -348,7 +375,28 @@ export class StandInQuestionHandler {
         preferredLanguage: "en-US",
         question: job.question,
         sources: pulse,
-      });
+      };
+      const answer = this.model.streamStandInQuestion
+        ? await this.model.streamStandInQuestion(
+            modelInput,
+            async (partialAnswer) => {
+              if (
+                !streamStarted ||
+                partialAnswer.length - lastPersistedAnswer.length < 48
+              ) {
+                return;
+              }
+              await this.conversations.updateMessageStream({
+                threadId: job.threadId,
+                messageId: job.answerMessageId,
+                senderId: standInSenderId,
+                body: partialAnswer,
+                streamState: "streaming",
+              });
+              lastPersistedAnswer = partialAnswer;
+            },
+          )
+        : await this.model.answerStandInQuestion(modelInput);
       const byWorkStateId = new Map(
         pulse.map((source) => [source.workStateId, source]),
       );
@@ -392,16 +440,43 @@ export class StandInQuestionHandler {
         sources,
         now: new Date().toISOString(),
       });
-      await this.conversations.appendMessage(job.threadId, {
-        id: job.answerMessageId,
-        senderId: personalStandInId(job.standInOwnerId),
-        body: exchange.answer,
-        createdAt: exchange.createdAt,
-      });
+      if (streamStarted) {
+        await this.conversations.updateMessageStream({
+          threadId: job.threadId,
+          messageId: job.answerMessageId,
+          senderId: standInSenderId,
+          body: exchange.answer,
+          streamState: "complete",
+        });
+      } else {
+        await this.conversations.appendMessage(job.threadId, {
+          id: job.answerMessageId,
+          senderId: standInSenderId,
+          body: exchange.answer,
+          createdAt: exchange.createdAt,
+        });
+      }
       await this.repository.completeJob(job.id);
     } catch (error) {
       const normalized =
         error instanceof Error ? error : new Error("stand_in_question_failed");
+      if (streamStarted) {
+        try {
+          await this.conversations.updateMessageStream({
+            threadId: job.threadId,
+            messageId: job.answerMessageId,
+            senderId: standInSenderId,
+            body:
+              execution.attempt >= execution.maxAttempts
+                ? lastPersistedAnswer
+                : "",
+            streamState:
+              execution.attempt >= execution.maxAttempts ? "failed" : "pending",
+          });
+        } catch {
+          // Preserve the original model/job error; stream repair is best effort.
+        }
+      }
       await this.repository.failJob(
         job.id,
         normalized.message,

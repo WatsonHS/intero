@@ -23,6 +23,8 @@ import {
   type SpecReviewResponse,
   type ThreadId,
   type ThreadMessage,
+  type ThreadMessageAttachment,
+  type ThreadMessageStreamState,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -43,6 +45,7 @@ import {
   claimFromEvent,
   type KanbanCardUpdate,
   type MutationResult,
+  normalizeMentionIds,
   sameThreadCreation,
   type StandInQuestionInput,
   type ThreadMessagePage,
@@ -480,9 +483,12 @@ export class PostgresPlatformStore implements PlatformStore {
       if (thread.rows[0]) {
         await client.query(
           `INSERT INTO messages
-            (id, organization_id, thread_id, sender_id, operation_id, sequence,
-             kind, body, server_readable, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 'coordination_action', $7, true, $8)
+            (id, organization_id, thread_id, sender_id, operation_id,
+             client_message_id, sequence, kind, body, server_readable, created_at)
+           VALUES (
+             $1, $2, $3, $4, $5, $1, $6,
+             'coordination_action', $7, true, $8
+           )
            ON CONFLICT (organization_id, operation_id) DO NOTHING`,
           [
             uuidv7(),
@@ -600,6 +606,9 @@ export class PostgresPlatformStore implements PlatformStore {
       senderId: PrincipalId;
       body?: string;
       encryptedBody?: string;
+      mentionedPrincipalIds?: PrincipalId[];
+      attachmentIds?: ThreadMessageAttachment["id"][];
+      streamState?: ThreadMessageStreamState;
       createdAt: string;
     },
   ): Promise<ThreadMessage> {
@@ -617,6 +626,11 @@ export class PostgresPlatformStore implements PlatformStore {
       if (!current.thread.participantIds.includes(input.senderId)) {
         throw new Error("Sender is not a Thread participant.");
       }
+      const mentionedPrincipalIds = normalizeMentionIds(
+        current.thread,
+        input.senderId,
+        input.mentionedPrincipalIds,
+      );
       const existingMessage = await client.query(
         "SELECT * FROM messages WHERE thread_id = $1 AND id = $2",
         [threadId, input.id],
@@ -626,15 +640,62 @@ export class PostgresPlatformStore implements PlatformStore {
         : undefined;
       if (existing) {
         if (
+          (existing.streamState === "pending" ||
+            existing.streamState === "streaming") &&
+          existing.senderId === input.senderId &&
+          input.body !== undefined &&
+          input.encryptedBody === undefined &&
+          !input.attachmentIds?.length
+        ) {
+          const finalized = await client.query(
+            `UPDATE messages
+             SET body = $3,
+                 stream_state = 'complete',
+                 revision = revision + 1,
+                 updated_at = now()
+             WHERE thread_id = $1 AND id = $2
+             RETURNING *`,
+            [threadId, input.id, input.body],
+          );
+          const completed = messageFromRow(finalized.rows[0]!);
+          await this.recordConversationChange(client, {
+            eventId: uuidv7() as OperationId,
+            thread: current.thread,
+            actorId: input.senderId,
+            reason: "message_updated",
+            messageId: completed.id,
+          });
+          return completed;
+        }
+        if (
           existing.senderId !== input.senderId ||
           existing.body !== (input.body ?? "") ||
-          existing.encryptedBody !== input.encryptedBody
+          existing.encryptedBody !== input.encryptedBody ||
+          !sameIds(
+            existing.mentionedPrincipalIds ?? [],
+            mentionedPrincipalIds,
+          ) ||
+          !sameIds(
+            (existing.attachments ?? []).map((attachment) => attachment.id),
+            input.attachmentIds ?? [],
+          )
         ) {
           throw new Error("Client message ID was already used.");
         }
         return existing;
       }
-      const message = buildThreadMessage(current.thread, input);
+      const attachments = await this.resolveMessageAttachments(
+        client,
+        threadId,
+        input.senderId,
+        input.id,
+        input.attachmentIds ?? [],
+      );
+      const message = buildThreadMessage(current.thread, {
+        ...input,
+        mentionedPrincipalIds,
+        attachments,
+      });
       const updated = await client.query<{
         sequence: number;
         access_version: number;
@@ -652,6 +713,18 @@ export class PostgresPlatformStore implements PlatformStore {
         sequence: updated.rows[0]!.sequence,
       };
       await this.insertMessage(client, stored);
+      if (attachments.length > 0) {
+        const claimed = await client.query(
+          `UPDATE attachments
+           SET message_id = $1, updated_at = now()
+           WHERE id = ANY($2::uuid[])
+             AND (message_id IS NULL OR message_id = $1)`,
+          [stored.id, attachments.map((attachment) => attachment.id)],
+        );
+        if ((claimed.rowCount ?? 0) !== attachments.length) {
+          throw new Error("One or more attachments were already sent.");
+        }
+      }
       await this.recordConversationChange(client, {
         eventId: stored.id as unknown as OperationId,
         thread: {
@@ -664,6 +737,64 @@ export class PostgresPlatformStore implements PlatformStore {
         reason: "message_appended",
       });
       return stored;
+    });
+  }
+
+  async updateMessageStream(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    senderId: PrincipalId;
+    body: string;
+    streamState: ThreadMessageStreamState;
+  }): Promise<ThreadMessage> {
+    if (input.body.length > 16_000) {
+      throw new Error("Stream message exceeds the message size limit.");
+    }
+    return this.write(async (client) => {
+      const current = await client.query(
+        `SELECT * FROM messages
+         WHERE thread_id = $1 AND id = $2
+         FOR UPDATE`,
+        [input.threadId, input.messageId],
+      );
+      const message = current.rows[0]
+        ? messageFromRow(current.rows[0])
+        : undefined;
+      if (!message || message.senderId !== input.senderId) {
+        throw new Error("Stream message was not found.");
+      }
+      if (
+        (message.streamState ?? "complete") === "complete" &&
+        input.streamState !== "complete"
+      ) {
+        throw new Error("Completed stream messages are immutable.");
+      }
+      const result = await client.query(
+        `UPDATE messages
+         SET body = $3,
+             stream_state = $4,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [input.threadId, input.messageId, input.body, input.streamState],
+      );
+      const updated = messageFromRow(result.rows[0]!);
+      const thread = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: thread.thread,
+        actorId: input.senderId,
+        reason: "message_updated",
+        messageId: input.messageId,
+      });
+      return updated;
     });
   }
 
@@ -764,7 +895,7 @@ export class PostgresPlatformStore implements PlatformStore {
       });
       const head = await client.query<{ sequence: number }>(
         `UPDATE threads
-         SET sequence = sequence + 1,
+         SET sequence = sequence + 2,
              latest_message_at = $2,
              updated_at = now()
          WHERE id = $1
@@ -773,9 +904,20 @@ export class PostgresPlatformStore implements PlatformStore {
       );
       const stored = {
         ...questionMessage,
-        sequence: head.rows[0]!.sequence,
+        sequence: head.rows[0]!.sequence - 1,
       };
+      const pendingAnswer = buildThreadMessage(
+        { ...current.thread, sequence: stored.sequence },
+        {
+          id: input.answerMessageId,
+          senderId: input.thread.standInIds[0]!,
+          body: "",
+          streamState: "pending",
+          createdAt: input.createdAt,
+        },
+      );
       await this.insertMessage(client, stored);
+      await this.insertMessage(client, pendingAnswer);
       await this.recordConversationChange(client, {
         eventId: stored.id as unknown as OperationId,
         thread: {
@@ -784,6 +926,16 @@ export class PostgresPlatformStore implements PlatformStore {
           latestMessageAt: stored.createdAt,
         },
         actorId: input.askedByPrincipalId,
+        reason: "message_appended",
+      });
+      await this.recordConversationChange(client, {
+        eventId: pendingAnswer.id as unknown as OperationId,
+        thread: {
+          ...current.thread,
+          sequence: pendingAnswer.sequence,
+          latestMessageAt: pendingAnswer.createdAt,
+        },
+        actorId: pendingAnswer.senderId,
         reason: "message_appended",
       });
       await client.query(
@@ -806,14 +958,14 @@ export class PostgresPlatformStore implements PlatformStore {
       );
       await client.query(
         `INSERT INTO outbox
-          (operation_id, organization_id, topic, payload, available_at)
+         (operation_id, organization_id, topic, payload, available_at)
          VALUES (
-           $1, $2, 'pilot.stand_in.question.enqueue',
+           $1::uuid, $2::uuid, 'pilot.stand_in.question.enqueue',
            jsonb_build_object(
              'schemaVersion', 1,
-             'organizationId', $2::text,
-             'jobId', $1::text,
-             'projectId', $3::text
+             'organizationId', $2::uuid::text,
+             'jobId', $1::uuid::text,
+             'projectId', $3::uuid::text
            ),
            $4
          )`,
@@ -944,6 +1096,28 @@ export class PostgresPlatformStore implements PlatformStore {
         accessVersion: metadata.access_version,
         hasMore,
       };
+    });
+  }
+
+  async getThreadMessage(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    messageId: ThreadMessage["id"],
+  ): Promise<ThreadMessage | undefined> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT m.*
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         WHERE m.thread_id = $1
+           AND m.id = $3
+           AND m.sequence >= viewer.visible_from_sequence`,
+        [threadId, principalId, messageId],
+      );
+      return result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
     });
   }
 
@@ -1359,6 +1533,7 @@ export class PostgresPlatformStore implements PlatformStore {
       const result = await client.query<{
         id: ThreadId;
         unread_count: number;
+        mention_count: number;
       }>(
         `SELECT t.id,
                 CASE
@@ -1378,7 +1553,26 @@ export class PostgresPlatformStore implements PlatformStore {
                       AND m.sequence > COALESCE(tr.last_read_sequence, 0)
                       AND m.sender_id <> $2
                   )
-                END AS unread_count
+                END AS unread_count,
+                CASE
+                  WHEN $2::uuid IS NULL THEN 0
+                  ELSE (
+                    SELECT count(*)::integer
+                    FROM messages m
+                    JOIN thread_participants viewer
+                      ON viewer.thread_id = m.thread_id
+                     AND viewer.principal_id = $2
+                     AND viewer.revoked_at IS NULL
+                    LEFT JOIN thread_reads tr
+                      ON tr.thread_id = m.thread_id
+                     AND tr.principal_id = $2
+                    WHERE m.thread_id = t.id
+                      AND m.sequence >= viewer.visible_from_sequence
+                      AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+                      AND m.sender_id <> $2
+                      AND $2 = ANY(m.mentioned_principal_ids)
+                  )
+                END AS mention_count
          FROM threads t
          WHERE ($1::text IS NULL OR t.kind = $1)
            AND (
@@ -1402,7 +1596,13 @@ export class PostgresPlatformStore implements PlatformStore {
             principalId,
             100,
           );
-          return item ? { ...item, unreadCount: row.unread_count } : undefined;
+          return item
+            ? {
+                ...item,
+                unreadCount: row.unread_count,
+                mentionCount: row.mention_count,
+              }
+            : undefined;
         }),
       );
       return items.filter(
@@ -1412,6 +1612,7 @@ export class PostgresPlatformStore implements PlatformStore {
           thread: ConversationThread;
           messages: ThreadMessage[];
           unreadCount: number;
+          mentionCount: number;
         } => item !== undefined,
       );
     });
@@ -1426,7 +1627,9 @@ export class PostgresPlatformStore implements PlatformStore {
         100,
       );
       if (!item) return undefined;
-      if (!principalId) return { ...item, unreadCount: 0 };
+      if (!principalId) {
+        return { ...item, unreadCount: 0, mentionCount: 0 };
+      }
       const unread = await client.query<{ unread_count: number }>(
         `SELECT count(*)::integer AS unread_count
          FROM messages m
@@ -1443,9 +1646,27 @@ export class PostgresPlatformStore implements PlatformStore {
            AND m.sender_id <> $2`,
         [threadId, principalId],
       );
+      const mentions = await client.query<{ mention_count: number }>(
+        `SELECT count(*)::integer AS mention_count
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         LEFT JOIN thread_reads tr
+           ON tr.thread_id = m.thread_id
+          AND tr.principal_id = $2
+         WHERE m.thread_id = $1
+           AND m.sequence >= viewer.visible_from_sequence
+           AND m.sequence > COALESCE(tr.last_read_sequence, 0)
+           AND m.sender_id <> $2
+           AND $2 = ANY(m.mentioned_principal_ids)`,
+        [threadId, principalId],
+      );
       return {
         ...item,
         unreadCount: unread.rows[0]?.unread_count ?? 0,
+        mentionCount: mentions.rows[0]?.mention_count ?? 0,
       };
     });
   }
@@ -1874,8 +2095,12 @@ export class PostgresPlatformStore implements PlatformStore {
     await client.query(
       `INSERT INTO messages
         (id, organization_id, thread_id, sender_id, client_message_id,
-         sequence, kind, body, encrypted_body, server_readable, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         sequence, kind, body, encrypted_body, server_readable,
+         mentioned_principal_ids, attachments, stream_state, revision, created_at)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15
+       )`,
       [
         message.id,
         this.organizationId,
@@ -1887,9 +2112,68 @@ export class PostgresPlatformStore implements PlatformStore {
         message.body,
         message.encryptedBody ?? null,
         message.serverReadable,
+        message.mentionedPrincipalIds ?? [],
+        json(message.attachments ?? []),
+        message.streamState ?? "complete",
+        message.revision ?? 1,
         message.createdAt,
       ],
     );
+  }
+
+  private async resolveMessageAttachments(
+    client: PoolClient,
+    threadId: ThreadId,
+    senderId: PrincipalId,
+    messageId: ThreadMessage["id"],
+    attachmentIds: ThreadMessageAttachment["id"][],
+  ): Promise<ThreadMessageAttachment[]> {
+    const uniqueIds = [...new Set(attachmentIds)];
+    if (uniqueIds.length !== attachmentIds.length) {
+      throw new Error("Attachment IDs must be unique.");
+    }
+    if (uniqueIds.length === 0) return [];
+    const result = await client.query<{
+      id: ThreadMessageAttachment["id"];
+      thread_id: ThreadId;
+      owner_id: PrincipalId;
+      file_name: string;
+      content_type: string;
+      byte_size: number;
+      state: string;
+      message_id: ThreadMessage["id"] | null;
+    }>(
+      `SELECT id, thread_id, owner_id, file_name, content_type, byte_size,
+              state, message_id
+       FROM attachments
+       WHERE id = ANY($1::uuid[])
+       FOR UPDATE`,
+      [uniqueIds],
+    );
+    if (result.rows.length !== uniqueIds.length) {
+      throw new Error("One or more attachments were not found.");
+    }
+    const byId = new Map(result.rows.map((row) => [row.id, row]));
+    return uniqueIds.map((id) => {
+      const row = byId.get(id)!;
+      if (
+        row.thread_id !== threadId ||
+        row.owner_id !== senderId ||
+        row.state !== "available" ||
+        (row.message_id !== null && row.message_id !== messageId)
+      ) {
+        throw new Error("An attachment is not available for this message.");
+      }
+      if (!row.content_type.startsWith("image/")) {
+        throw new Error("Conversation attachments must be images.");
+      }
+      return {
+        id: row.id,
+        fileName: row.file_name,
+        contentType: row.content_type,
+        byteSize: Number(row.byte_size),
+      };
+    });
   }
 
   private async createInboxItem(
@@ -1970,10 +2254,12 @@ export class PostgresPlatformStore implements PlatformStore {
       reason:
         | "thread_created"
         | "message_appended"
+        | "message_updated"
         | "read_cursor_changed"
         | "access_changed"
         | "thread_concluded";
       channels?: string[];
+      messageId?: ThreadMessage["id"];
     },
   ): Promise<void> {
     const occurredAt = new Date().toISOString();
@@ -1993,6 +2279,7 @@ export class PostgresPlatformStore implements PlatformStore {
           reason: input.reason,
           headSequence: input.thread.sequence,
           accessVersion: input.thread.accessVersion ?? 1,
+          ...(input.messageId ? { messageId: input.messageId } : {}),
         }),
         occurredAt,
       ],
@@ -2007,6 +2294,7 @@ export class PostgresPlatformStore implements PlatformStore {
       headSequence: input.thread.sequence,
       accessVersion: input.thread.accessVersion ?? 1,
       reason: input.reason,
+      ...(input.messageId ? { messageId: input.messageId } : {}),
       occurredAt,
     };
     await client.query(
@@ -2204,7 +2492,23 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     serverReadable: row.server_readable,
     ...(row.encrypted_body ? { encryptedBody: row.encrypted_body } : {}),
     ...(row.operation_id ? { operationId: row.operation_id } : {}),
+    ...((row.mentioned_principal_ids as PrincipalId[] | undefined)?.length
+      ? { mentionedPrincipalIds: row.mentioned_principal_ids as PrincipalId[] }
+      : {}),
+    ...((row.attachments as ThreadMessageAttachment[] | undefined)?.length
+      ? { attachments: row.attachments as ThreadMessageAttachment[] }
+      : {}),
+    streamState:
+      (row.stream_state as ThreadMessageStreamState | undefined) ?? "complete",
+    revision: Number(row.revision ?? 1),
   };
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].toSorted();
+  const sortedRight = [...right].toSorted();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function revisionFromRow(row: QueryResultRow): SpecRevision {

@@ -4,10 +4,12 @@ import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
+  getThreadMessage: vi.fn(),
   getThreadMessages: vi.fn(),
 }));
 
 vi.mock("../api.js", () => ({
+  getThreadMessage: api.getThreadMessage,
   getThreadMessages: api.getThreadMessages,
 }));
 
@@ -19,6 +21,7 @@ describe("conversation cursor repair", () => {
   beforeEach(() => {
     queryClient = new QueryClient();
     api.getThreadMessages.mockReset();
+    api.getThreadMessage.mockReset();
   });
 
   it("fills a sequence gap and merges duplicate messages deterministically", async () => {
@@ -97,6 +100,52 @@ describe("conversation cursor repair", () => {
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["threads"] });
     expect(api.getThreadMessages).not.toHaveBeenCalled();
+  });
+
+  it("repairs an in-place Stand-in stream revision by message pointer", async () => {
+    const threadId = uuidv7();
+    const first = message(threadId, 1);
+    queryClient.setQueryData(["threads"], {
+      items: [
+        {
+          thread: {
+            id: threadId,
+            kind: "stand_in",
+            title: "Stand-in",
+            participantIds: [first.senderId],
+            standInIds: [first.senderId],
+            accessMode: "agent_readable",
+            priorHistoryGranted: false,
+            sequence: 1,
+            accessVersion: 1,
+            createdAt: first.createdAt,
+          },
+          messages: [{ ...first, body: "", streamState: "pending" }],
+          principals: [],
+          actions: [],
+        },
+      ],
+    });
+    const streamed = {
+      ...first,
+      body: "A durable partial answer",
+      streamState: "streaming" as const,
+      revision: 3,
+    };
+    api.getThreadMessage.mockResolvedValue(streamed);
+
+    const repaired = await repairConversationChange(queryClient, {
+      ...change(threadId, 1, "message_updated"),
+      messageId: first.id,
+    });
+
+    expect(repaired).toEqual([streamed]);
+    expect(api.getThreadMessage).toHaveBeenCalledWith(threadId, first.id);
+    expect(
+      queryClient.getQueryData<{
+        items: Array<{ messages: ThreadMessage[] }>;
+      }>(["threads"])?.items[0]?.messages[0],
+    ).toMatchObject({ body: streamed.body, revision: 3 });
   });
 });
 

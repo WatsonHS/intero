@@ -7,6 +7,7 @@ import {
   canRenderCommunicationItems,
   conversationMentionCandidates,
   conversationMentionQuery,
+  extractConversationMentionPrincipalIds,
   filterConversationMentionCandidates,
   mergeCommunicationItems,
   personalStandInMentionCandidates,
@@ -228,6 +229,13 @@ describe("Communications personal Stand-in routing", () => {
         mention: candidates[0],
       },
     ]);
+    expect(
+      extractConversationMentionPrincipalIds(
+        "请 @开发同学，检查。",
+        candidates,
+        SESSION_PRINCIPAL_ID,
+      ),
+    ).toEqual([DEV_PRINCIPAL_ID]);
   });
 
   it("renders one personal Stand-in and hides legacy canonical Stand-in rows", () => {

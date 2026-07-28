@@ -15,7 +15,7 @@
     "demo:seed": "tsx src/demo-data-cli.ts seed",
     "demo:reset": "tsx src/demo-data-cli.ts reset",
     "demo:reset-and-seed": "tsx src/demo-data-cli.ts reset-and-seed",
-    "test:database": "vitest run --root ../.. apps/server-api/src/database/rls.integration.test.ts apps/server-api/src/postgres-store.integration.test.ts",
+    "test:database": "vitest run --no-file-parallelism --root ../.. apps/server-api/src/database/rls.integration.test.ts apps/server-api/src/postgres-store.integration.test.ts",
     "test": "vitest run"
   },
   "dependencies": {

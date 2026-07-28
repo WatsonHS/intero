@@ -332,6 +332,17 @@ export const messages = pgTable(
     body: text("body"),
     encryptedBody: text("encrypted_body"),
     serverReadable: boolean("server_readable").notNull(),
+    mentionedPrincipalIds: uuid("mentioned_principal_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    attachments: jsonb("attachments").notNull().default([]),
+    streamState: text("stream_state", {
+      enum: ["pending", "streaming", "complete", "failed"],
+    })
+      .notNull()
+      .default("complete"),
+    revision: integer("revision").notNull().default(1),
     ...timestamps,
   },
   (table) => [
@@ -353,6 +364,7 @@ export const messages = pgTable(
       table.sequence,
     ),
     index("messages_org_idx").on(table.organizationId),
+    index("messages_mentions_idx").using("gin", table.mentionedPrincipalIds),
   ],
 );
 
@@ -377,6 +389,9 @@ export const attachments = pgTable(
     objectKey: text("object_key").notNull().unique(),
     state: text("state").notNull(),
     scanErrorCode: text("scan_error_code"),
+    messageId: uuid("message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     ...timestamps,
   },

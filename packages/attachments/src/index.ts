@@ -113,6 +113,8 @@ export class AttachmentService {
       );
     });
     const requiredHeaders = {
+      "content-type": attachment.contentType,
+      "x-amz-meta-sha256": attachment.checksumSha256,
       ...(attachment.encryptionMode === "server_envelope" &&
       this.config.serverSideEncryption !== false
         ? { "x-amz-server-side-encryption": "AES256" }
@@ -131,7 +133,11 @@ export class AttachmentService {
           ? { ServerSideEncryption: "AES256" }
           : {}),
       }),
-      { expiresIn: 900 },
+      {
+        expiresIn: 900,
+        signableHeaders: new Set(["content-type"]),
+        unhoistableHeaders: new Set(["x-amz-meta-sha256"]),
+      },
     );
     return { attachment, uploadUrl, requiredHeaders };
   }
@@ -205,24 +211,35 @@ export class AttachmentService {
   }
 
   async cleanupOrphans(now = new Date()): Promise<number> {
-    const expired = await this.write(async (client) => {
-      const result = await client.query<{ id: string; object_key: string }>(
-        `DELETE FROM attachments
-         WHERE state = 'pending_upload' AND expires_at < $1
-         RETURNING id, object_key`,
+    return this.write(async (client) => {
+      const expired = await client.query<{
+        id: string;
+        object_key: string;
+      }>(
+        `SELECT id, object_key
+         FROM attachments
+         WHERE message_id IS NULL AND expires_at < $1
+         ORDER BY expires_at
+         LIMIT 100
+         FOR UPDATE SKIP LOCKED`,
         [now.toISOString()],
       );
-      return result.rows;
+      for (const item of expired.rows) {
+        await this.#s3.send(
+          new DeleteObjectCommand({
+            Bucket: this.config.bucket,
+            Key: item.object_key,
+          }),
+        );
+      }
+      if (expired.rows.length > 0) {
+        await client.query(
+          "DELETE FROM attachments WHERE id = ANY($1::uuid[])",
+          [expired.rows.map((item) => item.id)],
+        );
+      }
+      return expired.rows.length;
     });
-    for (const item of expired) {
-      await this.#s3.send(
-        new DeleteObjectCommand({
-          Bucket: this.config.bucket,
-          Key: item.object_key,
-        }),
-      );
-    }
-    return expired.length;
   }
 
   async get(id: string): Promise<Attachment | undefined> {
@@ -333,6 +350,9 @@ function attachmentFromRow(row: Record<string, unknown>): Attachment {
     state: row.state as Attachment["state"],
     createdAt: createdAt.toISOString(),
     expiresAt: expiresAt.toISOString(),
+    ...(row.message_id
+      ? { messageId: row.message_id as Attachment["messageId"] }
+      : {}),
   };
 }
 

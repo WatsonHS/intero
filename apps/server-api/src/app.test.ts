@@ -253,7 +253,7 @@ describe("Intero API vertical slice", () => {
         createdAt: new Date().toISOString(),
       },
     });
-    for (const senderId of [priya, priya, alex]) {
+    for (const [index, senderId] of [priya, priya, alex].entries()) {
       await app.inject({
         method: "POST",
         url: `/v1/threads/${threadId}/messages`,
@@ -261,11 +261,12 @@ describe("Intero API vertical slice", () => {
         payload: {
           clientMessageId: uuidv7(),
           body: "hello",
+          mentionedPrincipalIds: index === 0 ? [alex] : [],
         },
       });
     }
 
-    const unreadFor = async (viewer: PrincipalId) => {
+    const countsFor = async (viewer: PrincipalId) => {
       const response = await app.inject({
         method: "GET",
         url: "/v1/threads",
@@ -273,14 +274,24 @@ describe("Intero API vertical slice", () => {
       });
       return response
         .json<{
-          items: Array<{ thread: { id: string }; unreadCount: number }>;
+          items: Array<{
+            thread: { id: string };
+            unreadCount: number;
+            mentionCount: number;
+          }>;
         }>()
-        .items.find((item) => item.thread.id === threadId)?.unreadCount;
+        .items.find((item) => item.thread.id === threadId);
     };
 
     // Your own messages are never unread to you.
-    expect(await unreadFor(alex)).toBe(2);
-    expect(await unreadFor(priya)).toBe(1);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 2,
+      mentionCount: 1,
+    });
+    expect(await countsFor(priya)).toMatchObject({
+      unreadCount: 1,
+      mentionCount: 0,
+    });
 
     await app.inject({
       method: "POST",
@@ -288,7 +299,10 @@ describe("Intero API vertical slice", () => {
       headers: auth(alex),
       payload: { sequence: 3 },
     });
-    expect(await unreadFor(alex)).toBe(0);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 0,
+      mentionCount: 0,
+    });
 
     // Re-reading an older message must not resurrect the ones after it.
     await app.inject({
@@ -297,7 +311,10 @@ describe("Intero API vertical slice", () => {
       headers: auth(alex),
       payload: { sequence: 1 },
     });
-    expect(await unreadFor(alex)).toBe(0);
+    expect(await countsFor(alex)).toMatchObject({
+      unreadCount: 0,
+      mentionCount: 0,
+    });
   });
 
   it("keeps demo fixtures opt-in", () => {
