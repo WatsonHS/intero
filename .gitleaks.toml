@@ -1,0 +1,18 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known synthetic credentials used only by automated tests"
+regexTarget = "match"
+regexes = [
+  '''intero-bearer-integration-secret-at-least-32-bytes''',
+  '''Bearer one-time-bound-agent-credential''',
+  '''phase5-route-idempotency''',
+  '''phase7-derived-relation''',
+]
+
+[[allowlists]]
+description = "Package-manager integrity checksums are not credentials"
+paths = [
+  '''(^|/)Cargo\.lock$''',
+]

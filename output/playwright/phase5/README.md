@@ -77,7 +77,6 @@ Validation date: 2026-07-26 (Asia/Shanghai)
 
 ## Evidence
 
-- `01-agent-connect-prompt.png`: canonical connection prompt and one-time ticket.
 - `02-agent-work-on-board.png`: Agent-created work on the canonical board.
 - `03-work-item-detail.png`: canonical activity/context/code detail layout.
 - `04-member-peer-team-pulse.png`: member B sees peer cards, readable status and

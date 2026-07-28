@@ -6,7 +6,11 @@ describe("latestInvitationsByEmail", () => {
   it("hides a revoked invitation superseded by a new invitation", () => {
     const invitations = [
       invitation("new", "Everaways@example.com", "2026-07-28T05:30:00.000Z"),
-      invitation("revoked", "everaways@example.com", "2026-07-27T05:30:00.000Z"),
+      invitation(
+        "revoked",
+        "everaways@example.com",
+        "2026-07-27T05:30:00.000Z",
+      ),
     ];
 
     expect(latestInvitationsByEmail(invitations).map(({ id }) => id)).toEqual([
