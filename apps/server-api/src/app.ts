@@ -41,7 +41,11 @@ import {
   type ThreadId,
 } from "@intero/domain";
 import cors from "@fastify/cors";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import type { Pool } from "pg";
 import { z, ZodError, type ZodType } from "zod";
 
@@ -123,6 +127,18 @@ const CONVERSATION_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+const CONVERSATION_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+
+type ConversationAttachmentService = Pick<
+  AttachmentService,
+  | "completeUpload"
+  | "createDownload"
+  | "createUpload"
+  | "get"
+  | "readContent"
+  | "scan"
+  | "uploadContent"
+>;
 
 export interface BuildAppOptions {
   store?: PlatformStore;
@@ -139,7 +155,7 @@ export interface BuildAppOptions {
   principalDirectory?: PrincipalDirectory;
   requestAuth?: RequestAuth;
   authorization?: AuthorizationPort;
-  attachments?: AttachmentService;
+  attachments?: ConversationAttachmentService;
   organization?: { id: string; name: string };
   currentPrincipal?: PrincipalSummary;
   standInPrincipal?: PrincipalSummary;
@@ -172,6 +188,13 @@ export async function buildApp(
         ? false
         : loggerOptions(process.env.INTERO_LOG_LEVEL),
   });
+  for (const contentType of CONVERSATION_IMAGE_TYPES) {
+    app.addContentTypeParser(
+      contentType,
+      { parseAs: "buffer", bodyLimit: CONVERSATION_IMAGE_MAX_BYTES },
+      (_request, body, done) => done(null, body),
+    );
+  }
   const metrics =
     options.metrics === false
       ? undefined
@@ -500,11 +523,61 @@ export async function buildApp(
       return notFound(reply, "Thread");
     }
     const upload = await options.attachments.createUpload(input);
+    const contentUrl = attachmentContentUrl(
+      request,
+      input.id,
+      options.authPublicUrl,
+    );
     return reply.status(201).send({
       ...upload,
+      uploadUrl: contentUrl,
+      requiredHeaders: { "content-type": input.contentType },
       attachment: presentAttachment(upload.attachment),
     });
   });
+
+  app.put<{ Params: { attachmentId: string } }>(
+    "/v1/attachments/:attachmentId/content",
+    { bodyLimit: CONVERSATION_IMAGE_MAX_BYTES },
+    async (request, reply) => {
+      if (!options.attachments) {
+        return reply.status(503).send({
+          code: "ATTACHMENTS_UNAVAILABLE",
+          message: "Attachment storage is not configured.",
+          requestId: request.id,
+        });
+      }
+      const principal = await requestAuth.resolve(request);
+      const attachment = await options.attachments.get(
+        request.params.attachmentId,
+      );
+      if (
+        !attachment ||
+        attachment.ownerId !== principal!.id ||
+        !(await store.hasThreadAccess(attachment.threadId, principal!.id))
+      ) {
+        return notFound(reply, "Attachment");
+      }
+      const contentType = request.headers["content-type"]?.split(";", 1)[0];
+      if (
+        attachment.state !== "pending_upload" ||
+        contentType !== attachment.contentType ||
+        !Buffer.isBuffer(request.body) ||
+        request.body.byteLength !== attachment.byteSize
+      ) {
+        throw new PilotStoreError(
+          "ATTACHMENT_UPLOAD_INVALID",
+          400,
+          "Attachment content does not match the upload reservation.",
+        );
+      }
+      await options.attachments.uploadContent(
+        request.params.attachmentId,
+        request.body,
+      );
+      return reply.status(204).send();
+    },
+  );
 
   app.post<{ Params: { attachmentId: string } }>(
     "/v1/attachments/:attachmentId/complete",
@@ -564,8 +637,43 @@ export async function buildApp(
       );
       return {
         ...download,
+        downloadUrl: attachmentContentUrl(
+          request,
+          attachment.id,
+          options.authPublicUrl,
+        ),
         attachment: presentAttachment(download.attachment),
       };
+    },
+  );
+
+  app.get<{ Params: { attachmentId: string } }>(
+    "/v1/attachments/:attachmentId/content",
+    async (request, reply) => {
+      if (!options.attachments) {
+        return reply.status(503).send({
+          code: "ATTACHMENTS_UNAVAILABLE",
+          message: "Attachment storage is not configured.",
+          requestId: request.id,
+        });
+      }
+      const principal = await requestAuth.resolve(request);
+      const attachment = await options.attachments.get(
+        request.params.attachmentId,
+      );
+      if (
+        !attachment ||
+        attachment.state !== "available" ||
+        (!attachment.messageId && attachment.ownerId !== principal!.id) ||
+        !(await store.hasThreadAccess(attachment.threadId, principal!.id))
+      ) {
+        return notFound(reply, "Attachment");
+      }
+      const content = await options.attachments.readContent(attachment.id);
+      return reply
+        .header("content-type", attachment.contentType)
+        .header("cache-control", "private, no-store")
+        .send(Buffer.from(content));
     },
   );
 
@@ -1275,6 +1383,19 @@ function presentAttachment<T extends { objectKey: string }>(
 ): Omit<T, "objectKey"> {
   const { objectKey: _objectKey, ...safe } = attachment;
   return safe;
+}
+
+function attachmentContentUrl(
+  request: FastifyRequest,
+  attachmentId: string,
+  publicUrl?: string,
+): string {
+  const host = request.headers.host ?? "localhost";
+  const baseUrl = publicUrl ?? `${request.protocol}://${host}`;
+  return new URL(
+    `/v1/attachments/${encodeURIComponent(attachmentId)}/content`,
+    baseUrl,
+  ).toString();
 }
 
 declare module "fastify" {

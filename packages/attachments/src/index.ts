@@ -164,6 +164,32 @@ export class AttachmentService {
     return this.updateState(id, "uploaded");
   }
 
+  async uploadContent(id: string, content: Uint8Array): Promise<void> {
+    const attachment = await this.require(id);
+    if (attachment.state !== "pending_upload") {
+      throw new Error("Attachment is not waiting for an upload.");
+    }
+    if (content.byteLength !== attachment.byteSize) {
+      throw new Error(
+        "Uploaded attachment size does not match the declaration.",
+      );
+    }
+    await this.#s3.send(
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: attachment.objectKey,
+        Body: content,
+        ContentType: attachment.contentType,
+        ContentLength: attachment.byteSize,
+        Metadata: { sha256: attachment.checksumSha256 },
+        ...(attachment.encryptionMode === "server_envelope" &&
+        this.config.serverSideEncryption !== false
+          ? { ServerSideEncryption: "AES256" }
+          : {}),
+      }),
+    );
+  }
+
   async scan(id: string): Promise<Attachment> {
     const attachment = await this.require(id);
     if (
@@ -268,6 +294,22 @@ export class AttachmentService {
       { expiresIn: 300 },
     );
     return { attachment, downloadUrl };
+  }
+
+  async readContent(id: string): Promise<Uint8Array> {
+    const attachment = await this.require(id);
+    if (attachment.state !== "available") {
+      throw new Error("Attachment is not available until scanning succeeds.");
+    }
+    const response = await this.#s3.send(
+      new GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: attachment.objectKey,
+      }),
+    );
+    const content = await response.Body?.transformToByteArray();
+    if (!content) throw new Error("Attachment content is unavailable.");
+    return content;
   }
 
   async close(): Promise<void> {

@@ -1,5 +1,6 @@
 import type { PrincipalId } from "@intero/domain";
 import {
+  type QueryClient,
   type UseQueryResult,
   useQuery,
   useQueryClient,
@@ -10,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -50,6 +52,34 @@ interface PilotContextValue {
 const PilotContext = createContext<PilotContextValue | undefined>(undefined);
 
 /**
+ * Authentication is a hard cache boundary. Most query keys predate session
+ * authentication and are not principal-scoped, so retaining them while a
+ * browser changes account can briefly expose the previous principal's data and
+ * can submit mutations with the previous owner ID.
+ *
+ * The Pilot bootstrap is the source that detects the new authenticated
+ * principal. Invitation details are capability-scoped by their URL token.
+ * Everything else must be discarded when that principal changes or signs out.
+ */
+export function clearAuthenticatedQueryCache(
+  queryClient: QueryClient,
+  options: { preserveBootstrap?: boolean } = {},
+): void {
+  const isAuthenticatedQuery = (query: {
+    queryKey: readonly unknown[];
+  }): boolean => {
+    const [scope, resource] = query.queryKey;
+    return !(
+      scope === "pilot" &&
+      (resource === "invitation" ||
+        (options.preserveBootstrap && resource === "bootstrap"))
+    );
+  };
+  void queryClient.cancelQueries({ predicate: isAuthenticatedQuery });
+  queryClient.removeQueries({ predicate: isAuthenticatedQuery });
+}
+
+/**
  * A project is reachable from a team when the team owns it or takes part in
  * it — participating teams see the same project surfaces as the owning one.
  */
@@ -81,6 +111,7 @@ export function resolveEffectivePilotIdentity(input: {
 export function PilotProvider({ children }: { children: ReactNode }) {
   const enabled = isPilotBrowser();
   const queryClient = useQueryClient();
+  const authenticatedPrincipalRef = useRef<PrincipalId | undefined>(undefined);
   const [selectedIdentityId, setIdentityState] = useState<
     PrincipalId | undefined
   >(() =>
@@ -130,19 +161,37 @@ export function PilotProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
+    if (bootstrap.data?.authMode !== "session") return;
+    const authenticatedPrincipalId = bootstrap.data.currentPrincipal?.id;
+    if (!authenticatedPrincipalId) return;
+    const previousPrincipalId = authenticatedPrincipalRef.current;
+    if (
+      previousPrincipalId &&
+      previousPrincipalId !== authenticatedPrincipalId
+    ) {
+      clearAuthenticatedQueryCache(queryClient, { preserveBootstrap: true });
+      clearStoredPilotScope(window.localStorage);
+      setIdentityState(undefined);
+      setProjectState(undefined);
+      setTeamState(undefined);
+    }
+    authenticatedPrincipalRef.current = authenticatedPrincipalId as PrincipalId;
+    setAuthenticationRequired(false);
+  }, [
+    bootstrap.data?.authMode,
+    bootstrap.data?.currentPrincipal?.id,
+    queryClient,
+  ]);
+
+  useEffect(() => {
     if (!enabled) return;
     const handleAuthenticationRequired = () => {
+      authenticatedPrincipalRef.current = undefined;
       setAuthenticationRequired(true);
       setIdentityState(undefined);
       setProjectState(undefined);
       setTeamState(undefined);
-      void queryClient.cancelQueries({ queryKey: ["action-inbox"] });
-      void queryClient.cancelQueries({ queryKey: ["pilot"] });
-      queryClient.removeQueries({ queryKey: ["action-inbox"] });
-      queryClient.removeQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "pilot" && query.queryKey[1] !== "bootstrap",
-      });
+      clearAuthenticatedQueryCache(queryClient);
     };
     window.addEventListener(
       AUTHENTICATION_REQUIRED_EVENT,
@@ -197,21 +246,19 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     setProjectState(undefined);
     setTeamState(undefined);
     if (next) window.localStorage.setItem(PILOT_IDENTITY_STORAGE_KEY, next);
-    queryClient.removeQueries({ queryKey: ["action-inbox"] });
-    queryClient.removeQueries({
-      predicate: (query) =>
-        query.queryKey[0] === "pilot" && query.queryKey[1] !== "bootstrap",
-    });
+    clearAuthenticatedQueryCache(queryClient, { preserveBootstrap: true });
     void queryClient.invalidateQueries({ queryKey: ["pilot"] });
   }
 
   async function signOutCurrentIdentity() {
+    authenticatedPrincipalRef.current = undefined;
     if (bootstrap.data?.authMode === "development_identity") {
       clearStoredPilotScope(window.localStorage);
       setAuthenticationRequired(true);
       setIdentityState(undefined);
       setProjectState(undefined);
       setTeamState(undefined);
+      clearAuthenticatedQueryCache(queryClient);
       return;
     }
     await signOutSession();
@@ -220,6 +267,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     setIdentityState(undefined);
     setProjectState(undefined);
     setTeamState(undefined);
+    clearAuthenticatedQueryCache(queryClient);
   }
 
   function setSelectedProjectId(next: string | undefined) {

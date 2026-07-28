@@ -88,16 +88,7 @@ integrationSuite("S3 attachment scan gate", () => {
       checksumSha256: sha256(content),
       encryptionMode: "server_envelope",
     });
-    const uploaded = await fetch(upload.uploadUrl, {
-      method: "PUT",
-      headers: upload.requiredHeaders,
-      body: content,
-    });
-    if (!uploaded.ok) {
-      throw new Error(
-        `MinIO upload failed ${uploaded.status} signed=${new URL(upload.uploadUrl).searchParams.get("X-Amz-SignedHeaders")} headers=${JSON.stringify(upload.requiredHeaders)}: ${await uploaded.text()}`,
-      );
-    }
+    await service.uploadContent(upload.attachment.id, content);
     await expect(
       service.completeUpload(upload.attachment.id),
     ).resolves.toMatchObject({
@@ -126,16 +117,7 @@ integrationSuite("S3 attachment scan gate", () => {
       checksumSha256: sha256(eicar),
       encryptionMode: "client_e2ee",
     });
-    const uploaded = await fetch(upload.uploadUrl, {
-      method: "PUT",
-      headers: upload.requiredHeaders,
-      body: eicar,
-    });
-    if (!uploaded.ok) {
-      throw new Error(
-        `MinIO upload failed ${uploaded.status} signed=${new URL(upload.uploadUrl).searchParams.get("X-Amz-SignedHeaders")} headers=${JSON.stringify(upload.requiredHeaders)}: ${await uploaded.text()}`,
-      );
-    }
+    await service.uploadContent(upload.attachment.id, eicar);
     await service.completeUpload(upload.attachment.id);
     await expect(service.scan(upload.attachment.id)).resolves.toMatchObject({
       state: "quarantined",
@@ -187,6 +169,9 @@ integrationSuite("S3 attachment scan gate", () => {
     expect(uploaded.ok).toBe(true);
     await service.completeUpload(available.attachment.id);
     await service.scan(available.attachment.id);
+    await expect(service.readContent(available.attachment.id)).resolves.toEqual(
+      new Uint8Array(content),
+    );
     await adminPool.query(
       `UPDATE attachments SET expires_at = now() - interval '1 second'
        WHERE id = ANY($1::uuid[])`,

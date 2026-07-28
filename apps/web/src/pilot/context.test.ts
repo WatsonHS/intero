@@ -1,7 +1,12 @@
 import type { PrincipalId } from "@intero/domain";
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
-import { resolveEffectivePilotIdentity, resolveGovernance } from "./context.js";
+import {
+  clearAuthenticatedQueryCache,
+  resolveEffectivePilotIdentity,
+  resolveGovernance,
+} from "./context.js";
 
 const principalId = "019f9a00-0000-7000-8000-000000000103" as PrincipalId;
 const otherPrincipalId = "019f9a00-0000-7000-8000-000000000104" as PrincipalId;
@@ -126,5 +131,51 @@ describe("effective pilot identity", () => {
         authenticationRequired: true,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("authenticated query cache boundary", () => {
+  it("discards every principal-scoped cache when the account changes", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["pilot", "bootstrap"], { principal: "next" });
+    queryClient.setQueryData(["pilot", "invitation", "token"], {
+      team: "Product",
+    });
+    queryClient.setQueryData(["pilot", "profile", principalId], {
+      displayName: "Previous user",
+    });
+    queryClient.setQueryData(["bootstrap"], { principal: "previous" });
+    queryClient.setQueryData(["threads"], { items: ["private"] });
+    queryClient.setQueryData(["conversation-attachment", "image"], {
+      downloadUrl: "private",
+    });
+
+    clearAuthenticatedQueryCache(queryClient, { preserveBootstrap: true });
+
+    expect(queryClient.getQueryData(["pilot", "bootstrap"])).toEqual({
+      principal: "next",
+    });
+    expect(queryClient.getQueryData(["pilot", "invitation", "token"])).toEqual({
+      team: "Product",
+    });
+    expect(
+      queryClient.getQueryData(["pilot", "profile", principalId]),
+    ).toBeUndefined();
+    expect(queryClient.getQueryData(["bootstrap"])).toBeUndefined();
+    expect(queryClient.getQueryData(["threads"])).toBeUndefined();
+    expect(
+      queryClient.getQueryData(["conversation-attachment", "image"]),
+    ).toBeUndefined();
+  });
+
+  it("also drops the cached session bootstrap on sign-out", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["pilot", "bootstrap"], {
+      currentPrincipal: { id: principalId, displayName: "Previous user" },
+    });
+
+    clearAuthenticatedQueryCache(queryClient);
+
+    expect(queryClient.getQueryData(["pilot", "bootstrap"])).toBeUndefined();
   });
 });

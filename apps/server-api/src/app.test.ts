@@ -1,7 +1,9 @@
 import type {
   ActionEnvelope,
+  Attachment,
   CapabilityGrant,
   ConversationThread,
+  CreateAttachmentUpload,
   MessageId,
   PrincipalId,
   SpecId,
@@ -411,6 +413,137 @@ describe("Intero API vertical slice", () => {
     expect(attachmentRoute.json()).toMatchObject({
       code: "ATTACHMENTS_UNAVAILABLE",
     });
+  });
+
+  it("keeps conversation image bytes behind the authenticated API boundary", async () => {
+    await app.close();
+    const content = Buffer.from("safe image bytes");
+    const threadId = uuidv7();
+    const attachmentId = uuidv7();
+    let attachment: Attachment | undefined;
+    const attachments = {
+      async createUpload(input: CreateAttachmentUpload) {
+        const reserved: Attachment = {
+          ...input,
+          objectKey: `test/${input.id}`,
+          state: "pending_upload",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+        attachment = reserved;
+        return {
+          attachment: reserved,
+          uploadUrl: "http://minio.internal/presigned",
+          requiredHeaders: { "x-internal-storage": "must-not-leak" },
+        };
+      },
+      async get() {
+        return attachment;
+      },
+      async uploadContent(_id: string, bytes: Uint8Array) {
+        expect(Buffer.from(bytes)).toEqual(content);
+      },
+      async completeUpload() {
+        attachment = { ...attachment!, state: "uploaded" };
+        return attachment;
+      },
+      async scan() {
+        attachment = { ...attachment!, state: "available" };
+        return attachment;
+      },
+      async createDownload() {
+        return {
+          attachment: attachment!,
+          downloadUrl: "http://minio.internal/presigned-download",
+        };
+      },
+      async readContent() {
+        return content;
+      },
+    };
+    app = await buildApp({ store, attachments, logger: false });
+    const createdThread = await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(),
+      payload: {
+        id: threadId,
+        kind: "human_group",
+        title: "Image boundary",
+        participantIds: [ALEX],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    expect(createdThread.statusCode).toBe(201);
+
+    const reservation = await app.inject({
+      method: "POST",
+      url: "/v1/attachments/uploads",
+      headers: auth(),
+      payload: {
+        id: attachmentId,
+        threadId,
+        ownerId: ALEX,
+        fileName: "proof.png",
+        contentType: "image/png",
+        byteSize: content.byteLength,
+        checksumSha256: "0".repeat(64),
+        encryptionMode: "server_envelope",
+      },
+    });
+    expect(reservation.statusCode).toBe(201);
+    expect(reservation.json()).toMatchObject({
+      uploadUrl: `http://localhost/v1/attachments/${attachmentId}/content`,
+      requiredHeaders: { "content-type": "image/png" },
+    });
+    expect(reservation.body).not.toContain("minio.internal");
+
+    const crossedSession = await app.inject({
+      method: "PUT",
+      url: `/v1/attachments/${attachmentId}/content`,
+      headers: { ...auth(PRIYA), "content-type": "image/png" },
+      payload: content,
+    });
+    expect(crossedSession.statusCode).toBe(404);
+
+    const uploaded = await app.inject({
+      method: "PUT",
+      url: `/v1/attachments/${attachmentId}/content`,
+      headers: { ...auth(), "content-type": "image/png" },
+      payload: content,
+    });
+    expect(uploaded.statusCode).toBe(204);
+
+    const completed = await app.inject({
+      method: "POST",
+      url: `/v1/attachments/${attachmentId}/complete`,
+      headers: auth(),
+      payload: {},
+    });
+    expect(completed.statusCode).toBe(202);
+    expect(completed.json()).toMatchObject({ state: "available" });
+
+    const download = await app.inject({
+      method: "GET",
+      url: `/v1/attachments/${attachmentId}`,
+      headers: auth(),
+    });
+    expect(download.json()).toMatchObject({
+      downloadUrl: `http://localhost/v1/attachments/${attachmentId}/content`,
+    });
+    expect(download.body).not.toContain("minio.internal");
+
+    const downloaded = await app.inject({
+      method: "GET",
+      url: `/v1/attachments/${attachmentId}/content`,
+      headers: auth(),
+    });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.headers["content-type"]).toBe("image/png");
+    expect(downloaded.rawPayload).toEqual(content);
   });
 
   it("reduces a Coding Agent checkpoint into Team Pulse without raw session data", async () => {
