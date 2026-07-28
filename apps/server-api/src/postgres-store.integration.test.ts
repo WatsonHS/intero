@@ -339,25 +339,30 @@ databaseSuite("PostgreSQL platform store", () => {
     });
     await store.enqueueStandInQuestion({
       jobId: uuidv7() as OperationId,
-      thread: {
-        id: threadId,
-        kind: "stand_in",
-        title: "Owner Stand-in",
-        participantIds: [ownerId, standInId],
-        standInIds: [standInId],
-        accessMode: "agent_readable",
-        priorHistoryGranted: false,
-        sequence: 0,
-        accessVersion: 1,
-        createdAt: new Date().toISOString(),
-      },
       projectId: projectId!,
       standInOwnerId: ownerId,
       askedByPrincipalId: ownerId,
-      questionMessageId,
       answerMessageId,
-      question: "What changed?",
-      createdAt: new Date().toISOString(),
+      preferredLanguage: "en-US",
+      recordExchange: true,
+      source: {
+        kind: "new_message",
+        thread: {
+          id: threadId,
+          kind: "stand_in",
+          title: "Owner Stand-in",
+          participantIds: [ownerId, standInId],
+          standInIds: [standInId],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          sequence: 0,
+          accessVersion: 1,
+          createdAt: new Date().toISOString(),
+        },
+        messageId: questionMessageId,
+        body: "What changed?",
+        createdAt: new Date().toISOString(),
+      },
     });
 
     expect((await store.getThread(threadId, ownerId))?.messages).toEqual([

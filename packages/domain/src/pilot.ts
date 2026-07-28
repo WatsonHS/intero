@@ -433,7 +433,7 @@ export const PilotStandInAnswer = z
     evidence: z.array(z.string().min(1).max(300)).max(5),
     nextStep: z.string().max(600),
     neededCollaboration: z.string().max(600),
-    sourceWorkStateIds: z.array(z.uuid()).min(1).max(10),
+    sourceWorkStateIds: z.array(z.uuid()).max(10),
   })
   .strict();
 export type PilotStandInAnswer = z.infer<typeof PilotStandInAnswer>;
@@ -476,7 +476,7 @@ export const PilotStandInExchange = z
     question: z.string().min(1).max(2_000),
     answer: z.string().min(1).max(2_000),
     structuredAnswer: PilotStandInAnswerDetail,
-    sources: z.array(PilotStandInSource).min(1).max(10),
+    sources: z.array(PilotStandInSource).max(10),
     createdAt: z.iso.datetime(),
   })
   .strict();

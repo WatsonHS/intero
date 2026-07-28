@@ -151,11 +151,7 @@ export const SendThreadMessageRequest = z
       (input.body.trim().length > 0 || input.attachmentIds.length > 0)
     );
   }, "Send ciphertext alone, or a server-readable body and/or attachments.");
-export const AddStandInRequest = z
-  .object({
-    standInId: z.string().uuid(),
-  })
-  .strict();
+export const AddStandInRequest = z.object({}).strict();
 export const UpdateThreadRequest = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),

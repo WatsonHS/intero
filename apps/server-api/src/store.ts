@@ -12,6 +12,7 @@ import {
   type KanbanCardId,
   type OperationId,
   type OutboxEntry,
+  personalStandInId,
   type PrincipalId,
   type Project,
   type ProjectId,
@@ -79,14 +80,26 @@ export interface ThreadMessagePage {
 
 export interface StandInQuestionInput {
   jobId: OperationId;
-  thread: ConversationThread;
   projectId: ProjectId;
   standInOwnerId: PrincipalId;
   askedByPrincipalId: PrincipalId;
-  questionMessageId: ThreadMessage["id"];
   answerMessageId: ThreadMessage["id"];
-  question: string;
-  createdAt: string;
+  preferredLanguage: "zh-CN" | "en-US";
+  recordExchange: boolean;
+  source:
+    | {
+        kind: "new_message";
+        thread: ConversationThread;
+        messageId: ThreadMessage["id"];
+        body: string;
+        createdAt: string;
+      }
+    | {
+        kind: "existing_message";
+        threadId: ThreadId;
+        messageId: ThreadMessage["id"];
+        createdAt: string;
+      };
 }
 
 export class InMemoryPlatformStore {
@@ -517,19 +530,35 @@ export class InMemoryPlatformStore {
   }
 
   enqueueStandInQuestion(input: StandInQuestionInput): ThreadMessage {
-    this.createThread(input.thread, input.askedByPrincipalId);
-    const question = this.appendMessage(input.thread.id, {
-      id: input.questionMessageId,
-      senderId: input.askedByPrincipalId,
-      body: input.question,
-      createdAt: input.createdAt,
-    });
-    this.appendMessage(input.thread.id, {
+    const question =
+      input.source.kind === "new_message"
+        ? (() => {
+            this.createThread(input.source.thread, input.askedByPrincipalId);
+            return this.appendMessage(input.source.thread.id, {
+              id: input.source.messageId,
+              senderId: input.askedByPrincipalId,
+              body: input.source.body,
+              createdAt: input.source.createdAt,
+            });
+          })()
+        : this.getThreadMessage(
+            input.source.threadId,
+            input.askedByPrincipalId,
+            input.source.messageId,
+          );
+    if (!question || question.senderId !== input.askedByPrincipalId) {
+      throw new Error("Stand-in question source message was not found.");
+    }
+    const threadId =
+      input.source.kind === "new_message"
+        ? input.source.thread.id
+        : input.source.threadId;
+    this.appendMessage(threadId, {
       id: input.answerMessageId,
-      senderId: input.thread.standInIds[0]!,
+      senderId: personalStandInId(input.standInOwnerId),
       body: "",
       streamState: "pending",
-      createdAt: input.createdAt,
+      createdAt: input.source.createdAt,
     });
     return question;
   }
@@ -737,11 +766,11 @@ export class InMemoryPlatformStore {
 
   addStandInToThread(
     threadId: ThreadId,
-    standInId: PrincipalId,
     actorId: PrincipalId,
   ): { thread: ConversationThread; event: ThreadMessage } {
     const current = this.threads.get(threadId);
     if (!current) throw new Error("Thread was not found.");
+    const standInId = personalStandInId(actorId);
     this.ensurePrincipal(standInId, "stand_in");
     this.ensurePrincipal(actorId, "human");
     const transition = addStandIn(current, standInId, actorId);

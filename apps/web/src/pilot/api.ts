@@ -642,21 +642,26 @@ export function askPilotStandIn(
   });
 }
 
-export function answerPilotStandInInConversation(
+export function enqueuePilotStandInReply(
   identityId: PrincipalId,
   projectId: string,
+  threadId: string,
+  messageId: string,
   standInOwnerId: PrincipalId,
-  question: string,
 ) {
   return request<{
-    answer: string;
-    standInOwner: PrincipalSummary;
-    standIn: PrincipalSummary;
-  }>(`/v1/pilot/projects/${projectId}/stand-in`, {
-    method: "POST",
-    identityId,
-    body: { question, standInOwnerId, recordExchange: false },
-  });
+    status: "pending" | "complete";
+    threadId: string;
+    questionMessageId: string;
+    answerMessageId?: string;
+  }>(
+    `/v1/pilot/projects/${projectId}/threads/${threadId}/messages/${messageId}/stand-in-replies`,
+    {
+      method: "POST",
+      identityId,
+      body: { standInOwnerId },
+    },
+  );
 }
 
 export function createPilotAgentConnection(

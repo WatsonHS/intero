@@ -13,6 +13,9 @@ import {
   type PilotJoinLink,
   type PilotOrganization,
   type PilotProject,
+  type PilotPulseEntry,
+  type PilotStandInAnswer,
+  type PilotStandInSource,
   type PilotTeam,
   type PilotTeamInvitation,
   PilotTeamRole,
@@ -1113,7 +1116,6 @@ export async function registerPilotRoutes(
           (
             await options.conversations.addStandInToThread(
               threadId,
-              personalStandInId(principal.id),
               principal.id,
             )
           ).thread,
@@ -1195,7 +1197,6 @@ export async function registerPilotRoutes(
           clientMessageId: z.uuid().optional(),
           question: z.string().min(1).max(2_000),
           standInOwnerId: z.uuid().optional(),
-          recordExchange: z.boolean().optional(),
         })
         .strict()
         .parse(request.body);
@@ -1224,13 +1225,6 @@ export async function registerPilotRoutes(
       const pulse = (
         await options.store.listTeamPulse(projectId, principal.id)
       ).filter((entry) => entry.ownerId === standInOwnerId);
-      if (pulse.length === 0) {
-        throw new PilotStoreError(
-          "STAND_IN_CONTEXT_UNAVAILABLE",
-          409,
-          "This member has no published structured Work State in the selected project.",
-        );
-      }
       if (options.adapters.jobs === "transactional-outbox") {
         const now = new Date().toISOString();
         const questionMessageId = input.clientMessageId ?? uuidv7();
@@ -1246,29 +1240,34 @@ export async function registerPilotRoutes(
               "intero-stand-in-question-job-v1",
               questionMessageId,
             ) as import("@intero/domain").OperationId,
-            thread: {
-              id: threadId,
-              kind: "stand_in",
-              title: `${standInOwner.displayName} 的替身`,
-              participantIds: [principal.id, standInId],
-              standInIds: [standInId],
-              accessMode: "agent_readable",
-              priorHistoryGranted: false,
-              sequence: 0,
-              accessVersion: 1,
-              createdAt: now,
-            },
             projectId,
             standInOwnerId,
             askedByPrincipalId: principal.id,
-            questionMessageId:
-              questionMessageId as import("@intero/domain").MessageId,
             answerMessageId: derivedUuid(
               "intero-stand-in-question-answer-v1",
               questionMessageId,
             ) as import("@intero/domain").MessageId,
-            question: input.question,
-            createdAt: now,
+            preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
+            recordExchange: true,
+            source: {
+              kind: "new_message",
+              thread: {
+                id: threadId,
+                kind: "stand_in",
+                title: `${standInOwner.displayName} 的替身`,
+                participantIds: [principal.id, standInId],
+                standInIds: [standInId],
+                accessMode: "agent_readable",
+                priorHistoryGranted: false,
+                sequence: 0,
+                accessVersion: 1,
+                createdAt: now,
+              },
+              messageId:
+                questionMessageId as import("@intero/domain").MessageId,
+              body: input.question,
+              createdAt: now,
+            },
           });
         return reply.status(202).send({
           status: "pending",
@@ -1278,46 +1277,15 @@ export async function registerPilotRoutes(
           standIn: personalStandInPrincipal(standInOwner),
         });
       }
-      const answer = await options.modelGateway.answerStandInQuestion({
-        organizationId: project.organizationId,
-        project: {
-          id: project.id,
-          name: project.name,
-          posture: project.posture,
-        },
+      const generated = await generateStandInAnswer(options, {
+        project,
         standInOwnerId,
         askedByPrincipalId: principal.id,
         preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
         question: input.question,
-        sources: pulse,
+        pulse,
       });
-      const byWorkStateId = new Map(
-        pulse.map((source) => [source.workStateId, source]),
-      );
-      const sources = answer.sourceWorkStateIds.map((workStateId) => {
-        const source = byWorkStateId.get(workStateId);
-        if (!source) {
-          throw new PilotStoreError(
-            "STAND_IN_SOURCE_INVALID",
-            502,
-            "The Stand-in cited a Work State outside the allowed context.",
-          );
-        }
-        return {
-          workStateId: source.workStateId,
-          title: source.title,
-          eventType: source.eventType,
-          summary: source.summary,
-          narrative: source.narrative,
-          freshnessAt: source.freshnessAt,
-          provenance: {
-            source: source.provenance.source,
-            client: source.provenance.client,
-            connectionName: source.provenance.connectionName,
-            occurredAt: source.provenance.occurredAt,
-          },
-        };
-      });
+      const { answer, sources } = generated;
       const structuredAnswer = {
         answer: answer.answer,
         currentStatus: answer.currentStatus,
@@ -1326,15 +1294,6 @@ export async function registerPilotRoutes(
         nextStep: answer.nextStep,
         neededCollaboration: answer.neededCollaboration,
       };
-      if (input.recordExchange === false) {
-        return reply.status(200).send({
-          answer: answer.answer,
-          structuredAnswer,
-          sources,
-          standInOwner,
-          standIn: personalStandInPrincipal(standInOwner),
-        });
-      }
       const exchange = await options.store.recordStandInExchange({
         projectId,
         standInOwnerId,
@@ -1347,6 +1306,135 @@ export async function registerPilotRoutes(
       });
       return reply.status(201).send({
         exchange,
+        standInOwner,
+        standIn: personalStandInPrincipal(standInOwner),
+      });
+    },
+  );
+
+  app.post<{
+    Params: { projectId: string; threadId: string; messageId: string };
+  }>(
+    "/v1/pilot/projects/:projectId/threads/:threadId/messages/:messageId/stand-in-replies",
+    async (request, reply) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const projectId = ProjectId.parse(request.params.projectId);
+      const threadId = request.params.threadId as ThreadId;
+      const messageId = request.params.messageId as ThreadMessage["id"];
+      const input = z
+        .object({ standInOwnerId: z.uuid() })
+        .strict()
+        .parse(request.body);
+      const standInOwnerId = PrincipalId.parse(input.standInOwnerId);
+      const project = (await options.store.listProjects(principal.id)).find(
+        (item) => item.id === projectId,
+      );
+      if (!project) {
+        throw new PilotStoreError(
+          "PROJECT_NOT_FOUND",
+          404,
+          "Project was not found.",
+        );
+      }
+      await options.store.listStandInExchanges(
+        projectId,
+        principal.id,
+        standInOwnerId,
+      );
+      const standInOwner = await requireDirectoryPrincipal(
+        options,
+        standInOwnerId,
+      );
+      const standInId = personalStandInId(standInOwnerId);
+      const visibleThread = await options.conversations.getThread(
+        threadId,
+        principal.id,
+      );
+      if (
+        !visibleThread ||
+        visibleThread.thread.accessMode !== "agent_readable" ||
+        !visibleThread.thread.standInIds.includes(standInId)
+      ) {
+        throw new PilotStoreError(
+          "STAND_IN_REPLY_THREAD_NOT_FOUND",
+          404,
+          "The Stand-in reply Thread was not found.",
+        );
+      }
+      const questionMessage = await options.conversations.getThreadMessage(
+        threadId,
+        principal.id,
+        messageId,
+      );
+      if (
+        !questionMessage?.body ||
+        questionMessage.senderId !== principal.id ||
+        !questionMessage.mentionedPrincipalIds?.includes(standInId)
+      ) {
+        throw new PilotStoreError(
+          "STAND_IN_REPLY_MESSAGE_NOT_FOUND",
+          404,
+          "The message that addressed this Stand-in was not found.",
+        );
+      }
+      const answerMessageId = derivedUuid(
+        "intero-group-stand-in-answer-v1",
+        `${messageId}:${standInOwnerId}`,
+      ) as ThreadMessage["id"];
+      const pulse = (
+        await options.store.listTeamPulse(projectId, principal.id)
+      ).filter((entry) => entry.ownerId === standInOwnerId);
+      if (options.adapters.jobs === "transactional-outbox") {
+        await options.conversations.enqueueStandInQuestion({
+          jobId: derivedUuid(
+            "intero-group-stand-in-question-job-v1",
+            `${messageId}:${standInOwnerId}`,
+          ) as import("@intero/domain").OperationId,
+          projectId,
+          standInOwnerId,
+          askedByPrincipalId: principal.id,
+          answerMessageId,
+          preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
+          recordExchange: false,
+          source: {
+            kind: "existing_message",
+            threadId,
+            messageId,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        return reply.status(202).send({
+          status: "pending",
+          threadId,
+          questionMessageId: messageId,
+          answerMessageId,
+          standInOwner,
+          standIn: personalStandInPrincipal(standInOwner),
+        });
+      }
+      const generated = await generateStandInAnswer(options, {
+        project,
+        standInOwnerId,
+        askedByPrincipalId: principal.id,
+        preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
+        question: questionMessage.body,
+        pulse,
+      });
+      const answerMessage = await options.conversations.appendMessage(
+        threadId,
+        {
+          id: answerMessageId,
+          senderId: standInId,
+          body: generated.answer.answer,
+          createdAt: new Date().toISOString(),
+        },
+      );
+      return reply.status(201).send({
+        status: "complete",
+        threadId,
+        questionMessageId: messageId,
+        answerMessage,
+        sources: generated.sources,
         standInOwner,
         standIn: personalStandInPrincipal(standInOwner),
       });
@@ -1610,6 +1698,60 @@ export async function registerPilotRoutes(
       return { thread };
     },
   );
+}
+
+async function generateStandInAnswer(
+  options: PilotRoutesOptions,
+  input: {
+    project: PilotProject;
+    standInOwnerId: PrincipalId;
+    askedByPrincipalId: PrincipalId;
+    preferredLanguage: "zh-CN" | "en-US";
+    question: string;
+    pulse: PilotPulseEntry[];
+  },
+): Promise<{ answer: PilotStandInAnswer; sources: PilotStandInSource[] }> {
+  const answer = await options.modelGateway.answerStandInQuestion({
+    organizationId: input.project.organizationId,
+    project: {
+      id: input.project.id,
+      name: input.project.name,
+      posture: input.project.posture,
+    },
+    standInOwnerId: input.standInOwnerId,
+    askedByPrincipalId: input.askedByPrincipalId,
+    preferredLanguage: input.preferredLanguage,
+    question: input.question,
+    sources: input.pulse,
+  });
+  const byWorkStateId = new Map(
+    input.pulse.map((source) => [source.workStateId, source]),
+  );
+  const sources = answer.sourceWorkStateIds.map((workStateId) => {
+    const source = byWorkStateId.get(workStateId);
+    if (!source) {
+      throw new PilotStoreError(
+        "STAND_IN_SOURCE_INVALID",
+        502,
+        "The Stand-in cited a Work State outside the allowed context.",
+      );
+    }
+    return {
+      workStateId: source.workStateId,
+      title: source.title,
+      eventType: source.eventType,
+      summary: source.summary,
+      narrative: source.narrative,
+      freshnessAt: source.freshnessAt,
+      provenance: {
+        source: source.provenance.source,
+        client: source.provenance.client,
+        connectionName: source.provenance.connectionName,
+        occurredAt: source.provenance.occurredAt,
+      },
+    };
+  });
+  return { answer, sources };
 }
 
 async function findTicketContext(

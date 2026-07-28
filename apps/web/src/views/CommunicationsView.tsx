@@ -58,8 +58,8 @@ import {
 } from "../pilot/adapters.js";
 import {
   addPilotStandIn,
-  answerPilotStandInInConversation,
   askPilotStandIn,
+  enqueuePilotStandInReply,
   getPilotDms,
   getPilotStandIn,
   sendPilotDm,
@@ -313,6 +313,17 @@ export function CommunicationsView({
   const currentIsPilot = currentPilotItem !== undefined;
   const currentIsPilotStandIn =
     pilotStandInItem?.thread.id === current?.thread.id;
+  const currentIsCanonicalGroup =
+    !currentIsPilot &&
+    !currentIsPilotStandIn &&
+    (current?.thread.kind === "room" || current?.thread.kind === "human_group");
+  const ownStandInState =
+    currentIsCanonicalGroup && current
+      ? ownStandInControlState(
+          current.thread,
+          conversationIdentity?.standInPrincipalId,
+        )
+      : undefined;
   const principals = collectPrincipals(allItems, pulse.data?.principals ?? [], [
     bootstrap.data?.currentPrincipal,
     bootstrap.data?.standInPrincipal,
@@ -383,13 +394,7 @@ export function CommunicationsView({
         standInOwnerIds,
         additionalStandIns: currentIsPilotStandIn
           ? standInMentionCandidates
-          : !currentIsPilot &&
-              (current.thread.kind === "room" ||
-                current.thread.kind === "human_group")
-            ? standInMentionCandidates.filter((candidate) =>
-                current.thread.participantIds.includes(candidate.principalId),
-              )
-            : [],
+          : [],
       })
     : [];
   const activeMention = conversationMentionQuery(draft, mentionCursor);
@@ -647,14 +652,13 @@ export function CommunicationsView({
   const standInReplies = useMutation({
     mutationFn: (input: {
       threadId: string;
+      messageId: string;
       senderId: string;
-      body: string;
       projectId?: string;
       mentionedStandIns: MentionedStandIn[];
     }) =>
       requestConversationStandInReplies(input, {
-        sendMessage: sendThreadMessage,
-        answerStandIn: answerPilotStandInInConversation,
+        enqueueReply: enqueuePilotStandInReply,
       }),
     onError: (error) => {
       notifications.error(
@@ -696,7 +700,7 @@ export function CommunicationsView({
           input.body,
           input.clientMessageId,
         );
-        return input;
+        return { ...input, messageId: undefined };
       }
       if (input.mode === "pilot-stand-in") {
         if (!input.standInOwnerId) {
@@ -709,13 +713,12 @@ export function CommunicationsView({
           input.body,
           input.clientMessageId,
         );
-        return input;
+        return { ...input, messageId: undefined };
       }
-      await sendCanonicalConversationMessage(input, {
-        addStandIn: addStandInToThread,
+      const message = await sendCanonicalConversationMessage(input, {
         sendMessage: sendThreadMessage,
       });
-      return input;
+      return { ...input, messageId: message.id };
     },
     onSuccess: async (input) => {
       retryableSendRef.current = undefined;
@@ -731,12 +734,13 @@ export function CommunicationsView({
       reservedImageSlotsRef.current = 0;
       if (
         input.mode === "canonical" &&
+        input.messageId &&
         (input.mentionedStandIns?.length ?? 0) > 0
       ) {
         standInReplies.mutate({
           threadId: input.threadId,
+          messageId: input.messageId,
           senderId: input.senderId,
-          body: input.body,
           ...(pilot?.selectedProjectId
             ? { projectId: pilot.selectedProjectId }
             : {}),
@@ -813,11 +817,7 @@ export function CommunicationsView({
       if (currentIsPilot) {
         await addPilotStandIn(pilot!.identityId!, threadId);
       } else {
-        await addStandInToThread({
-          threadId,
-          standInId: conversationIdentity!.standInPrincipalId,
-          actorId: conversationIdentity!.currentPrincipalId,
-        });
+        await addStandInToThread({ threadId });
       }
     },
     onSuccess: async () => {
@@ -1442,17 +1442,49 @@ export function CommunicationsView({
                       })}
               </small>
             </span>
-            {current.thread.kind === "room" ? (
-              <button
-                type="button"
-                data-testid="group-chat-management-trigger"
-                aria-label={t("chat.manage")}
-                onClick={() => setShowManage(true)}
-                className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-accent-strong"
-              >
-                <GearSixIcon size={14} />
-                {t("chat.manage")}
-              </button>
+            {currentIsCanonicalGroup ? (
+              <div className="ml-auto flex items-center gap-2">
+                {ownStandInState === "present" ? (
+                  <span
+                    data-testid="group-own-stand-in-present"
+                    className="inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong"
+                  >
+                    <RobotIcon size={13} />
+                    {t("chat.ownStandInPresent")}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="group-add-own-stand-in"
+                    disabled={
+                      addStandIn.isPending ||
+                      !conversationIdentity?.standInPrincipalId
+                    }
+                    title={t("chat.addOwnStandInHint")}
+                    onClick={() => addStandIn.mutate(current.thread.id)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {addStandIn.isPending ? (
+                      <CircleNotchIcon size={14} className="animate-spin" />
+                    ) : (
+                      <UserPlusIcon size={14} />
+                    )}
+                    {t("chat.addOwnStandIn")}
+                  </button>
+                )}
+                {current.thread.kind === "room" ? (
+                  <button
+                    type="button"
+                    data-testid="group-chat-management-trigger"
+                    aria-label={t("chat.manage")}
+                    onClick={() => setShowManage(true)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+                  >
+                    <GearSixIcon size={14} />
+                    {t("chat.manage")}
+                  </button>
+                ) : null}
+              </div>
             ) : current.thread.kind === "human_direct" &&
               current.thread.standInIds.length === 0 ? (
               <button
@@ -2004,13 +2036,26 @@ export interface ConversationMentionCandidate {
   displayName: string;
   kind: "human" | "stand_in";
   standInOwnerId?: PrincipalId;
-  threadParticipant?: boolean;
+}
+
+export function ownStandInControlState(
+  thread: ConversationThread,
+  ownStandInId: string | undefined,
+): "add" | "present" | undefined {
+  if (
+    !ownStandInId ||
+    (thread.kind !== "room" && thread.kind !== "human_group")
+  ) {
+    return undefined;
+  }
+  return thread.standInIds.includes(ownStandInId as PrincipalId)
+    ? "present"
+    : "add";
 }
 
 export interface MentionedStandIn {
   principalId: PrincipalId;
   ownerId: PrincipalId;
-  needsJoin: boolean;
 }
 
 export interface ConversationMention {
@@ -2037,7 +2082,6 @@ export function conversationMentionCandidates(input: {
       displayName:
         input.principalNames.get(principalId) ?? principalId.slice(0, 8),
       kind: standInIds.has(principalId) ? "stand_in" : "human",
-      threadParticipant: true,
       ...(standInOwnerId ? { standInOwnerId } : {}),
     });
   }
@@ -2049,7 +2093,6 @@ export function conversationMentionCandidates(input: {
       displayName: `${candidate.displayName} 的替身`,
       kind: "stand_in",
       standInOwnerId: candidate.principalId,
-      threadParticipant: false,
     });
   }
   return [...candidates.values()].toSorted(
@@ -2071,34 +2114,9 @@ export function mentionedStandIns(
     mentioned.set(part.mention.principalId, {
       principalId: part.mention.principalId,
       ownerId: part.mention.standInOwnerId,
-      needsJoin: part.mention.threadParticipant === false,
     });
   }
   return [...mentioned.values()];
-}
-
-export async function prepareConversationStandIns(
-  input: {
-    threadId: string;
-    senderId: string;
-    mentionedStandIns?: MentionedStandIn[];
-  },
-  dependencies: {
-    addStandIn: (input: {
-      threadId: string;
-      standInId: string;
-      actorId: string;
-    }) => Promise<unknown>;
-  },
-): Promise<void> {
-  for (const mentioned of input.mentionedStandIns ?? []) {
-    if (!mentioned.needsJoin) continue;
-    await dependencies.addStandIn({
-      threadId: input.threadId,
-      standInId: mentioned.principalId,
-      actorId: input.senderId,
-    });
-  }
 }
 
 export async function sendCanonicalConversationMessage(
@@ -2112,11 +2130,6 @@ export async function sendCanonicalConversationMessage(
     attachmentIds?: string[];
   },
   dependencies: {
-    addStandIn: (input: {
-      threadId: string;
-      standInId: string;
-      actorId: string;
-    }) => Promise<unknown>;
     sendMessage: (input: {
       threadId: string;
       senderId: string;
@@ -2124,11 +2137,10 @@ export async function sendCanonicalConversationMessage(
       clientMessageId?: string;
       mentionedPrincipalIds?: string[];
       attachmentIds?: string[];
-    }) => Promise<unknown>;
+    }) => Promise<ThreadMessage>;
   },
-): Promise<void> {
-  await prepareConversationStandIns(input, dependencies);
-  await dependencies.sendMessage({
+): Promise<ThreadMessage> {
+  return dependencies.sendMessage({
     threadId: input.threadId,
     senderId: input.senderId,
     body: input.body,
@@ -2155,26 +2167,19 @@ export class StandInReplyError extends Error {
 export async function requestConversationStandInReplies(
   input: {
     threadId: string;
+    messageId: string;
     senderId: string;
-    body: string;
     projectId?: string;
     mentionedStandIns: MentionedStandIn[];
   },
   dependencies: {
-    sendMessage: (input: {
-      threadId: string;
-      senderId: string;
-      body: string;
-    }) => Promise<unknown>;
-    answerStandIn: (
+    enqueueReply: (
       identityId: PrincipalId,
       projectId: string,
+      threadId: string,
+      messageId: string,
       standInOwnerId: PrincipalId,
-      question: string,
-    ) => Promise<{
-      answer: string;
-      standIn: { id: string };
-    }>;
+    ) => Promise<unknown>;
   },
 ): Promise<void> {
   if (input.mentionedStandIns.length === 0) return;
@@ -2187,17 +2192,13 @@ export async function requestConversationStandInReplies(
   const errors: unknown[] = [];
   for (const mentioned of input.mentionedStandIns) {
     try {
-      const result = await dependencies.answerStandIn(
+      await dependencies.enqueueReply(
         input.senderId as PrincipalId,
         input.projectId,
+        input.threadId,
+        input.messageId,
         mentioned.ownerId,
-        input.body,
       );
-      await dependencies.sendMessage({
-        threadId: input.threadId,
-        senderId: result.standIn.id,
-        body: result.answer,
-      });
     } catch (error) {
       errors.push(error);
     }

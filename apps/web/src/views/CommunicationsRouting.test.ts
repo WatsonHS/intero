@@ -11,9 +11,10 @@ import {
   filterConversationMentionCandidates,
   mentionedStandIns,
   mergeCommunicationItems,
+  ownStandInControlState,
   personalStandInMentionCandidates,
   personalStandInMentionQuery,
-  prepareConversationStandIns,
+  personalStandInPrincipalId,
   requestConversationStandInReplies,
   resolvePilotCommunicationPrincipal,
   sendCanonicalConversationMessage,
@@ -75,6 +76,28 @@ describe("Communications personal Stand-in routing", () => {
         canonicalError: true,
       }),
     ).toBe(false);
+  });
+
+  it("offers the group control until this member's own Stand-in has joined", () => {
+    const thread = payload("room", "Delivery", "9").thread;
+    const ownStandInId = personalStandInPrincipalId(SESSION_PRINCIPAL_ID);
+    const otherStandInId = personalStandInPrincipalId(DEV_PRINCIPAL_ID);
+
+    expect(
+      ownStandInControlState(
+        { ...thread, standInIds: [otherStandInId] },
+        ownStandInId,
+      ),
+    ).toBe("add");
+    expect(
+      ownStandInControlState(
+        { ...thread, standInIds: [otherStandInId, ownStandInId] },
+        ownStandInId,
+      ),
+    ).toBe("present");
+    expect(
+      ownStandInControlState({ ...thread, kind: "human_direct" }, ownStandInId),
+    ).toBeUndefined();
   });
 
   it("lists only other members from the Project's current teams", () => {
@@ -260,12 +283,11 @@ describe("Communications personal Stand-in routing", () => {
       {
         principalId: standInId,
         ownerId: DEV_PRINCIPAL_ID,
-        needsJoin: false,
       },
     ]);
   });
 
-  it("marks a participant's not-yet-joined Stand-in for an access transition", () => {
+  it("adds an unjoined Stand-in only when navigation supplies it explicitly", () => {
     const candidates = conversationMentionCandidates({
       participantIds: [SESSION_PRINCIPAL_ID, DEV_PRINCIPAL_ID],
       standInIds: [],
@@ -288,42 +310,31 @@ describe("Communications personal Stand-in routing", () => {
       {
         principalId: PrincipalId.parse("019f9f20-0000-5000-8000-000000000002"),
         ownerId: DEV_PRINCIPAL_ID,
-        needsJoin: true,
       },
     ]);
   });
 
-  it("adds an addressed Stand-in before the triggering group message", async () => {
-    const threadId = "019f9f20-0000-7000-8000-000000000099";
-    const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000002");
-    const addStandIn = vi.fn(async () => undefined);
-
-    await prepareConversationStandIns(
-      {
-        threadId,
-        senderId: SESSION_PRINCIPAL_ID,
-        mentionedStandIns: [
-          {
-            principalId: standInId,
-            ownerId: DEV_PRINCIPAL_ID,
-            needsJoin: true,
-          },
-        ],
-      },
-      { addStandIn },
-    );
-
-    expect(addStandIn).toHaveBeenCalledWith({
-      threadId,
-      standInId,
-      actorId: SESSION_PRINCIPAL_ID,
+  it("does not expose another member's unjoined Stand-in in a group mention list", () => {
+    const candidates = conversationMentionCandidates({
+      participantIds: [SESSION_PRINCIPAL_ID, DEV_PRINCIPAL_ID],
+      standInIds: [],
+      principalNames: new Map([
+        [SESSION_PRINCIPAL_ID, "Session Member"],
+        [DEV_PRINCIPAL_ID, "Development Member"],
+      ]),
     });
+
+    expect(
+      candidates.filter((candidate) => candidate.kind === "stand_in"),
+    ).toEqual([]);
   });
 
-  it("persists the access transition before the message that addresses a new Stand-in", async () => {
+  it("never changes Stand-in membership while sending a group message", async () => {
     const threadId = "019f9f20-0000-7000-8000-000000000099";
     const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000002");
-    const calls: string[] = [];
+    const sendMessage = vi.fn(async () => {
+      return { id: "019f9f20-0000-7000-8000-000000000098" } as never;
+    });
 
     await sendCanonicalConversationMessage(
       {
@@ -334,63 +345,45 @@ describe("Communications personal Stand-in routing", () => {
           {
             principalId: standInId,
             ownerId: DEV_PRINCIPAL_ID,
-            needsJoin: true,
           },
         ],
       },
       {
-        addStandIn: async () => {
-          calls.push("join");
-        },
-        sendMessage: async () => {
-          calls.push("send");
-        },
+        sendMessage,
       },
     );
 
-    expect(calls).toEqual(["join", "send"]);
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it("answers a group mention separately and writes only the reply back", async () => {
+  it("enqueues a group reply against the durable source message", async () => {
     const threadId = "019f9f20-0000-7000-8000-000000000099";
+    const messageId = "019f9f20-0000-7000-8000-000000000098";
     const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000002");
-    const calls: string[] = [];
-    const sendMessage = vi.fn(
-      async (input: { senderId: string; body: string }) => {
-        calls.push(`send:${input.senderId}:${input.body}`);
-      },
-    );
-    const answerStandIn = vi.fn(async () => {
-      calls.push("answer");
-      return {
-        answer: "当前状态已同步。",
-        standIn: { id: standInId },
-      };
-    });
+    const enqueueReply = vi.fn(async () => undefined);
 
     await requestConversationStandInReplies(
       {
         threadId,
+        messageId,
         senderId: SESSION_PRINCIPAL_ID,
-        body: "@Development Member 的替身 当前进度如何？",
         projectId: "019f9f20-0000-7000-8000-000000000088",
         mentionedStandIns: [
           {
             principalId: standInId,
             ownerId: DEV_PRINCIPAL_ID,
-            needsJoin: false,
           },
         ],
       },
-      { sendMessage, answerStandIn },
+      { enqueueReply },
     );
 
-    expect(calls).toEqual(["answer", `send:${standInId}:当前状态已同步。`]);
-    expect(answerStandIn).toHaveBeenCalledWith(
+    expect(enqueueReply).toHaveBeenCalledWith(
       SESSION_PRINCIPAL_ID,
       "019f9f20-0000-7000-8000-000000000088",
+      threadId,
+      messageId,
       DEV_PRINCIPAL_ID,
-      "@Development Member 的替身 当前进度如何？",
     );
   });
 
@@ -404,19 +397,16 @@ describe("Communications personal Stand-in routing", () => {
     const secondOwnerId = PrincipalId.parse(
       "019f9f20-0000-7000-8000-000000000003",
     );
-    const sendMessage = vi.fn(async () => undefined);
-    const answerStandIn = vi.fn(
+    const enqueueReply = vi.fn(
       async (
         _identityId: PrincipalId,
         _projectId: string,
+        _threadId: string,
+        _messageId: string,
         ownerId: PrincipalId,
       ) => {
         if (ownerId === DEV_PRINCIPAL_ID)
           throw new Error("provider_unavailable");
-        return {
-          answer: "第二个替身已回复。",
-          standIn: { id: secondStandInId },
-        };
       },
     );
 
@@ -424,32 +414,32 @@ describe("Communications personal Stand-in routing", () => {
       requestConversationStandInReplies(
         {
           threadId: "019f9f20-0000-7000-8000-000000000099",
+          messageId: "019f9f20-0000-7000-8000-000000000098",
           senderId: SESSION_PRINCIPAL_ID,
-          body: "请两个替身分别同步。",
           projectId: "019f9f20-0000-7000-8000-000000000088",
           mentionedStandIns: [
             {
               principalId: firstStandInId,
               ownerId: DEV_PRINCIPAL_ID,
-              needsJoin: false,
             },
             {
               principalId: secondStandInId,
               ownerId: secondOwnerId,
-              needsJoin: false,
             },
           ],
         },
-        { sendMessage, answerStandIn },
+        { enqueueReply },
       ),
     ).rejects.toThrow("provider_unavailable");
 
-    expect(answerStandIn).toHaveBeenCalledTimes(2);
-    expect(sendMessage).toHaveBeenCalledWith({
-      threadId: "019f9f20-0000-7000-8000-000000000099",
-      senderId: secondStandInId,
-      body: "第二个替身已回复。",
-    });
+    expect(enqueueReply).toHaveBeenCalledTimes(2);
+    expect(enqueueReply).toHaveBeenLastCalledWith(
+      SESSION_PRINCIPAL_ID,
+      "019f9f20-0000-7000-8000-000000000088",
+      "019f9f20-0000-7000-8000-000000000099",
+      "019f9f20-0000-7000-8000-000000000098",
+      secondOwnerId,
+    );
   });
 
   it("renders one personal Stand-in and hides legacy canonical Stand-in rows", () => {

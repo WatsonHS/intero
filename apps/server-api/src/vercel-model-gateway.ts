@@ -33,7 +33,8 @@ const BASE_QUESTION_SYSTEM_INSTRUCTIONS = [
   "You are Intero's bounded Digital Stand-in answering a project participant.",
   "Answer only from the supplied safe structured project summaries.",
   "Do not infer missing facts, secrets, raw prompts, file contents, diffs, terminal output, tool logs, personal data, priorities, or commitments.",
-  "If the supplied summaries do not support the question, say that the current structured Work State does not contain enough information.",
+  "An empty safeStructuredSources array is valid: answer directly that this person has not published any structured Work State for the project yet, and return an empty sourceWorkStateIds array.",
+  "If supplied summaries do not support the question, say that the current structured Work State does not contain enough information.",
   "Give a direct conclusion first, then a grounded current status, completed outcome, concrete evidence, next step, and needed collaboration.",
   "Do not repeat IDs, clients, timestamps, schema versions, or other provenance metadata in the prose answer.",
   "Return the workStateId of every summary that directly supports the answer and no unsupported source IDs.",
@@ -169,9 +170,7 @@ export class VercelAiModelGateway implements ModelGateway {
     input: StandInQuestionInput,
   ): Promise<PilotStandInAnswerValue> {
     if (input.sources.length === 0) {
-      throw new ModelGatewayUnavailableError(
-        "No published structured Work State is available to ground an answer.",
-      );
+      return emptyWorkStateAnswer(input.preferredLanguage);
     }
     const configuration = await this.loadConfiguration();
     const provider = createOpenAICompatible({
@@ -214,9 +213,9 @@ export class VercelAiModelGateway implements ModelGateway {
     onPartialAnswer: (answer: string) => Promise<void>,
   ): Promise<PilotStandInAnswerValue> {
     if (input.sources.length === 0) {
-      throw new ModelGatewayUnavailableError(
-        "No published structured Work State is available to ground an answer.",
-      );
+      const answer = emptyWorkStateAnswer(input.preferredLanguage);
+      await onPartialAnswer(answer.answer);
+      return answer;
     }
     const configuration = await this.loadConfiguration();
     const provider = createOpenAICompatible({
@@ -287,6 +286,32 @@ export class VercelAiModelGateway implements ModelGateway {
       );
     }
   }
+}
+
+function emptyWorkStateAnswer(
+  preferredLanguage: "zh-CN" | "en-US",
+): PilotStandInAnswerValue {
+  if (preferredLanguage === "zh-CN") {
+    return {
+      answer: "对方尚未在当前项目发布可共享的结构化工作状态。",
+      currentStatus: "暂无已发布的结构化工作状态。",
+      completedOutcome: "",
+      evidence: [],
+      nextStep: "可以请对方发布一次项目工作状态后再询问。",
+      neededCollaboration: "",
+      sourceWorkStateIds: [],
+    };
+  }
+  return {
+    answer:
+      "This person has not published a shareable structured Work State in the current project.",
+    currentStatus: "No structured Work State has been published.",
+    completedOutcome: "",
+    evidence: [],
+    nextStep: "Ask the person to publish a project Work State, then try again.",
+    neededCollaboration: "",
+    sourceWorkStateIds: [],
+  };
 }
 
 function standInQuestionPrompt(input: StandInQuestionInput): string {

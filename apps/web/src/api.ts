@@ -626,13 +626,9 @@ export async function sendThreadMessage(input: {
 
 export async function addStandInToThread(input: {
   threadId: string;
-  standInId: string;
-  actorId: string;
 }): Promise<void> {
   try {
-    await postJson(`/v1/threads/${input.threadId}/stand-ins`, {
-      standInId: input.standInId,
-    });
+    await postJson(`/v1/threads/${input.threadId}/stand-ins`, {});
   } catch (error) {
     // A stale client can race another participant that addressed the same
     // Stand-in. The access transition is already durable in that case.

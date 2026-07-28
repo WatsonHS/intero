@@ -23,6 +23,148 @@ const OWNER_ID = "019b5ac0-7600-7000-8000-000000000021" as PrincipalId;
 const ASKER_ID = "019b5ac0-7600-7000-8000-000000000022" as PrincipalId;
 
 describe("StandInQuestionHandler", () => {
+  it("completes a recovered job whose durable reply is already complete", async () => {
+    const jobId = uuidv7();
+    const repository = {
+      claimJob: vi.fn(async () => ({
+        status: "claimed" as const,
+        job: {
+          id: jobId,
+          threadId: uuidv7() as ThreadId,
+          projectId: PROJECT_ID,
+          standInOwnerId: OWNER_ID,
+          askedByPrincipalId: ASKER_ID,
+          questionMessageId: uuidv7(),
+          answerMessageId: uuidv7(),
+          question: "What is the current status?",
+          preferredLanguage: "en-US" as const,
+          recordExchange: false,
+          answerStreamState: "complete" as const,
+        },
+      })),
+      completeJob: vi.fn(async () => undefined),
+      failJob: vi.fn(async () => undefined),
+    } as unknown as PostgresStandInQuestionRepository;
+    const pilotStore = {
+      listProjects: vi.fn(),
+    } as unknown as PilotStore;
+    const model = {
+      answerStandInQuestion: vi.fn(),
+    } as unknown as ModelGateway;
+    const handler = new StandInQuestionHandler(
+      repository,
+      pilotStore,
+      {} as PlatformStore,
+      model,
+      ORGANIZATION_ID,
+    );
+
+    await handler.handle(
+      {
+        schemaVersion: 2,
+        organizationId: ORGANIZATION_ID,
+        jobId,
+        projectId: PROJECT_ID,
+      },
+      { workerId: "worker-1", attempt: 2, maxAttempts: 8 },
+    );
+
+    expect(repository.completeJob).toHaveBeenCalledWith(jobId);
+    expect(pilotStore.listProjects).not.toHaveBeenCalled();
+    expect(model.answerStandInQuestion).not.toHaveBeenCalled();
+  });
+
+  it("answers an empty-context group mention in its originating Thread without recording a private exchange", async () => {
+    const jobId = uuidv7();
+    const threadId = uuidv7() as ThreadId;
+    const questionMessageId = uuidv7();
+    const answerMessageId = uuidv7();
+    const repository = {
+      claimJob: vi.fn(async () => ({
+        status: "claimed" as const,
+        job: {
+          id: jobId,
+          threadId,
+          projectId: PROJECT_ID,
+          standInOwnerId: OWNER_ID,
+          askedByPrincipalId: ASKER_ID,
+          questionMessageId,
+          answerMessageId,
+          question: "What is the current status?",
+          preferredLanguage: "en-US" as const,
+          recordExchange: false,
+        },
+      })),
+      completeJob: vi.fn(async () => undefined),
+      failJob: vi.fn(async () => undefined),
+    } as unknown as PostgresStandInQuestionRepository;
+    const recordStandInExchange = vi.fn();
+    const pilotStore = {
+      listProjects: vi.fn(async () => [
+        {
+          id: PROJECT_ID,
+          organizationId: ORGANIZATION_ID,
+          name: "Intero",
+          posture: "collaborative",
+        },
+      ]),
+      listStandInExchanges: vi.fn(async () => []),
+      listTeamPulse: vi.fn(async () => []),
+      recordStandInExchange,
+    } as unknown as PilotStore;
+    const updateMessageStream = vi.fn(async () => ({}));
+    const conversations = {
+      updateMessageStream,
+      appendMessage: vi.fn(async () => ({})),
+    } as unknown as PlatformStore;
+    const answerStandInQuestion = vi.fn(async () => ({
+      answer: "No structured Work State has been published for this member.",
+      currentStatus: "No published structured Work State.",
+      completedOutcome: "",
+      evidence: [],
+      nextStep: "Ask the member to publish a project update.",
+      neededCollaboration: "",
+      sourceWorkStateIds: [],
+    }));
+    const model = {
+      generateStandInOutput: vi.fn(),
+      answerStandInQuestion,
+    } as unknown as ModelGateway;
+    const handler = new StandInQuestionHandler(
+      repository,
+      pilotStore,
+      conversations,
+      model,
+      ORGANIZATION_ID,
+    );
+
+    await handler.handle(
+      {
+        schemaVersion: 2,
+        organizationId: ORGANIZATION_ID,
+        jobId,
+        projectId: PROJECT_ID,
+      },
+      { workerId: "worker-1", attempt: 1, maxAttempts: 8 },
+    );
+
+    expect(answerStandInQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "What is the current status?",
+        sources: [],
+      }),
+    );
+    expect(recordStandInExchange).not.toHaveBeenCalled();
+    expect(updateMessageStream).toHaveBeenLastCalledWith({
+      threadId,
+      messageId: answerMessageId,
+      senderId: expect.any(String),
+      body: "No structured Work State has been published for this member.",
+      streamState: "complete",
+    });
+    expect(repository.completeJob).toHaveBeenCalledWith(jobId);
+  });
+
   it("replays the stored exchange answer when a model retry drifts", async () => {
     const jobId = uuidv7();
     const threadId = uuidv7() as ThreadId;
@@ -84,6 +226,8 @@ describe("StandInQuestionHandler", () => {
           questionMessageId,
           answerMessageId,
           question: "What changed?",
+          preferredLanguage: "en-US" as const,
+          recordExchange: true,
         },
       })),
       completeJob: vi.fn(async () => undefined),

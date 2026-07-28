@@ -1,7 +1,9 @@
 import {
   PILOT_AGENT_CONFIGURATION_VERSION,
+  type MessageId,
   type PilotCheckpointInput,
   type OrganizationId,
+  personalStandInId,
   type PrincipalId,
   type ThreadId,
   uuidv7,
@@ -56,7 +58,18 @@ const modelGateway: ModelGateway = {
     };
   },
   async answerStandInQuestion({ sources }) {
-    const source = sources[0]!;
+    const source = sources[0];
+    if (!source) {
+      return {
+        answer: "No structured Work State has been published for this member.",
+        currentStatus: "No published structured Work State.",
+        completedOutcome: "",
+        evidence: [],
+        nextStep: "Ask the member to publish a project update.",
+        neededCollaboration: "",
+        sourceWorkStateIds: [],
+      };
+    }
     return {
       answer: `Grounded in: ${source.summary}`,
       currentStatus: source.narrative.currentFocus,
@@ -2061,24 +2074,6 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(visibleToB.json().standIn.id).not.toBe(A);
 
-    const groupAnswer = await app.inject({
-      method: "POST",
-      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
-      headers: identity(B),
-      payload: {
-        question: "Answer this only inside the group conversation.",
-        standInOwnerId: A,
-        recordExchange: false,
-      },
-    });
-    expect(groupAnswer.statusCode).toBe(200);
-    expect(groupAnswer.json()).toMatchObject({
-      answer: "Grounded in: Implemented scoped checkpoint ingestion.",
-      standInOwner: { id: A, kind: "human" },
-      standIn: { kind: "stand_in" },
-    });
-    expect(groupAnswer.json().exchange).toBeUndefined();
-
     const stillOnlyPersonalExchange = await app.inject({
       method: "GET",
       url: `/v1/pilot/projects/${fixture.project.id}/stand-in?standInOwnerId=${A}`,
@@ -2105,8 +2100,12 @@ describe("pilot cloud-first vertical slice", () => {
         standInOwnerId: B,
       },
     });
-    expect(noSharedStateForB.statusCode).toBe(409);
-    expect(noSharedStateForB.json().code).toBe("STAND_IN_CONTEXT_UNAVAILABLE");
+    expect(noSharedStateForB.statusCode).toBe(201);
+    expect(noSharedStateForB.json().exchange).toMatchObject({
+      principalId: B,
+      answer: "No structured Work State has been published for this member.",
+      sources: [],
+    });
 
     const unauthorizedTarget = await app.inject({
       method: "POST",
@@ -2187,6 +2186,81 @@ describe("pilot cloud-first vertical slice", () => {
         sequence: 2,
         streamState: "pending",
         revision: 1,
+      }),
+    ]);
+  });
+
+  it("queues an addressed Stand-in reply in the originating group Thread", async () => {
+    const fixture = await readyProject(app);
+    await app.close();
+    const answerStandInQuestion = vi.fn(async () => {
+      throw new Error("The API process must not invoke the model.");
+    });
+    conversationStore = new InMemoryPlatformStore();
+    app = await buildApp({
+      logger: false,
+      store: conversationStore,
+      pilotStore,
+      pilotJobs: new TransactionalOutboxJobRunner(),
+      pilotIdentities: [
+        { id: A, displayName: "Alex Rivera", kind: "human" },
+        { id: B, displayName: "Morgan Chen", kind: "human" },
+        { id: C, displayName: "Taylor Singh", kind: "human" },
+      ],
+      deploymentProbe: async () => true,
+      providerEncryptionSecret: "test-provider-secret",
+      pilotModelGateway: {
+        ...modelGateway,
+        answerStandInQuestion,
+      },
+    });
+    const threadId = uuidv7() as ThreadId;
+    const messageId = uuidv7() as MessageId;
+    const standInId = personalStandInId(A);
+    conversationStore.createThread(
+      {
+        id: threadId,
+        kind: "human_group",
+        title: "Delivery",
+        participantIds: [A, B, standInId],
+        standInIds: [standInId],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        accessVersion: 1,
+        createdAt: new Date().toISOString(),
+      },
+      B,
+    );
+    conversationStore.appendMessage(threadId, {
+      id: messageId,
+      senderId: B,
+      body: "@Alex Rivera 的替身 当前进度如何？",
+      mentionedPrincipalIds: [standInId],
+      createdAt: new Date().toISOString(),
+    });
+
+    const queued = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/threads/${threadId}/messages/${messageId}/stand-in-replies`,
+      headers: identity(B),
+      payload: { standInOwnerId: A },
+    });
+
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json()).toMatchObject({
+      status: "pending",
+      threadId,
+      questionMessageId: messageId,
+    });
+    expect(answerStandInQuestion).not.toHaveBeenCalled();
+    expect((await conversationStore.getThread(threadId, B))?.messages).toEqual([
+      expect.objectContaining({ id: messageId, sequence: 1 }),
+      expect.objectContaining({
+        senderId: standInId,
+        sequence: 2,
+        body: "",
+        streamState: "pending",
       }),
     ]);
   });

@@ -797,12 +797,31 @@ Stand-in changes that same logical conversation:
 Agent readability grants access to the Stand-in for the Thread purpose.
 It does not grant team, project, or organization publication.
 
+Stand-in membership is owner-controlled. A human participant may add only
+their own deterministic personal Stand-in; the public command accepts no
+Stand-in target ID, and the store derives it from the authenticated actor.
+Another member's Stand-in becomes mentionable only after that member has added
+it to the Thread.
+
+Addressing a personal Stand-in in an Agent-readable group Thread does not open
+or copy the exchange into a private Stand-in Thread. The committed source
+message is the durable question: one job per `(source message, Stand-in owner)`
+creates a pending answer in the same Thread, and the worker revises that answer
+in place while streaming. This supports multiple addressed Stand-ins, stable
+retries, and realtime convergence without making model latency part of the
+human message write.
+
 ### 8.2 Availability and freshness
 
 The user sees one cloud Stand-in identity. When Intero cloud is online,
 it answers from the private and shared context authorized for that request. When
 the service or a required dependency is unavailable, clients show an explicit
 unavailable or stale state. No desktop or daemon fallback is assumed.
+
+An empty published Work State is valid context, not a service failure. In that
+case the Stand-in returns a deterministic localized answer that says no
+shareable structured state is available, cites no sources, and does not require
+a model-provider call.
 
 MCP failure and delayed delivery follow the bounded outbox contract in §5.3; no
 offline Stand-in or continuous local processing is implied.

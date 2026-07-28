@@ -1315,9 +1315,14 @@ export const standInQuestionJobs = pgTable(
       .references(() => principals.id),
     questionMessageId: uuid("question_message_id")
       .notNull()
-      .references(() => messages.id)
-      .unique(),
+      .references(() => messages.id),
     answerMessageId: uuid("answer_message_id").notNull(),
+    preferredLanguage: text("preferred_language", {
+      enum: ["zh-CN", "en-US"],
+    })
+      .notNull()
+      .default("en-US"),
+    recordExchange: boolean("record_exchange").notNull().default(true),
     status: text("status").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),
     availableAt: timestamp("available_at", { withTimezone: true })
@@ -1330,6 +1335,10 @@ export const standInQuestionJobs = pgTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("stand_in_question_jobs_source_owner_unique").on(
+      table.questionMessageId,
+      table.standInOwnerId,
+    ),
     index("stand_in_question_jobs_available_idx")
       .on(table.availableAt, table.id)
       .where(sql`${table.status} IN ('pending', 'retrying')`),

@@ -1182,7 +1182,7 @@ export async function buildApp(
     "/v1/threads/:threadId/stand-ins",
     async (request, reply) => {
       const principal = await requestAuth.resolve(request);
-      const input = parse(AddStandInRequest, request.body);
+      parse(AddStandInRequest, request.body);
       const visible = await store.hasThreadAccess(
         request.params.threadId as ThreadId,
         principal!.id,
@@ -1193,7 +1193,6 @@ export async function buildApp(
         .send(
           await store.addStandInToThread(
             request.params.threadId as ThreadId,
-            input.standInId as PrincipalId,
             principal!.id,
           ),
         );

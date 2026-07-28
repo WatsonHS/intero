@@ -9,14 +9,14 @@ import type {
   SpecId,
   Workstream,
 } from "@intero/domain";
-import { uuidv7 } from "@intero/domain";
+import { personalStandInId, uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
 import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
 
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
-const STAND_IN = "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
+const STAND_IN = personalStandInId(ALEX);
 const PRIYA = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
 
 function auth(principalId: PrincipalId = ALEX) {
@@ -875,11 +875,18 @@ describe("Intero API vertical slice", () => {
       headers: auth(human),
       payload: thread,
     });
+    const attemptedOtherStandIn = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${thread.id}/stand-ins`,
+      headers: auth(human),
+      payload: { standInId: personalStandInId(PRIYA) },
+    });
+    expect(attemptedOtherStandIn.statusCode).toBe(400);
     const transition = await app.inject({
       method: "POST",
       url: `/v1/threads/${thread.id}/stand-ins`,
       headers: auth(human),
-      payload: { standInId: STAND_IN },
+      payload: {},
     });
     expect(transition.json().thread).toMatchObject({
       accessMode: "agent_readable",
@@ -887,6 +894,7 @@ describe("Intero API vertical slice", () => {
       accessChangedAtSequence: 1,
     });
     expect(transition.json().event.kind).toBe("system_access_change");
+    expect(transition.json().thread.standInIds).toEqual([STAND_IN]);
   });
 
   it("lists durable threads by kind with their ordered messages", async () => {
@@ -995,7 +1003,6 @@ describe("Intero API vertical slice", () => {
 
   it("accepts only ciphertext before the access boundary and plaintext after it", async () => {
     const human = ALEX;
-    const standIn = STAND_IN;
     const threadId = uuidv7() as ConversationThread["id"];
     await app.inject({
       method: "POST",
@@ -1041,7 +1048,7 @@ describe("Intero API vertical slice", () => {
       method: "POST",
       url: `/v1/threads/${threadId}/stand-ins`,
       headers: auth(human),
-      payload: { standInId: standIn },
+      payload: {},
     });
     const readable = await app.inject({
       method: "POST",

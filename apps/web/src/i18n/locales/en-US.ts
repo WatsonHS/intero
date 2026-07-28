@@ -834,6 +834,10 @@ export const enUS: Record<TranslationKey, string> = {
     "A discussion group keeps one focused topic together.",
   "chat.roomHint": "A group chat persists for ongoing conversation.",
   "chat.standInPresent": "Stand-in has joined",
+  "chat.addOwnStandIn": "Add my Stand-in",
+  "chat.addOwnStandInHint":
+    "Each member can add only their own Stand-in to the group",
+  "chat.ownStandInPresent": "My Stand-in has joined",
   "chat.mention": "Mention a conversation participant",
   "chat.mentionPerson": "Person",
   "chat.mentionStandIn": "Stand-in",

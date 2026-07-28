@@ -13,6 +13,7 @@ import {
   type OperationId,
   type OrganizationId,
   type OutboxEntry,
+  personalStandInId,
   type PrincipalId,
   type Project,
   type ProjectId,
@@ -908,62 +909,75 @@ export class PostgresPlatformStore implements PlatformStore {
     input: StandInQuestionInput,
   ): Promise<ThreadMessage> {
     return this.write(async (client) => {
-      for (const principalId of input.thread.participantIds) {
-        await this.ensurePrincipal(
-          client,
-          principalId,
-          input.thread.standInIds.includes(principalId) ? "stand_in" : "human",
-        );
-      }
-      const insertedThread = await client.query(
-        `INSERT INTO threads
-          (id, organization_id, kind, title, access_mode,
-           prior_history_granted, sequence, access_version, created_at)
-         VALUES ($1, $2, $3, $4, $5, false, 0, 1, $6)
-         ON CONFLICT (id) DO NOTHING
-         RETURNING id`,
-        [
-          input.thread.id,
-          this.organizationId,
-          input.thread.kind,
-          input.thread.title,
-          input.thread.accessMode,
-          input.thread.createdAt,
-        ],
-      );
-      if ((insertedThread.rowCount ?? 0) > 0) {
-        for (const principalId of input.thread.participantIds) {
-          await client.query(
-            `INSERT INTO thread_participants
-              (organization_id, thread_id, principal_id, stand_in)
-             VALUES ($1, $2, $3, $4)`,
-            [
-              this.organizationId,
-              input.thread.id,
-              principalId,
-              input.thread.standInIds.includes(principalId),
-            ],
+      const threadId =
+        input.source.kind === "new_message"
+          ? input.source.thread.id
+          : input.source.threadId;
+      const questionMessageId = input.source.messageId;
+      const createdAt = input.source.createdAt;
+      const standInId = personalStandInId(input.standInOwnerId);
+      if (input.source.kind === "new_message") {
+        for (const principalId of input.source.thread.participantIds) {
+          await this.ensurePrincipal(
+            client,
+            principalId,
+            input.source.thread.standInIds.includes(principalId)
+              ? "stand_in"
+              : "human",
           );
         }
-        await this.recordConversationChange(client, {
-          eventId: input.thread.id as unknown as OperationId,
-          thread: input.thread,
-          actorId: input.askedByPrincipalId,
-          reason: "thread_created",
-        });
-      } else {
-        const existingThread = await this.getThreadInTransaction(
-          client,
-          input.thread.id,
-          undefined,
-          0,
+        const insertedThread = await client.query(
+          `INSERT INTO threads
+            (id, organization_id, kind, title, access_mode,
+             prior_history_granted, sequence, access_version, created_at)
+           VALUES ($1, $2, $3, $4, $5, false, 0, 1, $6)
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id`,
+          [
+            input.source.thread.id,
+            this.organizationId,
+            input.source.thread.kind,
+            input.source.thread.title,
+            input.source.thread.accessMode,
+            input.source.thread.createdAt,
+          ],
         );
-        if (
-          !existingThread ||
-          !sameThreadCreation(existingThread.thread, input.thread)
-        ) {
-          throw new Error("Stand-in Thread ID was already used.");
+        if ((insertedThread.rowCount ?? 0) > 0) {
+          for (const principalId of input.source.thread.participantIds) {
+            await client.query(
+              `INSERT INTO thread_participants
+                (organization_id, thread_id, principal_id, stand_in)
+               VALUES ($1, $2, $3, $4)`,
+              [
+                this.organizationId,
+                input.source.thread.id,
+                principalId,
+                input.source.thread.standInIds.includes(principalId),
+              ],
+            );
+          }
+          await this.recordConversationChange(client, {
+            eventId: input.source.thread.id as unknown as OperationId,
+            thread: input.source.thread,
+            actorId: input.askedByPrincipalId,
+            reason: "thread_created",
+          });
+        } else {
+          const existingThread = await this.getThreadInTransaction(
+            client,
+            input.source.thread.id,
+            undefined,
+            0,
+          );
+          if (
+            !existingThread ||
+            !sameThreadCreation(existingThread.thread, input.source.thread)
+          ) {
+            throw new Error("Stand-in Thread ID was already used.");
+          }
         }
+      } else {
+        await this.ensurePrincipal(client, standInId, "stand_in");
       }
 
       const existingJob = await client.query<{ question_message_id: string }>(
@@ -984,56 +998,88 @@ export class PostgresPlatformStore implements PlatformStore {
       }
 
       await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
-        input.thread.id,
+        threadId,
       ]);
       const current = await this.getThreadInTransaction(
         client,
-        input.thread.id,
+        threadId,
         undefined,
         0,
       );
       if (!current) throw new Error("Stand-in Thread was not found.");
-      const questionMessage = buildThreadMessage(current.thread, {
-        id: input.questionMessageId,
-        senderId: input.askedByPrincipalId,
-        body: input.question,
-        createdAt: input.createdAt,
-      });
+      const existingQuestion =
+        input.source.kind === "existing_message"
+          ? await client.query(
+              `SELECT *
+               FROM messages
+               WHERE id = $1
+                 AND thread_id = $2
+                 AND sender_id = $3
+                 AND body IS NOT NULL`,
+              [questionMessageId, threadId, input.askedByPrincipalId],
+            )
+          : undefined;
+      if (
+        input.source.kind === "existing_message" &&
+        !existingQuestion?.rows[0]
+      ) {
+        throw new Error("Stand-in question source message was not found.");
+      }
+      const questionMessage =
+        input.source.kind === "new_message"
+          ? buildThreadMessage(current.thread, {
+              id: questionMessageId,
+              senderId: input.askedByPrincipalId,
+              body: input.source.body,
+              createdAt,
+            })
+          : messageFromRow(existingQuestion!.rows[0]);
+      const sequenceIncrement = input.source.kind === "new_message" ? 2 : 1;
       const head = await client.query<{ sequence: number }>(
         `UPDATE threads
-         SET sequence = sequence + 2,
+         SET sequence = sequence + $3,
              latest_message_at = $2,
              updated_at = now()
          WHERE id = $1
          RETURNING sequence`,
-        [input.thread.id, input.createdAt],
+        [threadId, createdAt, sequenceIncrement],
       );
-      const stored = {
-        ...questionMessage,
-        sequence: head.rows[0]!.sequence - 1,
-      };
+      const stored =
+        input.source.kind === "new_message"
+          ? {
+              ...questionMessage,
+              sequence: head.rows[0]!.sequence - 1,
+            }
+          : questionMessage;
       const pendingAnswer = buildThreadMessage(
-        { ...current.thread, sequence: stored.sequence },
+        {
+          ...current.thread,
+          sequence: head.rows[0]!.sequence - 1,
+        },
         {
           id: input.answerMessageId,
-          senderId: input.thread.standInIds[0]!,
+          senderId: standInId,
           body: "",
           streamState: "pending",
-          createdAt: input.createdAt,
+          createdAt,
         },
       );
-      await this.insertMessage(client, stored);
+      if (input.source.kind === "new_message") {
+        await this.insertMessage(client, stored);
+      }
       await this.insertMessage(client, pendingAnswer);
-      await this.recordConversationChange(client, {
-        eventId: stored.id as unknown as OperationId,
-        thread: {
-          ...current.thread,
-          sequence: stored.sequence,
-          latestMessageAt: stored.createdAt,
-        },
-        actorId: input.askedByPrincipalId,
-        reason: "message_appended",
-      });
+      if (input.source.kind === "new_message") {
+        await this.recordConversationChange(client, {
+          eventId: stored.id as unknown as OperationId,
+          thread: {
+            ...current.thread,
+            sequence: stored.sequence,
+            latestMessageAt: stored.createdAt,
+          },
+          actorId: input.askedByPrincipalId,
+          reason: "message_appended",
+        });
+      }
       await this.recordConversationChange(client, {
         eventId: pendingAnswer.id as unknown as OperationId,
         thread: {
@@ -1048,18 +1094,24 @@ export class PostgresPlatformStore implements PlatformStore {
         `INSERT INTO stand_in_question_jobs
           (id, organization_id, thread_id, project_id, stand_in_owner_id,
            asked_by_principal_id, question_message_id, answer_message_id,
-           status, available_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $9, $9)`,
+           preferred_language, record_exchange, status, available_at,
+           created_at, updated_at)
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+           'pending', $11, $11, $11
+         )`,
         [
           input.jobId,
           this.organizationId,
-          input.thread.id,
+          threadId,
           input.projectId,
           input.standInOwnerId,
           input.askedByPrincipalId,
-          input.questionMessageId,
+          questionMessageId,
           input.answerMessageId,
-          input.createdAt,
+          input.preferredLanguage,
+          input.recordExchange,
+          createdAt,
         ],
       );
       await client.query(
@@ -1068,14 +1120,20 @@ export class PostgresPlatformStore implements PlatformStore {
          VALUES (
            $1::uuid, $2::uuid, 'pilot.stand_in.question.enqueue',
            jsonb_build_object(
-             'schemaVersion', 1,
+             'schemaVersion', CASE WHEN $5 THEN 1 ELSE 2 END,
              'organizationId', $2::uuid::text,
              'jobId', $1::uuid::text,
              'projectId', $3::uuid::text
            ),
            $4
          )`,
-        [input.jobId, this.organizationId, input.projectId, input.createdAt],
+        [
+          input.jobId,
+          this.organizationId,
+          input.projectId,
+          createdAt,
+          input.recordExchange,
+        ],
       );
       return stored;
     });
@@ -1359,7 +1417,6 @@ export class PostgresPlatformStore implements PlatformStore {
 
   async addStandInToThread(
     threadId: ThreadId,
-    standInId: PrincipalId,
     actorId: PrincipalId,
   ): Promise<{ thread: ConversationThread; event: ThreadMessage }> {
     return this.write(async (client) => {
@@ -1370,6 +1427,7 @@ export class PostgresPlatformStore implements PlatformStore {
         0,
       );
       if (!current) throw new Error("Thread was not found.");
+      const standInId = personalStandInId(actorId);
       await this.ensurePrincipal(client, standInId, "stand_in");
       await this.ensurePrincipal(client, actorId);
       const transition = addStandIn(current.thread, standInId, actorId);

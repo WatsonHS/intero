@@ -22,7 +22,8 @@ export const PILOT_STAND_IN_QUESTION_DISPATCH_TASK =
   "pilot_stand_in_question_dispatch";
 
 export interface StandInQuestionReference {
-  schemaVersion: 1;
+  /** Version 2 requires a worker that preserves originating-Thread semantics. */
+  schemaVersion: 1 | 2;
   organizationId: OrganizationId;
   jobId: string;
   projectId: ProjectId;
@@ -37,6 +38,9 @@ interface StandInQuestionJob {
   questionMessageId: MessageId;
   answerMessageId: MessageId;
   question: string;
+  preferredLanguage: "zh-CN" | "en-US";
+  recordExchange: boolean;
+  answerStreamState?: "pending" | "streaming" | "complete" | "failed";
 }
 
 interface ClaimedPublication {
@@ -161,12 +165,19 @@ export class PostgresStandInQuestionRepository {
         question_message_id: MessageId;
         answer_message_id: MessageId;
         body: string;
+        preferred_language: "zh-CN" | "en-US";
+        record_exchange: boolean;
+        answer_stream_state:
+          "pending" | "streaming" | "complete" | "failed" | null;
       }>(
         `SELECT j.id, j.thread_id, j.project_id, j.stand_in_owner_id,
                 j.asked_by_principal_id, j.question_message_id,
-                j.answer_message_id, m.body
+                j.answer_message_id, j.preferred_language,
+                j.record_exchange, m.body,
+                answer.stream_state AS answer_stream_state
          FROM stand_in_question_jobs j
          JOIN messages m ON m.id = j.question_message_id
+         LEFT JOIN messages answer ON answer.id = j.answer_message_id
          WHERE j.id = $1`,
         [jobId],
       );
@@ -183,6 +194,11 @@ export class PostgresStandInQuestionRepository {
           questionMessageId: row.question_message_id,
           answerMessageId: row.answer_message_id,
           question: row.body,
+          preferredLanguage: row.preferred_language,
+          recordExchange: row.record_exchange,
+          ...(row.answer_stream_state
+            ? { answerStreamState: row.answer_stream_state }
+            : {}),
         },
       };
     });
@@ -320,6 +336,10 @@ export class StandInQuestionHandler {
       throw new Error("stand_in_question_already_processing");
     }
     const job = claimed.job;
+    if (job.answerStreamState === "complete") {
+      await this.repository.completeJob(job.id);
+      return;
+    }
     const standInSenderId = personalStandInId(job.standInOwnerId);
     let streamStarted = false;
     let lastPersistedAnswer = "";
@@ -339,9 +359,6 @@ export class StandInQuestionHandler {
           job.askedByPrincipalId,
         )
       ).filter((entry) => entry.ownerId === job.standInOwnerId);
-      if (pulse.length === 0) {
-        throw new Error("stand_in_question_context_unavailable");
-      }
       if (typeof this.conversations.updateMessageStream === "function") {
         try {
           await this.conversations.updateMessageStream({
@@ -372,7 +389,7 @@ export class StandInQuestionHandler {
         },
         standInOwnerId: job.standInOwnerId,
         askedByPrincipalId: job.askedByPrincipalId,
-        preferredLanguage: "en-US",
+        preferredLanguage: job.preferredLanguage,
         question: job.question,
         sources: pulse,
       };
@@ -420,40 +437,45 @@ export class StandInQuestionHandler {
           };
         },
       );
-      const exchange = await this.pilotStore.recordStandInExchange({
-        id: job.id,
-        questionMessageId: job.questionMessageId,
-        answerMessageId: job.answerMessageId,
-        projectId: job.projectId,
-        standInOwnerId: job.standInOwnerId,
-        askedByPrincipalId: job.askedByPrincipalId,
-        question: job.question,
-        answer: answer.answer,
-        structuredAnswer: {
-          answer: answer.answer,
-          currentStatus: answer.currentStatus,
-          completedOutcome: answer.completedOutcome,
-          evidence: answer.evidence,
-          nextStep: answer.nextStep,
-          neededCollaboration: answer.neededCollaboration,
-        },
-        sources,
-        now: new Date().toISOString(),
-      });
+      const completedAt = new Date().toISOString();
+      const exchange = job.recordExchange
+        ? await this.pilotStore.recordStandInExchange({
+            id: job.id,
+            questionMessageId: job.questionMessageId,
+            answerMessageId: job.answerMessageId,
+            projectId: job.projectId,
+            standInOwnerId: job.standInOwnerId,
+            askedByPrincipalId: job.askedByPrincipalId,
+            question: job.question,
+            answer: answer.answer,
+            structuredAnswer: {
+              answer: answer.answer,
+              currentStatus: answer.currentStatus,
+              completedOutcome: answer.completedOutcome,
+              evidence: answer.evidence,
+              nextStep: answer.nextStep,
+              neededCollaboration: answer.neededCollaboration,
+            },
+            sources,
+            now: completedAt,
+          })
+        : undefined;
+      const completedAnswer = exchange?.answer ?? answer.answer;
+      const answerCreatedAt = exchange?.createdAt ?? completedAt;
       if (streamStarted) {
         await this.conversations.updateMessageStream({
           threadId: job.threadId,
           messageId: job.answerMessageId,
           senderId: standInSenderId,
-          body: exchange.answer,
+          body: completedAnswer,
           streamState: "complete",
         });
       } else {
         await this.conversations.appendMessage(job.threadId, {
           id: job.answerMessageId,
           senderId: standInSenderId,
-          body: exchange.answer,
-          createdAt: exchange.createdAt,
+          body: completedAnswer,
+          createdAt: answerCreatedAt,
         });
       }
       await this.repository.completeJob(job.id);
@@ -492,7 +514,7 @@ function parseReference(
   organizationId: OrganizationId,
 ): StandInQuestionReference {
   if (
-    payload?.schemaVersion !== 1 ||
+    (payload?.schemaVersion !== 1 && payload?.schemaVersion !== 2) ||
     payload.organizationId !== organizationId ||
     typeof payload.jobId !== "string" ||
     typeof payload.projectId !== "string"
