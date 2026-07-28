@@ -61,6 +61,7 @@ import {
   type PilotTeamPayload,
 } from "../pilot/api.js";
 import { copyTextToClipboard } from "./agent/copy-text.js";
+import { latestInvitationsByEmail } from "./admin/invitations.js";
 import { runInvitationCreatedEffects } from "./invitation-effects.js";
 import {
   projectInTeam,
@@ -827,6 +828,7 @@ function MembersTab({
     email: string;
     status: string;
     expiresAt: string;
+    createdAt: string;
   }>;
   onChangeRole: (input: MemberRoleChange) => void;
   onRemove: (memberId: string) => void;
@@ -911,12 +913,14 @@ function MembersTab({
     },
   });
 
-  // An accepted invitation is just a member now — it belongs in the table
-  // above, not as a permanent row here. Only what still needs action shows.
-  const open = invitations.filter(
+  // The API retains history for governance. This surface keeps only the newest
+  // state per address, then hides accepted invitations because those people
+  // already appear in the member table above.
+  const currentInvitations = latestInvitationsByEmail(invitations);
+  const open = currentInvitations.filter(
     (invitation) => invitation.status !== "accepted",
   );
-  const accepted = invitations.length - open.length;
+  const accepted = currentInvitations.length - open.length;
 
   return (
     <div className="mt-[26px]">
