@@ -153,34 +153,6 @@ describe("Outbox dispatcher", () => {
     ]);
   });
 
-  it("completes durable notifications when polling is the delivery mode", async () => {
-    const repository = new MemoryOutbox([
-      {
-        operationId: "operation-polling",
-        topic: "pilot.stand_in.completed",
-        payload: {
-          projectId: "project-1",
-          workStateId: "work-state-1",
-        },
-        attempts: 1,
-      },
-    ]);
-    const pollingRealtime: RealtimePublisher = {
-      async publish() {
-        // Polling clients read the committed database state.
-      },
-    };
-    const dispatcher = new OutboxDispatcher(
-      "organization-1",
-      repository,
-      pollingRealtime,
-    );
-
-    await expect(dispatcher.dispatch()).resolves.toBe(1);
-    expect(repository.completed).toEqual(["operation-polling"]);
-    expect(repository.failed).toEqual([]);
-  });
-
   it("reports an unavailable Centrifugo dependency without throwing", async () => {
     await expect(
       new CentrifugoRealtime("http://127.0.0.1:59998").checkReadiness(),

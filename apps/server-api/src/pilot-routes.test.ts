@@ -2,6 +2,7 @@ import {
   type PilotCheckpointInput,
   type OrganizationId,
   type PrincipalId,
+  type ThreadId,
   uuidv7,
 } from "@intero/domain";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
 import type { ModelGateway } from "./pilot-ports.js";
 import { ModelGatewayUnavailableError } from "./pilot-ports.js";
+import { teamConversationThreadId } from "./pilot-routes.js";
 import { InMemoryPilotStore, PilotStoreError } from "./pilot-store.js";
 import { TransactionalOutboxJobRunner } from "./pilot-service.js";
 import { InMemoryPlatformStore } from "./store.js";
@@ -71,12 +73,15 @@ const modelGateway: ModelGateway = {
 describe("pilot cloud-first vertical slice", () => {
   let app: FastifyInstance;
   let pilotStore: InMemoryPilotStore;
+  let conversationStore: InMemoryPlatformStore;
 
   beforeEach(async () => {
     pilotStore = new InMemoryPilotStore();
+    conversationStore = new InMemoryPlatformStore();
     app = await buildApp({
       logger: false,
       pilotStore,
+      store: conversationStore,
       pilotIdentities: [
         { id: A, displayName: "Alex Rivera", kind: "human" },
         { id: B, displayName: "Morgan Chen", kind: "human" },
@@ -652,6 +657,12 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(accepted.statusCode).toBe(200);
     expect(accepted.json().profile.displayName).toBe("Morgan Product");
+    expect(
+      conversationStore.hasThreadAccess(
+        teamConversationThreadId(teamId) as ThreadId,
+        B,
+      ),
+    ).toBe(true);
 
     const promoted = await app.inject({
       method: "PATCH",
@@ -684,6 +695,150 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(lastAdmin.statusCode).toBe(409);
     expect(lastAdmin.json().code).toBe("LAST_ORGANIZATION_ADMIN");
+  });
+
+  it("creates one durable group chat per team and adds new team members at the access boundary", async () => {
+    await setupAsA(app);
+    const initialTeamId = await firstTeamId(app, A);
+    const initialThreadId = teamConversationThreadId(initialTeamId);
+    expect(
+      conversationStore.getThread(initialThreadId as ThreadId, A)?.thread,
+    ).toMatchObject({
+      kind: "room",
+      teamId: initialTeamId,
+      participantIds: [A],
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "Developer Platform" },
+    });
+    expect(created.statusCode).toBe(201);
+    const teamId = created.json().team.id as string;
+    const threadId = teamConversationThreadId(teamId);
+    expect(
+      conversationStore.getThread(threadId as ThreadId, A)?.thread,
+    ).toMatchObject({
+      title: "Developer Platform",
+      kind: "room",
+      teamId,
+      participantIds: [A],
+    });
+
+    const message = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: identity(A),
+      payload: {
+        clientMessageId: uuidv7(),
+        body: "This predates Morgan joining the team.",
+      },
+    });
+    expect(message.statusCode).toBe(201);
+
+    const join = await createJoinLink(app, initialTeamId);
+    const joined = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/join/${join.code}`,
+      headers: identity(B),
+    });
+    expect(joined.statusCode).toBe(200);
+    expect(
+      conversationStore.hasThreadAccess(initialThreadId as ThreadId, B),
+    ).toBe(true);
+
+    const added = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${teamId}/members`,
+      headers: identity(A),
+      payload: { memberId: B },
+    });
+    expect(added.statusCode).toBe(201);
+    const newMemberView = conversationStore.getThread(threadId as ThreadId, B);
+    expect(newMemberView?.thread.participantIds).toEqual([A, B]);
+    expect(newMemberView?.messages).toEqual([
+      expect.objectContaining({
+        kind: "system_access_change",
+        sequence: 2,
+      }),
+    ]);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/teams/${teamId}`,
+      headers: identity(A),
+      payload: { name: "Platform Tools" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(
+      conversationStore.getThread(threadId as ThreadId, A)?.thread.title,
+    ).toBe("Platform Tools");
+
+    const customized = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}`,
+      headers: identity(A),
+      payload: { title: "Platform Launch Room" },
+    });
+    expect(customized.statusCode).toBe(200);
+    const renamedAgain = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/teams/${teamId}`,
+      headers: identity(A),
+      payload: { name: "Infrastructure Platform" },
+    });
+    expect(renamedAgain.statusCode).toBe(200);
+    expect(
+      conversationStore.getThread(threadId as ThreadId, A)?.thread.title,
+    ).toBe("Platform Launch Room");
+  });
+
+  it("backfills the deterministic group chat for teams created before the feature", async () => {
+    await app.close();
+    const organizationId = uuidv7() as OrganizationId;
+    const teamId = uuidv7();
+    const createdAt = new Date().toISOString();
+    pilotStore = new InMemoryPilotStore();
+    await pilotStore.setupOrganization({
+      organization: {
+        id: organizationId,
+        name: "Existing organization",
+        deploymentBaseUrl: "https://intero.example.test",
+        deploymentValidatedAt: createdAt,
+        provider: { configured: false },
+      },
+      administratorId: A,
+      initialTeam: {
+        id: teamId,
+        organizationId,
+        name: "Existing Team",
+        createdAt,
+      },
+    });
+    conversationStore = new InMemoryPlatformStore();
+    app = await buildApp({
+      logger: false,
+      pilotStore,
+      store: conversationStore,
+      organization: { id: organizationId, name: "Existing organization" },
+      pilotIdentities: [{ id: A, displayName: "Alex Rivera", kind: "human" }],
+      deploymentProbe: async () => true,
+      providerEncryptionSecret: "test-provider-secret",
+      pilotModelGateway: modelGateway,
+    });
+
+    expect(
+      conversationStore.getThread(
+        teamConversationThreadId(teamId) as ThreadId,
+        A,
+      )?.thread,
+    ).toMatchObject({
+      title: "Existing Team",
+      teamId,
+      participantIds: [A],
+    });
   });
 
   it("creates and renames teams, and only admins put existing people in them", async () => {

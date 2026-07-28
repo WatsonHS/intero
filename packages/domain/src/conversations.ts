@@ -111,6 +111,7 @@ export type ThreadMessage = z.infer<typeof ThreadMessage>;
 
 export const ConversationChangeReason = z.enum([
   "thread_created",
+  "thread_updated",
   "message_appended",
   "message_updated",
   "read_cursor_changed",

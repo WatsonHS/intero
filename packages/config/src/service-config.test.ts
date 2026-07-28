@@ -43,7 +43,14 @@ describe("service environment schemas", () => {
     expect(loadApiServiceConfig(postgresEnvironment)).toMatchObject({
       objectStorage: { mode: "disabled" },
       metricsEnabled: true,
-      pilot: { persistence: "postgres" },
+      pilot: {
+        persistence: "postgres",
+        centrifugoApiUrl: "http://localhost:8000",
+      },
+      realtime: {
+        publicUrl: "http://localhost:4311",
+        tokenSecret: "intero-development-realtime-token-secret-v1",
+      },
     });
     expect(
       loadWorkerServiceConfig({
@@ -55,7 +62,19 @@ describe("service environment schemas", () => {
       concurrency: 8,
       metricsHost: "127.0.0.1",
       metricsPort: 9464,
+      pilot: {
+        centrifugoApiUrl: "http://localhost:8000",
+      },
     });
+  });
+
+  it("rejects the removed realtime mode switch", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_PILOT_REALTIME: "polling",
+      }),
+    ).toThrow("INTERO_PILOT_REALTIME no longer selects an adapter");
   });
 
   it("configures invite-only credentials without a delivery provider", () => {
@@ -149,6 +168,7 @@ describe("service environment schemas", () => {
       loadApiServiceConfig({
         ...postgresEnvironment,
         INTERO_RUNTIME_MODE: "product",
+        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
         INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
@@ -163,6 +183,7 @@ describe("service environment schemas", () => {
       loadApiServiceConfig({
         ...postgresEnvironment,
         INTERO_RUNTIME_MODE: "product",
+        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
         INTERO_SEED_DEMO: "true",
       }),
     ).toThrow("Product runtime requires INTERO_AUTH_SECRET");
@@ -171,10 +192,14 @@ describe("service environment schemas", () => {
       loadApiServiceConfig({
         ...postgresEnvironment,
         INTERO_RUNTIME_MODE: "product",
+        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
         INTERO_SEED_DEMO: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
         INTERO_PUBLIC_URL: "http://intero.internal.example:4311",
+        INTERO_CENTRIFUGO_TOKEN_SECRET:
+          "realtime-token-secret-at-least-thirty-two-bytes",
+        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
       }),
     ).toMatchObject({
       runtimeMode: "product",
@@ -190,7 +215,6 @@ describe("service environment schemas", () => {
       INTERO_AUTH_SECRET:
         "intero-auth-secret-that-is-at-least-thirty-two-bytes",
       INTERO_PUBLIC_URL: "https://intero.example.com",
-      INTERO_PILOT_REALTIME: "centrifugo",
       INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
     } as const;
     expect(() => loadApiServiceConfig(productRealtime)).toThrow(

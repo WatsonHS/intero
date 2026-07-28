@@ -15,7 +15,6 @@ import {
   DisabledObjectStoreAdapter,
   InlineJobRunner,
   MembershipAuthorizationAdapter,
-  PollingRealtimeAdapter,
   ProjectInternalCoordinationTransport,
   type PilotStandInJob,
 } from "./pilot-ports.js";
@@ -23,7 +22,6 @@ import {
   evaluatePilotAuthorizationContract,
   expectedPilotAuthorizationContract,
 } from "./pilot-authorization.contract.js";
-import { exerciseRealtimeContract } from "./pilot-realtime.contract.js";
 import { InMemoryPilotStore, type PilotStore } from "./pilot-store.js";
 import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 import { VercelAiModelGateway } from "./vercel-model-gateway.js";
@@ -136,11 +134,7 @@ describe("pilot adapter contracts", () => {
     ).resolves.toEqual(expectedPilotAuthorizationContract);
   });
 
-  it("exposes polling realtime and disabled object storage behind stable ports", async () => {
-    const realtime = new PollingRealtimeAdapter();
-    await expect(exerciseRealtimeContract(realtime)).resolves.toBeUndefined();
-    expect(realtime.mode).toBe("polling");
-
+  it("exposes disabled object storage behind its stable port", async () => {
     const objectStore = new DisabledObjectStoreAdapter();
     await expect(
       objectStore.createUpload({

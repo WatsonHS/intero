@@ -17,11 +17,7 @@ import type {
   PilotStore,
 } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
-import type {
-  AuthorizationPort,
-  JobRunnerPort,
-  RealtimePort,
-} from "./ports.js";
+import type { AuthorizationPort, JobRunnerPort } from "./ports.js";
 
 export type StandInProcessing =
   | { status: "published" }
@@ -88,7 +84,6 @@ export class PilotStandInJobHandler {
     private readonly authorization: AuthorizationPort,
     private readonly model: ModelGateway,
     private readonly coordination: CoordinationTransport,
-    private readonly realtime: RealtimePort,
   ) {}
 
   async handle(
@@ -212,16 +207,6 @@ export class PilotStandInJobHandler {
           : {}),
         now: receivedAt,
       });
-
-      await this.realtime
-        .publish(`pilot:project:${project.id}`, {
-          kind: "stand_in_projection_updated",
-          projectId: project.id,
-          workStateId,
-          pulseEntryId: completed.pulseEntry?.id,
-          coordinationThreadId: completed.coordinationThread?.id,
-        })
-        .catch(() => undefined);
     } catch (error) {
       const terminal = execution.attempt >= execution.maxAttempts;
       await this.store.failStandInJob({

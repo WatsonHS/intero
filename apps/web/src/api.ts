@@ -67,7 +67,7 @@ export interface BootstrapPayload {
   currentPrincipal: PrincipalSummary;
   standInPrincipal: PrincipalSummary;
   adapters?: {
-    realtime: "polling" | "centrifugo";
+    realtime: "centrifugo";
   };
 }
 
@@ -738,6 +738,17 @@ export async function createConversationThread(input: {
     accessMode: "agent_readable",
     priorHistoryGranted: false,
     createdAt: new Date().toISOString(),
+  });
+}
+
+export async function updateConversationThread(input: {
+  threadId: string;
+  title?: string;
+  addParticipantIds?: string[];
+}): Promise<{ thread: ConversationThread; event?: ThreadMessage }> {
+  return patchJson(`/v1/threads/${encodeURIComponent(input.threadId)}`, {
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    addParticipantIds: input.addParticipantIds ?? [],
   });
 }
 

@@ -166,6 +166,31 @@
         }
       }
     },
+    "/v1/threads/{threadId}": {
+      "patch": {
+        "operationId": "updateThread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "threadId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateThreadRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated group conversation" },
+          "404": { "description": "Thread not found or inaccessible" }
+        }
+      }
+    },
     "/v1/specs": {
       "get": {
         "operationId": "listSpecs",
@@ -2145,6 +2170,24 @@
             }
           }
         },
+        "additionalProperties": false
+      },
+      "UpdateThreadRequest": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "addParticipantIds": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        },
+        "required": ["addParticipantIds"],
         "additionalProperties": false
       }
     }

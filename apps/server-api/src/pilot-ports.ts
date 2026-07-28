@@ -19,7 +19,6 @@ import type {
   JobEnvelope,
   JobRunnerPort,
   ObjectStorePort,
-  RealtimePort,
 } from "./ports.js";
 
 export interface StandInModelInput {
@@ -187,19 +186,6 @@ export class InlineJobRunner implements JobRunnerPort<PilotStandInJob> {
       };
     }
   }
-}
-
-/**
- * Browser clients poll durable project state. Publishing is intentionally a
- * no-op in the pilot, but all application calls still cross this stable port.
- */
-export class PollingRealtimeAdapter implements RealtimePort {
-  readonly mode = "polling";
-
-  async publish(
-    _channel: string,
-    _event: Record<string, unknown>,
-  ): Promise<void> {}
 }
 
 export class DisabledObjectStoreAdapter implements ObjectStorePort {

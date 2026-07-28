@@ -143,6 +143,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/threads/{threadId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch: operations["updateThread"];
+    trace?: never;
+  };
   "/v1/specs": {
     parameters: {
       query?: never;
@@ -841,6 +857,11 @@ export interface components {
       estimatePoints?: number;
       relatedWorkstreamIds?: string[];
     };
+    UpdateThreadRequest: {
+      title?: string;
+      /** @default [] */
+      addParticipantIds: string[];
+    };
   };
   responses: never;
   parameters: never;
@@ -1041,6 +1062,37 @@ export interface operations {
             items: components["schemas"]["ThreadResponse"][];
           };
         };
+      };
+    };
+  };
+  updateThread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateThreadRequest"];
+      };
+    };
+    responses: {
+      /** @description Updated group conversation */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Thread not found or inaccessible */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
     };
   };

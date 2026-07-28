@@ -19,7 +19,6 @@ import { NormalizedPostgresPilotStore } from "../../server-api/src/normalized-po
 import {
   MembershipAuthorizationAdapter,
   ModelGatewayUnavailableError,
-  PollingRealtimeAdapter,
   ProjectInternalCoordinationTransport,
   type ModelGateway,
   type StandInModelInput,
@@ -98,7 +97,6 @@ databaseSuite("durable Pilot Stand-in jobs", () => {
       new MembershipAuthorizationAdapter(store),
       model,
       new ProjectInternalCoordinationTransport(store),
-      new PollingRealtimeAdapter(),
     );
   });
 

@@ -156,6 +156,16 @@ export const AddStandInRequest = z
     standInId: z.string().uuid(),
   })
   .strict();
+export const UpdateThreadRequest = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    addParticipantIds: z.array(z.string().uuid()).max(20).default([]),
+  })
+  .strict()
+  .refine(
+    (input) => input.title !== undefined || input.addParticipantIds.length > 0,
+    "Update the title and/or add at least one participant.",
+  );
 export const ThreadMessagesQuery = z
   .object({
     afterSequence: z.coerce.number().int().nonnegative().optional(),

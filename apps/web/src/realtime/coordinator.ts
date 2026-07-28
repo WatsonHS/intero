@@ -22,21 +22,29 @@ const ConversationChangedHint = z
     accessVersion: z.number().int().positive(),
     reason: z.enum([
       "thread_created",
+      "thread_updated",
       "message_appended",
+      "message_updated",
       "read_cursor_changed",
       "access_changed",
       "thread_concluded",
     ]),
+    messageId: z.string().uuid().optional(),
     occurredAt: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .superRefine((event, context) => {
+    if (event.reason === "message_updated" && !event.messageId) {
+      context.addIssue({
+        code: "custom",
+        path: ["messageId"],
+        message: "message_updated events require a messageId pointer.",
+      });
+    }
+  });
 
 export type ConversationRealtimeStatus =
-  | "disabled"
-  | "connecting"
-  | "live"
-  | "degraded"
-  | "offline";
+  "disabled" | "connecting" | "live" | "degraded" | "offline";
 
 export interface ConversationRealtimeDependencies {
   createSession: () => Promise<RealtimeSessionPayload>;
@@ -69,9 +77,7 @@ export class ConversationRealtimeCoordinator {
 
   start(): void {
     if (this.#client || this.#retryTimer || this.#stopped) return;
-    this.#dependencies.onStatus(
-      this.#online() ? "connecting" : "offline",
-    );
+    this.#dependencies.onStatus(this.#online() ? "connecting" : "offline");
     if (!this.#online()) return;
     void this.#connect();
   }
@@ -126,10 +132,8 @@ export class ConversationRealtimeCoordinator {
     });
     subscription.on("error", () => {
       // The SDK retries temporary failures. HTTP repair remains the source of
-      // truth, and degraded polling covers a prolonged authorization outage.
-      this.#dependencies.onStatus(
-        this.#online() ? "degraded" : "offline",
-      );
+      // truth after the realtime transport reconnects.
+      this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
     });
     this.#subscriptions.set(threadId, subscription);
     subscription.subscribe();
@@ -143,8 +147,7 @@ export class ConversationRealtimeCoordinator {
       const transports = session.transports as TransportEndpoint[];
       const client = new Centrifuge(transports, {
         token: session.token,
-        getToken: async () =>
-          (await this.#dependencies.createSession()).token,
+        getToken: async () => (await this.#dependencies.createSession()).token,
         emulationEndpoint: session.emulationEndpoint,
       });
       this.#client = client;
@@ -153,14 +156,10 @@ export class ConversationRealtimeCoordinator {
         this.#dependencies.onStatus("live");
       });
       client.on("connecting", () => {
-        this.#dependencies.onStatus(
-          this.#online() ? "connecting" : "offline",
-        );
+        this.#dependencies.onStatus(this.#online() ? "connecting" : "offline");
       });
       client.on("disconnected", () => {
-        this.#dependencies.onStatus(
-          this.#online() ? "degraded" : "offline",
-        );
+        this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
       });
       client.on("publication", (context) => this.#publication(context));
       client.on("subscribed", (context) => {
@@ -171,9 +170,7 @@ export class ConversationRealtimeCoordinator {
       client.connect();
     } catch {
       if (this.#stopped) return;
-      this.#dependencies.onStatus(
-        this.#online() ? "degraded" : "offline",
-      );
+      this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
       this.#scheduleRetry();
     }
   }
@@ -187,9 +184,7 @@ export class ConversationRealtimeCoordinator {
       const expired = this.#seenEventOrder.shift();
       if (expired) this.#seenEventIds.delete(expired);
     }
-    this.#dependencies.onChange(
-      parsed.data as ConversationChangedEventPayload,
-    );
+    this.#dependencies.onChange(parsed.data as ConversationChangedEventPayload);
   }
 
   #scheduleRetry(): void {

@@ -4,6 +4,7 @@ import {
   CheckCircleIcon,
   CircleNotchIcon,
   EyeIcon,
+  GearSixIcon,
   GitBranchIcon,
   HandTapIcon,
   LockSimpleIcon,
@@ -39,6 +40,7 @@ import {
   getTeamPulse,
   getThreads,
   sendThreadMessage,
+  updateConversationThread,
   type BootstrapPayload,
   type PrincipalSummary,
   type ThreadPayload,
@@ -66,6 +68,7 @@ import {
 import { usePilotOptional } from "../pilot/context.js";
 import { useConversationRealtime } from "../realtime/context.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
+import { GroupChatManagementModal } from "./chat/GroupChatManagementModal.js";
 
 const THREAD_GROUPS: Array<{
   kind: ConversationThread["kind"];
@@ -77,7 +80,6 @@ const THREAD_GROUPS: Array<{
   { kind: "human_direct", label: "chat.group.direct" },
 ];
 const RELEVANT_KINDS = new Set(THREAD_GROUPS.map((group) => group.kind));
-const CHAT_REFRESH_INTERVAL_MS = 10_000;
 const DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
 const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -134,16 +136,13 @@ export function CommunicationsView({
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
   const realtime = useConversationRealtime();
-  const canonicalRefreshInterval =
-    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
-  const pilotChatRefreshInterval =
-    realtime.status === "live" ? false : CHAT_REFRESH_INTERVAL_MS;
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>(
     initialThreadId,
   );
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showManage, setShowManage] = useState(false);
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -171,7 +170,6 @@ export function CommunicationsView({
   const threads = useQuery({
     queryKey: ["threads"],
     queryFn: ({ signal }) => getThreads(undefined, signal),
-    refetchInterval: canonicalRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
@@ -188,9 +186,8 @@ export function CommunicationsView({
     queryKey: ["pilot", "dms", pilot?.identityId],
     queryFn: ({ signal }) => getPilotDms(pilot!.identityId!, signal),
     // Pilot DM routes now adapt onto canonical conversations. Reading them a
-    // second time would create duplicate UI state and duplicate polling.
+    // second time would create duplicate UI state.
     enabled: false,
-    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotProject = pilot?.projects.data?.projects.find(
@@ -227,7 +224,6 @@ export function CommunicationsView({
       pilot.selectedProjectId &&
       activeStandInOwnerId,
     ),
-    refetchInterval: pilotChatRefreshInterval,
     refetchOnWindowFocus: true,
   });
   const pilotItems = (pilotDms.data?.items ?? []).map((item) =>
@@ -499,6 +495,7 @@ export function CommunicationsView({
 
   useEffect(() => {
     setMentionPickerOpen(false);
+    setShowManage(false);
   }, [current?.thread.id]);
 
   useEffect(() => {
@@ -720,6 +717,23 @@ export function CommunicationsView({
       notifications.error(
         error instanceof Error ? error.message : t("chat.createFailed"),
         { title: t("chat.createFailed") },
+      );
+    },
+  });
+  const updateGroupChat = useMutation({
+    mutationFn: (input: {
+      threadId: string;
+      title?: string;
+      addParticipantIds: string[];
+    }) => updateConversationThread(input),
+    onSuccess: async () => {
+      setShowManage(false);
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.manageFailed"),
+        { title: t("chat.manageFailed") },
       );
     },
   });
@@ -1113,48 +1127,78 @@ export function CommunicationsView({
     }
 
     const isOwn = message.senderId === currentSenderId;
+    const avatar = (
+      <span
+        className="grid h-[30px] w-[30px] place-items-center rounded-full text-[9.5px] font-[650] text-on-tint"
+        style={{ background: tintFor(message.senderId) }}
+      >
+        {initials(senderName)}
+      </span>
+    );
+    const content = (
+      <div
+        className={cn(
+          "min-w-0",
+          isOwn ? "flex flex-col items-end text-right" : undefined,
+        )}
+      >
+        <div
+          className={cn(
+            "flex items-center gap-[9px]",
+            isOwn ? "justify-end" : undefined,
+          )}
+        >
+          <strong className="text-[12px] font-[620]">{senderName}</strong>
+          <time className="font-mono text-[9.5px] text-faint">
+            {formatTime(message.createdAt)}
+          </time>
+        </div>
+        <div
+          className={cn(
+            "mt-[7px] max-w-[560px] rounded-card p-[12px_15px] text-left",
+            isOwn ? "w-fit bg-accent-soft" : "bg-bubble",
+          )}
+        >
+          {message.serverReadable ? (
+            <ChatMarkdown
+              markdown={message.body}
+              renderText={(text) => (
+                <MentionText body={text} candidates={mentionCandidates} />
+              )}
+            />
+          ) : (
+            <p className="text-[13px] leading-[1.7] text-ink">
+              {t("chat.encryptedMessage")}
+            </p>
+          )}
+          <MessageAttachments attachments={message.attachments ?? []} />
+        </div>
+      </div>
+    );
     return (
       <div
-        className="grid grid-cols-[30px_minmax(0,1fr)] gap-3"
+        className={cn(
+          "grid gap-3",
+          isOwn
+            ? "grid-cols-[minmax(0,1fr)_30px]"
+            : "grid-cols-[30px_minmax(0,1fr)]",
+        )}
+        data-message-side={isOwn ? "right" : "left"}
         data-testid={
           currentIsPilot ? `pilot-dm-message-${message.sequence}` : undefined
         }
       >
-        <span
-          className="grid h-[30px] w-[30px] place-items-center rounded-full text-[9.5px] font-[650] text-on-tint"
-          style={{ background: tintFor(message.senderId) }}
-        >
-          {initials(senderName)}
-        </span>
-        <div className="min-w-0">
-          <div className="flex items-center gap-[9px]">
-            <strong className="text-[12px] font-[620]">{senderName}</strong>
-            <time className="font-mono text-[9.5px] text-faint">
-              {formatTime(message.createdAt)}
-            </time>
-          </div>
-          <div
-            className={
-              isOwn
-                ? "mt-[7px] max-w-[560px] rounded-card bg-accent-soft p-[12px_15px]"
-                : "mt-[7px] max-w-[560px] rounded-card bg-bubble p-[12px_15px]"
-            }
-          >
-            {message.serverReadable ? (
-              <ChatMarkdown
-                markdown={message.body}
-                renderText={(text) => (
-                  <MentionText body={text} candidates={mentionCandidates} />
-                )}
-              />
-            ) : (
-              <p className="text-[13px] leading-[1.7] text-ink">
-                {t("chat.encryptedMessage")}
-              </p>
-            )}
-            <MessageAttachments attachments={message.attachments ?? []} />
-          </div>
-        </div>
+        {isOwn ? (
+          <>
+            {content}
+            {avatar}
+          </>
+        ) : (
+          <>
+            {avatar}
+            {content}
+          </>
+        )}
       </div>
     );
   }
@@ -1286,6 +1330,28 @@ export function CommunicationsView({
 
       {current ? (
         <div className="grid h-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+          {showManage && current.thread.kind === "room" ? (
+            <GroupChatManagementModal
+              title={current.thread.title}
+              participantIds={current.thread.participantIds}
+              standInIds={current.thread.standInIds}
+              principalNames={principalNames}
+              candidates={conversationCandidates}
+              busy={updateGroupChat.isPending}
+              error={
+                updateGroupChat.error instanceof Error
+                  ? updateGroupChat.error.message
+                  : undefined
+              }
+              onClose={() => setShowManage(false)}
+              onSave={(input) =>
+                updateGroupChat.mutate({
+                  threadId: current.thread.id,
+                  ...input,
+                })
+              }
+            />
+          ) : null}
           <header className="flex items-center gap-[13px] border-b border-line p-[18px_26px]">
             <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-accent-soft text-[12px] font-[650] text-accent-strong">
               {initials(current.thread.title)}
@@ -1305,8 +1371,19 @@ export function CommunicationsView({
                       })}
               </small>
             </span>
-            {current.thread.kind === "human_direct" &&
-            current.thread.standInIds.length === 0 ? (
+            {current.thread.kind === "room" ? (
+              <button
+                type="button"
+                data-testid="group-chat-management-trigger"
+                aria-label={t("chat.manage")}
+                onClick={() => setShowManage(true)}
+                className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+              >
+                <GearSixIcon size={14} />
+                {t("chat.manage")}
+              </button>
+            ) : current.thread.kind === "human_direct" &&
+              current.thread.standInIds.length === 0 ? (
               <button
                 type="button"
                 data-testid="pilot-add-stand-in"

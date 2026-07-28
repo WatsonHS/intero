@@ -38,6 +38,7 @@ export interface PlatformStore {
   putGrant: StoreMethod<"putGrant">;
   coordinate: StoreMethod<"coordinate">;
   createThread: StoreMethod<"createThread">;
+  updateThread: StoreMethod<"updateThread">;
   appendMessage: StoreMethod<"appendMessage">;
   enqueueStandInQuestion(
     input: StandInQuestionInput,

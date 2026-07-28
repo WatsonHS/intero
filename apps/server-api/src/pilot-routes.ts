@@ -63,7 +63,7 @@ export interface PilotRoutesOptions {
   coordination: CoordinationTransport;
   modelGateway: ModelGateway;
   adapters: {
-    realtime: "polling" | "centrifugo";
+    realtime: "centrifugo";
     objectStorage: "disabled";
     jobs: "inline" | "transactional-outbox";
     coordination: "project-internal-v1";
@@ -81,6 +81,7 @@ export async function registerPilotRoutes(
         options.organizationId,
       )
     : new InMemoryActivationRateLimiter();
+  await reconcileTeamConversationThreads(options);
   app.get("/v1/pilot/bootstrap", async (request) => {
     const currentPrincipal = await options.requestAuth.resolve(request, false);
     const storedOrganization = await options.store.getOrganization();
@@ -161,6 +162,7 @@ export async function registerPilotRoutes(
       administratorId: principal.id,
       initialTeam: team,
     });
+    await ensureTeamConversationForTeam(options, team, principal.id);
     return reply.status(201).send({ organization, team });
   });
 
@@ -225,6 +227,7 @@ export async function registerPilotRoutes(
     return {
       teams: await Promise.all(
         teams.map(async (team) => {
+          await ensureTeamConversationForTeam(options, team, principal.id);
           const memberships = await options.store.listTeamMembers(
             team.id,
             principal.id,
@@ -270,8 +273,13 @@ export async function registerPilotRoutes(
       name: input.name,
       createdAt: new Date().toISOString(),
     };
+    const created = await options.store.createTeam({
+      team,
+      principalId: principal.id,
+    });
+    await ensureTeamConversationForTeam(options, created, principal.id);
     return reply.status(201).send({
-      team: await options.store.createTeam({ team, principalId: principal.id }),
+      team: created,
     });
   });
 
@@ -283,13 +291,19 @@ export async function registerPilotRoutes(
         .object({ name: z.string().trim().min(1).max(160) })
         .strict()
         .parse(request.body);
-      return {
-        team: await options.store.renameTeam({
-          teamId: request.params.teamId,
-          name: input.name,
-          principalId: principal.id,
-        }),
-      };
+      const previousTeam = await options.store.getTeam(request.params.teamId);
+      const team = await options.store.renameTeam({
+        teamId: request.params.teamId,
+        name: input.name,
+        principalId: principal.id,
+      });
+      await ensureTeamConversationForTeam(
+        options,
+        team,
+        principal.id,
+        previousTeam?.name,
+      );
+      return { team };
     },
   );
 
@@ -316,15 +330,17 @@ export async function registerPilotRoutes(
         })
         .strict()
         .parse(request.body);
-      return reply.status(201).send({
-        membership: await options.store.addTeamMember({
-          teamId: request.params.teamId,
-          memberId: input.memberId,
-          role: input.role,
-          principalId: principal.id,
-          now: new Date().toISOString(),
-        }),
+      const membership = await options.store.addTeamMember({
+        teamId: request.params.teamId,
+        memberId: input.memberId,
+        role: input.role,
+        principalId: principal.id,
+        now: new Date().toISOString(),
       });
+      const team = await options.store.getTeam(request.params.teamId);
+      if (!team) throw new Error("Team was not found.");
+      await ensureTeamConversationForTeam(options, team, principal.id);
+      return reply.status(201).send({ membership });
     },
   );
 
@@ -741,6 +757,7 @@ export async function registerPilotRoutes(
         principal.id,
         { displayName: input.displayName },
       );
+      await ensureTeamConversationForTeam(options, accepted.team, principal.id);
       return {
         invitation: presentInvitation(
           accepted.invitation,
@@ -845,6 +862,7 @@ export async function registerPilotRoutes(
         principal.id,
         new Date().toISOString(),
       );
+      await ensureTeamConversationForTeam(options, team, principal.id);
       return { team };
     },
   );
@@ -1825,6 +1843,132 @@ export function standInConversationThreadId(
     "intero-stand-in-thread-v1",
     `${projectId}:${viewerId}:${standInOwnerId}`,
   );
+}
+
+export function teamConversationThreadId(teamId: string): string {
+  return derivedUuid("intero-team-thread-v1", teamId);
+}
+
+async function reconcileTeamConversationThreads(
+  options: PilotRoutesOptions,
+): Promise<void> {
+  // Some bounded route-test stores intentionally implement only the policy
+  // methods under test. Reconciliation is additive and can safely wait until
+  // a full PilotStore is mounted.
+  const store = options.store as Partial<PilotStore>;
+  if (
+    typeof store.getAdministratorId !== "function" ||
+    typeof store.getOrganizationDirectory !== "function"
+  ) {
+    return;
+  }
+  const administratorId = await store.getAdministratorId();
+  if (!administratorId) return;
+  const directory = await store.getOrganizationDirectory(administratorId);
+  for (const team of directory.teams) {
+    await ensureTeamConversation(options, {
+      team,
+      memberIds: directory.teamMemberships
+        .filter((membership) => membership.teamId === team.id)
+        .map((membership) => membership.principalId),
+      preferredActorId: administratorId,
+    });
+  }
+}
+
+async function ensureTeamConversationForTeam(
+  options: PilotRoutesOptions,
+  team: PilotTeam,
+  actorId: PrincipalId,
+  syncTitleFrom?: string,
+): Promise<ConversationThread> {
+  const organizationRole = await options.store.getOrganizationRole(actorId);
+  const memberships =
+    organizationRole === "admin"
+      ? (await options.store.getOrganizationDirectory(actorId)).teamMemberships
+      : await options.store.listTeamMembers(team.id, actorId);
+  return ensureTeamConversation(options, {
+    team,
+    memberIds: memberships
+      .filter((membership) => membership.teamId === team.id)
+      .map((membership) => membership.principalId),
+    preferredActorId: actorId,
+    ...(syncTitleFrom ? { syncTitleFrom } : {}),
+  });
+}
+
+async function ensureTeamConversation(
+  options: PilotRoutesOptions,
+  input: {
+    team: PilotTeam;
+    memberIds: PrincipalId[];
+    preferredActorId: PrincipalId;
+    syncTitleFrom?: string;
+  },
+): Promise<ConversationThread> {
+  const participantIds = [...new Set(input.memberIds)];
+  const firstParticipantId = participantIds[0];
+  if (!firstParticipantId) {
+    throw new Error("A Team conversation requires at least one member.");
+  }
+  const threadId = teamConversationThreadId(input.team.id) as ThreadId;
+  let current = (await options.conversations.getThread(threadId))?.thread;
+  if (!current) {
+    try {
+      return await options.conversations.createThread(
+        {
+          id: threadId,
+          kind: "room",
+          title: input.team.name,
+          participantIds,
+          standInIds: [],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          sequence: 0,
+          teamId: input.team.id,
+          createdAt: input.team.createdAt,
+        },
+        firstParticipantId,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "Thread ID was already used."
+      ) {
+        throw error;
+      }
+      current = (await options.conversations.getThread(threadId))?.thread;
+    }
+  }
+  if (!current) throw new Error("Team conversation was not found.");
+  const actorId = current.participantIds.includes(input.preferredActorId)
+    ? input.preferredActorId
+    : current.participantIds.find(
+        (principalId) => !current!.standInIds.includes(principalId),
+      );
+  if (!actorId) {
+    throw new Error("Team conversation has no human manager.");
+  }
+  const addParticipantIds = participantIds.filter(
+    (principalId) => !current!.participantIds.includes(principalId),
+  );
+  const titleShouldFollowTeam =
+    input.syncTitleFrom !== undefined &&
+    current.title === input.syncTitleFrom &&
+    current.title !== input.team.name;
+  if (!titleShouldFollowTeam && addParticipantIds.length === 0) {
+    return current;
+  }
+  return (
+    await options.conversations.updateThread(
+      threadId,
+      {
+        ...(titleShouldFollowTeam ? { title: input.team.name } : {}),
+        addParticipantIds,
+      },
+      actorId,
+    )
+  ).thread;
 }
 
 function derivedUuid(namespace: string, value: string): string {

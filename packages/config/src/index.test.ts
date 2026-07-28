@@ -37,11 +37,15 @@ describe("telemetry allowlist", () => {
 
 describe("pilot adapter configuration", () => {
   it("uses memory only when no database is configured", () => {
-    expect(loadPilotAdapterConfig({})).toEqual({
+    expect(
+      loadPilotAdapterConfig({
+        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
+      }),
+    ).toEqual({
       persistence: "memory",
       authorization: "membership",
-      realtime: "polling",
       standInJobs: "inline",
+      centrifugoApiUrl: "http://localhost:8000",
     });
   });
 
@@ -50,14 +54,15 @@ describe("pilot adapter configuration", () => {
       loadPilotAdapterConfig({
         INTERO_DATABASE_URL: "postgres://intero.test/intero",
         INTERO_PROVIDER_ENCRYPTION_KEY: "server-only-encryption-secret",
+        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
     ).toEqual({
       persistence: "postgres",
       authorization: "membership",
-      realtime: "polling",
       standInJobs: "transactional-outbox",
       databaseUrl: "postgres://intero.test/intero",
       providerEncryptionKey: "server-only-encryption-secret",
+      centrifugoApiUrl: "http://localhost:8000",
     });
   });
 
@@ -66,6 +71,7 @@ describe("pilot adapter configuration", () => {
       loadPilotAdapterConfig({
         INTERO_PILOT_PERSISTENCE: "postgres",
         INTERO_DATABASE_URL: "postgres://intero.test/intero",
+        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
     ).toThrow("INTERO_PROVIDER_ENCRYPTION_KEY");
   });
@@ -81,7 +87,6 @@ describe("pilot adapter configuration", () => {
       }),
     ).toMatchObject({
       authorization: "spicedb",
-      realtime: "centrifugo",
       standInJobs: "transactional-outbox",
       spiceDbEndpoint: "spicedb.internal:50051",
       centrifugoApiUrl: "https://centrifugo.internal",
@@ -92,16 +97,14 @@ describe("pilot adapter configuration", () => {
     expect(() =>
       loadPilotAdapterConfig({
         INTERO_PILOT_AUTHORIZATION: "spicedb",
+        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
     ).toThrow("INTERO_SPICEDB_ENDPOINT");
-    expect(() =>
-      loadPilotAdapterConfig({
-        INTERO_PILOT_REALTIME: "centrifugo",
-      }),
-    ).toThrow("INTERO_CENTRIFUGO_API_URL");
+    expect(() => loadPilotAdapterConfig({})).toThrow();
     expect(() =>
       loadPilotAdapterConfig({
         INTERO_PILOT_STAND_IN_JOBS: "transactional-outbox",
+        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
     ).toThrow("PostgreSQL");
   });

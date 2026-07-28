@@ -11,6 +11,10 @@ const ServerSecret = z.string().min(16);
 const OrganizationId = z.uuid();
 const RuntimeMode = z.enum(["development", "product"]);
 export type RuntimeMode = z.infer<typeof RuntimeMode>;
+const DevelopmentRealtimeTokenSecret =
+  "intero-development-realtime-token-secret-v1";
+const DevelopmentCentrifugoApiUrl = "http://localhost:8000";
+const DevelopmentCentrifugoPublicUrl = "http://localhost:4311";
 
 const DisabledObjectStorageConfig = z.object({
   mode: z.literal("disabled"),
@@ -70,7 +74,7 @@ export interface ApiServiceConfig {
   metricsEnabled: boolean;
   spiceDbInsecure: boolean;
   allowDevelopmentIdentity: boolean;
-  realtime?: {
+  realtime: {
     publicUrl: string;
     tokenSecret: string;
   };
@@ -163,9 +167,23 @@ export function loadApiServiceConfig(
       ...configuredTrustedOrigins,
     ]),
   );
-  const pilot = loadPilotAdapterConfig(environment);
-  const realtimeTokenSecret = environment.INTERO_CENTRIFUGO_TOKEN_SECRET;
-  const realtimePublicUrl = environment.INTERO_CENTRIFUGO_PUBLIC_URL;
+  const pilotEnvironment = withDevelopmentCentrifugoDefaults(
+    environment,
+    runtimeMode,
+  );
+  const pilot = loadPilotAdapterConfig(pilotEnvironment);
+  const realtimeTokenSecret =
+    environment.INTERO_CENTRIFUGO_TOKEN_SECRET ??
+    (runtimeMode === "development"
+      ? DevelopmentRealtimeTokenSecret
+      : undefined);
+  const realtimePublicUrl =
+    environment.INTERO_CENTRIFUGO_PUBLIC_URL ??
+    (runtimeMode === "development"
+      ? environment.INTERO_PUBLIC_URL
+        ? publicUrl
+        : DevelopmentCentrifugoPublicUrl
+      : undefined);
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
   if (runtimeMode === "product" && developmentIdentityRequested) {
@@ -188,20 +206,12 @@ export function loadApiServiceConfig(
       "Product runtime requires INTERO_DATABASE_URL for persistent sessions.",
     );
   }
-  if (
-    runtimeMode === "product" &&
-    pilot.realtime === "centrifugo" &&
-    !realtimeTokenSecret
-  ) {
+  if (runtimeMode === "product" && !realtimeTokenSecret) {
     throw new Error(
       "Product Centrifugo realtime requires INTERO_CENTRIFUGO_TOKEN_SECRET.",
     );
   }
-  if (
-    runtimeMode === "product" &&
-    pilot.realtime === "centrifugo" &&
-    !pilot.centrifugoApiKey
-  ) {
+  if (runtimeMode === "product" && !pilot.centrifugoApiKey) {
     throw new Error(
       "Product Centrifugo realtime requires INTERO_CENTRIFUGO_API_KEY.",
     );
@@ -219,17 +229,13 @@ export function loadApiServiceConfig(
     spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
     allowDevelopmentIdentity:
       runtimeMode === "development" && developmentIdentityRequested,
-    ...(pilot.realtime === "centrifugo" && realtimeTokenSecret
-      ? {
-          realtime: {
-            publicUrl: z
-              .url()
-              .parse(realtimePublicUrl ?? publicUrl)
-              .replace(/\/+$/, ""),
-            tokenSecret: z.string().min(32).parse(realtimeTokenSecret),
-          },
-        }
-      : {}),
+    realtime: {
+      publicUrl: z
+        .url()
+        .parse(realtimePublicUrl ?? publicUrl)
+        .replace(/\/+$/, ""),
+      tokenSecret: z.string().min(32).parse(realtimeTokenSecret),
+    },
     ...(authSecret
       ? {
           auth: {
@@ -286,12 +292,14 @@ function defaultAuthTrustedOrigins(
 export function loadWorkerServiceConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): WorkerServiceConfig {
-  const pilot = loadPilotAdapterConfig(environment);
-  if (
-    environment.INTERO_RUNTIME_MODE === "product" &&
-    pilot.realtime === "centrifugo" &&
-    !pilot.centrifugoApiKey
-  ) {
+  const runtimeMode = RuntimeMode.parse(
+    environment.INTERO_RUNTIME_MODE ??
+      (environment.NODE_ENV === "production" ? "product" : "development"),
+  );
+  const pilot = loadPilotAdapterConfig(
+    withDevelopmentCentrifugoDefaults(environment, runtimeMode),
+  );
+  if (runtimeMode === "product" && !pilot.centrifugoApiKey) {
     throw new Error(
       "Product Centrifugo worker requires INTERO_CENTRIFUGO_API_KEY.",
     );
@@ -330,6 +338,20 @@ export function loadWorkerServiceConfig(
       .default(9464)
       .parse(environment.INTERO_WORKER_METRICS_PORT),
     spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
+  };
+}
+
+function withDevelopmentCentrifugoDefaults(
+  environment: NodeJS.ProcessEnv,
+  runtimeMode: RuntimeMode,
+): NodeJS.ProcessEnv {
+  if (runtimeMode !== "development") {
+    return environment;
+  }
+  return {
+    ...environment,
+    INTERO_CENTRIFUGO_API_URL:
+      environment.INTERO_CENTRIFUGO_API_URL ?? DevelopmentCentrifugoApiUrl,
   };
 }
 

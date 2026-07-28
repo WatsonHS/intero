@@ -201,8 +201,11 @@ export function AdminView({
     queryClient.invalidateQueries({ queryKey: ["project-automation"] });
   /** Teams, projects, the organization directory and the trail they leave. */
   const refreshScope = async () => {
-    await queryClient.invalidateQueries({ queryKey: ["pilot"] });
-    await queryClient.invalidateQueries({ queryKey: ["governance-audit"] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["pilot"] }),
+      queryClient.invalidateQueries({ queryKey: ["threads"] }),
+      queryClient.invalidateQueries({ queryKey: ["governance-audit"] }),
+    ]);
   };
 
   const showRoleNotice = (

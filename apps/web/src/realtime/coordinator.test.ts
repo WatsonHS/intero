@@ -120,6 +120,19 @@ describe("ConversationRealtimeCoordinator", () => {
     const client = fakeTransport.Centrifuge.instances[0]!;
     const release = await coordinator.subscribeThread(threadId);
     const subscription = client.subscriptions[0]!;
+    const messageUpdated = {
+      ...event,
+      eventId: uuidv7(),
+      headSequence: 5,
+      reason: "message_updated" as const,
+      messageId: uuidv7(),
+    };
+    const threadUpdated = {
+      ...event,
+      eventId: uuidv7(),
+      headSequence: 6,
+      reason: "thread_updated" as const,
+    };
     client.emit("publication", {
       channel: `intero:user:test`,
       data: event,
@@ -128,9 +141,17 @@ describe("ConversationRealtimeCoordinator", () => {
       channel: `intero:thread:${threadId}`,
       data: event,
     });
+    subscription.emit("publication", {
+      channel: `intero:thread:${threadId}`,
+      data: messageUpdated,
+    });
+    client.emit("publication", {
+      channel: `intero:user:test`,
+      data: threadUpdated,
+    });
 
     expect(statuses).toEqual(["connecting", "live"]);
-    expect(changes).toEqual([event]);
+    expect(changes).toEqual([event, messageUpdated, threadUpdated]);
     release();
     expect(subscription.subscribed).toBe(false);
     coordinator.stop();

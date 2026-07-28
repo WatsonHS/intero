@@ -14,8 +14,6 @@ export const PilotPersistenceMode = z.enum(["memory", "postgres"]);
 export type PilotPersistenceMode = z.infer<typeof PilotPersistenceMode>;
 export const PilotAuthorizationMode = z.enum(["membership", "spicedb"]);
 export type PilotAuthorizationMode = z.infer<typeof PilotAuthorizationMode>;
-export const PilotRealtimeMode = z.enum(["polling", "centrifugo"]);
-export type PilotRealtimeMode = z.infer<typeof PilotRealtimeMode>;
 export const PilotJobMode = z.enum(["inline", "transactional-outbox"]);
 export type PilotJobMode = z.infer<typeof PilotJobMode>;
 
@@ -23,13 +21,12 @@ export const PilotAdapterConfig = z
   .object({
     persistence: PilotPersistenceMode,
     authorization: PilotAuthorizationMode,
-    realtime: PilotRealtimeMode,
     standInJobs: PilotJobMode,
     databaseUrl: z.string().min(1).optional(),
     providerEncryptionKey: z.string().min(16).optional(),
     spiceDbEndpoint: z.string().min(1).optional(),
     spiceDbToken: z.string().min(1).optional(),
-    centrifugoApiUrl: z.string().url().optional(),
+    centrifugoApiUrl: z.string().url(),
     centrifugoApiKey: z.string().min(1).optional(),
   })
   .superRefine((value, context) => {
@@ -71,14 +68,6 @@ export const PilotAdapterConfig = z
         });
       }
     }
-    if (value.realtime === "centrifugo" && !value.centrifugoApiUrl) {
-      context.addIssue({
-        code: "custom",
-        path: ["realtime"],
-        message:
-          "INTERO_CENTRIFUGO_API_URL is required when INTERO_PILOT_REALTIME=centrifugo.",
-      });
-    }
   });
 export type PilotAdapterConfig = z.infer<typeof PilotAdapterConfig>;
 
@@ -95,6 +84,14 @@ export function loadRuntimeConfig(
 export function loadPilotAdapterConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): PilotAdapterConfig {
+  if (
+    environment.INTERO_PILOT_REALTIME &&
+    environment.INTERO_PILOT_REALTIME !== "centrifugo"
+  ) {
+    throw new Error(
+      "INTERO_PILOT_REALTIME no longer selects an adapter; Centrifugo is required.",
+    );
+  }
   const databaseUrl = environment.INTERO_DATABASE_URL;
   const persistence =
     environment.INTERO_PILOT_PERSISTENCE ??
@@ -107,9 +104,6 @@ export function loadPilotAdapterConfig(
     authorization:
       environment.INTERO_PILOT_AUTHORIZATION ??
       (spiceDbEndpoint || spiceDbToken ? "spicedb" : "membership"),
-    realtime:
-      environment.INTERO_PILOT_REALTIME ??
-      (centrifugoApiUrl ? "centrifugo" : "polling"),
     standInJobs:
       environment.INTERO_PILOT_STAND_IN_JOBS ??
       (persistence === "postgres" ? "transactional-outbox" : "inline"),

@@ -41,7 +41,7 @@ State contracts are transport-independent behind explicit ports:
 | ----------------------- | ------------------------------------------------------------- | -------------------------------- |
 | `ModelGateway`          | Vercel AI SDK calling the administrator-configured model      | Additional providers may adapt   |
 | `AuthorizationPort`     | SpiceDB-backed authorization plus tenant-safe membership data | Contract-tested and replaceable  |
-| `RealtimePort`          | Centrifugo fanout with polling/cursor repair                  | PostgreSQL remains authoritative |
+| `RealtimePort`          | Centrifugo fanout with reconnect cursor repair                | PostgreSQL remains authoritative |
 | `ObjectStorePort`       | MinIO/S3-compatible storage with DB-authoritative metadata    | Upload product surface disabled  |
 | `JobRunnerPort`         | Graphile Worker jobs plus transactional outbox and reconciler | Durable, idempotent processing   |
 | `CoordinationTransport` | Bounded Project-internal protocol                             | General A2A remains deferred     |
@@ -1025,7 +1025,8 @@ Security verification covers:
 - API and Stand-in jobs retry idempotently where safe.
 - stale state is visible rather than silently reused;
 - protected reads and mutations fail closed when authorization is unavailable;
-- realtime failure falls back to cursor polling;
+- realtime failure remains visible while Centrifugo reconnects; no polling
+  delivery fallback is enabled;
 - scanning failure keeps an upload unavailable;
 - MCP unavailability is explicit and does not block Coding Agent work;
 - optional hook delivery retries in process for a bounded period, then fails open

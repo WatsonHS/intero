@@ -61,14 +61,14 @@ API continues to use the RLS-constrained `INTERO_DATABASE_URL`.
 
 ### Phase 2 reliable collaboration services
 
-The persistent Pilot path uses three explicitly selected adapters:
+The persistent Pilot path uses three required collaboration services:
 
 - normalized PostgreSQL plus Graphile Worker for durable Stand-in jobs
   and the transactional outbox;
 - SpiceDB for organization/team/project authorization, with normalized
   membership as the relationship source of truth;
-- Centrifugo for project-scoped realtime fanout. Polling remains available as
-  repair/fallback behavior.
+- Centrifugo for project-scoped realtime fanout. PostgreSQL remains
+  authoritative, but there is no polling delivery mode.
 
 For local validation, start only the Phase 2 dependencies (MinIO is not part of
 this phase), apply both schemas, and initialize Graphile Worker:
@@ -86,7 +86,6 @@ export INTERO_PILOT_AUTHORIZATION='spicedb'
 export INTERO_SPICEDB_ENDPOINT='127.0.0.1:50051'
 export INTERO_SPICEDB_TOKEN='intero-development'
 export INTERO_SPICEDB_INSECURE='true'
-export INTERO_PILOT_REALTIME='centrifugo'
 export INTERO_CENTRIFUGO_API_URL='http://127.0.0.1:8000'
 
 pnpm --filter @intero/server-api migrate
@@ -114,8 +113,8 @@ writes a heartbeat and shuts down gracefully.
 The realtime dispatcher publishes the same durable domain outbox to
 `intero:project:<project-id>`. Failed Centrifugo delivery leaves the outbox row
 retryable with backoff; successful delivery records completion. Clients must
-also refresh through the existing polling path after reconnect, so realtime
-delivery is an acceleration rather than a second source of truth.
+repair authoritative state over HTTP after reconnect or a recovery gap;
+Centrifugo remains the only arrival and wake-up transport.
 
 Without `INTERO_DATABASE_URL`, pilot state is in memory and resets when the API
 restarts. When `INTERO_DATABASE_URL` is set, normalized PostgreSQL tables are

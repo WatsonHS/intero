@@ -99,6 +99,8 @@ export class InMemoryPlatformStore {
   readonly envelopes = new Map<OperationId, ActionEnvelope>();
   readonly threads = new Map<ThreadId, ConversationThread>();
   readonly messages = new Map<ThreadId, ThreadMessage[]>();
+  /** First message sequence visible to a participant after they join. */
+  private readonly threadVisibility = new Map<string, number>();
   /** Keyed `${threadId}:${principalId}` — the read marker per person. */
   private readonly threadReads = new Map<
     string,
@@ -338,6 +340,9 @@ export class InMemoryPlatformStore {
     };
     this.threads.set(thread.id, stored);
     this.messages.set(thread.id, []);
+    for (const participantId of thread.participantIds) {
+      this.threadVisibility.set(`${thread.id}:${participantId}`, 1);
+    }
     if (actorId) {
       this.recordConversationChange(
         stored,
@@ -347,6 +352,86 @@ export class InMemoryPlatformStore {
       );
     }
     return stored;
+  }
+
+  updateThread(
+    threadId: ThreadId,
+    input: { title?: string; addParticipantIds: PrincipalId[] },
+    actorId: PrincipalId,
+  ): { thread: ConversationThread; event?: ThreadMessage } {
+    const current = this.threads.get(threadId);
+    if (!current || !current.participantIds.includes(actorId)) {
+      throw new Error("Thread was not found.");
+    }
+    if (current.standInIds.includes(actorId)) {
+      throw new Error("Only a human participant can manage this Thread.");
+    }
+    if (current.kind !== "room" && current.kind !== "human_group") {
+      throw new Error("Only group conversations can be managed.");
+    }
+    const title = input.title?.trim();
+    if (title !== undefined && (title.length === 0 || title.length > 200)) {
+      throw new Error("Thread title is invalid.");
+    }
+    const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
+      (principalId) => !current.participantIds.includes(principalId),
+    );
+    for (const participantId of addedParticipantIds) {
+      this.ensurePrincipal(participantId, "human");
+    }
+    const titleChanged = title !== undefined && title !== current.title;
+    if (!titleChanged && addedParticipantIds.length === 0) {
+      return { thread: current };
+    }
+
+    const event =
+      addedParticipantIds.length > 0
+        ? ({
+            id: uuidv7() as ThreadMessage["id"],
+            threadId,
+            senderId: actorId,
+            sequence: current.sequence + 1,
+            kind: "system_access_change",
+            body:
+              addedParticipantIds.length === 1
+                ? "A member joined the group conversation. Earlier history remains withheld."
+                : `${addedParticipantIds.length} members joined the group conversation. Earlier history remains withheld.`,
+            createdAt: new Date().toISOString(),
+            serverReadable: true,
+          } satisfies ThreadMessage)
+        : undefined;
+    const updated: ConversationThread = {
+      ...current,
+      ...(titleChanged ? { title } : {}),
+      ...(addedParticipantIds.length > 0
+        ? {
+            participantIds: [...current.participantIds, ...addedParticipantIds],
+            sequence: event!.sequence,
+            accessVersion: (current.accessVersion ?? 1) + 1,
+            latestMessageAt: event!.createdAt,
+          }
+        : {}),
+    };
+    this.threads.set(threadId, updated);
+    if (event) {
+      this.messages.set(threadId, [
+        ...(this.messages.get(threadId) ?? []),
+        event,
+      ]);
+      for (const participantId of addedParticipantIds) {
+        this.threadVisibility.set(
+          `${threadId}:${participantId}`,
+          event.sequence,
+        );
+      }
+    }
+    this.recordConversationChange(
+      updated,
+      actorId,
+      event ? "access_changed" : "thread_updated",
+      event?.id ?? uuidv7(),
+    );
+    return { thread: updated, ...(event ? { event } : {}) };
   }
 
   appendMessage(
@@ -537,24 +622,27 @@ export class InMemoryPlatformStore {
       return undefined;
     }
     const all = this.messages.get(threadId) ?? [];
+    const visibleFrom =
+      this.threadVisibility.get(`${threadId}:${principalId}`) ?? 1;
+    const visible = all.filter((message) => message.sequence >= visibleFrom);
     let candidates: ThreadMessage[];
     let hasMore = false;
     if (query.afterSequence !== undefined) {
-      const matching = all.filter(
+      const matching = visible.filter(
         (message) => message.sequence > query.afterSequence!,
       );
       candidates = matching.slice(0, query.limit);
       hasMore = matching.length > candidates.length;
     } else if (query.beforeSequence !== undefined) {
-      const matching = all.filter(
+      const matching = visible.filter(
         (message) => message.sequence < query.beforeSequence!,
       );
       candidates = matching.slice(-query.limit);
       hasMore = matching.length > candidates.length;
     } else {
       const limit = query.tail ?? query.limit;
-      candidates = all.slice(-limit);
-      hasMore = all.length > candidates.length;
+      candidates = visible.slice(-limit);
+      hasMore = visible.length > candidates.length;
     }
     return {
       items: structuredClone(candidates),
@@ -570,8 +658,10 @@ export class InMemoryPlatformStore {
     messageId: ThreadMessage["id"],
   ): ThreadMessage | undefined {
     if (!this.hasThreadAccess(threadId, principalId)) return undefined;
+    const visibleFrom =
+      this.threadVisibility.get(`${threadId}:${principalId}`) ?? 1;
     return (this.messages.get(threadId) ?? []).find(
-      (message) => message.id === messageId,
+      (message) => message.id === messageId && message.sequence >= visibleFrom,
     );
   }
 
@@ -810,7 +900,12 @@ export class InMemoryPlatformStore {
       )
       .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((thread) => {
-        const messages = this.messages.get(thread.id) ?? [];
+        const visibleFrom = principalId
+          ? (this.threadVisibility.get(`${thread.id}:${principalId}`) ?? 1)
+          : 1;
+        const messages = (this.messages.get(thread.id) ?? []).filter(
+          (message) => message.sequence >= visibleFrom,
+        );
         const lastRead = principalId
           ? (this.threadReads.get(`${thread.id}:${principalId}`)
               ?.lastReadSequence ?? 0)
@@ -846,7 +941,12 @@ export class InMemoryPlatformStore {
     ) {
       return undefined;
     }
-    const messages = this.messages.get(threadId) ?? [];
+    const visibleFrom = principalId
+      ? (this.threadVisibility.get(`${thread.id}:${principalId}`) ?? 1)
+      : 1;
+    const messages = (this.messages.get(threadId) ?? []).filter(
+      (message) => message.sequence >= visibleFrom,
+    );
     const lastRead = principalId
       ? (this.threadReads.get(`${thread.id}:${principalId}`)
           ?.lastReadSequence ?? 0)
@@ -892,6 +992,7 @@ export class InMemoryPlatformStore {
     actorId: PrincipalId,
     reason:
       | "thread_created"
+      | "thread_updated"
       | "message_appended"
       | "message_updated"
       | "read_cursor_changed"

@@ -17,6 +17,7 @@ import {
   TeamPulseResponse,
   ThreadResponse,
   UpdateKanbanCardRequest,
+  UpdateThreadRequest,
 } from "@intero/api-contracts";
 import openapiTS, { astToString } from "openapi-typescript";
 import { format } from "prettier";
@@ -38,6 +39,7 @@ const schemas = {
   TeamPulseResponse,
   ThreadResponse,
   UpdateKanbanCardRequest,
+  UpdateThreadRequest,
 };
 
 const document = {
@@ -198,6 +200,35 @@ const document = {
                 },
               },
             },
+          },
+        },
+      },
+    },
+    "/v1/threads/{threadId}": {
+      patch: {
+        operationId: "updateThread",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/UpdateThreadRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Updated group conversation",
+          },
+          "404": {
+            description: "Thread not found or inaccessible",
           },
         },
       },

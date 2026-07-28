@@ -232,7 +232,7 @@ const app = await buildApp({
     : {}),
   ...(objectStore ? { pilotObjectStore: objectStore } : {}),
   ...(attachmentService ? { attachments: attachmentService } : {}),
-  ...(serviceConfig.realtime ? { realtimeConfig: serviceConfig.realtime } : {}),
+  realtimeConfig: serviceConfig.realtime,
 });
 if (authorization) app.addHook("onClose", async () => authorization.close());
 if (objectStore) app.addHook("onClose", async () => objectStore.close());

@@ -599,6 +599,112 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async updateThread(
+    threadId: ThreadId,
+    input: { title?: string; addParticipantIds: PrincipalId[] },
+    actorId: PrincipalId,
+  ): Promise<{ thread: ConversationThread; event?: ThreadMessage }> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!current || !current.thread.participantIds.includes(actorId)) {
+        throw new Error("Thread was not found.");
+      }
+      if (current.thread.standInIds.includes(actorId)) {
+        throw new Error("Only a human participant can manage this Thread.");
+      }
+      if (
+        current.thread.kind !== "room" &&
+        current.thread.kind !== "human_group"
+      ) {
+        throw new Error("Only group conversations can be managed.");
+      }
+      const title = input.title?.trim();
+      if (title !== undefined && (title.length === 0 || title.length > 200)) {
+        throw new Error("Thread title is invalid.");
+      }
+      const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
+        (principalId) => !current.thread.participantIds.includes(principalId),
+      );
+      const titleChanged =
+        title !== undefined && title !== current.thread.title;
+      if (!titleChanged && addedParticipantIds.length === 0) {
+        return { thread: current.thread };
+      }
+
+      const event =
+        addedParticipantIds.length > 0
+          ? ({
+              id: uuidv7() as ThreadMessage["id"],
+              threadId,
+              senderId: actorId,
+              sequence: current.thread.sequence + 1,
+              kind: "system_access_change",
+              body:
+                addedParticipantIds.length === 1
+                  ? "A member joined the group conversation. Earlier history remains withheld."
+                  : `${addedParticipantIds.length} members joined the group conversation. Earlier history remains withheld.`,
+              createdAt: new Date().toISOString(),
+              serverReadable: true,
+            } satisfies ThreadMessage)
+          : undefined;
+
+      for (const participantId of addedParticipantIds) {
+        await this.ensurePrincipal(client, participantId, "human");
+        await client.query(
+          `INSERT INTO thread_participants
+            (organization_id, thread_id, principal_id, stand_in,
+             visible_from_sequence, revoked_at)
+           VALUES ($1, $2, $3, false, $4, NULL)
+           ON CONFLICT (thread_id, principal_id)
+           DO UPDATE SET
+             stand_in = false,
+             visible_from_sequence = EXCLUDED.visible_from_sequence,
+             revoked_at = NULL,
+             updated_at = now()`,
+          [this.organizationId, threadId, participantId, event!.sequence],
+        );
+      }
+      await client.query(
+        `UPDATE threads SET
+           title = $2,
+           sequence = $3,
+           access_version = access_version + $4,
+           latest_message_at = $5,
+           updated_at = now()
+         WHERE id = $1`,
+        [
+          threadId,
+          titleChanged ? title : current.thread.title,
+          event?.sequence ?? current.thread.sequence,
+          event ? 1 : 0,
+          event?.createdAt ?? current.thread.latestMessageAt ?? null,
+        ],
+      );
+      if (event) await this.insertMessage(client, event);
+      const updated = (await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      ))!.thread;
+      await this.recordConversationChange(client, {
+        eventId: (event?.id ?? uuidv7()) as OperationId,
+        thread: updated,
+        actorId,
+        reason: event ? "access_changed" : "thread_updated",
+      });
+      return { thread: updated, ...(event ? { event } : {}) };
+    });
+  }
+
   async appendMessage(
     threadId: ThreadId,
     input: {
@@ -2253,6 +2359,7 @@ export class PostgresPlatformStore implements PlatformStore {
       actorId: PrincipalId;
       reason:
         | "thread_created"
+        | "thread_updated"
         | "message_appended"
         | "message_updated"
         | "read_cursor_changed"

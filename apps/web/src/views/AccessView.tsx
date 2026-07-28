@@ -245,7 +245,10 @@ export function AcceptInvitationView({
   const accept = useMutation({
     mutationFn: () => acceptPilotInvitation(token, displayName.trim()),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["pilot"] }),
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+      ]);
     },
   });
   const activate = useMutation({
@@ -272,7 +275,10 @@ export function AcceptInvitationView({
       return acceptPilotInvitation(token, displayName.trim());
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["pilot"] }),
+        queryClient.invalidateQueries({ queryKey: ["threads"] }),
+      ]);
     },
   });
   const signInExisting = useMutation({

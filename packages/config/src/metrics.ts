@@ -53,7 +53,7 @@ export class PrivacySafeMetrics {
     this.observe(`intero_model_duration_ms${labels}`, durationMs);
   }
 
-  setRealtimeHealth(adapter: "polling" | "centrifugo", healthy: boolean) {
+  setRealtimeHealth(adapter: "centrifugo", healthy: boolean) {
     this.#gauges.set(
       `intero_realtime_healthy${labelsOf({ adapter })}`,
       healthy ? 1 : 0,

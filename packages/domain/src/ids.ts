@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import { z } from "zod";
 
 const uuidSchema = z.uuid();
@@ -14,8 +12,7 @@ export const WorkItemId = uuidSchema.brand<"WorkItemId">();
 export const ProgramIncrementId = uuidSchema.brand<"ProgramIncrementId">();
 export const SprintId = uuidSchema.brand<"SprintId">();
 export const WorkCommentId = uuidSchema.brand<"WorkCommentId">();
-export const SpecCommentThreadId =
-  uuidSchema.brand<"SpecCommentThreadId">();
+export const SpecCommentThreadId = uuidSchema.brand<"SpecCommentThreadId">();
 export const SpecCommentId = uuidSchema.brand<"SpecCommentId">();
 export const WorkspaceId = uuidSchema.brand<"WorkspaceId">();
 export const WorkstreamId = uuidSchema.brand<"WorkstreamId">();
@@ -60,7 +57,7 @@ export type OperationId = z.infer<typeof OperationId>;
  * database or platform-specific UUID extension.
  */
 export function uuidv7(now = Date.now()): string {
-  const bytes = randomBytes(16);
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
   const timestamp = BigInt(now);
 
   bytes[0] = Number((timestamp >> 40n) & 0xffn);
@@ -72,7 +69,9 @@ export function uuidv7(now = Date.now()): string {
   bytes[6] = (bytes[6]! & 0x0f) | 0x70;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
 
-  const hex = bytes.toString("hex");
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),

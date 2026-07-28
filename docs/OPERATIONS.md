@@ -171,8 +171,9 @@ PostgreSQL backup covers object metadata, not MinIO bytes. Production must use
 bucket versioning plus MinIO site/bucket replication or an infrastructure
 backup product and test restoration of both metadata and bytes to a staged
 environment. SpiceDB schema is versioned in the repository; normalized
-membership can repopulate enforcement tuples. Centrifugo history is transient
-and is repaired from PostgreSQL polling/outbox state.
+membership can repopulate enforcement tuples. Centrifugo history is transient;
+clients repair authoritative state from PostgreSQL-backed HTTP reads after
+reconnect or a recovery gap.
 
 ## Failure behavior
 
@@ -183,7 +184,8 @@ and is repaired from PostgreSQL polling/outbox state.
 - provider unavailable: private Work State remains durable; jobs retry and may
   dead-letter after the configured maximum.
 - SpiceDB unavailable: authorization fails closed and readiness is unavailable.
-- Centrifugo unavailable: outbox retries; clients repair by polling.
+- Centrifugo unavailable: outbox retries and clients remain degraded while the
+  SDK reconnects; there is no polling delivery fallback.
 - optional MinIO unavailable: readiness is degraded; core collaboration and MCP
   remain available, and no upload route is exposed.
 

@@ -18,6 +18,7 @@ export async function repairConversationChange(
 ): Promise<ThreadMessage[]> {
   if (
     event.reason === "thread_created" ||
+    event.reason === "thread_updated" ||
     event.reason === "access_changed" ||
     event.reason === "thread_concluded"
   ) {

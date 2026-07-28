@@ -180,6 +180,77 @@ describe("Intero API vertical slice", () => {
     expect(stored.json().thread.participantIds).toEqual([ALEX]);
   });
 
+  it("lets a group member rename the chat and add a member without exposing earlier history", async () => {
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "room",
+        title: "Launch planning",
+        participantIds: [ALEX],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: uuidv7(),
+        body: "History from before Priya joined.",
+      },
+    });
+    const rejected = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(PRIYA),
+      payload: { title: "Hijacked" },
+    });
+    expect(rejected.statusCode).toBe(404);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(ALEX),
+      payload: {
+        title: "Launch room",
+        addParticipantIds: [PRIYA],
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      thread: {
+        title: "Launch room",
+        participantIds: [ALEX, PRIYA],
+        sequence: 2,
+        accessVersion: 2,
+      },
+      event: {
+        kind: "system_access_change",
+        sequence: 2,
+      },
+    });
+
+    const newMemberView = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(PRIYA),
+    });
+    expect(newMemberView.statusCode).toBe(200);
+    expect(newMemberView.json().messages).toEqual([
+      expect.objectContaining({
+        kind: "system_access_change",
+        sequence: 2,
+      }),
+    ]);
+  });
+
   it("settles a retried message ID exactly once and rejects payload drift", async () => {
     const threadId = uuidv7();
     const clientMessageId = uuidv7();
@@ -513,7 +584,7 @@ describe("Intero API vertical slice", () => {
         id: "019b5ac0-7600-7000-8000-000000000001",
         name: "Intero Development",
       },
-      adapters: { realtime: "polling" },
+      adapters: { realtime: "centrifugo" },
     });
   });
 

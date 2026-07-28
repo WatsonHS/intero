@@ -20,7 +20,6 @@ import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
   InstrumentedModelGateway,
   MembershipAuthorizationAdapter,
-  PollingRealtimeAdapter,
   ProjectInternalCoordinationTransport,
 } from "../../server-api/src/pilot-ports.js";
 import { PilotStandInJobHandler } from "../../server-api/src/pilot-service.js";
@@ -102,7 +101,6 @@ const authorization = spiceDb
   ? new SpiceDbPilotAuthorization(pilotStore, spiceDb)
   : new MembershipAuthorizationAdapter(pilotStore);
 const coordination = new ProjectInternalCoordinationTransport(pilotStore);
-const pollingRealtime = new PollingRealtimeAdapter();
 const metrics = new PrivacySafeMetrics();
 const model = new InstrumentedModelGateway(
   new VercelAiModelGateway(
@@ -116,7 +114,6 @@ const standInHandler = new PilotStandInJobHandler(
   authorization,
   model,
   coordination,
-  pollingRealtime,
 );
 const pilotJobRepository = new PostgresPilotJobRepository(
   new Pool({ connectionString }),
@@ -331,16 +328,14 @@ const realtimeOutboxRepository = new PostgresOutboxRepository(
   new Pool({ connectionString }),
   organizationId,
 );
-const centrifugoRealtime = centrifugoApiUrl
-  ? new CentrifugoRealtime(
-      centrifugoApiUrl,
-      pilotAdapterConfig.centrifugoApiKey,
-    )
-  : undefined;
+const centrifugoRealtime = new CentrifugoRealtime(
+  centrifugoApiUrl,
+  pilotAdapterConfig.centrifugoApiKey,
+);
 const realtimeOutbox = new OutboxDispatcher(
   organizationId,
   realtimeOutboxRepository,
-  centrifugoRealtime ?? pollingRealtime,
+  centrifugoRealtime,
 );
 tasks.dispatch_outbox = async (_payload, helpers) => {
   await realtimeOutbox.dispatch();
@@ -558,14 +553,9 @@ async function updateOperationalHealth(): Promise<void> {
   const operational = await pilotJobRepository.getOperationalMetrics();
   metrics.setQueueDepth("stand_in", operational.standInQueueDepth);
   metrics.setQueueDepth("realtime_outbox", operational.realtimeOutboxDepth);
-  const realtimeReadiness = centrifugoRealtime
-    ? await centrifugoRealtime.checkReadiness()
-    : { status: "ready" as const };
+  const realtimeReadiness = await centrifugoRealtime.checkReadiness();
   realtimeHealthy = realtimeReadiness.status === "ready";
-  metrics.setRealtimeHealth(
-    centrifugoRealtime ? "centrifugo" : "polling",
-    realtimeHealthy,
-  );
+  metrics.setRealtimeHealth("centrifugo", realtimeHealthy);
   await pilotJobRepository.heartbeat({
     workerId,
     status: "ready",

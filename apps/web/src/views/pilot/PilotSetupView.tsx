@@ -72,7 +72,10 @@ export function PilotTestSetupFlow({
   const selectedTeam = teams[0];
 
   async function refreshPilot() {
-    await queryClient.invalidateQueries({ queryKey: ["pilot"] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["pilot"] }),
+      queryClient.invalidateQueries({ queryKey: ["threads"] }),
+    ]);
   }
 
   const setup = useMutation({
@@ -80,8 +83,7 @@ export function PilotTestSetupFlow({
       setupPilot(pilot.identityId!, {
         organizationName,
         teamName,
-        deploymentBaseUrl:
-          pilot.bootstrap.data?.publicUrl ?? deploymentBaseUrl,
+        deploymentBaseUrl: pilot.bootstrap.data?.publicUrl ?? deploymentBaseUrl,
       }),
     onSuccess: refreshPilot,
   });

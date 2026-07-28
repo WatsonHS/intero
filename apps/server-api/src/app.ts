@@ -19,6 +19,7 @@ import {
   SendThreadMessageRequest,
   ThreadMessagesQuery,
   UpdateKanbanCardRequest,
+  UpdateThreadRequest,
 } from "@intero/api-contracts";
 import type { AttachmentService } from "@intero/attachments";
 import {
@@ -74,7 +75,6 @@ import {
   MembershipAuthorizationAdapter,
   type ModelGateway,
   type PilotStandInJob,
-  PollingRealtimeAdapter,
   ProjectInternalCoordinationTransport,
 } from "./pilot-ports.js";
 import { registerPilotRoutes } from "./pilot-routes.js";
@@ -95,7 +95,6 @@ import {
   type JobRunnerPort,
   type ObjectStorePort,
   type ReadinessDependency,
-  type RealtimePort,
 } from "./ports.js";
 import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 import { InMemoryPlatformStore } from "./store.js";
@@ -151,7 +150,6 @@ export interface BuildAppOptions {
   deploymentProbe?: (baseUrl: string) => Promise<boolean>;
   providerEncryptionSecret?: string;
   pilotAuthorization?: AuthorizationPort;
-  pilotRealtime?: RealtimePort;
   pilotObjectStore?: ObjectStorePort;
   pilotCoordination?: CoordinationTransport;
   pilotModelGateway?: ModelGateway;
@@ -178,6 +176,10 @@ export async function buildApp(
     options.metrics === false
       ? undefined
       : (options.metrics ?? new PrivacySafeMetrics());
+  const realtimeConfig = options.realtimeConfig ?? {
+    publicUrl: "http://localhost:4311",
+    tokenSecret: "intero-development-realtime-token-secret-v1",
+  };
   const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
   const organization = options.organization ?? {
@@ -260,7 +262,6 @@ export async function buildApp(
   const pilotAuthorization =
     options.pilotAuthorization ??
     new MembershipAuthorizationAdapter(pilotStore);
-  const pilotRealtime = options.pilotRealtime ?? new PollingRealtimeAdapter();
   const pilotObjectStore =
     options.pilotObjectStore ?? new DisabledObjectStoreAdapter();
   const pilotCoordination =
@@ -281,7 +282,6 @@ export async function buildApp(
     pilotAuthorization,
     pilotModelGateway,
     pilotCoordination,
-    pilotRealtime,
   );
   const pilotJobs =
     options.pilotJobs ??
@@ -370,7 +370,7 @@ export async function buildApp(
     return {
       organization,
       adapters: {
-        realtime: options.realtimeConfig ? "centrifugo" : "polling",
+        realtime: "centrifugo",
       },
       ...(resolvedPrincipal
         ? {
@@ -407,11 +407,7 @@ export async function buildApp(
     coordination: pilotCoordination,
     modelGateway: pilotModelGateway,
     adapters: {
-      realtime: options.realtimeConfig
-        ? "centrifugo"
-        : pilotRealtime instanceof PollingRealtimeAdapter
-          ? pilotRealtime.mode
-          : "polling",
+      realtime: "centrifugo",
       objectStorage:
         pilotObjectStore instanceof DisabledObjectStoreAdapter
           ? pilotObjectStore.mode
@@ -434,13 +430,11 @@ export async function buildApp(
     store: pilotStore,
     checkpointService: pilotCheckpointService,
   });
-  if (options.realtimeConfig) {
-    await registerRealtimeRoutes(app, {
-      store,
-      requestAuth,
-      ...options.realtimeConfig,
-    });
-  }
+  await registerRealtimeRoutes(app, {
+    store,
+    requestAuth,
+    ...realtimeConfig,
+  });
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {
       store: options.projectWorkStore,
@@ -980,6 +974,41 @@ export async function buildApp(
         ]),
       );
       return presentThread(store, result, reads, principal!.id);
+    },
+  );
+
+  app.patch<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const input = parse(UpdateThreadRequest, request.body);
+      const visible = await store.hasThreadAccess(threadId, principal!.id);
+      if (!visible) return notFound(reply, "Thread");
+      const requestedParticipants = [
+        ...new Set(input.addParticipantIds as PrincipalId[]),
+      ];
+      const knownParticipants = await principalDirectory.list(
+        requestedParticipants,
+      );
+      if (
+        knownParticipants.length !== requestedParticipants.length ||
+        knownParticipants.some((candidate) => candidate.kind !== "human")
+      ) {
+        throw new PilotStoreError(
+          "THREAD_MEMBER_INVALID",
+          400,
+          "New Thread participants must be known human members.",
+        );
+      }
+      return store.updateThread(
+        threadId,
+        {
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          addParticipantIds: requestedParticipants,
+        },
+        principal!.id,
+      );
     },
   );
 
