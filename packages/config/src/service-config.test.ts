@@ -5,6 +5,7 @@ import {
   loadMigratorServiceConfig,
   loadObjectStorageConfig,
   loadWorkerServiceConfig,
+  realtimeEnabledForOrganization,
 } from "./service-config.js";
 
 const postgresEnvironment = {
@@ -59,6 +60,8 @@ describe("service environment schemas", () => {
       realtime: {
         publicUrl: "http://localhost:4311",
         tokenSecret: "intero-development-realtime-token-secret-v1",
+        enabled: true,
+        rolloutPercent: 100,
       },
     });
     expect(
@@ -76,6 +79,27 @@ describe("service environment schemas", () => {
         centrifugoApiKey: "intero-development-realtime-api-key-v1",
       },
     });
+  });
+
+  it("uses a stable Organization bucket for staged realtime rollout", () => {
+    const organizationId = "019b5ac0-7600-7000-8000-000000000001";
+    expect(realtimeEnabledForOrganization(organizationId, 0)).toBe(false);
+    expect(realtimeEnabledForOrganization(organizationId, 100)).toBe(true);
+    expect(realtimeEnabledForOrganization(organizationId, 10)).toBe(
+      realtimeEnabledForOrganization(organizationId, 10),
+    );
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_REALTIME_ROLLOUT_PERCENT: "0",
+      }).realtime,
+    ).toMatchObject({ enabled: false, rolloutPercent: 0 });
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_REALTIME_ROLLOUT_PERCENT: "101",
+      }),
+    ).toThrow();
   });
 
   it("rejects the removed realtime mode switch", () => {

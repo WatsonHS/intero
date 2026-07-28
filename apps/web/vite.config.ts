@@ -22,13 +22,39 @@ export function createWebViteConfig(options?: {
     build: {
       outDir: options?.outDir ?? resolve(webRoot, "dist"),
       emptyOutDir: true,
-      ...(options?.input
-        ? {
-            rollupOptions: {
-              input: options.input,
-            },
-          }
-        : {}),
+      rollupOptions: {
+        ...(options?.input ? { input: options.input } : {}),
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return undefined;
+            if (id.includes("@tanstack/")) return "vendor-tanstack";
+            if (id.includes("/@uiw/react-codemirror/")) {
+              return "vendor-editor-react";
+            }
+            if (id.includes("/@lezer/")) return "vendor-editor-parser";
+            if (id.includes("/@codemirror/")) return "vendor-editor-core";
+            if (
+              id.includes("@phosphor-icons/") ||
+              id.includes("/phosphor-react/")
+            ) {
+              return "vendor-icons";
+            }
+            if (id.includes("/better-auth/") || id.includes("/@better-auth/")) {
+              return "vendor-auth";
+            }
+            if (
+              id.includes("/react/") ||
+              id.includes("/react-dom/") ||
+              id.includes("/scheduler/")
+            ) {
+              return "vendor-react";
+            }
+            if (id.includes("/centrifuge/")) return "vendor-realtime";
+            if (id.includes("/zod/")) return "vendor-validation";
+            return undefined;
+          },
+        },
+      },
     },
   };
 }

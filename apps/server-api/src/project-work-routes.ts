@@ -368,24 +368,29 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId",
     async (request) => {
       const access = await requireProjectAccess(request, options, "either");
-      const input = workItemMutation.partial().parse(request.body);
+      const input = workItemMutation
+        .partial()
+        .extend({ expectedUpdatedAt: z.iso.datetime().optional() })
+        .parse(request.body);
+      const { expectedUpdatedAt, ...mutation } = input;
       await assertAgentWorkItemBoundaries(
         options.store,
         access,
-        input,
+        mutation,
         false,
         "work_item.update",
       );
       const key = requireDerivationIdempotencyKey(
         request,
-        input.sourceSpecRevisionId ?? undefined,
+        mutation.sourceSpecRevisionId ?? undefined,
       );
       return options.store.updateWorkItem(
         access.projectId,
         WorkItemId.parse(request.params.workItemId),
-        workItemPatch(input),
+        workItemPatch(mutation),
         access.actor,
         key,
+        expectedUpdatedAt,
       );
     },
   );

@@ -70,6 +70,38 @@ integrationSuite("SpiceDB Authorization port", () => {
     ).resolves.toMatchObject({ allowed: false });
   });
 
+  it("retains concurrent relationship repairs before checking permissions", async () => {
+    const relationships = Array.from({ length: 24 }, (_, index) => {
+      const resourceType =
+        index % 3 === 0 ? "organization" : index % 3 === 1 ? "team" : "project";
+      return {
+        resourceType,
+        resourceId: `concurrent-${Date.now()}-${index}`,
+        relation: resourceType === "organization" ? "admin" : "member",
+        permission: resourceType === "organization" ? "manage" : "participate",
+        principalId: `concurrent-principal-${Date.now()}-${index}`,
+      };
+    });
+    const tokens = await Promise.all(
+      relationships.map((relationship) =>
+        authorization.touchRelationship(relationship),
+      ),
+    );
+    const checks = await Promise.all(
+      relationships.map((relationship, index) =>
+        authorization.check({
+          principalId: relationship.principalId,
+          resourceType: relationship.resourceType,
+          resourceId: relationship.resourceId,
+          permission: relationship.permission,
+          ...(tokens[index] ? { consistencyToken: tokens[index] } : {}),
+        }),
+      ),
+    );
+
+    expect(checks.every((check) => check.allowed)).toBe(true);
+  });
+
   it("fails closed when SpiceDB is unavailable", async () => {
     const unavailable = new SpiceDbAuthorization({
       endpoint: "127.0.0.1:59999",

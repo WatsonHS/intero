@@ -24,8 +24,14 @@ class ManualActionInboxEvents implements ActionInboxEventSource {
   }
 
   emit(event: ActionInboxChangedEvent): void {
-    for (const listener of this.listeners.get(event.principalId) ?? []) {
-      listener(event);
+    if ("principalId" in event) {
+      for (const listener of this.listeners.get(event.principalId) ?? []) {
+        listener(event);
+      }
+      return;
+    }
+    for (const listeners of this.listeners.values()) {
+      for (const listener of listeners) listener(event);
     }
   }
 }
@@ -75,6 +81,25 @@ describe("Action Inbox SSE route", () => {
     expect(changed).toContain('"reason":"action_inbox"');
     expect(changed).not.toContain("title");
     expect(changed).not.toContain("detail");
+
+    events.emit({
+      organizationId: "019b5ac0-7600-7000-8000-000000000001" as OrganizationId,
+      reason: "workspace_change",
+      eventType: "project.work_item.updated",
+      aggregateType: "work_item",
+      aggregateId: "019fa900-0000-7000-8000-000000000003",
+      projectId: "019fa900-0000-7000-8000-000000000001",
+      occurredAt: "2026-07-28T05:01:00.000Z",
+    });
+    const workspaceChanged = await readUntil(
+      reader,
+      decoder,
+      "event: workspace-changed",
+    );
+    expect(workspaceChanged).toContain(
+      '"eventType":"project.work_item.updated"',
+    );
+    expect(workspaceChanged).not.toContain("forbiddenContent");
 
     abort.abort();
     await reader.cancel().catch(() => undefined);

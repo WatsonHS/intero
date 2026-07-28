@@ -134,6 +134,22 @@ Metrics never include prompts, messages, file names/content, Claims, tenant IDs,
 Project IDs, principal IDs, API keys, tokens, or provider payloads. HTTP routes
 are normalized templates and status is reduced to a status class.
 
+### Realtime staged rollout and kill switch
+
+`INTERO_REALTIME_ROLLOUT_PERCENT` assigns each Organization to one stable,
+content-free hash bucket. `0` removes realtime discovery and token routes while
+durable HTTP/cursor repair stays authoritative; `100` enables every
+Organization. A percentage change never moves an Organization between buckets
+unless it crosses the new threshold.
+
+Advance through internal validation, `10`, `50`, and `100`. At each step require
+the browser route suite, outbox outage/fanout integration, shared rate-limit
+integration, no authorization anomaly, and healthy oldest-outbox/reconnect
+metrics for one observation window. Roll back to the previous percentage—or
+`0`—when remote visibility breaches its SLO, reconnect storms rise, or an
+authorization anomaly appears. Committed messages remain in PostgreSQL and
+clients visibly use bounded cursor repair during rollback.
+
 ## Object storage policy and lifecycle
 
 `object_store_objects` is authoritative for declared checksum, size, content

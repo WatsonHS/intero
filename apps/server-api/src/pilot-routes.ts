@@ -68,7 +68,7 @@ export interface PilotRoutesOptions {
   coordination: CoordinationTransport;
   modelGateway: ModelGateway;
   adapters: {
-    realtime: "centrifugo";
+    realtime?: "centrifugo";
     objectStorage: "minio";
     jobs: "inline" | "transactional-outbox";
     coordination: "project-internal-v1";

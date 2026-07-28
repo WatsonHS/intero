@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 import { randomUUID } from "node:crypto";
 
 const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://127.0.0.1:4310";
@@ -56,9 +57,31 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   const disconnectButton = page.getByTestId(
     `pilot-agent-disconnect-${connection.bindingId}`,
   );
-  const status = disconnectButton.locator("xpath=..");
+  const status = page.getByTestId(
+    `pilot-agent-binding-${connection.bindingId}`,
+  );
   await expect(status).toContainText("Codex E2E repository");
-  await expect(status).toContainText("Bearer credential 与原生 MCP 已验证");
+  await expect(status).toContainText(
+    "原生 MCP 已验证 · 等待 Codex Hook 首次上报",
+  );
+  await expect(page.getByTestId("agent-connection-success")).toHaveCount(0);
+  await expect(page.getByTestId("connect-agent-codex")).toHaveText(
+    "重新生成 Codex 修复任务",
+  );
+
+  const lifecycle = await page.request.post(`${apiUrl}/v1/pilot/agent/hooks`, {
+    headers: {
+      authorization: `Bearer ${connection.accessToken}`,
+    },
+    data: {
+      clientEventId: `e2e-session-${Date.now().toString(36)}`,
+      lifecycle: "session_started",
+      workstreamKey: "agent-connection-e2e",
+      workstreamTitle: "Agent connection E2E",
+    },
+  });
+  expect(lifecycle.ok(), await lifecycle.text()).toBe(true);
+  await expect(status).toContainText("原生 MCP 与 SessionStart Hook 已验证");
   await expect(page.getByTestId("agent-connection-success")).toBeVisible();
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
     "连接另一个 Codex 仓库",
@@ -74,6 +97,8 @@ test("Web reflects authenticated MCP initialization and functional validation", 
       client: string;
       mcpInitializedAt?: string;
       validatedAt?: string;
+      activityUpdatedAt?: string;
+      configurationVersion?: number;
       disconnectedAt?: string;
     }>;
   };
@@ -83,6 +108,8 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   expect(binding?.id).toBe(connection.bindingId);
   expect(binding?.mcpInitializedAt).toBeTruthy();
   expect(binding?.validatedAt).toBeTruthy();
+  expect(binding?.activityUpdatedAt).toBeTruthy();
+  expect(binding?.configurationVersion).toBe(PILOT_AGENT_CONFIGURATION_VERSION);
 
   await disconnectButton.click();
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
@@ -203,13 +230,25 @@ async function initializeMcp(
       method: "tools/call",
       params: {
         name: "intero.validate_connection",
-        arguments: { verificationCode: connection.verificationCode },
+        arguments: {
+          verificationCode: connection.verificationCode,
+          configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        },
       },
     },
   });
   const validationText = await validation.text();
   expect(validation.ok(), validationText).toBe(true);
-  expect(validationText).toContain('"status":"connected"');
+  const validationEnvelope = JSON.parse(validationText) as {
+    result: { content: Array<{ type: string; text: string }> };
+  };
+  expect(
+    JSON.parse(validationEnvelope.result.content[0]?.text ?? "{}"),
+  ).toMatchObject({
+    status: "lifecycle_pending",
+    mcpConnected: true,
+    configurationCurrent: true,
+  });
 }
 
 function mcpHeaders(accessToken: string): Record<string, string> {

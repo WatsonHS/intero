@@ -51,6 +51,7 @@ type IssuedConnection = {
   client: PilotAgentClient;
   prompt: string;
   mcpUrl: string;
+  expiresAt: string;
 };
 
 export function AgentConnectionsSettings({
@@ -76,6 +77,7 @@ export function AgentConnectionsSettings({
   );
   const [launchPending, setLaunchPending] = useState(false);
   const [launchError, setLaunchError] = useState<string>();
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (
@@ -92,7 +94,24 @@ export function AgentConnectionsSettings({
     queryFn: ({ signal }) =>
       getPilotOverview(pilot.identityId!, projectId, signal),
     enabled: Boolean(pilot.identityId && projectId),
-    refetchInterval: issued ? 1_500 : 5_000,
+    refetchInterval: issued
+      ? (query) => {
+          const bindings = query.state.data?.bindings ?? [];
+          const pending = bindings.some(
+            (binding) =>
+              binding.id === issued.bindingId &&
+              !binding.disconnectedAt &&
+              (!binding.validatedAt ||
+                !binding.activityUpdatedAt ||
+                binding.configurationVersion !==
+                  PILOT_AGENT_CONFIGURATION_VERSION),
+          );
+          return pending && Date.parse(issued.expiresAt) > Date.now()
+            ? 2_000
+            : false;
+        }
+      : false,
+    refetchOnWindowFocus: true,
   });
   const summary = useMemo(
     () =>
@@ -142,6 +161,7 @@ export function AgentConnectionsSettings({
         client,
         prompt: result.connectPrompt,
         mcpUrl: result.mcpUrl,
+        expiresAt: result.ticket.expiresAt,
       });
       setCopyStatus("idle");
       pilot.setSelectedProjectId(projectId);
@@ -194,6 +214,13 @@ export function AgentConnectionsSettings({
           : issued
             ? 1
             : 0;
+  const issuedExpired = issued ? Date.parse(issued.expiresAt) <= now : false;
+
+  useEffect(() => {
+    if (!issued || issuedExpired) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [issued, issuedExpired]);
 
   async function launchCodex(prompt: string) {
     setLaunchError(undefined);
@@ -286,7 +313,16 @@ export function AgentConnectionsSettings({
       {projectId && overview.isError ? (
         <div className="mt-4 flex items-center gap-2 rounded-card bg-danger-soft p-5 text-[12px] text-danger">
           <WarningCircleIcon size={16} />
-          无法读取这个 Project 的连接状态。
+          <span className="flex-1">
+            无法读取这个 Project 的连接状态 · AGENT_OVERVIEW_UNAVAILABLE
+          </span>
+          <button
+            type="button"
+            onClick={() => void overview.refetch()}
+            className="h-8 rounded-btn border border-danger px-3 text-[10.5px]"
+          >
+            重试
+          </button>
         </div>
       ) : null}
 
@@ -336,97 +372,148 @@ export function AgentConnectionsSettings({
               <div className="mt-4 grid gap-2">
                 {overview.data.bindings
                   .filter((binding) => !binding.disconnectedAt)
-                  .map((binding) => (
-                    <div
-                      key={binding.id}
-                      className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 rounded-card border border-line bg-bg px-3.5 py-3"
-                    >
-                      <span
-                        className={[
-                          "grid h-[34px] w-[34px] place-items-center rounded-[10px]",
-                          binding.validatedAt &&
-                          binding.activityUpdatedAt &&
-                          binding.configurationVersion ===
-                            PILOT_AGENT_CONFIGURATION_VERSION
-                            ? "bg-green-soft text-green"
-                            : binding.validatedAt
-                              ? "bg-amber-soft text-amber"
-                              : binding.mcpInitializedAt
-                                ? "bg-accent-soft text-accent-strong"
-                                : "bg-amber-soft text-amber",
-                        ].join(" ")}
+                  .map((binding) => {
+                    const ageMs = Date.now() - Date.parse(binding.createdAt);
+                    const timedOut =
+                      ageMs > 10 * 60_000 &&
+                      (!binding.validatedAt || !binding.activityUpdatedAt);
+                    const nextAction =
+                      binding.authMode === "oauth"
+                        ? "下一步：撤销旧连接，并生成新的项目级原生连接任务。"
+                        : binding.validatedAt &&
+                            binding.activityUpdatedAt &&
+                            binding.configurationVersion ===
+                              PILOT_AGENT_CONFIGURATION_VERSION
+                          ? "连接完整；新的项目任务会自动复用。"
+                          : binding.validatedAt && !binding.activityUpdatedAt
+                            ? "下一步：在 GUI 批准 Hook，然后在该仓库新建一次任务。"
+                            : binding.mcpInitializedAt
+                              ? "下一步：等待连接任务写入凭据并完成 MCP 验证。"
+                              : "下一步：在目标仓库运行连接任务，写入项目配置。";
+                    const errorCode = timedOut
+                      ? binding.validatedAt
+                        ? "AGENT_HOOK_TIMEOUT"
+                        : "AGENT_CONNECTION_TIMEOUT"
+                      : undefined;
+                    return (
+                      <div
+                        key={binding.id}
+                        data-testid={`pilot-agent-binding-${binding.id}`}
+                        className="grid grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-3 rounded-card border border-line bg-bg px-3.5 py-3"
                       >
-                        {binding.validatedAt &&
-                        binding.activityUpdatedAt &&
-                        binding.configurationVersion ===
-                          PILOT_AGENT_CONFIGURATION_VERSION ? (
-                          <CheckCircleIcon size={16} weight="fill" />
-                        ) : (
-                          <PlugsIcon size={16} />
-                        )}
-                      </span>
-                      <span className="grid min-w-0">
-                        <strong className="truncate text-[12px] font-[620]">
-                          {binding.name}
-                        </strong>
-                        <small className="mt-1 text-[10.5px] text-ink-muted">
-                          {binding.client} ·{" "}
-                          {binding.authMode === "oauth"
-                            ? "旧 OAuth 连接已停用，请重新连接"
-                            : binding.validatedAt &&
-                                binding.activityUpdatedAt &&
-                                binding.configurationVersion !==
-                                  PILOT_AGENT_CONFIGURATION_VERSION
-                              ? `项目配置 v${binding.configurationVersion ?? "旧版"} · 需要升级到 v${PILOT_AGENT_CONFIGURATION_VERSION}`
-                              : binding.validatedAt && binding.activityUpdatedAt
-                                ? "原生 MCP 与 SessionStart Hook 已验证"
-                                : binding.validatedAt
-                                  ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
-                                  : binding.mcpInitializedAt
-                                    ? "MCP 已加载"
-                                    : "等待连接任务写入配置"}
-                          {binding.lastSeenAt
-                            ? ` · 最后活跃 ${new Date(
-                                binding.lastSeenAt,
-                              ).toLocaleString()}`
-                            : ""}
-                        </small>
-                      </span>
-                      {binding.ownerId === pilot.identityId ? (
-                        <span className="flex items-center gap-2">
+                        <span
+                          className={[
+                            "grid h-[34px] w-[34px] place-items-center rounded-[10px]",
+                            binding.validatedAt &&
+                            binding.activityUpdatedAt &&
+                            binding.configurationVersion ===
+                              PILOT_AGENT_CONFIGURATION_VERSION
+                              ? "bg-green-soft text-green"
+                              : binding.validatedAt
+                                ? "bg-amber-soft text-amber"
+                                : binding.mcpInitializedAt
+                                  ? "bg-accent-soft text-accent-strong"
+                                  : "bg-amber-soft text-amber",
+                          ].join(" ")}
+                        >
                           {binding.validatedAt &&
                           binding.activityUpdatedAt &&
-                          binding.configurationVersion !==
+                          binding.configurationVersion ===
                             PILOT_AGENT_CONFIGURATION_VERSION ? (
+                            <CheckCircleIcon size={16} weight="fill" />
+                          ) : (
+                            <PlugsIcon size={16} />
+                          )}
+                        </span>
+                        <span className="grid min-w-0">
+                          <strong className="truncate text-[12px] font-[620]">
+                            {binding.name}
+                          </strong>
+                          <small className="mt-1 text-[10.5px] text-ink-muted">
+                            {binding.client} ·{" "}
+                            {binding.authMode === "oauth"
+                              ? "旧 OAuth 连接已停用，请重新连接"
+                              : binding.validatedAt &&
+                                  binding.activityUpdatedAt &&
+                                  binding.configurationVersion !==
+                                    PILOT_AGENT_CONFIGURATION_VERSION
+                                ? `项目配置 v${binding.configurationVersion ?? "旧版"} · 需要升级到 v${PILOT_AGENT_CONFIGURATION_VERSION}`
+                                : binding.validatedAt &&
+                                    binding.activityUpdatedAt
+                                  ? "原生 MCP 与 SessionStart Hook 已验证"
+                                  : binding.validatedAt
+                                    ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
+                                    : binding.mcpInitializedAt
+                                      ? "MCP 已加载"
+                                      : "等待连接任务写入配置"}
+                            {binding.lastSeenAt
+                              ? ` · 最后活跃 ${new Date(
+                                  binding.lastSeenAt,
+                                ).toLocaleString()}`
+                              : ""}
+                          </small>
+                          <small
+                            className={[
+                              "mt-1 text-[10px] leading-[1.5]",
+                              errorCode ? "text-danger" : "text-faint",
+                            ].join(" ")}
+                          >
+                            {nextAction}
+                            {errorCode ? ` · ${errorCode}` : ""}
+                          </small>
+                        </span>
+                        {binding.ownerId === pilot.identityId ? (
+                          <span className="flex items-center gap-2">
+                            {binding.validatedAt &&
+                            binding.activityUpdatedAt &&
+                            binding.configurationVersion !==
+                              PILOT_AGENT_CONFIGURATION_VERSION ? (
+                              <button
+                                type="button"
+                                data-testid={`pilot-agent-repair-${binding.id}`}
+                                disabled={startConnection.isPending}
+                                onClick={() =>
+                                  startConnection.mutate({
+                                    client: binding.client,
+                                    bindingId: binding.id,
+                                  })
+                                }
+                                className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
+                              >
+                                修复配置
+                              </button>
+                            ) : null}
+                            {timedOut ? (
+                              <button
+                                type="button"
+                                data-testid={`pilot-agent-retry-${binding.id}`}
+                                disabled={startConnection.isPending}
+                                onClick={() =>
+                                  startConnection.mutate({
+                                    client: binding.client,
+                                    bindingId: binding.id,
+                                  })
+                                }
+                                className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
+                              >
+                                重试
+                              </button>
+                            ) : null}
                             <button
                               type="button"
-                              data-testid={`pilot-agent-repair-${binding.id}`}
-                              disabled={startConnection.isPending}
-                              onClick={() =>
-                                startConnection.mutate({
-                                  client: binding.client,
-                                  bindingId: binding.id,
-                                })
-                              }
-                              className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
+                              data-testid={`pilot-agent-disconnect-${binding.id}`}
+                              data-client={binding.client}
+                              disabled={disconnect.isPending}
+                              onClick={() => disconnect.mutate(binding.id)}
+                              className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-danger hover:text-danger disabled:opacity-50"
                             >
-                              修复配置
+                              撤销连接
                             </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            data-testid={`pilot-agent-disconnect-${binding.id}`}
-                            data-client={binding.client}
-                            disabled={disconnect.isPending}
-                            onClick={() => disconnect.mutate(binding.id)}
-                            className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-danger hover:text-danger disabled:opacity-50"
-                          >
-                            断开
-                          </button>
-                        </span>
-                      ) : null}
-                    </div>
-                  ))}
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
               </div>
             ) : (
               <p className="mt-3 text-[11.5px] leading-[1.7] text-ink-muted">
@@ -469,6 +556,9 @@ export function AgentConnectionsSettings({
               const lifecyclePending = summary.mineLifecyclePending.some(
                 (binding) => binding.client === client.id,
               );
+              const lifecyclePendingBinding = summary.mineLifecyclePending.find(
+                (binding) => binding.client === client.id,
+              );
               return (
                 <article
                   key={client.id}
@@ -487,19 +577,21 @@ export function AgentConnectionsSettings({
                   <button
                     type="button"
                     data-testid={`connect-agent-${client.id}`}
-                    disabled={startConnection.isPending || lifecyclePending}
+                    disabled={startConnection.isPending}
                     onClick={() =>
                       startConnection.mutate({
                         client: client.id,
                         ...(outdatedBinding
                           ? { bindingId: outdatedBinding.id }
-                          : {}),
+                          : lifecyclePendingBinding
+                            ? { bindingId: lifecyclePendingBinding.id }
+                            : {}),
                       })
                     }
                     className="mt-auto h-9 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                   >
                     {lifecyclePending
-                      ? `等待 ${client.label} Hook 首次上报`
+                      ? `重新生成 ${client.label} 修复任务`
                       : outdatedBinding
                         ? `修复 ${client.label} 项目配置`
                         : pending
@@ -561,7 +653,45 @@ export function AgentConnectionsSettings({
             ))}
           </div>
 
+          <div
+            className={[
+              "mt-3 rounded-card px-3.5 py-2.5 text-[10.5px] leading-[1.6]",
+              issuedExpired
+                ? "bg-danger-soft text-danger"
+                : "bg-raise text-ink-muted",
+            ].join(" ")}
+            data-testid="agent-connection-expiry"
+          >
+            {issuedExpired
+              ? "连接 ticket 已过期 · AGENT_TICKET_EXPIRED。点击下方重试会生成新的单次任务，旧 ticket 不再可用。"
+              : `连接任务有效至 ${new Date(issued.expiresAt).toLocaleString()}。如果 MCP 已验证但 Hook 长时间没有到达，可重新生成修复任务。`}
+          </div>
+
+          {startConnection.isError ? (
+            <p
+              className="mt-3 rounded-card bg-danger-soft px-3.5 py-2.5 text-[10.5px] text-danger"
+              role="alert"
+            >
+              连接任务生成失败 · AGENT_TICKET_ISSUE_FAILED。检查诊断中心后重试。
+            </p>
+          ) : null}
+
           <div className="mt-4 flex flex-wrap gap-2">
+            {issuedExpired ? (
+              <button
+                type="button"
+                disabled={startConnection.isPending}
+                onClick={() =>
+                  startConnection.mutate({
+                    client: issued.client,
+                    ...(issuedBinding ? { bindingId: issuedBinding.id } : {}),
+                  })
+                }
+                className="h-9 rounded-btn border-0 bg-accent-strong px-4 text-[11px] font-[620] text-on-accent disabled:opacity-50"
+              >
+                重新生成连接任务
+              </button>
+            ) : null}
             {issued.client === "codex" ? (
               typeof window !== "undefined" && window.interoDesktop ? (
                 <button

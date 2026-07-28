@@ -47,6 +47,9 @@ databaseSuite("Action Inbox PostgreSQL notifications", () => {
       organizationId,
     ]);
     await admin.query(`DELETE FROM principals WHERE id=$1`, [principalId]);
+    await admin.query(`DELETE FROM outbox WHERE organization_id=$1`, [
+      organizationId,
+    ]);
     await admin.query(`DELETE FROM organizations WHERE id=$1`, [
       organizationId,
     ]);
@@ -86,5 +89,50 @@ databaseSuite("Action Inbox PostgreSQL notifications", () => {
       principalId,
       reason: "action_inbox",
     });
+  });
+
+  it("fans a privacy-safe Outbox hint to the organization", async () => {
+    const received = new Promise<ActionInboxChangedEvent>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Timed out waiting for workspace NOTIFY.")),
+        2_000,
+      );
+      timeout.unref();
+      const unsubscribe = events.subscribe(principalId, (event) => {
+        if (event.reason !== "workspace_change") return;
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve(event);
+      });
+    });
+    const projectId = uuidv7();
+    const aggregateId = uuidv7();
+    await admin.query(
+      `INSERT INTO outbox
+        (operation_id,organization_id,topic,payload)
+       VALUES ($1,$2,$3,$4)`,
+      [
+        uuidv7(),
+        organizationId,
+        `project.${projectId}.phase5`,
+        {
+          eventType: "project.work_item.updated",
+          aggregateType: "work_item",
+          aggregateId,
+          payload: { projectId, forbiddenContent: "must not escape" },
+        },
+      ],
+    );
+
+    await expect(received).resolves.toMatchObject({
+      organizationId,
+      reason: "workspace_change",
+      eventType: "project.work_item.updated",
+      aggregateType: "work_item",
+      aggregateId,
+      projectId,
+    });
+    const event = await received;
+    expect(JSON.stringify(event)).not.toContain("forbiddenContent");
   });
 });

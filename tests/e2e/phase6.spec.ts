@@ -12,7 +12,7 @@ test("two users activate, authenticate, receive targeted attention, and search s
 
   await admin.goto("/");
   await admin.getByLabel("邮箱").fill("alex@demo.intero.test");
-  await admin.getByLabel("密码").fill("Intero-demo-2026!");
+  await admin.getByLabel("密码", { exact: true }).fill("Intero-demo-2026!");
   await admin.getByRole("button", { name: "使用邮箱和密码登录" }).click();
   await expect(admin.getByTitle("Team Pulse")).toBeVisible();
 

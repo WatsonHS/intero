@@ -27,6 +27,7 @@ import {
   loadSpiceDbCertificate,
   SpiceDbAuthorization,
 } from "./spicedb-authorization.js";
+import { CentrifugoAccessRevoker } from "./realtime-routes.js";
 import { SpiceDbPilotAuthorization } from "./spicedb-pilot-authorization.js";
 import { demoSeedingEnabled } from "./store.js";
 
@@ -232,6 +233,14 @@ const app = await buildApp({
     : {}),
   attachments: attachmentService,
   realtimeConfig: serviceConfig.realtime,
+  ...(pilotAdapterConfig.centrifugoApiUrl && pilotAdapterConfig.centrifugoApiKey
+    ? {
+        realtimeAccessRevoker: new CentrifugoAccessRevoker(
+          pilotAdapterConfig.centrifugoApiUrl,
+          pilotAdapterConfig.centrifugoApiKey,
+        ),
+      }
+    : {}),
 });
 if (authorization) app.addHook("onClose", async () => authorization.close());
 app.addHook("onClose", async () => objectStore.close());

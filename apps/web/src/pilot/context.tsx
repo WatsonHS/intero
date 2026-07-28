@@ -137,7 +137,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     queryKey: ["pilot", "bootstrap"],
     queryFn: ({ signal }) => getPilotBootstrap(signal),
     enabled,
-    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
   });
   const effectiveIdentity = resolveEffectivePilotIdentity({
     authMode: bootstrap.data?.authMode,
@@ -151,13 +151,13 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     queryKey: ["pilot", "teams", identityId],
     queryFn: ({ signal }) => getPilotTeams(identityId!, signal),
     enabled: enabled && Boolean(identityId),
-    refetchInterval: 2_000,
+    refetchOnWindowFocus: true,
   });
   const projects = useQuery({
     queryKey: ["pilot", "projects", identityId],
     queryFn: ({ signal }) => getPilotProjects(identityId!, signal),
     enabled: enabled && Boolean(identityId),
-    refetchInterval: 2_000,
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {

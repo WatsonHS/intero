@@ -372,7 +372,11 @@ export class InMemoryPlatformStore {
 
   updateThread(
     threadId: ThreadId,
-    input: { title?: string; addParticipantIds: PrincipalId[] },
+    input: {
+      title?: string;
+      addParticipantIds: PrincipalId[];
+      removeParticipantIds?: PrincipalId[];
+    },
     actorId: PrincipalId,
   ): { thread: ConversationThread; event?: ThreadMessage } {
     const current = this.threads.get(threadId);
@@ -392,26 +396,46 @@ export class InMemoryPlatformStore {
     const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
       (principalId) => !current.participantIds.includes(principalId),
     );
+    const removedParticipantIds = [
+      ...new Set(input.removeParticipantIds ?? []),
+    ].filter(
+      (principalId) =>
+        current.participantIds.includes(principalId) &&
+        !current.standInIds.includes(principalId),
+    );
+    if (removedParticipantIds.includes(actorId)) {
+      throw new Error("A group manager cannot remove their own access.");
+    }
     for (const participantId of addedParticipantIds) {
       this.ensurePrincipal(participantId, "human");
     }
     const titleChanged = title !== undefined && title !== current.title;
-    if (!titleChanged && addedParticipantIds.length === 0) {
+    if (
+      !titleChanged &&
+      addedParticipantIds.length === 0 &&
+      removedParticipantIds.length === 0
+    ) {
       return { thread: current };
     }
 
     const event =
-      addedParticipantIds.length > 0
+      addedParticipantIds.length > 0 || removedParticipantIds.length > 0
         ? ({
             id: uuidv7() as ThreadMessage["id"],
             threadId,
             senderId: actorId,
             sequence: current.sequence + 1,
             kind: "system_access_change",
-            body:
-              addedParticipantIds.length === 1
-                ? "A member joined the group conversation. Earlier history remains withheld."
-                : `${addedParticipantIds.length} members joined the group conversation. Earlier history remains withheld.`,
+            body: [
+              addedParticipantIds.length > 0
+                ? `${addedParticipantIds.length} member(s) joined; earlier history remains withheld.`
+                : "",
+              removedParticipantIds.length > 0
+                ? `${removedParticipantIds.length} member(s) left and lost access immediately.`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" "),
             createdAt: new Date().toISOString(),
             serverReadable: true,
           } satisfies ThreadMessage)
@@ -419,9 +443,17 @@ export class InMemoryPlatformStore {
     const updated: ConversationThread = {
       ...current,
       ...(titleChanged ? { title } : {}),
-      ...(addedParticipantIds.length > 0
+      ...(event
         ? {
-            participantIds: [...current.participantIds, ...addedParticipantIds],
+            participantIds: [
+              ...current.participantIds.filter(
+                (id) => !removedParticipantIds.includes(id),
+              ),
+              ...addedParticipantIds,
+            ],
+            standInIds: current.standInIds.filter(
+              (id) => !removedParticipantIds.includes(id),
+            ),
             sequence: event!.sequence,
             accessVersion: (current.accessVersion ?? 1) + 1,
             latestMessageAt: event!.createdAt,
@@ -439,6 +471,9 @@ export class InMemoryPlatformStore {
           `${threadId}:${participantId}`,
           event.sequence,
         );
+      }
+      for (const participantId of removedParticipantIds) {
+        this.threadVisibility.delete(`${threadId}:${participantId}`);
       }
     }
     this.recordConversationChange(

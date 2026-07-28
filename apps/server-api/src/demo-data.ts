@@ -250,6 +250,7 @@ export async function seedDemoData(input: {
   await migrateDatabase(input.target.databaseUrl);
   const pool = new Pool({ connectionString: input.target.databaseUrl });
   try {
+    await grantDemoRuntimeAccess(pool);
     const state = await inspectDemoOwnership(pool);
     if (state === "seeded") return demoResult("already_seeded");
     if (state === "partial") {
@@ -341,6 +342,29 @@ export async function seedDemoData(input: {
   }
 }
 
+async function grantDemoRuntimeAccess(pool: Pool): Promise<void> {
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'intero_app') THEN
+        GRANT USAGE ON SCHEMA public TO intero_app;
+        GRANT SELECT, INSERT, UPDATE, DELETE
+          ON ALL TABLES IN SCHEMA public TO intero_app;
+        GRANT USAGE, SELECT
+          ON ALL SEQUENCES IN SCHEMA public TO intero_app;
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'intero_worker') THEN
+        GRANT USAGE ON SCHEMA public TO intero_worker;
+        GRANT SELECT, INSERT, UPDATE, DELETE
+          ON ALL TABLES IN SCHEMA public TO intero_worker;
+        GRANT USAGE, SELECT
+          ON ALL SEQUENCES IN SCHEMA public TO intero_worker;
+      END IF;
+    END
+    $$;
+  `);
+}
+
 async function seedBoundedAutomation(
   databaseUrl: string,
   now: Date,
@@ -420,6 +444,10 @@ export async function resetDemoData(
         `TRUNCATE TABLE ${names.map(quoteIdentifier).join(", ")} RESTART IDENTITY CASCADE`,
       );
     }
+    // Graphile Worker keeps its deduplication keys outside the public schema.
+    // A Demo reset must clear those keys as well or newly seeded jobs can be
+    // accepted by the outbox while silently deduplicating against stale work.
+    await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE");
     return { status: "reset", tableCount: names.length };
   } finally {
     await pool.end();

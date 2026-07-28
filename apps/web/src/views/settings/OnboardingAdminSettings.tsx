@@ -57,7 +57,7 @@ export function OnboardingAdminSettings({
     queryFn: ({ signal }) =>
       getPilotInvitations(team!.id, signal, developmentIdentityId),
     enabled: Boolean(team && isAdmin),
-    refetchInterval: 10_000,
+    refetchOnWindowFocus: true,
   });
   const [displayName, setDisplayName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");

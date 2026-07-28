@@ -194,6 +194,44 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
       clientB.socket.close();
     }
   }, 15_000);
+
+  it("fans one content-free publication to a configurable client cohort within the visibility SLO", async () => {
+    const clientCount = Math.max(
+      1,
+      Math.min(
+        10_000,
+        Number(process.env.INTERO_REALTIME_CAPACITY_CLIENTS ?? 32),
+      ),
+    );
+    const clients = await Promise.all(
+      Array.from({ length: clientCount }, () =>
+        subscribeClient(
+          centrifugoUrl!,
+          channel,
+          createClientToken(ownerId, centrifugoTokenSecret),
+        ),
+      ),
+    );
+    const probeId = uuidv7();
+    try {
+      const received = clients.map((client) =>
+        waitForPublication(client.socket, probeId),
+      );
+      const startedAt = performance.now();
+      await new CentrifugoRealtime(centrifugoUrl!, centrifugoApiKey).publish(
+        channel,
+        {
+          operationId: probeId,
+          eventType: "realtime.capacity_probe",
+          sequence: 1,
+        },
+      );
+      await expect(Promise.all(received)).resolves.toHaveLength(clientCount);
+      expect(performance.now() - startedAt).toBeLessThan(3_000);
+    } finally {
+      for (const client of clients) client.socket.close();
+    }
+  }, 30_000);
 });
 
 async function subscribeClient(

@@ -5,7 +5,12 @@ import {
   HandTapIcon,
 } from "@phosphor-icons/react";
 import type { PilotCoordinationThread, PrincipalId } from "@intero/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import type { ThreadPayload } from "../api.js";
@@ -84,10 +89,11 @@ export function CoordinationView({
     pilot?.projects.data?.projects.find(
       (project) => project.id === pilot.selectedProjectId,
     ) ?? pilot?.projects.data?.projects[0];
+  const accessibleProjects = pilot?.projects.data?.projects ?? [];
   const threads = useQuery({
     queryKey: ["threads", "coordination"],
     queryFn: ({ signal }) => getThreads("coordination", signal),
-    refetchInterval: 3_000,
+    refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -98,22 +104,30 @@ export function CoordinationView({
     queryFn: ({ signal }) => getTeamPulse(signal),
     refetchInterval: 30_000,
   });
-  const pilotOverview = useQuery({
-    queryKey: ["pilot", "overview", pilot?.identityId, pilotProject?.id],
-    queryFn: ({ signal }) =>
-      getPilotOverview(pilot!.identityId!, pilotProject!.id, signal),
-    enabled: Boolean(pilot?.enabled && pilot.identityId && pilotProject),
-    refetchInterval: 1_500,
-  });
-  const automation = useQuery({
-    queryKey: ["project-automation", pilotProject?.id],
-    queryFn: ({ signal }) => getProjectAutomation(pilotProject!.id, signal),
-    enabled: Boolean(pilotProject?.id),
-    refetchInterval: 3_000,
+  const pilotOverviews = useQueries({
+    queries: accessibleProjects.map((project) => ({
+      queryKey: ["pilot", "overview", pilot?.identityId, project.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getPilotOverview(pilot!.identityId!, project.id, signal),
+      enabled: Boolean(pilot?.enabled && pilot.identityId),
+      refetchOnWindowFocus: true,
+    })),
   });
 
-  const pilotPrincipals = pilotOverview.data?.principals ?? [];
-  const pilotThreads = pilotOverview.data?.coordination ?? [];
+  const pilotPrincipals = [
+    ...new Map(
+      pilotOverviews
+        .flatMap((overview) => overview.data?.principals ?? [])
+        .map((principal) => [principal.id, principal]),
+    ).values(),
+  ];
+  const pilotThreads = [
+    ...new Map(
+      pilotOverviews
+        .flatMap((overview) => overview.data?.coordination ?? [])
+        .map((thread) => [thread.id, thread]),
+    ).values(),
+  ];
   const pilotThreadById = new Map(
     pilotThreads.map((thread) => [thread.id, thread]),
   );
@@ -144,14 +158,26 @@ export function CoordinationView({
       branchState(item, pilotThreadById.get(item.thread.id)) === filter,
   );
   const visible = filtered.slice(0, shown);
-  const current =
-    filtered.find((item) => item.thread.id === selectedThreadId) ??
-    filtered[0] ??
-    items.find((item) => item.thread.id === selectedThreadId) ??
-    items[0];
+  const selected = selectedThreadId
+    ? items.find((item) => item.thread.id === selectedThreadId)
+    : undefined;
+  const selectedRecordMissing = Boolean(selectedThreadId && !selected);
+  const current = selectedRecordMissing
+    ? undefined
+    : (filtered.find((item) => item.thread.id === selectedThreadId) ??
+      filtered[0] ??
+      selected ??
+      items[0]);
   const currentPilotThread = current
     ? pilotThreadById.get(current.thread.id)
     : undefined;
+  const currentProjectId = currentPilotThread?.projectId ?? pilotProject?.id;
+  const automation = useQuery({
+    queryKey: ["project-automation", currentProjectId],
+    queryFn: ({ signal }) => getProjectAutomation(currentProjectId!, signal),
+    enabled: Boolean(currentProjectId),
+    refetchOnWindowFocus: true,
+  });
   const currentAutomation = current
     ? automation.data?.signals.find(
         ({ signal }) => signal.coordinationThreadId === current.thread.id,
@@ -232,7 +258,14 @@ export function CoordinationView({
     },
   });
 
-  if (threads.isLoading && pilotOverview.isLoading) {
+  const pilotOverviewsLoading =
+    Boolean(pilot?.enabled && pilot.projects.isLoading) ||
+    pilotOverviews.some((overview) => overview.isLoading);
+  const pilotOverviewsUnavailable =
+    pilotOverviews.length > 0 &&
+    pilotOverviews.every((overview) => overview.isError);
+
+  if (threads.isLoading || pilotOverviewsLoading) {
     return (
       <div className="animate-view-enter grid h-full place-items-center p-[34px]">
         <p className="text-[13px] text-ink-muted">{t("general.loading")}</p>
@@ -240,7 +273,7 @@ export function CoordinationView({
     );
   }
 
-  if (threads.isError && pilotOverview.isError) {
+  if (threads.isError && pilotOverviewsUnavailable) {
     return (
       <div className="animate-view-enter grid h-full place-items-center p-[34px]">
         <div className="grid justify-items-center gap-3 text-center">
@@ -253,6 +286,35 @@ export function CoordinationView({
             onClick={() => void threads.refetch()}
           >
             {t("general.retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedRecordMissing) {
+    return (
+      <div
+        className="animate-view-enter grid h-full place-items-center p-[34px]"
+        data-testid="coordination-degraded-record"
+      >
+        <div className="max-w-[500px] rounded-container border border-amber-soft bg-amber-soft p-6 text-center">
+          <strong className="text-[16px] font-[630] text-amber">
+            这条协调记录无法完整读取
+          </strong>
+          <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted">
+            链接指向旧版、已迁移或你已失去访问权限的记录。Intero 不会用另一条
+            Thread 冒充它，也不会显示空白详情。
+          </p>
+          <p className="mt-2 font-mono text-[10px] text-amber">
+            COORDINATION_RECORD_UNAVAILABLE · {selectedThreadId}
+          </p>
+          <button
+            type="button"
+            onClick={onOpenThread}
+            className="mt-4 h-9 rounded-btn border border-amber px-4 text-[11.5px] text-amber"
+          >
+            返回可访问的通讯记录
           </button>
         </div>
       </div>
@@ -452,6 +514,30 @@ export function CoordinationView({
         <p className="mt-3 max-w-[620px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
           {t("coord.lede")}
         </p>
+
+        {!currentPilotThread ? (
+          <div
+            className="mt-4 max-w-[660px] rounded-card border border-amber-soft bg-amber-soft px-4 py-3 text-[11px] leading-[1.65] text-amber"
+            data-testid="coordination-legacy-detail"
+          >
+            这是旧版 Coordination 记录。历史消息与已解析 action
+            仍可查看，但缺少当前
+            Project、候选步骤或确认状态时将保持只读，不会推断补齐。
+            <span className="ml-1 font-mono">COORDINATION_LEGACY_RECORD</span>
+          </div>
+        ) : currentPilotThread.participantIds.length === 0 ||
+          !currentPilotThread.safeContext.trim() ? (
+          <div
+            className="mt-4 max-w-[660px] rounded-card border border-amber-soft bg-amber-soft px-4 py-3 text-[11px] leading-[1.65] text-amber"
+            data-testid="coordination-incomplete-detail"
+          >
+            这条记录尚未完成迁移：参与者或安全上下文缺失。确认操作已暂停，请先从原始
+            Thread 恢复信息。
+            <span className="ml-1 font-mono">
+              COORDINATION_PARTIAL_MIGRATION
+            </span>
+          </div>
+        ) : null}
 
         {currentAutomation ? (
           <section

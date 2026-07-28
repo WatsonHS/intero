@@ -11,6 +11,7 @@ import type { PrincipalSummary } from "./platform-store.js";
 import { PilotStoreError } from "./pilot-store.js";
 
 const DEVELOPMENT_IDENTITY_HEADER = "x-intero-dev-principal-id";
+const TRUSTED_CLIENT_IP_HEADER = "x-intero-client-ip";
 export const ACTIVATION_BOOTSTRAP_HEADER =
   "x-intero-activation-bootstrap-secret";
 
@@ -41,6 +42,13 @@ export function createInteroAuth(config: AuthConfig) {
       customRules: {
         "/sign-in/email": { window: 60, max: 5 },
         "/passkey/generate-authenticate-options": { window: 60, max: 10 },
+      },
+    },
+    advanced: {
+      ipAddress: {
+        // mountAuth replaces this header with Fastify's socket-derived address.
+        // Better Auth therefore never trusts a client-supplied forwarding chain.
+        ipAddressHeaders: [TRUSTED_CLIENT_IP_HEADER],
       },
     },
     hooks: {
@@ -436,6 +444,7 @@ export function mountAuth(
     }
     const headers = toHeaders(request);
     headers.delete("content-length");
+    headers.set(TRUSTED_CLIENT_IP_HEADER, request.ip);
     const host = request.headers.host ?? "localhost";
     const body =
       request.method === "GET" || request.method === "HEAD"

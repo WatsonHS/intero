@@ -1,9 +1,10 @@
-import type {
-  PilotAgentClient,
-  PilotCheckpointEventType,
-  PilotWorkNarrative,
-  PreferredLanguage,
-  WorkstreamPhase,
+import {
+  PILOT_AGENT_CONFIGURATION_VERSION,
+  type PilotAgentClient,
+  type PilotCheckpointEventType,
+  type PilotWorkNarrative,
+  type PreferredLanguage,
+  type WorkstreamPhase,
 } from "@intero/domain";
 import {
   createCipheriv,
@@ -187,6 +188,7 @@ export class CloudPilotClient {
       params: {
         name: "intero.validate_connection",
         arguments: {
+          configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
           ...(this.verificationCode
             ? { verificationCode: this.verificationCode }
             : {}),
@@ -199,8 +201,19 @@ export class CloudPilotClient {
     const text = resultBody.result?.content?.find(
       (item) => item.type === "text",
     )?.text;
-    const result = text ? (JSON.parse(text) as { status?: string }) : undefined;
-    if (result?.status !== "connected") {
+    const result = text
+      ? (JSON.parse(text) as {
+          status?: string;
+          mcpConnected?: boolean;
+          configurationCurrent?: boolean;
+        })
+      : undefined;
+    const validationComplete =
+      result?.status === "connected" ||
+      (result?.status === "lifecycle_pending" &&
+        result.mcpConnected === true &&
+        result.configurationCurrent === true);
+    if (!validationComplete) {
       throw new Error("Agent connection validation did not complete.");
     }
     this.verificationCode = undefined;

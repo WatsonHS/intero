@@ -18,8 +18,21 @@ import {
   useRouterState,
   useSearch,
 } from "@tanstack/react-router";
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  Suspense,
+  createContext,
+  lazy,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
+import {
+  selectNewBrowserNotifiableItems,
+  showActionInboxBrowserNotification,
+  type ActionInboxSnapshot,
+} from "./action-inbox-browser-notifications.js";
 import {
   getActionInbox,
   getBootstrap,
@@ -44,20 +57,50 @@ import {
   NoTeamAccessView,
   SignInView,
 } from "./views/AccessView.js";
-import { AdminView, type AdminTab } from "./views/AdminView.js";
-import { AttentionView } from "./views/AttentionView.js";
-import { CommunicationsView } from "./views/CommunicationsView.js";
-import { CoordinationView } from "./views/CoordinationView.js";
-import { PersonView } from "./views/PersonView.js";
-import { ProjectView } from "./views/ProjectView.js";
-import { SettingsView, type SettingsCategory } from "./views/SettingsView.js";
+import type { AdminTab } from "./views/AdminView.js";
+import type { SettingsCategory } from "./views/SettingsView.js";
 import { ProfileMenu } from "./views/ProfileMenu.js";
 import { ScopeBar } from "./views/ScopeBar.js";
-import { SearchView } from "./views/SearchView.js";
 import { SetupView } from "./views/SetupView.js";
-import { SpecReviewView } from "./views/SpecReviewView.js";
-import { TeamPulseView } from "./views/TeamPulseView.js";
-import { WorkItemView } from "./views/WorkItemView.js";
+import { RouteErrorBoundary } from "./views/RouteErrorBoundary.js";
+import {
+  invalidateWorkspaceEvent,
+  repairWorkspaceAfterReconnect,
+} from "./workspace-events.js";
+
+const AdminView = lazy(async () => ({
+  default: (await import("./views/AdminView.js")).AdminView,
+}));
+const AttentionView = lazy(async () => ({
+  default: (await import("./views/AttentionView.js")).AttentionView,
+}));
+const CommunicationsView = lazy(async () => ({
+  default: (await import("./views/CommunicationsView.js")).CommunicationsView,
+}));
+const CoordinationView = lazy(async () => ({
+  default: (await import("./views/CoordinationView.js")).CoordinationView,
+}));
+const PersonView = lazy(async () => ({
+  default: (await import("./views/PersonView.js")).PersonView,
+}));
+const ProjectView = lazy(async () => ({
+  default: (await import("./views/ProjectView.js")).ProjectView,
+}));
+const SearchView = lazy(async () => ({
+  default: (await import("./views/SearchView.js")).SearchView,
+}));
+const SettingsView = lazy(async () => ({
+  default: (await import("./views/SettingsView.js")).SettingsView,
+}));
+const SpecReviewView = lazy(async () => ({
+  default: (await import("./views/SpecReviewView.js")).SpecReviewView,
+}));
+const TeamPulseView = lazy(async () => ({
+  default: (await import("./views/TeamPulseView.js")).TeamPulseView,
+}));
+const WorkItemView = lazy(async () => ({
+  default: (await import("./views/WorkItemView.js")).WorkItemView,
+}));
 
 export type AppView =
   | "pulse"
@@ -119,6 +162,7 @@ const SETTINGS_CATEGORIES = new Set<SettingsCategory>([
   "personal",
   "project",
   "agent",
+  "services",
 ]);
 
 const ADMIN_TABS = new Set<AdminTab>([
@@ -208,6 +252,7 @@ function InteroApp() {
   const routeSearch = useSearch({ strict: false }) as {
     token?: string;
     standInOwnerId?: string;
+    itemId?: string;
   };
   const view = resolveAppView(pathname);
   const projectMatch = matchRoute({ to: "/projects/$projectId/work" });
@@ -218,6 +263,7 @@ function InteroApp() {
   const invitationMatch = matchRoute({ to: "/accept-invitation" });
   const [bootstrapActive, setBootstrapActive] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const notifiedActionInboxIds = useRef(new Set<string>());
 
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -237,21 +283,71 @@ function InteroApp() {
     if (!inboxEventsEnabled) return;
     const abort = new AbortController();
     let retryDelay = 1_000;
+    let openedOnce = false;
 
     const connect = async () => {
       while (!abort.signal.aborted) {
         let openedAt: number | undefined;
         try {
           await streamActionInboxEvents(
-            () => {
-              void queryClient.invalidateQueries({
-                queryKey: ["action-inbox"],
-              });
+            (event) => {
+              void invalidateWorkspaceEvent(queryClient, event);
+              if (
+                event.reason !== "action_inbox" &&
+                event.reason !== "notification_preferences"
+              ) {
+                return;
+              }
+              const previous = queryClient.getQueryData<ActionInboxSnapshot>([
+                "action-inbox",
+              ]);
+              void queryClient
+                .fetchQuery({
+                  queryKey: ["action-inbox"],
+                  queryFn: ({ signal }) => getActionInbox(signal),
+                })
+                .then((current) => {
+                  if (
+                    event.reason !== "action_inbox" ||
+                    typeof document === "undefined" ||
+                    document.visibilityState !== "hidden"
+                  ) {
+                    return;
+                  }
+                  for (const item of selectNewBrowserNotifiableItems({
+                    previous,
+                    current,
+                    occurredAt: event.occurredAt,
+                  })) {
+                    if (notifiedActionInboxIds.current.has(item.id)) continue;
+                    const shown = showActionInboxBrowserNotification(
+                      item,
+                      () => {
+                        window.focus();
+                        void navigate({
+                          to: "/attention",
+                          search: { itemId: item.id },
+                        });
+                      },
+                    );
+                    if (shown) notifiedActionInboxIds.current.add(item.id);
+                  }
+                  if (notifiedActionInboxIds.current.size > 500) {
+                    notifiedActionInboxIds.current = new Set(
+                      [...notifiedActionInboxIds.current].slice(-250),
+                    );
+                  }
+                })
+                .catch(() => undefined);
             },
             {
               signal: abort.signal,
               onOpen: () => {
                 openedAt = Date.now();
+                if (openedOnce) {
+                  void repairWorkspaceAfterReconnect(queryClient);
+                }
+                openedOnce = true;
               },
             },
           );
@@ -266,7 +362,7 @@ function InteroApp() {
 
     void connect();
     return () => abort.abort();
-  }, [inboxEventsEnabled, pilot?.identityId, queryClient]);
+  }, [inboxEventsEnabled, navigate, pilot?.identityId, queryClient]);
 
   const identity = pilot?.enabled
     ? pilot.effectiveIdentity
@@ -664,9 +760,31 @@ function InteroApp() {
             selectedProjectId,
           }}
         >
-          <Outlet />
+          <RouteErrorBoundary key={pathname}>
+            <Suspense fallback={<RouteLoadingView />}>
+              <Outlet />
+            </Suspense>
+          </RouteErrorBoundary>
         </RoutedNavigationContext.Provider>
       </main>
+    </div>
+  );
+}
+
+function RouteLoadingView() {
+  return (
+    <div
+      className="grid h-full place-items-center bg-bg"
+      data-testid="route-loading"
+      aria-live="polite"
+    >
+      <span className="inline-flex items-center gap-2 text-[11.5px] text-faint">
+        <i
+          aria-hidden="true"
+          className="h-2 w-2 animate-pulse rounded-full bg-accent-strong"
+        />
+        正在打开…
+      </span>
     </div>
   );
 }
@@ -700,6 +818,7 @@ export function RoutedWorkspace() {
   });
   const routeSearch = useSearch({ strict: false }) as {
     standInOwnerId?: string;
+    itemId?: string;
   };
   const {
     openAction,
@@ -865,7 +984,12 @@ export function RoutedWorkspace() {
   }
 
   if (view === "inbox") {
-    return <AttentionView onOpenAction={openAction} />;
+    return (
+      <AttentionView
+        onOpenAction={openAction}
+        {...(routeSearch.itemId ? { focusedItemId: routeSearch.itemId } : {})}
+      />
+    );
   }
 
   if (view === "search") {

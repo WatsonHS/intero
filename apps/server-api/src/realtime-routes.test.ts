@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildTestApp } from "./test-app.js";
 import { InMemoryPlatformStore } from "./store.js";
+import {
+  CentrifugoAccessRevoker,
+  InMemoryRealtimeRateLimiter,
+} from "./realtime-routes.js";
 
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
 const PRIYA = "019b5ac0-7600-7000-8000-000000000004" as PrincipalId;
@@ -124,6 +128,51 @@ describe("Realtime authorization routes", () => {
     expect(response.json()).toMatchObject({
       code: "AUTHENTICATION_REQUIRED",
     });
+  });
+});
+
+describe("Realtime production boundaries", () => {
+  it("rate limits repeated requests within one shared bucket window", async () => {
+    const limiter = new InMemoryRealtimeRateLimiter();
+    expect(
+      await limiter.consume("principal", 2, 60_000, 1_000),
+    ).toBeUndefined();
+    expect(
+      await limiter.consume("principal", 2, 60_000, 1_001),
+    ).toBeUndefined();
+    expect(await limiter.consume("principal", 2, 60_000, 1_002)).toBe(60);
+    expect(
+      await limiter.consume("principal", 2, 60_000, 61_001),
+    ).toBeUndefined();
+  });
+
+  it("revokes the removed participant from the exact Centrifugo channel", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const revoker = new CentrifugoAccessRevoker(
+      "https://realtime.example.test",
+      "private-api-key",
+      (async (input, init) => {
+        requests.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)),
+        });
+        return new Response(JSON.stringify({ result: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    );
+    const threadId = uuidv7();
+    await revoker.revoke(PRIYA, threadId as never);
+    expect(requests).toEqual([
+      {
+        url: "https://realtime.example.test/api/unsubscribe",
+        body: {
+          user: PRIYA,
+          channel: `intero:thread:${threadId}`,
+        },
+      },
+    ]);
   });
 });
 

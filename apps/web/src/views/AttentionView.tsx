@@ -7,6 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ActionInboxItem } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import {
   getActionInbox,
@@ -29,8 +30,10 @@ const KINDS: Array<{
 
 export function AttentionView({
   onOpenAction,
+  focusedItemId,
 }: {
   onOpenAction: (sourceRef: string) => void;
+  focusedItemId?: string;
 }) {
   const queryClient = useQueryClient();
   const pilot = usePilotOptional();
@@ -55,6 +58,13 @@ export function AttentionView({
     },
   });
   const current = inbox.data?.preferences;
+
+  useEffect(() => {
+    if (!focusedItemId || !inbox.data) return;
+    document
+      .getElementById(`attention-item-${focusedItemId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusedItemId, inbox.data]);
 
   function toggleKind(kind: ActionInboxItem["kind"]) {
     const muted = current?.mutedKinds ?? [];
@@ -150,8 +160,13 @@ export function AttentionView({
           inbox.data.items.map((item) => (
             <article
               key={item.id}
+              id={`attention-item-${item.id}`}
+              data-focused={item.id === focusedItemId ? "true" : undefined}
               className={[
                 "grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-[13px] border p-[15px_17px]",
+                item.id === focusedItemId
+                  ? "ring-2 ring-accent-strong ring-offset-2 ring-offset-bg"
+                  : "",
                 item.readAt
                   ? "border-line bg-panel2"
                   : "border-accent/35 bg-accent-soft/35",

@@ -87,7 +87,7 @@ export function ProjectSpecReviewSurface({
   const specs = useQuery({
     queryKey: ["project-specs", projectId],
     queryFn: ({ signal }) => getProjectSpecs(projectId, signal),
-    refetchInterval: 4_000,
+    refetchOnWindowFocus: true,
   });
   const overview = useQuery({
     queryKey: ["pilot", "overview", pilot?.identityId, projectId],
@@ -268,11 +268,10 @@ export function ProjectSpecReviewSurface({
   const shownDiscussion = unresolvedOnly
     ? discussion.filter((thread) => thread.status === "open")
     : discussion;
-  // The discussion header counts discussion threads; the Decision Record counts
-  // every open thread, because an unresolved annotation holds up approval too.
-  const openDiscussionCount = discussion.filter(
-    (thread) => thread.status === "open",
-  ).length;
+  // Every visible count comes from the same revision-scoped thread set. Anchored
+  // annotations remain rendered in the document body, but they are still
+  // review threads and must not disappear from the discussion summary while
+  // blocking the Decision Record.
   const openThreadCount = revisionThreads.filter(
     (thread) => thread.status === "open",
   ).length;
@@ -665,8 +664,8 @@ export function ProjectSpecReviewSurface({
                 </strong>
                 <Meta>
                   {t("spec.threadCount", {
-                    total: discussion.length,
-                    open: openDiscussionCount,
+                    total: revisionThreads.length,
+                    open: openThreadCount,
                   })}
                 </Meta>
                 <FilterChip
@@ -699,9 +698,15 @@ export function ProjectSpecReviewSurface({
                 ))}
                 {shownDiscussion.length === 0 ? (
                   <EmptySlot>
-                    {t(
-                      unresolvedOnly ? "spec.noUnresolved" : "spec.noComments",
-                    )}
+                    {annotations.length > 0 && discussion.length === 0
+                      ? t("spec.annotationsInBody", {
+                          count: annotations.length,
+                        })
+                      : t(
+                          unresolvedOnly
+                            ? "spec.noUnresolved"
+                            : "spec.noComments",
+                        )}
                   </EmptySlot>
                 ) : null}
               </div>

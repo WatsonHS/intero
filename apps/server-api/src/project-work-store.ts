@@ -812,6 +812,7 @@ export class PostgresProjectWorkStore {
     patch: WorkItemPatch,
     actor: WorkActor,
     idempotencyKey?: string,
+    expectedUpdatedAt?: string,
   ): Promise<WorkItem> {
     try {
       assertAgentWorkItemMutation(actor, patch, false);
@@ -837,6 +838,13 @@ export class PostgresProjectWorkStore {
       );
       if (!currentResult.rows[0]) throw new Error("Work Item was not found.");
       const current = workItemFromRow(currentResult.rows[0]);
+      if (expectedUpdatedAt && current.updatedAt !== expectedUpdatedAt) {
+        throw new PilotStoreError(
+          "WORK_ITEM_CONFLICT",
+          409,
+          "The Work Item changed after this screen loaded. Refresh it before retrying.",
+        );
+      }
       await assertHumanOwner(client, patch.ownerId ?? undefined);
       const piId =
         patch.piId === null ? undefined : (patch.piId ?? current.piId);

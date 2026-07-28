@@ -164,11 +164,15 @@ export const UpdateThreadRequest = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     addParticipantIds: z.array(z.string().uuid()).max(20).default([]),
+    removeParticipantIds: z.array(z.string().uuid()).max(20).default([]),
   })
   .strict()
   .refine(
-    (input) => input.title !== undefined || input.addParticipantIds.length > 0,
-    "Update the title and/or add at least one participant.",
+    (input) =>
+      input.title !== undefined ||
+      input.addParticipantIds.length > 0 ||
+      input.removeParticipantIds.length > 0,
+    "Update the title, add a participant, and/or remove a participant.",
   );
 export const ThreadMessagesQuery = z
   .object({

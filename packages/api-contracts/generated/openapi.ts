@@ -720,6 +720,8 @@ export interface components {
       title?: string;
       /** @default [] */
       addParticipantIds: string[];
+      /** @default [] */
+      removeParticipantIds: string[];
     };
   };
   responses: never;

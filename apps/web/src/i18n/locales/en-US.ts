@@ -179,6 +179,21 @@ export const enUS: Record<TranslationKey, string> = {
   "person.notFound": "No Work State found for this person.",
 
   "chat.title": "Messages",
+  "chat.realtime.live": "Live",
+  "chat.realtime.liveDetail":
+    "New messages arrive live and are reconciled with durable history.",
+  "chat.realtime.connecting": "Connecting",
+  "chat.realtime.connectingDetail":
+    "Intero is establishing realtime delivery; messages remain durable.",
+  "chat.realtime.degraded": "Repairing",
+  "chat.realtime.degradedDetail":
+    "Realtime is unavailable, so Intero is repairing message gaps incrementally.",
+  "chat.realtime.offline": "Offline",
+  "chat.realtime.offlineDetail":
+    "The network is unavailable; durable history will repair the gap after reconnecting.",
+  "chat.realtime.disabled": "Realtime off",
+  "chat.realtime.disabledDetail":
+    "This deployment has no realtime service; the page refreshes when focused.",
   "chat.group.standIn": "Your Stand-in",
   "chat.group.temp": "Temporary groups",
   "chat.group.rooms": "Group chats",
@@ -788,6 +803,8 @@ export const enUS: Record<TranslationKey, string> = {
     "This revision carries {count} annotations. Publishing a new revision leaves them on the old one.",
   "spec.discussion": "Discussion",
   "spec.threadCount": "{total} threads · {open} unresolved",
+  "spec.annotationsInBody":
+    "{count} inline annotations are shown in the document above.",
   "spec.onlyUnresolved": "Unresolved only",
   "spec.noUnresolved": "Nothing unresolved.",
   "spec.commentFoot":

@@ -21,6 +21,7 @@ import {
   createProgramIncrement,
   createWorkItem,
   getProjectWork,
+  InteroApiError,
   closeSprint,
   revertFeature,
   updateFeature,
@@ -51,6 +52,12 @@ import { usePilotOptional } from "../../pilot/context.js";
 import { ProjectAgentConnectionBadge } from "../agent/connection-state.js";
 
 type ProjectPane = "board" | "list" | "epic" | "backlog";
+
+type InlineMutationState = {
+  status: "saving" | "saved" | "failed" | "conflict";
+  patch: Record<string, unknown>;
+  expectedUpdatedAt: string;
+};
 
 const COLUMNS: Array<{
   id: WorkItemStatus;
@@ -127,11 +134,14 @@ export function ProjectWorkSurface({
   const [newFeatureTitle, setNewFeatureTitle] = useState("");
   const [newFeatureEpicId, setNewFeatureEpicId] = useState("");
   const [showPi, setShowPi] = useState(false);
+  const [inlineMutationStates, setInlineMutationStates] = useState<
+    Record<string, InlineMutationState>
+  >({});
 
   const data = useQuery({
     queryKey: ["project-work", projectId],
     queryFn: ({ signal }) => getProjectWork(projectId, signal),
-    refetchInterval: 4_000,
+    refetchOnWindowFocus: true,
   });
   const overview = useQuery({
     queryKey: ["pilot", "overview", pilot?.identityId, projectId],
@@ -169,9 +179,61 @@ export function ProjectWorkSurface({
   // One mutation for every inline field edit on a card; the board patches
   // status, owner, points, and priority through the same path.
   const update = useMutation({
-    mutationFn: (input: { id: string; patch: Record<string, unknown> }) =>
-      updateWorkItem(projectId, input.id, input.patch),
-    onSuccess: refresh,
+    mutationFn: (input: {
+      id: string;
+      patch: Record<string, unknown>;
+      expectedUpdatedAt: string;
+    }) =>
+      updateWorkItem(projectId, input.id, {
+        ...input.patch,
+        expectedUpdatedAt: input.expectedUpdatedAt,
+      }),
+    onMutate: (input) => {
+      setInlineMutationStates((current) => ({
+        ...current,
+        [input.id]: {
+          status: "saving",
+          patch: input.patch,
+          expectedUpdatedAt: input.expectedUpdatedAt,
+        },
+      }));
+    },
+    onSuccess: (saved, input) => {
+      queryClient.setQueryData<ProjectWorkPayload>(
+        ["project-work", projectId],
+        (current) =>
+          current
+            ? {
+                ...current,
+                workItems: current.workItems.map((item) =>
+                  item.id === saved.id ? saved : item,
+                ),
+              }
+            : current,
+      );
+      setInlineMutationStates((current) => ({
+        ...current,
+        [input.id]: {
+          status: "saved",
+          patch: input.patch,
+          expectedUpdatedAt: saved.updatedAt,
+        },
+      }));
+    },
+    onError: (error, input) => {
+      setInlineMutationStates((current) => ({
+        ...current,
+        [input.id]: {
+          status:
+            error instanceof InteroApiError &&
+            error.code === "WORK_ITEM_CONFLICT"
+              ? "conflict"
+              : "failed",
+          patch: input.patch,
+          expectedUpdatedAt: input.expectedUpdatedAt,
+        },
+      }));
+    },
   });
   const createPi = useMutation({
     mutationFn: (input: {
@@ -313,6 +375,31 @@ export function ProjectWorkSurface({
   const selectedSprint = work.sprints.find(
     (sprint) => sprint.id === activeSprintId,
   );
+  const mutateInline = (id: string, patch: Record<string, unknown>) => {
+    const item = work.workItems.find((candidate) => candidate.id === id);
+    if (!item) return;
+    update.mutate({ id, patch, expectedUpdatedAt: item.updatedAt });
+  };
+  const retryInline = async (id: string) => {
+    const pending = inlineMutationStates[id];
+    if (!pending) return;
+    if (pending.status === "conflict") {
+      const refreshed = await data.refetch();
+      const latest = refreshed.data?.workItems.find((item) => item.id === id);
+      if (!latest) return;
+      update.mutate({
+        id,
+        patch: pending.patch,
+        expectedUpdatedAt: latest.updatedAt,
+      });
+      return;
+    }
+    update.mutate({
+      id,
+      patch: pending.patch,
+      expectedUpdatedAt: pending.expectedUpdatedAt,
+    });
+  };
 
   return (
     <div className="animate-view-enter grid h-full grid-rows-[auto_minmax(0,1fr)]">
@@ -522,7 +609,9 @@ export function ProjectWorkSurface({
           formatRelative={formatRelative}
           onOpenItem={onOpenItem}
           owners={assignableOwners}
-          onUpdate={(id, patch) => update.mutate({ id, patch })}
+          mutationStates={inlineMutationStates}
+          onRetry={(id) => void retryInline(id)}
+          onUpdate={mutateInline}
         />
       ) : null}
 
@@ -655,6 +744,8 @@ function BoardPane({
   formatRelative,
   onOpenItem,
   owners,
+  mutationStates,
+  onRetry,
   onUpdate,
 }: {
   items: WorkItem[];
@@ -664,6 +755,8 @@ function BoardPane({
   formatRelative: (value: string) => string;
   onOpenItem: (id: string) => void;
   owners: ReadonlyArray<{ id: string; displayName: string }>;
+  mutationStates: Record<string, InlineMutationState>;
+  onRetry: (id: string) => void;
   onUpdate: (id: string, patch: Record<string, unknown>) => void;
 }) {
   const { t } = useI18n();
@@ -796,6 +889,46 @@ function BoardPane({
                       {formatRelative(item.updatedAt)}
                     </Meta>
                   </div>
+
+                  {mutationStates[item.id] ? (
+                    <div
+                      className={[
+                        "flex items-center gap-2 rounded-btn px-2.5 py-1.5 text-[9.5px]",
+                        mutationStates[item.id]?.status === "saved"
+                          ? "bg-green-soft text-green"
+                          : mutationStates[item.id]?.status === "saving"
+                            ? "bg-accent-soft text-accent-strong"
+                            : "bg-danger-soft text-danger",
+                      ].join(" ")}
+                      data-testid={`work-item-save-${item.id}`}
+                      role={
+                        mutationStates[item.id]?.status === "failed" ||
+                        mutationStates[item.id]?.status === "conflict"
+                          ? "alert"
+                          : undefined
+                      }
+                    >
+                      {mutationStates[item.id]?.status === "saving"
+                        ? "正在保存…"
+                        : mutationStates[item.id]?.status === "saved"
+                          ? "已保存"
+                          : mutationStates[item.id]?.status === "conflict"
+                            ? "检测到并发修改，未覆盖服务端版本 · WORK_ITEM_CONFLICT"
+                            : "保存失败，修改仍保留在当前卡片上"}
+                      {mutationStates[item.id]?.status === "failed" ||
+                      mutationStates[item.id]?.status === "conflict" ? (
+                        <button
+                          type="button"
+                          onClick={() => onRetry(item.id)}
+                          className="ml-auto rounded-pill border border-current px-2 py-0.5 font-[650]"
+                        >
+                          {mutationStates[item.id]?.status === "conflict"
+                            ? "刷新后重试"
+                            : "重试"}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <button
                     type="button"

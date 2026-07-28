@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CloudPilotClient, EncryptedOutbox } from "./cloud-client.js";
@@ -130,7 +131,11 @@ describe("cloud MCP client", () => {
               content: [
                 {
                   type: "text",
-                  text: JSON.stringify({ status: "connected" }),
+                  text: JSON.stringify({
+                    status: "lifecycle_pending",
+                    mcpConnected: true,
+                    configurationCurrent: true,
+                  }),
                 },
               ],
             },
@@ -187,6 +192,7 @@ describe("cloud MCP client", () => {
             params: {
               name: "intero.validate_connection",
               arguments: {
+                configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
                 verificationCode: "verification-code-connection-test",
               },
             },

@@ -3,6 +3,7 @@ import {
   CircleHalfIcon,
   CodeIcon,
   FolderSimpleIcon,
+  PulseIcon,
   MoonIcon,
   ShootingStarIcon,
   SunIcon,
@@ -22,10 +23,12 @@ import { NotificationSettings } from "./settings/NotificationSettings.js";
 import { AccountSecuritySettings } from "./settings/AccountSecuritySettings.js";
 import { ProjectAutomationSettings } from "./settings/ProjectAutomationSettings.js";
 import { GitAwarenessSettings } from "./settings/GitAwarenessSettings.js";
+import { FirstUseGuide } from "./settings/FirstUseGuide.js";
+import { ServiceDiagnosticsSettings } from "./settings/ServiceDiagnosticsSettings.js";
 
 // Team members, deployment and model service moved to 团队管理 — they are
 // governance settings for a whole team or organization, not personal ones.
-export type SettingsCategory = "personal" | "project" | "agent";
+export type SettingsCategory = "personal" | "project" | "agent" | "services";
 
 const SETTINGS_CATEGORIES = [
   {
@@ -45,6 +48,12 @@ const SETTINGS_CATEGORIES = [
     label: "Coding Agent",
     detail: "项目连接管理",
     icon: CodeIcon,
+  },
+  {
+    id: "services",
+    label: "Diagnostics",
+    detail: "连接与服务诊断",
+    icon: PulseIcon,
   },
 ] as const satisfies ReadonlyArray<{
   id: SettingsCategory;
@@ -109,6 +118,8 @@ export function SettingsView({
     personal: "管理你的个人资料、界面偏好、账号安全和站内通知。",
     project: "查看当前项目的有效治理配置，并管理受控的替身自动协作。",
     agent: "按 Project 管理 Coding Agent 的连接、验证状态和本地仓库配置。",
+    services:
+      "集中检查 Agent、模型、实时、Worker、授权、数据库和对象存储，并获得安全的恢复入口。",
   };
 
   useEffect(() => {
@@ -343,6 +354,7 @@ export function SettingsView({
 
               {pilot?.enabled && pilot.identityId ? (
                 <>
+                  <FirstUseGuide />
                   <OnboardingAdminSettings section="personal" />
                   <AccountSecuritySettings />
                   <NotificationSettings />
@@ -370,6 +382,12 @@ export function SettingsView({
                 onConnectedClientsChange={setConnectedAgentClients}
               />
             </div>
+          ) : null}
+
+          {pilot?.enabled &&
+          pilot.identityId &&
+          activeCategory === "services" ? (
+            <ServiceDiagnosticsSettings />
           ) : null}
 
           {activeCategory === "agent" &&

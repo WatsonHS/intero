@@ -176,6 +176,10 @@ export interface BuildAppOptions {
     publicUrl: string;
     tokenSecret: string;
     tokenTtlSeconds?: number;
+    enabled?: boolean;
+  };
+  realtimeAccessRevoker?: {
+    revoke(principalId: PrincipalId, threadId: ThreadId): Promise<void>;
   };
 }
 
@@ -207,6 +211,7 @@ export async function buildApp(
     publicUrl: "http://localhost:4311",
     tokenSecret: "intero-development-realtime-token-secret-v1",
   };
+  const realtimeEnabled = realtimeConfig.enabled ?? true;
   const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
   const organization = options.organization ?? {
@@ -396,9 +401,7 @@ export async function buildApp(
     const resolvedPrincipal = await requestAuth.resolve(request, false);
     return {
       organization,
-      adapters: {
-        realtime: "centrifugo",
-      },
+      adapters: realtimeEnabled ? { realtime: "centrifugo" as const } : {},
       ...(resolvedPrincipal
         ? {
             currentPrincipal: resolvedPrincipal,
@@ -434,7 +437,7 @@ export async function buildApp(
     coordination: pilotCoordination,
     modelGateway: pilotModelGateway,
     adapters: {
-      realtime: "centrifugo",
+      ...(realtimeEnabled ? { realtime: "centrifugo" as const } : {}),
       objectStorage: "minio",
       jobs:
         pilotJobs instanceof TransactionalOutboxJobRunner
@@ -454,11 +457,19 @@ export async function buildApp(
     store: pilotStore,
     checkpointService: pilotCheckpointService,
   });
-  await registerRealtimeRoutes(app, {
-    store,
-    requestAuth,
-    ...realtimeConfig,
-  });
+  if (realtimeEnabled) {
+    await registerRealtimeRoutes(app, {
+      store,
+      requestAuth,
+      ...realtimeConfig,
+      ...(options.authDatabase
+        ? {
+            rateLimitDatabase: options.authDatabase,
+            organizationId: organization.id,
+          }
+        : {}),
+    });
+  }
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {
       store: options.projectWorkStore,
@@ -833,10 +844,27 @@ export async function buildApp(
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     const unsubscribe = actionInboxEvents.subscribe(principal!.id, (event) => {
-      send("inbox-changed", {
-        reason: event.reason,
-        occurredAt: event.occurredAt,
-      });
+      send(
+        event.reason === "workspace_change"
+          ? "workspace-changed"
+          : "inbox-changed",
+        {
+          reason: event.reason,
+          occurredAt: event.occurredAt,
+          ...(event.reason === "workspace_change"
+            ? {
+                ...(event.eventType ? { eventType: event.eventType } : {}),
+                ...(event.aggregateType
+                  ? { aggregateType: event.aggregateType }
+                  : {}),
+                ...(event.aggregateId
+                  ? { aggregateId: event.aggregateId }
+                  : {}),
+                ...(event.projectId ? { projectId: event.projectId } : {}),
+              }
+            : {}),
+        },
+      );
     });
     const heartbeat = setInterval(() => {
       if (!closed && !reply.raw.destroyed) reply.raw.write(": heartbeat\n\n");
@@ -1121,6 +1149,9 @@ export async function buildApp(
       const requestedParticipants = [
         ...new Set(input.addParticipantIds as PrincipalId[]),
       ];
+      const removedParticipants = [
+        ...new Set(input.removeParticipantIds as PrincipalId[]),
+      ];
       const knownParticipants = await principalDirectory.list(
         requestedParticipants,
       );
@@ -1134,14 +1165,28 @@ export async function buildApp(
           "New Thread participants must be known human members.",
         );
       }
-      return store.updateThread(
+      const result = await store.updateThread(
         threadId,
         {
           ...(input.title !== undefined ? { title: input.title } : {}),
           addParticipantIds: requestedParticipants,
+          removeParticipantIds: removedParticipants,
         },
         principal!.id,
       );
+      const revocations = await Promise.allSettled(
+        removedParticipants.map((removedPrincipalId) =>
+          options.realtimeAccessRevoker?.revoke(removedPrincipalId, threadId),
+        ),
+      );
+      if (revocations.some((revocation) => revocation.status === "rejected")) {
+        throw new PilotStoreError(
+          "REALTIME_ACCESS_REVOKE_PENDING",
+          503,
+          "Participant access was removed durably, but realtime disconnect is pending. Retry this change.",
+        );
+      }
+      return result;
     },
   );
 

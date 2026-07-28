@@ -14,6 +14,7 @@ export interface SpiceDbAuthorizationConfig {
 export class SpiceDbAuthorization implements AuthorizationPort {
   readonly #client: v1.ZedClientInterface;
   readonly #timeoutMs: number;
+  #relationshipWriteTail: Promise<void> = Promise.resolve();
 
   constructor(config: SpiceDbAuthorizationConfig) {
     if (config.insecureLocalhost && config.certificate) {
@@ -127,6 +128,29 @@ export class SpiceDbAuthorization implements AuthorizationPort {
   }
 
   async touchRelationship(input: {
+    resourceType: string;
+    resourceId: string;
+    relation: string;
+    principalId?: string;
+    subjectType?: string;
+    subjectId?: string;
+    subjectRelation?: string;
+  }): Promise<string | undefined> {
+    // The bundled in-memory SpiceDB datastore can acknowledge concurrent
+    // writes at adjacent revisions while retaining only a subset of them.
+    // Preserve write ordering per client so a successful authorization repair
+    // is immediately durable before its consistency token is checked.
+    const write = this.#relationshipWriteTail.then(() =>
+      this.#writeRelationship(input),
+    );
+    this.#relationshipWriteTail = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
+  }
+
+  async #writeRelationship(input: {
     resourceType: string;
     resourceId: string;
     relation: string;

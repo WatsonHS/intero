@@ -78,6 +78,7 @@ import {
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { useConversationRealtime } from "../realtime/context.js";
+import type { ConversationRealtimeStatus } from "../realtime/coordinator.js";
 import { EmojiPicker } from "./chat/EmojiPicker.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
 import { GroupChatManagementModal } from "./chat/GroupChatManagementModal.js";
@@ -104,6 +105,41 @@ const MESSAGE_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+
+const REALTIME_STATUS: Record<
+  ConversationRealtimeStatus,
+  {
+    label: TranslationKey;
+    detail: TranslationKey;
+    tone: "green" | "amber" | "danger" | "muted";
+  }
+> = {
+  live: {
+    label: "chat.realtime.live",
+    detail: "chat.realtime.liveDetail",
+    tone: "green",
+  },
+  connecting: {
+    label: "chat.realtime.connecting",
+    detail: "chat.realtime.connectingDetail",
+    tone: "amber",
+  },
+  degraded: {
+    label: "chat.realtime.degraded",
+    detail: "chat.realtime.degradedDetail",
+    tone: "amber",
+  },
+  offline: {
+    label: "chat.realtime.offline",
+    detail: "chat.realtime.offlineDetail",
+    tone: "danger",
+  },
+  disabled: {
+    label: "chat.realtime.disabled",
+    detail: "chat.realtime.disabledDetail",
+    tone: "muted",
+  },
+};
 
 interface ComposerImage {
   id: string;
@@ -360,8 +396,13 @@ export function CommunicationsView({
           ),
       )
     : items;
-  const current =
-    items.find((item) => item.thread.id === selectedThreadId) ?? items[0];
+  const selectedItem = selectedThreadId
+    ? items.find((item) => item.thread.id === selectedThreadId)
+    : undefined;
+  const selectedRecordMissing = Boolean(selectedThreadId && !selectedItem);
+  const current = selectedRecordMissing
+    ? undefined
+    : (selectedItem ?? items[0]);
   const replyingToMessage = current?.messages.find(
     (message) => message.id === replyingToMessageId,
   );
@@ -371,6 +412,9 @@ export function CommunicationsView({
   const currentIsPilot = currentPilotItem !== undefined;
   const currentIsPilotStandIn =
     pilotStandInItem?.thread.id === current?.thread.id;
+  const legacyStandInRecord = Boolean(
+    current?.thread.kind === "stand_in" && !currentIsPilotStandIn,
+  );
   const currentIsCanonicalGroup =
     !currentIsPilot &&
     !currentIsPilotStandIn &&
@@ -904,6 +948,7 @@ export function CommunicationsView({
       threadId: string;
       title?: string;
       addParticipantIds: string[];
+      removeParticipantIds: string[];
     }) => updateConversationThread(input),
     onSuccess: async () => {
       setShowManage(false);
@@ -1558,6 +1603,7 @@ export function CommunicationsView({
             <strong className="text-[15px] font-[620] tracking-[-0.02em]">
               {t("chat.title")}
             </strong>
+            <RealtimeDeliveryStatus status={realtime.status} />
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
@@ -1713,6 +1759,7 @@ export function CommunicationsView({
               standInIds={current.thread.standInIds}
               principalNames={principalNames}
               candidates={conversationCandidates}
+              protectedParticipantId={currentSenderId}
               busy={updateGroupChat.isPending}
               error={
                 updateGroupChat.error instanceof Error
@@ -1814,6 +1861,17 @@ export function CommunicationsView({
               </span>
             ) : null}
           </header>
+
+          {legacyStandInRecord ? (
+            <div
+              className="border-b border-amber-soft bg-amber-soft px-[26px] py-3 text-[11px] leading-[1.65] text-amber"
+              data-testid="stand-in-legacy-detail"
+            >
+              这是旧版 Project-backed Stand-in 记录。历史内容保留为只读；
+              新提问请从个人替身入口继续。
+              <span className="ml-1 font-mono">STAND_IN_LEGACY_RECORD</span>
+            </div>
+          ) : null}
 
           {/* A branched discussion is meant to end: its conclusion is posted
               back into the conversation it came from, then it closes. */}
@@ -2398,6 +2456,7 @@ export function CommunicationsView({
                         (image) => image.status !== "available",
                       ) ||
                       !currentSenderId ||
+                      legacyStandInRecord ||
                       current.thread.accessMode === "human_only_e2ee" ||
                       send.isPending
                     }
@@ -2413,6 +2472,24 @@ export function CommunicationsView({
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      ) : selectedRecordMissing ? (
+        <div
+          className="grid h-full min-w-0 place-items-center p-8"
+          data-testid="communications-degraded-record"
+        >
+          <div className="max-w-[480px] rounded-container border border-amber-soft bg-amber-soft p-6 text-center">
+            <strong className="text-[16px] font-[630] text-amber">
+              这条通讯记录不可用
+            </strong>
+            <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted">
+              它可能来自旧版数据、部分迁移，或你的参与者权限刚被移除。Intero
+              不会自动切换到另一条对话造成误解。
+            </p>
+            <p className="mt-2 font-mono text-[10px] text-amber">
+              COMMUNICATION_RECORD_UNAVAILABLE · {selectedThreadId}
+            </p>
           </div>
         </div>
       ) : !threads.isPending && !threads.isError && items.length === 0 ? (
@@ -2442,6 +2519,42 @@ export function CommunicationsView({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function RealtimeDeliveryStatus({
+  status,
+}: {
+  status: ConversationRealtimeStatus;
+}) {
+  const { t } = useI18n();
+  const presentation = REALTIME_STATUS[status];
+  const tone =
+    presentation.tone === "green"
+      ? "bg-green-soft text-green"
+      : presentation.tone === "amber"
+        ? "bg-amber-soft text-amber"
+        : presentation.tone === "danger"
+          ? "bg-danger-soft text-danger"
+          : "bg-raise text-faint";
+
+  return (
+    <span
+      role="status"
+      title={t(presentation.detail)}
+      data-testid="conversation-realtime-status"
+      data-status={status}
+      className={`inline-flex items-center gap-1.5 rounded-pill px-2 py-1 text-[9.5px] font-[620] ${tone}`}
+    >
+      <i
+        aria-hidden="true"
+        className={[
+          "h-1.5 w-1.5 rounded-full bg-current",
+          status === "connecting" ? "animate-pulse" : "",
+        ].join(" ")}
+      />
+      {t(presentation.label)}
+    </span>
   );
 }
 

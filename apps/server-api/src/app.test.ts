@@ -27,9 +27,14 @@ function auth(principalId: PrincipalId = ALEX) {
 describe("Intero API vertical slice", () => {
   let store: InMemoryPlatformStore;
   let app: Awaited<ReturnType<typeof buildTestApp>>;
+  let revokedRealtimeAccess: Array<{
+    principalId: PrincipalId;
+    threadId: string;
+  }>;
 
   beforeEach(async () => {
     store = new InMemoryPlatformStore();
+    revokedRealtimeAccess = [];
     app = await buildTestApp({
       store,
       logger: false,
@@ -38,6 +43,11 @@ describe("Intero API vertical slice", () => {
         { id: PRIYA, displayName: "Priya Shah", kind: "human" },
         { id: MORGAN, displayName: "Morgan Chen", kind: "human" },
       ],
+      realtimeAccessRevoker: {
+        revoke: async (principalId, threadId) => {
+          revokedRealtimeAccess.push({ principalId, threadId });
+        },
+      },
     });
   });
 
@@ -260,6 +270,91 @@ describe("Intero API vertical slice", () => {
         sequence: 2,
       }),
     ]);
+
+    const removed = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(ALEX),
+      payload: { removeParticipantIds: [PRIYA] },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({
+      thread: {
+        participantIds: [ALEX],
+        sequence: 3,
+        accessVersion: 3,
+      },
+      event: {
+        kind: "system_access_change",
+        sequence: 3,
+      },
+    });
+    expect(revokedRealtimeAccess).toEqual([{ principalId: PRIYA, threadId }]);
+    const revokedView = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${threadId}`,
+      headers: auth(PRIYA),
+    });
+    expect(revokedView.statusCode).toBe(404);
+  });
+
+  it("keeps a failed realtime disconnect visible and retryable after durable removal", async () => {
+    await app.close();
+    let realtimeAvailable = false;
+    app = await buildTestApp({
+      store,
+      logger: false,
+      pilotIdentities: [
+        { id: ALEX, displayName: "Alex Rivera", kind: "human" },
+        { id: PRIYA, displayName: "Priya Shah", kind: "human" },
+      ],
+      realtimeAccessRevoker: {
+        revoke: async () => {
+          if (!realtimeAvailable) throw new Error("centrifugo unavailable");
+        },
+      },
+    });
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "room",
+        title: "Removal retry",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    const remove = () =>
+      app.inject({
+        method: "PATCH",
+        url: `/v1/threads/${threadId}`,
+        headers: auth(ALEX),
+        payload: { removeParticipantIds: [PRIYA] },
+      });
+    const pending = await remove();
+    expect(pending.statusCode).toBe(503);
+    expect(pending.json()).toMatchObject({
+      code: "REALTIME_ACCESS_REVOKE_PENDING",
+    });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/threads/${threadId}`,
+          headers: auth(PRIYA),
+        })
+      ).statusCode,
+    ).toBe(404);
+
+    realtimeAvailable = true;
+    expect((await remove()).statusCode).toBe(200);
   });
 
   it("settles a retried message ID exactly once and rejects payload drift", async () => {
@@ -879,6 +974,36 @@ describe("Intero API vertical slice", () => {
       },
       adapters: { realtime: "centrifugo" },
     });
+  });
+
+  it("disables realtime discovery and token routes at the rollout kill switch", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store,
+      logger: false,
+      realtimeConfig: {
+        publicUrl: "http://localhost:4311",
+        tokenSecret: "intero-development-realtime-token-secret-v1",
+        enabled: false,
+      },
+    });
+    const bootstrap = await app.inject({
+      method: "GET",
+      url: "/v1/bootstrap",
+      headers: auth(),
+    });
+    expect(bootstrap.statusCode).toBe(200);
+    expect(bootstrap.json()).toMatchObject({ adapters: {} });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/realtime/session",
+          headers: auth(),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(404);
   });
 
   it("requires identity on organization data and rejects actor spoofing", async () => {

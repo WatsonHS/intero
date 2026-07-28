@@ -144,7 +144,7 @@ function CanonicalTeamPulseView({
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getPilotOverview(pilot!.identityId!, project.id, signal),
       enabled: Boolean(pilot?.enabled && pilot.identityId),
-      refetchInterval: 4_000,
+      refetchOnWindowFocus: true,
     })),
   });
   const projectWorkQueries = useQueries({
@@ -153,7 +153,7 @@ function CanonicalTeamPulseView({
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getProjectWork(project.id, signal),
       enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-      refetchInterval: 4_000,
+      refetchOnWindowFocus: true,
     })),
   });
   const projectSpecQueries = useQueries({
@@ -162,7 +162,7 @@ function CanonicalTeamPulseView({
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getProjectSpecs(project.id, signal),
       enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-      refetchInterval: 4_000,
+      refetchOnWindowFocus: true,
     })),
   });
   const invalidatePilot = async () => {

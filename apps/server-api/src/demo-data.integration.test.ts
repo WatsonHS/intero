@@ -283,10 +283,20 @@ integration("persisted Demo workspace", () => {
         ?.count,
     ).toBeGreaterThan(0);
 
+    await pool.query(
+      "CREATE SCHEMA IF NOT EXISTS graphile_worker; CREATE TABLE graphile_worker.jobs (id bigint PRIMARY KEY)",
+    );
     await expect(
       resetDemoData(target!, {
         providerDestructionConfirmation,
       }),
     ).resolves.toMatchObject({ status: "reset" });
+    expect(
+      (
+        await pool.query(
+          "SELECT to_regnamespace('graphile_worker') IS NULL AS removed",
+        )
+      ).rows[0]?.removed,
+    ).toBe(true);
   });
 });

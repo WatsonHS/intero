@@ -172,6 +172,19 @@ export const zhCN = {
   "person.notFound": "找不到这个人的 Work State。",
 
   "chat.title": "通讯",
+  "chat.realtime.live": "实时",
+  "chat.realtime.liveDetail": "新消息会实时送达，并以持久化记录校准。",
+  "chat.realtime.connecting": "正在连接",
+  "chat.realtime.connectingDetail": "正在建立实时连接；消息仍会持久保存。",
+  "chat.realtime.degraded": "降级同步",
+  "chat.realtime.degradedDetail":
+    "实时连接暂不可用，Intero 正通过增量修复同步消息。",
+  "chat.realtime.offline": "离线等待",
+  "chat.realtime.offlineDetail":
+    "当前网络不可用；恢复联网后会从持久化记录补齐消息。",
+  "chat.realtime.disabled": "实时未启用",
+  "chat.realtime.disabledDetail":
+    "当前部署未启用实时服务，页面会在重新聚焦时刷新。",
   "chat.group.standIn": "你的替身",
   "chat.group.temp": "临时讨论组",
   "chat.group.rooms": "群聊",
@@ -748,6 +761,7 @@ export const zhCN = {
     "这一版上还有 {count} 条批注。发布新 revision 后，它们会留在旧 revision 上。",
   "spec.discussion": "讨论",
   "spec.threadCount": "{total} 个话题 · {open} 个未解决",
+  "spec.annotationsInBody": "{count} 条正文批注显示在上方内容中。",
   "spec.onlyUnresolved": "只看未解决",
   "spec.noUnresolved": "没有未解决的话题。",
   "spec.commentFoot": "讨论不改变 spec 状态；结论走右侧 Decision Record",

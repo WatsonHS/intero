@@ -100,7 +100,6 @@ export function PersonView({
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getPilotOverview(pilot!.identityId!, project.id, signal),
       enabled: Boolean(pilot?.enabled && pilot.identityId),
-      refetchInterval: 10_000,
       refetchOnWindowFocus: true,
     })),
   });
@@ -110,7 +109,6 @@ export function PersonView({
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getProjectWork(project.id, signal),
       enabled: pilot?.bootstrap.data?.adapters.projectWork === "postgres",
-      refetchInterval: 10_000,
       refetchOnWindowFocus: true,
     })),
   });

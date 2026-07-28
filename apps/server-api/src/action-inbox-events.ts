@@ -2,13 +2,25 @@ import type { OrganizationId, PrincipalId } from "@intero/domain";
 import type { Notification, Pool, PoolClient } from "pg";
 
 export const ACTION_INBOX_EVENT_CHANNEL = "intero_action_inbox_events";
+export const WORKSPACE_EVENT_CHANNEL = "intero_workspace_events";
 
-export interface ActionInboxChangedEvent {
-  organizationId: OrganizationId;
-  principalId: PrincipalId;
-  reason: "action_inbox" | "notification_preferences" | "automation_summary";
-  occurredAt: string;
-}
+export type ActionInboxChangedEvent =
+  | {
+      organizationId: OrganizationId;
+      principalId: PrincipalId;
+      reason:
+        "action_inbox" | "notification_preferences" | "automation_summary";
+      occurredAt: string;
+    }
+  | {
+      organizationId: OrganizationId;
+      reason: "workspace_change";
+      occurredAt: string;
+      eventType?: string;
+      aggregateType?: string;
+      aggregateId?: string;
+      projectId?: string;
+    };
 
 export type ActionInboxEventListener = (event: ActionInboxChangedEvent) => void;
 
@@ -81,6 +93,9 @@ export class PostgresActionInboxEventSource implements ActionInboxEventSource {
       await client.query(`UNLISTEN ${ACTION_INBOX_EVENT_CHANNEL}`).catch(() => {
         // A broken listener connection can only be discarded.
       });
+      await client.query(`UNLISTEN ${WORKSPACE_EVENT_CHANNEL}`).catch(() => {
+        // A broken listener connection can only be discarded.
+      });
       client.release();
     }
     this.listeners.clear();
@@ -93,11 +108,21 @@ export class PostgresActionInboxEventSource implements ActionInboxEventSource {
       return;
     }
     const onNotification = (notification: Notification) => {
-      if (notification.channel !== ACTION_INBOX_EVENT_CHANNEL) return;
+      if (
+        notification.channel !== ACTION_INBOX_EVENT_CHANNEL &&
+        notification.channel !== WORKSPACE_EVENT_CHANNEL
+      )
+        return;
       const event = parseActionInboxChangedEvent(notification.payload);
       if (!event || event.organizationId !== this.organizationId) return;
-      for (const listener of this.listeners.get(event.principalId) ?? []) {
-        listener(event);
+      if ("principalId" in event) {
+        for (const listener of this.listeners.get(event.principalId) ?? []) {
+          listener(event);
+        }
+        return;
+      }
+      for (const listeners of this.listeners.values()) {
+        for (const listener of listeners) listener(event);
       }
     };
     const onError = () => {
@@ -112,6 +137,7 @@ export class PostgresActionInboxEventSource implements ActionInboxEventSource {
     client.on("error", onError);
     try {
       await client.query(`LISTEN ${ACTION_INBOX_EVENT_CHANNEL}`);
+      await client.query(`LISTEN ${WORKSPACE_EVENT_CHANNEL}`);
       this.client = client;
     } catch (error) {
       client.removeListener("notification", onNotification);
@@ -139,13 +165,19 @@ export function parseActionInboxChangedEvent(
     const candidate = JSON.parse(payload) as Record<string, unknown>;
     if (
       typeof candidate.organizationId !== "string" ||
-      typeof candidate.principalId !== "string" ||
       typeof candidate.occurredAt !== "string" ||
       ![
         "action_inbox",
         "notification_preferences",
         "automation_summary",
+        "workspace_change",
       ].includes(String(candidate.reason))
+    ) {
+      return undefined;
+    }
+    if (
+      candidate.reason !== "workspace_change" &&
+      typeof candidate.principalId !== "string"
     ) {
       return undefined;
     }

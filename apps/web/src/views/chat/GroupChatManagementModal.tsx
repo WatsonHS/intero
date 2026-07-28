@@ -16,6 +16,7 @@ export function GroupChatManagementModal({
   standInIds,
   principalNames,
   candidates,
+  protectedParticipantId,
   busy,
   error,
   onClose,
@@ -26,15 +27,21 @@ export function GroupChatManagementModal({
   standInIds: string[];
   principalNames: Map<string, string>;
   candidates: ConversationCandidate[];
+  protectedParticipantId?: string | undefined;
   busy: boolean;
   error?: string | undefined;
   onClose: () => void;
-  onSave: (input: { title?: string; addParticipantIds: string[] }) => void;
+  onSave: (input: {
+    title?: string;
+    addParticipantIds: string[];
+    removeParticipantIds: string[];
+  }) => void;
 }) {
   const { t } = useI18n();
   const [title, setTitle] = useState(initialTitle);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
   const existing = new Set(participantIds);
   const needle = query.trim().toLocaleLowerCase();
   const available = candidates
@@ -48,10 +55,19 @@ export function GroupChatManagementModal({
   const normalizedTitle = title.trim();
   const titleChanged =
     normalizedTitle.length > 0 && normalizedTitle !== initialTitle;
-  const ready = titleChanged || picked.length > 0;
+  const ready = titleChanged || picked.length > 0 || removed.length > 0;
 
   function toggle(id: string) {
     setPicked((current) =>
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : [...current, id],
+    );
+  }
+
+  function toggleRemoved(id: string) {
+    if (standInIds.includes(id) || id === protectedParticipantId) return;
+    setRemoved((current) =>
       current.includes(id)
         ? current.filter((entry) => entry !== id)
         : [...current, id],
@@ -90,10 +106,32 @@ export function GroupChatManagementModal({
             {participantIds.map((id) => {
               const name = principalNames.get(id) ?? t("chat.someone");
               const isStandIn = standInIds.includes(id);
+              const isProtected = id === protectedParticipantId;
               return (
-                <span
+                <button
+                  type="button"
                   key={id}
-                  className="inline-flex h-8 items-center gap-2 rounded-pill bg-raise px-2.5 text-[11px] text-ink"
+                  disabled={isStandIn || isProtected}
+                  aria-pressed={removed.includes(id)}
+                  onClick={() => toggleRemoved(id)}
+                  title={
+                    isStandIn
+                      ? "替身访问由其所有者控制"
+                      : isProtected
+                        ? "不能移除自己的访问权限"
+                        : removed.includes(id)
+                          ? "取消移除"
+                          : "从群聊移除"
+                  }
+                  className={[
+                    "inline-flex h-8 items-center gap-2 rounded-pill px-2.5 text-[11px]",
+                    removed.includes(id)
+                      ? "bg-danger-soft text-danger line-through"
+                      : "bg-raise text-ink",
+                    isStandIn || isProtected
+                      ? "cursor-not-allowed opacity-60"
+                      : "cursor-pointer",
+                  ].join(" ")}
                 >
                   {isStandIn ? (
                     <span className="grid h-5 w-5 place-items-center rounded-full bg-accent-soft text-accent-strong">
@@ -103,7 +141,12 @@ export function GroupChatManagementModal({
                     <Avatar id={id} name={name} size="sm" />
                   )}
                   {name}
-                </span>
+                  {!isStandIn && !isProtected ? (
+                    <span className="text-[9px] opacity-70">
+                      {removed.includes(id) ? "保留" : "移除"}
+                    </span>
+                  ) : null}
+                </button>
               );
             })}
           </div>
@@ -136,6 +179,7 @@ export function GroupChatManagementModal({
               onSave({
                 ...(titleChanged ? { title: normalizedTitle } : {}),
                 addParticipantIds: picked,
+                removeParticipantIds: removed,
               })
             }
             className="h-8 cursor-pointer rounded-inset border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"

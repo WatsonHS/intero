@@ -224,6 +224,46 @@ databaseSuite("PostgreSQL Project Work + Spec Review", () => {
     ).rejects.toMatchObject({ code: "AUTOMATION_AUTHORITY_DENIED" });
   });
 
+  it("rejects a stale inline Work Item mutation with a recoverable conflict", async () => {
+    const item = await store.createWorkItem(
+      {
+        projectId,
+        title: "Conflict-safe inline edit",
+        description: "",
+        status: "todo",
+        priority: "P2",
+        carryover: false,
+        coordinationThreadIds: [],
+      },
+      adminActor,
+      "work-item-conflict-create",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const current = await store.updateWorkItem(
+      projectId,
+      item.id,
+      { title: "Committed in another view" },
+      adminActor,
+      "work-item-conflict-current",
+      item.updatedAt,
+    );
+    expect(current.updatedAt).not.toBe(item.updatedAt);
+
+    await expect(
+      store.updateWorkItem(
+        projectId,
+        item.id,
+        { priority: "P0" },
+        adminActor,
+        "work-item-conflict-stale",
+        item.updatedAt,
+      ),
+    ).rejects.toMatchObject({
+      code: "WORK_ITEM_CONFLICT",
+      statusCode: 409,
+    });
+  });
+
   it("marks unfinished early-closed Sprint work as visible carryover", async () => {
     const snapshot = await store.listProject(projectId);
     const sprint = snapshot.sprints[1]!;

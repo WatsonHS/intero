@@ -33,6 +33,11 @@ phrase from the refusal, supplied as
 `INTERO_DEMO_DESTROY_PROVIDER_CONFIG=DESTROY_INTERO_CONFIGURED_PROVIDER:<host>:<port>/<database>`.
 Never set this override for the running user-facing environment.
 
+Reset also removes the disposable database's `graphile_worker` schema. This
+clears stale job-deduplication keys so jobs created after reseeding cannot be
+silently matched to work from the previous Demo run. Start `dev:demo` again
+after a reset so the Worker recreates its private schema.
+
 ## Create the workspace
 
 Create a dedicated local database and apply the seed:
@@ -48,18 +53,20 @@ export INTERO_DEMO_DATA=true
 export INTERO_DEMO_CONFIRM='INTERO_DEMO_DISPOSABLE:127.0.0.1:5432/intero_demo'
 export INTERO_PROVIDER_ENCRYPTION_KEY='replace-with-a-development-only-secret'
 
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c 'GRANT CONNECT ON DATABASE intero_demo TO intero_app' \
+  -c 'GRANT CONNECT, CREATE ON DATABASE intero_demo TO intero_worker' \
+  -c 'GRANT USAGE ON SCHEMA public TO intero_app'
+
 pnpm demo:seed
 ```
 
-When using the repository's Compose roles, grant the application role access to
-the newly created disposable database before starting the API:
-
-```sh
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -c 'GRANT USAGE ON SCHEMA public TO intero_app' \
-  -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO intero_app' \
-  -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO intero_app'
-```
+The database-level grants are required for a database created after Compose
+first initialized its roles: the API role needs to connect, and the Worker role
+needs to create and migrate its isolated Graphile schema. `demo:seed` applies
+the bounded runtime table and sequence grants after migrations, including when
+the workspace was already seeded. Later migrations also maintain grants for
+the objects they add.
 
 `pnpm demo:seed` applies migrations, creates the Demo workspace once, and
 returns `already_seeded` on later runs. It does not overwrite board moves,
@@ -97,17 +104,22 @@ Enable Better Auth and start the existing canonical browser renderer:
 
 ```sh
 export INTERO_AUTH_SECRET='replace-with-at-least-32-development-characters'
-export INTERO_RUNTIME_MODE='product'
+export INTERO_RUNTIME_MODE='development'
 export INTERO_PUBLIC_URL='http://localhost:4311'
 
-pnpm dev:proxy
 pnpm dev:demo
 ```
 
-`dev:demo` always starts the normal product auth boundary. It refuses to start
-without `INTERO_AUTH_SECRET`, disables development identity simulation, and
-uses Better Auth sessions. Seeded demo records do not create a third or more
-permissive auth mode.
+`dev:demo` refuses to start without `INTERO_AUTH_SECRET`, disables development
+identity simulation, and uses normal Better Auth sessions even though the
+local service profile permits HTTP loopback and the bundled insecure
+development dependencies. It starts the same-origin proxy as part of
+`dev:pilot`; a separate `pnpm dev:proxy` is not required. Seeded demo records
+do not create a third or more permissive auth mode. The command also selects
+the seeded Demo Organization, Alex principal, and Stand-in IDs unless they are
+explicitly overridden. HTTPS environments may set `INTERO_RUNTIME_MODE=product`
+and provide production-safe TLS-backed dependencies before invoking the same
+command.
 
 Local aliases on ports `4310`, `4311`, and `5173` are trusted automatically.
 Use `localhost` consistently for the API public URL and Passkey relying-party

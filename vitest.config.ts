@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
+const usesSharedIntegrationServices = Boolean(
+  process.env.DATABASE_URL ||
+  process.env.INTERO_SPICEDB_ENDPOINT ||
+  process.env.INTERO_OBJECT_STORAGE_ENDPOINT,
+);
 
 export default defineConfig({
   resolve: {
@@ -19,6 +24,11 @@ export default defineConfig({
   },
   test: {
     include: ["{apps,packages}/**/*.test.ts", "{apps,packages}/**/*.test.tsx"],
+    // Real integration suites share one explicitly disposable PostgreSQL,
+    // SpiceDB, and MinIO environment. Keep files ordered in that mode so a
+    // schema migration/reset cannot race another contract assertion. Fast,
+    // dependency-free unit runs remain parallel.
+    fileParallelism: !usesSharedIntegrationServices,
     coverage: {
       reporter: ["text", "html"],
       exclude: ["**/generated/**", "**/dist/**"],

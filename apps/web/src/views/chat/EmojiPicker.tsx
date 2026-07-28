@@ -1,4 +1,6 @@
 import { CircleNotchIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import emojiDataEnUrl from "emojibase-data/en/compact.json?url";
+import emojiDataZhUrl from "emojibase-data/zh/compact.json?url";
 import {
   useEffect,
   useMemo,
@@ -217,9 +219,11 @@ export function EmojiPicker({
 }
 
 async function loadEmojiData(locale: "zh-CN" | "en-US") {
-  const data =
-    locale === "zh-CN"
-      ? await import("emojibase-data/zh/compact.json")
-      : await import("emojibase-data/en/compact.json");
-  return data.default as EmojiRecord[];
+  const response = await fetch(
+    locale === "zh-CN" ? emojiDataZhUrl : emojiDataEnUrl,
+  );
+  if (!response.ok) {
+    throw new Error(`Emoji data request failed with ${response.status}.`);
+  }
+  return (await response.json()) as EmojiRecord[];
 }

@@ -84,7 +84,7 @@ export function ProjectAutomationSettings({
     queryKey: ["project-automation", projectId],
     queryFn: ({ signal }) => getProjectAutomation(projectId!, signal),
     enabled: Boolean(projectId),
-    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
   });
   const [draft, setDraft] = useState<ProjectAutomationPolicy>();
 

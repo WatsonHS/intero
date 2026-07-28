@@ -53,7 +53,7 @@ export function WorkItemDetailSurface({
   const work = useQuery({
     queryKey: ["project-work", projectId],
     queryFn: ({ signal }) => getProjectWork(projectId, signal),
-    refetchInterval: 4_000,
+    refetchOnWindowFocus: true,
   });
   const overview = useQuery({
     queryKey: ["pilot", "overview", identityId, projectId],

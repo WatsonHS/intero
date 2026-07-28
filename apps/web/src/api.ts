@@ -44,6 +44,7 @@ import {
 import { INTERO_API_URL } from "./api-url.js";
 import { createClientUuid } from "./client-id.js";
 import { consumeServerSentEvents } from "./sse.js";
+import type { WorkspaceChangedEvent } from "./workspace-events.js";
 
 const API_URL = INTERO_API_URL;
 type ConversationAttachment = Omit<Attachment, "objectKey">;
@@ -69,6 +70,28 @@ export interface BootstrapPayload {
   adapters?: {
     realtime: "centrifugo";
   };
+}
+
+export interface ServiceReadinessDependency {
+  name: string;
+  status: "ready" | "degraded" | "unavailable";
+  critical: boolean;
+  detail?: string;
+}
+
+export interface ServiceReadinessPayload {
+  status: "ready" | "degraded" | "unavailable";
+  dependencies: ServiceReadinessDependency[];
+}
+
+export class InteroApiError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export interface RealtimeSessionPayload {
@@ -154,6 +177,23 @@ export async function getProjectAutomation(
   signal?: AbortSignal,
 ): Promise<ProjectAutomationPayload> {
   return getJson(`/v1/project-automation/${projectId}`, signal);
+}
+
+export async function getServiceReadiness(
+  signal?: AbortSignal,
+): Promise<ServiceReadinessPayload> {
+  const response = await fetch(`${API_URL}/ready`, {
+    ...(signal ? { signal } : {}),
+    credentials: "include",
+    headers: developmentIdentityHeaders(),
+  });
+  // `/ready` deliberately returns the dependency report with HTTP 503 while
+  // one or more critical services are unavailable. The diagnostics UI still
+  // needs that privacy-safe body so it can show the exact repair target.
+  if (response.status !== 503) {
+    await ensureResponseOk(response);
+  }
+  return (await response.json()) as ServiceReadinessPayload;
 }
 
 export async function updateProjectAutomation(
@@ -469,10 +509,7 @@ export async function getActionInbox(signal?: AbortSignal): Promise<{
 }
 
 export async function streamActionInboxEvents(
-  onChanged: (event: {
-    reason: "action_inbox" | "notification_preferences" | "automation_summary";
-    occurredAt: string;
-  }) => void,
+  onChanged: (event: WorkspaceChangedEvent) => void,
   options: { signal: AbortSignal; onOpen?: () => void },
 ): Promise<void> {
   const response = await fetch(`${API_URL}/v1/action-inbox/events`, {
@@ -487,7 +524,8 @@ export async function streamActionInboxEvents(
   if (!response.body) throw new Error("Intero SSE response has no body.");
   options.onOpen?.();
   await consumeServerSentEvents(response.body, (event) => {
-    if (event.event !== "inbox-changed") return;
+    if (event.event !== "inbox-changed" && event.event !== "workspace-changed")
+      return;
     try {
       const payload = JSON.parse(event.data) as Record<string, unknown>;
       if (
@@ -495,12 +533,13 @@ export async function streamActionInboxEvents(
           "action_inbox",
           "notification_preferences",
           "automation_summary",
+          "workspace_change",
         ].includes(String(payload.reason)) ||
         typeof payload.occurredAt !== "string"
       ) {
         return;
       }
-      onChanged(payload as Parameters<typeof onChanged>[0]);
+      onChanged(payload as unknown as Parameters<typeof onChanged>[0]);
     } catch {
       // A malformed wake-up signal is safe to ignore; polling remains active.
     }
@@ -785,10 +824,12 @@ export async function updateConversationThread(input: {
   threadId: string;
   title?: string;
   addParticipantIds?: string[];
+  removeParticipantIds?: string[];
 }): Promise<{ thread: ConversationThread; event?: ThreadMessage }> {
   return patchJson(`/v1/threads/${encodeURIComponent(input.threadId)}`, {
     ...(input.title !== undefined ? { title: input.title } : {}),
     addParticipantIds: input.addParticipantIds ?? [],
+    removeParticipantIds: input.removeParticipantIds ?? [],
   });
 }
 
@@ -1005,13 +1046,15 @@ async function ensureResponseOk(response: Response): Promise<void> {
   if (response.ok) return;
   handleAuthenticationFailure(response.status);
   const fallback = `Intero API returned ${response.status}.`;
-  let body: { message?: unknown } | undefined;
+  let body: { code?: unknown; message?: unknown } | undefined;
   try {
-    body = (await response.json()) as { message?: unknown };
+    body = (await response.json()) as { code?: unknown; message?: unknown };
   } catch {
     // Some proxies return an empty or non-JSON error response.
   }
-  throw new Error(
+  throw new InteroApiError(
+    typeof body?.code === "string" ? body.code : "API_REQUEST_FAILED",
+    response.status,
     typeof body?.message === "string" && body.message.trim()
       ? body.message
       : fallback,

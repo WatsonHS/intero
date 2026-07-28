@@ -605,7 +605,11 @@ export class PostgresPlatformStore implements PlatformStore {
 
   async updateThread(
     threadId: ThreadId,
-    input: { title?: string; addParticipantIds: PrincipalId[] },
+    input: {
+      title?: string;
+      addParticipantIds: PrincipalId[];
+      removeParticipantIds?: PrincipalId[];
+    },
     actorId: PrincipalId,
   ): Promise<{ thread: ConversationThread; event?: ThreadMessage }> {
     return this.write(async (client) => {
@@ -637,24 +641,44 @@ export class PostgresPlatformStore implements PlatformStore {
       const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
         (principalId) => !current.thread.participantIds.includes(principalId),
       );
+      const removedParticipantIds = [
+        ...new Set(input.removeParticipantIds ?? []),
+      ].filter(
+        (principalId) =>
+          current.thread.participantIds.includes(principalId) &&
+          !current.thread.standInIds.includes(principalId),
+      );
+      if (removedParticipantIds.includes(actorId)) {
+        throw new Error("A group manager cannot remove their own access.");
+      }
       const titleChanged =
         title !== undefined && title !== current.thread.title;
-      if (!titleChanged && addedParticipantIds.length === 0) {
+      if (
+        !titleChanged &&
+        addedParticipantIds.length === 0 &&
+        removedParticipantIds.length === 0
+      ) {
         return { thread: current.thread };
       }
 
       const event =
-        addedParticipantIds.length > 0
+        addedParticipantIds.length > 0 || removedParticipantIds.length > 0
           ? ({
               id: uuidv7() as ThreadMessage["id"],
               threadId,
               senderId: actorId,
               sequence: current.thread.sequence + 1,
               kind: "system_access_change",
-              body:
-                addedParticipantIds.length === 1
-                  ? "A member joined the group conversation. Earlier history remains withheld."
-                  : `${addedParticipantIds.length} members joined the group conversation. Earlier history remains withheld.`,
+              body: [
+                addedParticipantIds.length > 0
+                  ? `${addedParticipantIds.length} member(s) joined; earlier history remains withheld.`
+                  : "",
+                removedParticipantIds.length > 0
+                  ? `${removedParticipantIds.length} member(s) left and lost access immediately.`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" "),
               createdAt: new Date().toISOString(),
               serverReadable: true,
             } satisfies ThreadMessage)
@@ -674,6 +698,16 @@ export class PostgresPlatformStore implements PlatformStore {
              revoked_at = NULL,
              updated_at = now()`,
           [this.organizationId, threadId, participantId, event!.sequence],
+        );
+      }
+      if (removedParticipantIds.length > 0) {
+        await client.query(
+          `UPDATE thread_participants
+           SET revoked_at = $3, updated_at = now()
+           WHERE thread_id = $1
+             AND principal_id = ANY($2::uuid[])
+             AND revoked_at IS NULL`,
+          [threadId, removedParticipantIds, event!.createdAt],
         );
       }
       await client.query(

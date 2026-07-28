@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 import {
   loadPilotAdapterConfig,
@@ -72,6 +73,8 @@ export interface ApiServiceConfig {
   realtime: {
     publicUrl: string;
     tokenSecret: string;
+    enabled: boolean;
+    rolloutPercent: number;
   };
   auth?: {
     publicUrl: string;
@@ -184,6 +187,16 @@ export function loadApiServiceConfig(
         ? publicUrl
         : DevelopmentCentrifugoPublicUrl
       : undefined);
+  const organizationId = OrganizationId.parse(
+    environment.INTERO_ORGANIZATION_ID ??
+      "019b5ac0-7600-7000-8000-000000000001",
+  );
+  const realtimeRolloutPercent = z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .parse(environment.INTERO_REALTIME_ROLLOUT_PERCENT ?? 100);
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
   if (runtimeMode === "product" && developmentIdentityRequested) {
@@ -220,10 +233,7 @@ export function loadApiServiceConfig(
     runtime,
     runtimeMode,
     pilot,
-    organizationId: OrganizationId.parse(
-      environment.INTERO_ORGANIZATION_ID ??
-        "019b5ac0-7600-7000-8000-000000000001",
-    ),
+    organizationId,
     objectStorage: loadObjectStorageConfig(environment),
     metricsEnabled: environment.INTERO_METRICS_ENABLED !== "false",
     spiceDbInsecure,
@@ -238,6 +248,11 @@ export function loadApiServiceConfig(
         .parse(realtimePublicUrl ?? publicUrl)
         .replace(/\/+$/, ""),
       tokenSecret: z.string().min(32).parse(realtimeTokenSecret),
+      enabled: realtimeEnabledForOrganization(
+        organizationId,
+        realtimeRolloutPercent,
+      ),
+      rolloutPercent: realtimeRolloutPercent,
     },
     ...(authSecret
       ? {
@@ -253,6 +268,18 @@ export function loadApiServiceConfig(
         }
       : {}),
   };
+}
+
+export function realtimeEnabledForOrganization(
+  organizationId: string,
+  rolloutPercent: number,
+): boolean {
+  if (rolloutPercent <= 0) return false;
+  if (rolloutPercent >= 100) return true;
+  const bucket =
+    createHash("sha256").update(organizationId).digest().readUInt32BE(0) %
+    10_000;
+  return bucket < rolloutPercent * 100;
 }
 
 function normalizePublicUrl(value: string): string {

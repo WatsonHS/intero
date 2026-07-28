@@ -83,6 +83,8 @@ const projectSpecsRoute = createRoute({
 const attentionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/attention",
+  validateSearch: (search: Record<string, unknown>): { itemId?: string } =>
+    typeof search.itemId === "string" ? { itemId: search.itemId } : {},
   component: RoutedWorkspace,
 });
 

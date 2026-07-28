@@ -101,9 +101,9 @@ databaseSuite("durable Pilot Stand-in jobs", () => {
   });
 
   afterAll(async () => {
-    await workerUtils.release();
-    await repository.close();
-    await store.close();
+    await workerUtils?.release();
+    await repository?.close();
+    await store?.close();
     await admin.query(
       `DELETE FROM graphile_worker._private_jobs
        WHERE key LIKE $1`,
@@ -304,6 +304,17 @@ databaseSuite("durable Pilot Stand-in jobs", () => {
         lastErrorCode: "MODEL_GATEWAY_UNAVAILABLE",
       },
     });
+    // This test invokes the handler directly to control retry metadata. Mark
+    // the corresponding enqueue intents complete so the next scenario does
+    // not inherit work that deliberately bypassed the dispatcher.
+    await admin.query(
+      `UPDATE outbox
+       SET completed_at = now()
+       WHERE organization_id = $1
+         AND topic = 'pilot.stand_in.enqueue'
+         AND payload->>'jobKey' = ANY($2::text[])`,
+      [organizationId, [retrying.clientEventId, terminal.clientEventId]],
+    );
   });
 
   it("serializes jobs per Project and exposes worker heartbeat readiness", async () => {
@@ -521,20 +532,20 @@ async function seedPilot(
     ownerId: fixture.adminId,
     client: "codex",
     preferredLanguage: "en-US",
-    ticketHash: "d".repeat(64),
+    ticketHash: fixture.organizationId.replaceAll("-", "").padEnd(64, "d"),
     expiresAt: "2026-07-27T00:00:00.000Z",
     createdAt: "2026-07-26T01:50:04.000Z",
   };
   await store.createAgentTicket(ticket);
   const binding: PilotAgentBinding = {
-    id: uuidv7(),
+    id: ticket.id,
     projectId: fixture.projectId,
     ownerId: fixture.adminId,
     client: "codex",
     name: "Durable Codex",
     workspaceId: uuidv7(),
     preferredLanguage: "en-US",
-    credentialHash: "e".repeat(64),
+    credentialHash: fixture.organizationId.replaceAll("-", "").padEnd(64, "e"),
     createdAt: "2026-07-26T01:50:05.000Z",
   };
   return store.exchangeAgentTicket(
