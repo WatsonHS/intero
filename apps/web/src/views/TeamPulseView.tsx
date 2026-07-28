@@ -53,7 +53,7 @@ import {
   updatePilotPosture,
   withdrawPilotPulse,
 } from "../pilot/api.js";
-import { usePilotOptional } from "../pilot/context.js";
+import { projectInTeam, usePilotOptional } from "../pilot/context.js";
 import {
   projectWorkToPulse,
   workLineFromProjectContext,
@@ -112,9 +112,16 @@ function CanonicalTeamPulseView({
   const pilot = usePilotOptional();
   const [openOwners, setOpenOwners] = useState<Set<string>>(new Set());
   const pilotProjects = pilot?.projects.data?.projects ?? [];
+  const selectedTeam = pilot?.teams.data?.teams.find(
+    (team) => team.id === pilot.selectedTeamId,
+  );
+  const scopedPilotProjects = selectedTeam
+    ? pilotProjects.filter((project) => projectInTeam(project, selectedTeam.id))
+    : pilotProjects;
   const pilotProject =
-    pilotProjects.find((project) => project.id === pilot?.selectedProjectId) ??
-    pilotProjects[0];
+    scopedPilotProjects.find(
+      (project) => project.id === pilot?.selectedProjectId,
+    ) ?? scopedPilotProjects[0];
 
   const pulse = useQuery({
     queryKey: ["team-pulse"],
@@ -131,7 +138,7 @@ function CanonicalTeamPulseView({
     queryFn: ({ signal }) => getThreads("stand_in", signal),
   });
   const pilotOverviewQueries = useQueries({
-    queries: pilotProjects.map((project) => ({
+    queries: scopedPilotProjects.map((project) => ({
       queryKey: ["pilot", "overview", pilot?.identityId, project.id],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getPilotOverview(pilot!.identityId!, project.id, signal),
@@ -140,7 +147,7 @@ function CanonicalTeamPulseView({
     })),
   });
   const projectWorkQueries = useQueries({
-    queries: pilotProjects.map((project) => ({
+    queries: scopedPilotProjects.map((project) => ({
       queryKey: ["project-work", project.id],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getProjectWork(project.id, signal),
@@ -149,7 +156,7 @@ function CanonicalTeamPulseView({
     })),
   });
   const projectSpecQueries = useQueries({
-    queries: pilotProjects.map((project) => ({
+    queries: scopedPilotProjects.map((project) => ({
       queryKey: ["project-specs", project.id],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         getProjectSpecs(project.id, signal),
@@ -200,10 +207,16 @@ function CanonicalTeamPulseView({
       projectContexts.set(projectionId, context);
     }
   }
-  const allProjections = mergeProjections(
-    pulse.data?.projections ?? [],
-    pilotEntries.map(pilotPulseEntryToProjection),
-    projectPulses.flatMap((projectPulse) => projectPulse.projections),
+  const visibleProjectIds = selectedTeam
+    ? new Set(scopedPilotProjects.map((project) => project.id))
+    : undefined;
+  const allProjections = scopeTeamProjections(
+    mergeProjections(
+      pulse.data?.projections ?? [],
+      pilotEntries.map(pilotPulseEntryToProjection),
+      projectPulses.flatMap((projectPulse) => projectPulse.projections),
+    ),
+    visibleProjectIds,
   );
   const detailProjections = allProjections.filter((projection) =>
     isInDetailWindow(projection.freshnessAt),
@@ -223,13 +236,19 @@ function CanonicalTeamPulseView({
       principalNames.set(principal.id, principal.displayName);
     }
   }
+  for (const member of selectedTeam?.members ?? []) {
+    principalNames.set(member.id, member.displayName);
+  }
   const projectNames = new Map<string, string>(
-    pilotProjects.map((project) => [project.id, project.name]),
+    scopedPilotProjects.map((project) => [project.id, project.name]),
   );
   for (const projectWork of projectWorkPayloads) {
     projectNames.set(projectWork.project.id, projectWork.project.name);
   }
-  const people = groupByOwner(projections);
+  const people = groupByOwner(
+    projections,
+    selectedTeam?.members.map((member) => member.id) ?? [],
+  );
   const detailCountByOwner = new Map<string, number>();
   for (const projection of detailProjections) {
     detailCountByOwner.set(
@@ -247,9 +266,13 @@ function CanonicalTeamPulseView({
   const staleProjections = projections.filter((item) =>
     isStale(item.freshnessAt, staleAfterSeconds),
   );
-
+  const connectedOwnerIds = new Set<string>(
+    [...agentConnections.connected, ...agentConnections.lifecyclePending].map(
+      (binding) => binding.ownerId,
+    ),
+  );
   const pilotActive = Boolean(
-    pilot?.enabled && pilot.identityId && pilotProjects.length > 0,
+    pilot?.enabled && pilot.identityId && scopedPilotProjects.length > 0,
   );
   const hasPilotSuccess =
     pilotOverviewQueries.some((query) => query.isSuccess) ||
@@ -267,10 +290,11 @@ function CanonicalTeamPulseView({
     pulse.isPending &&
     !hasPilotSuccess &&
     (!pilotActive || pilotSourcesPending);
-  const isEmptyState = pulseReady && projections.length === 0;
+  const rosterReady = !pilot?.enabled || pilot.teams.isSuccess;
+  const isEmptyState = pulseReady && rosterReady && people.length === 0;
   const isErrorState =
     pulse.isError && !hasPilotSuccess && (!pilotActive || !pilotSourcesPending);
-  const showCards = pulseReady && projections.length > 0;
+  const showCards = pulseReady && people.length > 0;
 
   const freshPill =
     staleProjections.length > 0 || pilotSourcesErrored
@@ -468,6 +492,8 @@ function CanonicalTeamPulseView({
           <MasonryColumns
             className="mt-[22px]"
             items={people}
+            minColumnWidth={360}
+            stretchColumns={false}
             keyOf={(person) => person.ownerId}
             renderItem={({ ownerId, workstreams }, index) => (
               <PersonCard
@@ -478,6 +504,11 @@ function CanonicalTeamPulseView({
                   (detailCountByOwner.get(ownerId) ?? 0) - workstreams.length,
                   0,
                 )}
+                emptyState={resolvePersonPulseEmptyState({
+                  todayCount: workstreams.length,
+                  recentCount: detailCountByOwner.get(ownerId) ?? 0,
+                  connected: connectedOwnerIds.has(ownerId),
+                })}
                 index={index}
                 staleAfterSeconds={staleAfterSeconds}
                 open={openOwners.has(ownerId)}
@@ -625,6 +656,7 @@ function PersonCard({
   name,
   workstreams,
   detailOnlyCount,
+  emptyState,
   index,
   staleAfterSeconds,
   open,
@@ -641,6 +673,7 @@ function PersonCard({
   name: string;
   workstreams: PublicWorkProjection[];
   detailOnlyCount: number;
+  emptyState: PersonPulseEmptyState | undefined;
   index: number;
   staleAfterSeconds: number | undefined;
   open: boolean;
@@ -656,8 +689,8 @@ function PersonCard({
   const { t, formatRelative } = useI18n();
   const ordered = orderByAttention(workstreams);
   const load = loadSummary(workstreams);
-  const lead = freshest(workstreams) ?? ordered[0]!;
-  const leadStale = isStale(lead.freshnessAt, staleAfterSeconds);
+  const lead = freshest(workstreams);
+  const leadStale = lead ? isStale(lead.freshnessAt, staleAfterSeconds) : false;
   const { visible, hiddenProjectCount } = selectPulseProjectWork(ordered, open);
 
   const loadLabel =
@@ -693,9 +726,11 @@ function PersonCard({
             <strong className="truncate text-[13.5px] font-[620] tracking-[-0.01em]">
               {name}
             </strong>
-            <Meta tone={leadStale ? "amber" : "faint"}>
-              {formatRelative(lead.freshnessAt)}
-            </Meta>
+            {lead ? (
+              <Meta tone={leadStale ? "amber" : "faint"}>
+                {formatRelative(lead.freshnessAt)}
+              </Meta>
+            ) : null}
           </span>
           <small className="mt-[3px] truncate text-[10.5px] text-faint">
             {t("pulse.card.role")}
@@ -704,50 +739,60 @@ function PersonCard({
         <ArrowUpRightIcon size={13} className="text-faint" />
       </button>
 
-      <p
-        className="relative mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]"
-        data-testid={`stand-in-person-summary-${ownerId}`}
-      >
-        {personSummary(ordered, load, t)}
-      </p>
+      {emptyState ? (
+        <PersonCardEmptyState state={emptyState} />
+      ) : (
+        <>
+          <p
+            className="relative mt-[13px] text-[12px] leading-[1.6] text-ink-muted [text-wrap:pretty]"
+            data-testid={`stand-in-person-summary-${ownerId}`}
+          >
+            {personSummary(ordered, load, t)}
+          </p>
 
-      <div className="relative mt-4 flex items-center gap-2">
-        <span className="text-[10px] font-[650] tracking-[0.08em] text-faint">
-          {t("pulse.parallel")}
-        </span>
-        <span className="h-px flex-1 bg-line" />
-        <Meta tone={load.blocked > 0 ? "danger" : "faint"}>{loadLabel}</Meta>
-      </div>
+          <div className="relative mt-4 flex items-center gap-2">
+            <span className="text-[10px] font-[650] tracking-[0.08em] text-faint">
+              {t("pulse.parallel")}
+            </span>
+            <span className="h-px flex-1 bg-line" />
+            <Meta tone={load.blocked > 0 ? "danger" : "faint"}>
+              {loadLabel}
+            </Meta>
+          </div>
 
-      <div className="relative mt-2.5 flex flex-col gap-2">
-        {visible.map((workstream) => {
-          const entry = pilotEntryByProjectionId.get(workstream.id);
-          const withdrawable =
-            entry && entry.ownerId === pilotIdentityId ? entry : undefined;
-          return (
-            <ParallelTaskRow
-              key={workstream.id}
-              workstream={workstream}
-              line={lineFor(
-                workstream,
-                pilotEntryByProjectionId,
-                projectContextByProjectionId,
-              )}
-              projectName={
-                workstream.projectId
-                  ? (projectNames.get(workstream.projectId) ??
-                    `Project · ${workstream.projectId.slice(0, 8)}`)
-                  : t("pulse.card.projectUnbound")
-              }
-              stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
-              withdrawableEntry={withdrawable}
-              withdrawing={withdrawingWorkStateId === withdrawable?.workStateId}
-              onWithdraw={onWithdraw}
-              onOpen={onOpen}
-            />
-          );
-        })}
-      </div>
+          <div className="relative mt-2.5 flex flex-col gap-2">
+            {visible.map((workstream) => {
+              const entry = pilotEntryByProjectionId.get(workstream.id);
+              const withdrawable =
+                entry && entry.ownerId === pilotIdentityId ? entry : undefined;
+              return (
+                <ParallelTaskRow
+                  key={workstream.id}
+                  workstream={workstream}
+                  line={lineFor(
+                    workstream,
+                    pilotEntryByProjectionId,
+                    projectContextByProjectionId,
+                  )}
+                  projectName={
+                    workstream.projectId
+                      ? (projectNames.get(workstream.projectId) ??
+                        `Project · ${workstream.projectId.slice(0, 8)}`)
+                      : t("pulse.card.projectUnbound")
+                  }
+                  stale={isStale(workstream.freshnessAt, staleAfterSeconds)}
+                  withdrawableEntry={withdrawable}
+                  withdrawing={
+                    withdrawingWorkStateId === withdrawable?.workStateId
+                  }
+                  onWithdraw={onWithdraw}
+                  onOpen={onOpen}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {hiddenProjectCount > 0 ? (
         <button
@@ -774,6 +819,43 @@ function PersonCard({
         </button>
       ) : null}
     </section>
+  );
+}
+
+export type PersonPulseEmptyState =
+  "noActivity" | "noUpdatesToday" | "noSharedProgress";
+
+export function resolvePersonPulseEmptyState(input: {
+  todayCount: number;
+  recentCount: number;
+  connected: boolean;
+}): PersonPulseEmptyState | undefined {
+  if (input.todayCount > 0) return undefined;
+  if (input.recentCount > 0) return "noUpdatesToday";
+  if (input.connected) return "noSharedProgress";
+  return "noActivity";
+}
+
+function PersonCardEmptyState({ state }: { state: PersonPulseEmptyState }) {
+  const { t } = useI18n();
+  const titleKey = `pulse.card.empty.${state}.title` as TranslationKey;
+  const bodyKey = `pulse.card.empty.${state}.body` as TranslationKey;
+
+  return (
+    <div
+      data-testid={`pulse-person-empty-${state}`}
+      className="relative mt-[14px] rounded-inset border border-dashed border-line2 bg-raise/60 px-3.5 py-4"
+    >
+      <div className="flex items-center gap-2">
+        <span className="h-1.5 w-1.5 rounded-full bg-faint" />
+        <strong className="text-[11.5px] font-[620] text-ink-muted">
+          {t(titleKey)}
+        </strong>
+      </div>
+      <p className="mt-1.5 text-[10.5px] leading-[1.55] text-faint [text-wrap:pretty]">
+        {t(bodyKey)}
+      </p>
+    </div>
   );
 }
 
@@ -1082,10 +1164,24 @@ function mergeProjections(
   ];
 }
 
-function groupByOwner(
-  workstreams: PublicWorkProjection[],
-): Array<{ ownerId: string; workstreams: PublicWorkProjection[] }> {
-  const groups = new Map<string, PublicWorkProjection[]>();
+export function scopeTeamProjections<
+  T extends { projectId?: string | undefined },
+>(workstreams: T[], visibleProjectIds: Set<string> | undefined): T[] {
+  if (!visibleProjectIds) return workstreams;
+  return workstreams.filter(
+    (workstream) =>
+      workstream.projectId !== undefined &&
+      visibleProjectIds.has(workstream.projectId),
+  );
+}
+
+export function groupByOwner<T extends { ownerId: string }>(
+  workstreams: T[],
+  rosterOwnerIds: string[] = [],
+): Array<{ ownerId: string; workstreams: T[] }> {
+  const groups = new Map<string, T[]>(
+    rosterOwnerIds.map((ownerId) => [ownerId, []]),
+  );
   for (const workstream of workstreams) {
     const group = groups.get(workstream.ownerId);
     if (group) group.push(workstream);

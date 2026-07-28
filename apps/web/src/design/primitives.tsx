@@ -594,6 +594,7 @@ export function MasonryColumns<T>({
   renderItem,
   minColumnWidth = 330,
   gap = 12,
+  stretchColumns = true,
   className,
 }: {
   items: readonly T[];
@@ -601,6 +602,7 @@ export function MasonryColumns<T>({
   renderItem: (item: T, index: number) => ReactNode;
   minColumnWidth?: number;
   gap?: number;
+  stretchColumns?: boolean;
   className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -639,8 +641,14 @@ export function MasonryColumns<T>({
       {columns.map((column, columnIndex) => (
         <div
           key={columnIndex}
-          className="flex min-w-0 flex-1 flex-col"
-          style={{ gap }}
+          className={cn(
+            "flex min-w-0 flex-col",
+            stretchColumns ? "flex-1" : "w-full flex-none",
+          )}
+          style={{
+            gap,
+            ...(stretchColumns ? {} : { maxWidth: minColumnWidth }),
+          }}
         >
           {column.map(({ item, index }) => (
             <Fragment key={keyOf(item)}>{renderItem(item, index)}</Fragment>

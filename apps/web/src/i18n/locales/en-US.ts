@@ -70,7 +70,7 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.title": "What everyone is doing",
   "pulse.lede":
     "Maintained by each person's Stand-in — nobody updates this by hand. This page is read-only.",
-  "pulse.countPeople": "people in motion",
+  "pulse.countPeople": "team members",
   "pulse.countTasks": "tasks in progress",
   "pulse.countInbox": "need a human",
   "pulse.countSpecs": "Specs in review",
@@ -93,6 +93,15 @@ export const enUS: Record<TranslationKey, string> = {
   "pulse.card.withdraw": "Withdraw the team summary for “{title}”",
   "pulse.card.withdrawAction": "Withdraw",
   "pulse.card.withdrawing": "Withdrawing…",
+  "pulse.card.empty.noActivity.title": "No activity",
+  "pulse.card.empty.noActivity.body":
+    "There is no team Project activity to show right now.",
+  "pulse.card.empty.noUpdatesToday.title": "No work updates today",
+  "pulse.card.empty.noUpdatesToday.body":
+    "Recent Project progress remains available in the member detail view.",
+  "pulse.card.empty.noSharedProgress.title": "No shareable Project progress",
+  "pulse.card.empty.noSharedProgress.body":
+    "The Agent is connected; this card only shows team Project activity you can access.",
   "pulse.parallel": "In flight at once",
   "pulse.load.all": "{total} in parallel",
   "pulse.load.partial": "{total} total · {live} moving",

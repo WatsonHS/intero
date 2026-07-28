@@ -68,7 +68,7 @@ export const zhCN = {
   "pulse.title": "大家正在干什么",
   "pulse.lede":
     "由每个人的替身自己维护，没有人需要手动更新。这一页只看，不用操作。",
-  "pulse.countPeople": "人在推进",
+  "pulse.countPeople": "位团队成员",
   "pulse.countTasks": "个进行中的任务",
   "pulse.countInbox": "处需要人",
   "pulse.countSpecs": "份 Spec 在评审",
@@ -91,6 +91,14 @@ export const zhCN = {
   "pulse.card.withdraw": "撤回「{title}」的团队摘要",
   "pulse.card.withdrawAction": "撤回",
   "pulse.card.withdrawing": "撤回中…",
+  "pulse.card.empty.noActivity.title": "暂无动态",
+  "pulse.card.empty.noActivity.body": "目前没有可显示的团队项目动态。",
+  "pulse.card.empty.noUpdatesToday.title": "今天还没有工作动态",
+  "pulse.card.empty.noUpdatesToday.body":
+    "最近的项目进展仍可在成员详情中查看。",
+  "pulse.card.empty.noSharedProgress.title": "暂无可共享的项目进展",
+  "pulse.card.empty.noSharedProgress.body":
+    "Agent 已连接；这里只显示你有权限查看的团队项目动态。",
   "pulse.parallel": "同时在推进",
   "pulse.load.all": "{total} 条并行",
   "pulse.load.partial": "{total} 条 · {live} 条在推进",
