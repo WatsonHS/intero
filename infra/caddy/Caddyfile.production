@@ -1,0 +1,19 @@
+{$INTERO_PUBLIC_URL:http://localhost:4311} {
+	encode zstd gzip
+
+	@realtime path /connection/* /emulation
+	handle @realtime {
+		reverse_proxy centrifugo:8000
+	}
+
+	@api path /v1/* /api/auth/* /.well-known/* /health /ready /metrics
+	handle @api {
+		reverse_proxy api:4310
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

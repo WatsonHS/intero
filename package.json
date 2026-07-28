@@ -30,7 +30,12 @@
     "demo:reset-and-seed": "pnpm --filter @intero/server-api demo:reset-and-seed",
     "dev:demo": "scripts/dev-demo.sh",
     "backup:postgres": "scripts/ops/backup-postgres.sh",
-    "restore:postgres": "scripts/ops/restore-postgres.sh"
+    "restore:postgres": "scripts/ops/restore-postgres.sh",
+    "production:compose": "scripts/ops/production-compose.sh",
+    "production:deploy": "scripts/ops/deploy-production.sh",
+    "production:rollback": "scripts/ops/rollback-production.sh",
+    "production:backup": "scripts/ops/backup-production.sh",
+    "production:install-launch-agent": "scripts/ops/install-production-launch-agent.sh"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

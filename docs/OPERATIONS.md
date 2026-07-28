@@ -1,5 +1,10 @@
 # Intero production-operability foundation
 
+The supported persistent single-Mac deployment path is documented in
+[`MAC_PRODUCTION_DEPLOYMENT.md`](./MAC_PRODUCTION_DEPLOYMENT.md). It packages
+the built API, worker, and Web artifacts in production containers, persists
+SpiceDB in PostgreSQL, and installs launchd recovery/backup jobs.
+
 Phase 3 supplies an operator path for the existing cloud-first API and worker.
 It does not add a deployment installer, productized self-hosting workflow,
 attachment UI, upload API, raw capture, generic A2A federation, or a new local

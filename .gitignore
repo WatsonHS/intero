@@ -6,6 +6,8 @@ playwright-report/
 test-results/
 .env
 .env.local
+.env.production
+.intero-production/
 *.log
 .DS_Store
 target/
