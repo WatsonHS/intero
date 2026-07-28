@@ -53,6 +53,12 @@ pnpm --filter @intero/server-api migrate
 pnpm dev:pilot
 ```
 
+`pnpm dev:pilot` also runs the PostgreSQL migration step before starting a
+persistent local Pilot, so a restart cannot silently combine new application
+code with an older schema. `DATABASE_URL` remains the administrator connection;
+the launcher removes it from the runtime environment after migration, and the
+API continues to use the RLS-constrained `INTERO_DATABASE_URL`.
+
 ### Phase 2 reliable collaboration services
 
 The persistent Pilot path uses three explicitly selected adapters:
@@ -89,13 +95,14 @@ pnpm --filter @intero/server-worker migrate
 ```
 
 Run `pnpm dev:pilot` after exporting the variables above. When PostgreSQL Pilot
-persistence is selected, this command starts Web, API, and server-worker
-together and fails before startup if the worker database URL or provider
-encryption key is missing. The API accepts an MCP checkpoint without waiting
-for the model and returns Stand-in `pending`; the worker later publishes the
-safe projection. `/ready` reports PostgreSQL, worker-heartbeat, and SpiceDB
-state. A missing/stale worker is degraded, while unavailable PostgreSQL or
-SpiceDB is not ready.
+persistence is selected, this command applies pending PostgreSQL migrations,
+starts Web, API, and server-worker together, and fails before startup if the
+administrator database URL, worker database URL, or provider encryption key is
+missing. The API accepts an MCP checkpoint without waiting for the model and
+returns Stand-in `pending`; the worker later publishes the safe projection.
+`/ready` reports migration compatibility, worker-heartbeat, and SpiceDB state.
+A missing/stale worker is degraded, while pending PostgreSQL migrations or
+unavailable SpiceDB are not ready.
 
 Stand-in work is serialized per Project. Model calls run outside
 database locks. Completion uses compare-and-set writes so Graphile's

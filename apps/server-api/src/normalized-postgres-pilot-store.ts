@@ -30,6 +30,7 @@ import {
   SnapshotPilotStore,
   type PilotStoredProvider,
 } from "./pilot-store.js";
+import { checkDatabaseMigrationReadiness } from "./database/migration-readiness.js";
 
 interface DataRow<T> {
   data: T;
@@ -62,15 +63,9 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
     detail?: string;
   }> {
     try {
-      await this.withClient("read", async (client) => {
-        const result = await client.query<{ table_name: string | null }>(
-          "SELECT to_regclass('public.pilot_deployment_settings')::text AS table_name",
-        );
-        if (!result.rows[0]?.table_name) {
-          throw new Error("normalized_pilot_schema_missing");
-        }
-      });
-      return { status: "ready" };
+      return await this.withClient("read", (client) =>
+        checkDatabaseMigrationReadiness(client),
+      );
     } catch {
       return {
         status: "unavailable",

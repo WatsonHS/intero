@@ -218,6 +218,13 @@
       "when": 1786204800000,
       "tag": "0030_chat_experience",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1786291200000,
+      "tag": "0031_runtime_migration_readiness",
+      "breakpoints": true
     }
   ]
 }
