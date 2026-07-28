@@ -48,7 +48,7 @@ export interface PilotBootstrapPayload {
     modelUse: string;
   };
   adapters: {
-    realtime: "polling" | "centrifugo";
+    realtime: "centrifugo";
     objectStorage: "disabled";
     jobs: "inline";
     coordination: "project-internal-v1";
