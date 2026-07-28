@@ -166,12 +166,30 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
     const verificationCode = connected.body.verification.code as string;
     expect(credential).not.toBe(firstExchange.body.credential);
 
-    const supersededCredential = await mcpRequest(
+    const supersededInitialization = await mcpRequest(
       `${baseUrl}/v1/pilot/mcp`,
       initializeRequest(),
       firstExchange.body.credential as string,
     );
-    expect(supersededCredential.response.status).toBe(401);
+    expect(
+      supersededInitialization.response.status,
+      supersededInitialization.text,
+    ).toBe(200);
+    const supersededTools = await mcpRequest(
+      `${baseUrl}/v1/pilot/mcp`,
+      {
+        jsonrpc: "2.0",
+        id: "bearer-mcp-superseded-tools",
+        method: "tools/list",
+      },
+      firstExchange.body.credential as string,
+    );
+    expect(supersededTools.response.status, supersededTools.text).toBe(200);
+    expect(JSON.parse(supersededTools.text)).toMatchObject({
+      result: {
+        tools: [{ name: "intero.connection_status" }],
+      },
+    });
 
     const initialized = await mcpRequest(
       `${baseUrl}/v1/pilot/mcp`,

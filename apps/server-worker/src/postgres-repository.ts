@@ -1,10 +1,7 @@
 import { uuidv7 } from "@intero/domain";
 import { Pool, type PoolClient } from "pg";
 
-import type {
-  PublicStandInRepository,
-  PublicStandInRun,
-} from "./runtime.js";
+import type { PublicStandInRepository, PublicStandInRun } from "./runtime.js";
 
 export class PostgresPublicStandInRepository implements PublicStandInRepository {
   constructor(
@@ -122,17 +119,17 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
       };
       await client.query(
         `INSERT INTO activity_events
-          (organization_id, event_id, operation_id, event_type, occurred_at,
-           received_at, actor_id, payload, idempotency_key)
-         VALUES ($1, $2, $2, 'conversation.changed', $3, $3, $4, $5, $6)
+          (organization_id, operation_id, actor_id, aggregate_type, aggregate_id,
+           event_type, metadata, occurred_at)
+         VALUES ($1, $2, $3, 'thread', $4, 'conversation.changed', $5, $6)
          ON CONFLICT (operation_id) DO NOTHING`,
         [
           this.organizationId,
           input.operationId,
-          occurredAt,
           this.standInId,
+          input.threadId,
           event,
-          `conversation:${input.operationId}`,
+          occurredAt,
         ],
       );
       await client.query(

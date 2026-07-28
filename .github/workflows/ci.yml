@@ -40,6 +40,8 @@ jobs:
           INTERO_SPICEDB_ENDPOINT: 127.0.0.1:50051
           INTERO_SPICEDB_TOKEN: intero-development
           INTERO_CENTRIFUGO_API_URL: http://127.0.0.1:8000
+          INTERO_CENTRIFUGO_API_KEY: intero-development-realtime-api-key-v1
+          INTERO_CENTRIFUGO_TOKEN_SECRET: intero-development-realtime-token-secret-v1
           INTERO_S3_ENDPOINT: http://127.0.0.1:9000
       - run: ./scripts/backup-restore-smoke.sh
       - run: pnpm build

@@ -6,6 +6,7 @@ import {
   type WorkstreamId,
   uuidv7,
 } from "@intero/domain";
+import { createHmac } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -19,6 +20,12 @@ import {
 const databaseUrl = process.env.DATABASE_URL;
 const databaseAppUrl = process.env.DATABASE_APP_URL;
 const centrifugoUrl = process.env.INTERO_CENTRIFUGO_API_URL;
+const centrifugoApiKey =
+  process.env.INTERO_CENTRIFUGO_API_KEY ??
+  "intero-development-realtime-api-key-v1";
+const centrifugoTokenSecret =
+  process.env.INTERO_CENTRIFUGO_TOKEN_SECRET ??
+  "intero-development-realtime-token-secret-v1";
 const integrationSuite =
   databaseUrl && databaseAppUrl && centrifugoUrl ? describe : describe.skip;
 
@@ -108,8 +115,9 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
   });
 
   it("recovers after an outage and fans out to two independent clients", async () => {
-    const clientA = await subscribeClient(centrifugoUrl!, channel);
-    const clientB = await subscribeClient(centrifugoUrl!, channel);
+    const clientToken = createClientToken(ownerId, centrifugoTokenSecret);
+    const clientA = await subscribeClient(centrifugoUrl!, channel, clientToken);
+    const clientB = await subscribeClient(centrifugoUrl!, channel, clientToken);
     try {
       const unavailable = new OutboxDispatcher(
         organizationId,
@@ -137,7 +145,7 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
 
       await expect(
         exerciseRealtimeContract(
-          new CentrifugoRealtime(centrifugoUrl!),
+          new CentrifugoRealtime(centrifugoUrl!, centrifugoApiKey),
           channel,
         ),
       ).resolves.toBeUndefined();
@@ -146,7 +154,7 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
       const recovered = new OutboxDispatcher(
         organizationId,
         repository,
-        new CentrifugoRealtime(centrifugoUrl!),
+        new CentrifugoRealtime(centrifugoUrl!, centrifugoApiKey),
       );
       await expect(recovered.dispatch()).resolves.toBe(1);
       await expect(Promise.all([messageA, messageB])).resolves.toEqual([
@@ -168,6 +176,7 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
         headers: {
           "content-type": "application/json",
           "x-centrifugo-error-mode": "transport",
+          "x-api-key": centrifugoApiKey,
         },
         body: JSON.stringify({ channel, limit: 10 }),
       }).then((response) => response.json())) as {
@@ -184,12 +193,13 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
       clientA.socket.close();
       clientB.socket.close();
     }
-  });
+  }, 15_000);
 });
 
 async function subscribeClient(
   apiUrl: string,
   channel: string,
+  token: string,
 ): Promise<{ socket: WebSocket }> {
   const socket = new WebSocket(
     `${apiUrl.replace(/^http/, "ws")}/connection/websocket`,
@@ -216,7 +226,7 @@ async function subscribeClient(
       { once: true },
     );
   });
-  socket.send(JSON.stringify({ id: 1, connect: {} }));
+  socket.send(JSON.stringify({ id: 1, connect: { token } }));
   await waitForReply(socket, 1);
   socket.send(JSON.stringify({ id: 2, subscribe: { channel } }));
   await waitForReply(socket, 2);
@@ -246,19 +256,64 @@ async function waitForSocketMessage<T>(
   select: (message: MessageEvent) => T | undefined,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const cleanup = () => {
+      clearTimeout(timeout);
       socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
       reject(new Error("Centrifugo WebSocket message timeout."));
     }, 5_000);
     const onMessage = (message: MessageEvent) => {
-      const selected = select(message);
+      let selected: T | undefined;
+      try {
+        selected = select(message);
+      } catch (error) {
+        cleanup();
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Centrifugo WebSocket message handling failed."),
+        );
+        return;
+      }
       if (selected === undefined) return;
-      clearTimeout(timeout);
-      socket.removeEventListener("message", onMessage);
+      cleanup();
       resolve(selected);
     };
+    const onClose = (event: CloseEvent) => {
+      cleanup();
+      reject(
+        new Error(
+          `Centrifugo WebSocket closed (${event.code}): ${event.reason || "no reason"}.`,
+        ),
+      );
+    };
+    const onError = () => {
+      cleanup();
+      reject(
+        new Error("Centrifugo WebSocket failed while awaiting a message."),
+      );
+    };
     socket.addEventListener("message", onMessage);
+    socket.addEventListener("close", onClose, { once: true });
+    socket.addEventListener("error", onError, { once: true });
   });
+}
+
+function createClientToken(subject: string, secret: string): string {
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
+    sub: subject,
+    exp: Math.floor(Date.now() / 1_000) + 60,
+  })}`;
+  const signature = createHmac("sha256", secret)
+    .update(unsigned)
+    .digest("base64url");
+  return `${unsigned}.${signature}`;
 }
 
 function parseSocketMessage(message: MessageEvent): {

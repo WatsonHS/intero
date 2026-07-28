@@ -65,6 +65,13 @@ databaseSuite("public Stand-in PostgreSQL repository", () => {
 
   afterAll(async () => {
     await repository.close();
+    await admin.query("DELETE FROM outbox WHERE organization_id = $1", [
+      organizationId,
+    ]);
+    await admin.query(
+      "DELETE FROM activity_events WHERE organization_id = $1",
+      [organizationId],
+    );
     await admin.query(
       "DELETE FROM public_stand_in_runs WHERE organization_id = $1",
       [organizationId],
