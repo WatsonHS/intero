@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 import { orderByAttention } from "../design/utils.js";
 import {
   DETAIL_WINDOW_MS,
-  PULSE_PROJECT_LIMIT,
+  PULSE_MAX_ITEMS,
+  PULSE_PAGE_SIZE,
   classifyWorkVisibility,
-  groupPulseWorkByProject,
   isInDetailWindow,
   isInPulseDay,
-  selectPulseProjectWork,
+  pulseDetailOnlyCount,
+  selectPulseWork,
 } from "./work-visibility.js";
 
 describe("work visibility", () => {
@@ -44,49 +45,26 @@ describe("work visibility", () => {
     expect(classifyWorkVisibility(updated, now)).toBe("recent");
   });
 
-  it("shows every item from the three freshest projects before expanding", () => {
-    expect(PULSE_PROJECT_LIMIT).toBe(3);
-    const workstreams = [
-      {
-        id: "project-a-older",
-        projectId: "project-a",
-        freshnessAt: new Date(now.getTime() - 4_000).toISOString(),
-      },
-      {
-        id: "project-a-newer",
-        projectId: "project-a",
-        freshnessAt: new Date(now.getTime() - 1_000).toISOString(),
-      },
-      {
-        id: "project-b",
-        projectId: "project-b",
-        freshnessAt: new Date(now.getTime() - 2_000).toISOString(),
-      },
-      {
-        id: "project-c",
-        projectId: "project-c",
-        freshnessAt: new Date(now.getTime() - 3_000).toISOString(),
-      },
-      {
-        id: "project-d",
-        projectId: "project-d",
-        freshnessAt: new Date(now.getTime() - 5_000).toISOString(),
-      },
-    ];
+  it("limits Pulse to two three-item pages before Detail", () => {
+    expect(PULSE_PAGE_SIZE).toBe(3);
+    expect(PULSE_MAX_ITEMS).toBe(6);
+    expect(pulseDetailOnlyCount(8)).toBe(2);
 
-    expect(
-      groupPulseWorkByProject(workstreams).map((group) => group.projectId),
-    ).toEqual(["project-a", "project-b", "project-c", "project-d"]);
-    expect(selectPulseProjectWork(workstreams, false)).toMatchObject({
-      visible: [
-        { id: "project-a-older" },
-        { id: "project-a-newer" },
-        { id: "project-b" },
-        { id: "project-c" },
-      ],
-      hiddenProjectCount: 1,
+    const sameProjectWork = Array.from({ length: 8 }, (_, index) => ({
+      id: `work-${index + 1}`,
+      projectId: "project-a",
+    }));
+
+    expect(selectPulseWork(sameProjectWork, false)).toMatchObject({
+      visible: sameProjectWork.slice(0, 3),
+      nextCount: 3,
+      detailOnlyCount: 2,
     });
-    expect(selectPulseProjectWork(workstreams, true).visible).toHaveLength(5);
+    expect(selectPulseWork(sameProjectWork, true)).toMatchObject({
+      visible: sameProjectWork.slice(0, 6),
+      nextCount: 3,
+      detailOnlyCount: 2,
+    });
   });
 
   it("puts attention first and uses freshness to break phase ties", () => {

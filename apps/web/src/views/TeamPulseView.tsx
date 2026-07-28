@@ -66,9 +66,10 @@ import {
   type WorkLine,
 } from "./work-lines.js";
 import {
+  PULSE_PAGE_SIZE,
   isInDetailWindow,
   isInPulseDay,
-  selectPulseProjectWork,
+  selectPulseWork,
 } from "./work-visibility.js";
 import {
   ProjectAgentConnectionBadge,
@@ -500,7 +501,7 @@ function CanonicalTeamPulseView({
                 ownerId={ownerId}
                 name={principalNames.get(ownerId) ?? ownerId.slice(0, 8)}
                 workstreams={workstreams}
-                detailOnlyCount={Math.max(
+                nonTodayDetailCount={Math.max(
                   (detailCountByOwner.get(ownerId) ?? 0) - workstreams.length,
                   0,
                 )}
@@ -655,7 +656,7 @@ function PersonCard({
   ownerId,
   name,
   workstreams,
-  detailOnlyCount,
+  nonTodayDetailCount,
   emptyState,
   index,
   staleAfterSeconds,
@@ -672,7 +673,7 @@ function PersonCard({
   ownerId: string;
   name: string;
   workstreams: PublicWorkProjection[];
-  detailOnlyCount: number;
+  nonTodayDetailCount: number;
   emptyState: PersonPulseEmptyState | undefined;
   index: number;
   staleAfterSeconds: number | undefined;
@@ -691,7 +692,12 @@ function PersonCard({
   const load = loadSummary(workstreams);
   const lead = freshest(workstreams);
   const leadStale = lead ? isStale(lead.freshnessAt, staleAfterSeconds) : false;
-  const { visible, hiddenProjectCount } = selectPulseProjectWork(ordered, open);
+  const {
+    visible,
+    nextCount,
+    detailOnlyCount: todayDetailOnlyCount,
+  } = selectPulseWork(ordered, open);
+  const detailOnlyCount = nonTodayDetailCount + todayDetailOnlyCount;
 
   const loadLabel =
     load.blocked > 0
@@ -794,7 +800,7 @@ function PersonCard({
         </>
       )}
 
-      {hiddenProjectCount > 0 ? (
+      {ordered.length > PULSE_PAGE_SIZE ? (
         <button
           type="button"
           onClick={onToggle}
@@ -804,12 +810,10 @@ function PersonCard({
           {open ? <CaretUpIcon size={12} /> : <CaretDownIcon size={12} />}
           {open
             ? t("pulse.card.collapse")
-            : `${t("pulse.card.more", {
-                count: hiddenProjectCount,
-              })} · Project`}
+            : t("pulse.card.more", { count: nextCount })}
         </button>
       ) : null}
-      {detailOnlyCount > 0 ? (
+      {open && detailOnlyCount > 0 ? (
         <button
           type="button"
           onClick={onOpen}
