@@ -1,5 +1,85 @@
 # Intero
 
+English · [简体中文](README.zh-CN.md)
+
+## Vision
+
+Intero is a working exploration of what collaboration software and software
+engineering should become in an AI-native era.
+
+### What changed
+
+The previous generation of software engineering was shaped by scarce individual
+capacity and relatively stable specialization. Frontend, backend, product,
+design, operations, and architecture work were divided among people, and many
+coordination practices grew around those handoffs.
+
+AI changes that premise. A person working with Coding Agents can cross several
+of those boundaries in one session. People can explore and implement more
+independently, and work that once required several specialists can now be
+completed by one person and their Agents.
+
+### Problems we are experiencing
+
+1. **Greater autonomy removes natural synchronization points.** Someone
+   implementing a frontend feature may notice a backend defect and fix it
+   directly instead of handing it to another specialist. The backend maintainer
+   may never know that the behavior changed, the fix may violate an assumption
+   the author did not know existed, and another Agent may continue building on
+   the previous contract.
+2. **Delivery grows faster than the team's understanding of the product.** Some
+   important capabilities begin as an idea or experiment rather than a formal
+   Feature, Spec, or ticket. Traditional trackers can record declared work, but
+   they may not describe what the product has actually become, which evidence
+   supports a capability, or whether later changes have put it at risk. Each
+   local task can appear complete while an older working behavior quietly
+   regresses.
+3. **AI output exceeds human review and decision capacity.** AI can produce
+   plans, Specs, alternatives, and implementations before a person has learned
+   enough about an unfamiliar domain to recognize a false assumption,
+   unnecessary abstraction, indirect design, or simpler alternative. It also
+   creates far more decisions per day. Under sustained decision fatigue, people
+   are least able to find the problems that most need judgment.
+
+These problems share one pattern: execution has accelerated beyond the team's
+ability to maintain shared understanding, reliable validation, and focused
+human attention.
+
+We do not think the answer is to restore rigid role boundaries, require human
+approval for every change, or place another unbounded autonomous Agent above the
+team. We want to explore harder questions:
+
+- How can individual capability remain fluid while responsibility for shared
+  contracts and system invariants stays clear?
+- How can a team distinguish a safe cross-boundary fix from a change that needs
+  coordination, review, or new validation?
+- How can a collaboration system discover incompatible work before it becomes a
+  regression without collecting raw private activity or creating surveillance?
+- How can the right people enter a temporary, bounded discussion while everyone
+  else receives only a quiet, useful summary?
+- How can human attention be reserved for decisions that genuinely require
+  judgment instead of turning every Agent action into another approval?
+- How can a team know that its product remains coherent and usable while many
+  people and Agents change it in parallel?
+- How can capabilities discovered through informal exploration remain visible
+  and verifiable even when no Feature, Spec, or ticket existed first?
+
+Our working thesis is that execution can become highly distributed, but
+coordination, validation, and responsibility must remain continuous. People and
+Agents should be able to work independently while a collaboration layer
+maintains authorized shared Work State, notices possible conflicts, routes
+attention, preserves evidence and uncertainty, and carries human-confirmed
+outcomes back into the work.
+
+The larger purpose of Intero is not a particular stack, model, or list of AI
+features. It is to make these questions concrete enough to build against, test,
+falsify, and refine. The current product is one experimental answer, not a claim
+that Intero should own every task, test, Spec, decision, or Agent workflow. We
+will judge the exploration by whether a team can remain autonomous and fast
+without losing a shared, trustworthy reality.
+
+## Current product direction
+
 Intero is a coordination layer for software teams working with Coding Agents.
 It turns structured Agent checkpoints into durable, privacy-aware team context:
 current work, blockers, decisions, review state, and the next coordination
@@ -225,6 +305,8 @@ dedicated security policy and private reporting channel are published.
 - [Demo-data safety](docs/DEMO_DATA.md)
 - [Architecture decision records](docs/adr/README.md)
 - [Product requirements](docs/brainstorms/2026-07-24-intero-product-requirements.md)
+- [Conversation-driven collaboration exploration](docs/plans/2026-07-29-002-conversation-driven-collaboration-todo.md)
+- [Product Capability Health next-phase research](docs/plans/2026-07-29-003-product-capability-health-roadmap.md)
 
 ## Contributing
 
