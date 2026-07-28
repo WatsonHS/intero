@@ -37,4 +37,22 @@ describe("copyTextToClipboard", () => {
       }),
     ).rejects.toThrow("Clipboard copy was rejected.");
   });
+
+  it("falls back when the Clipboard API never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const fallbackCopy = vi.fn(() => true);
+      const copy = copyTextToClipboard("invitation link", {
+        writeText: () => new Promise<void>(() => undefined),
+        fallbackCopy,
+        writeTimeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(copy).resolves.toBeUndefined();
+      expect(fallbackCopy).toHaveBeenCalledWith("invitation link");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

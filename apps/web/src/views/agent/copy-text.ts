@@ -1,7 +1,10 @@
 type CopyTextOptions = {
   writeText?: ((value: string) => Promise<void>) | undefined;
   fallbackCopy?: ((value: string) => boolean) | undefined;
+  writeTimeoutMs?: number | undefined;
 };
+
+const DEFAULT_WRITE_TIMEOUT_MS = 1_500;
 
 export async function copyTextToClipboard(
   value: string,
@@ -15,11 +18,15 @@ export async function copyTextToClipboard(
 
   if (writeText) {
     try {
-      await writeText(value);
+      await withTimeout(
+        writeText(value),
+        options?.writeTimeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+      );
       return;
     } catch {
       // Clipboard access can be rejected outside a secure context or after
-      // focus moves to the native Codex app. Continue with selection copy.
+      // focus moves to the native Codex app. Some browser implementations can
+      // also leave the permission request pending, so continue after a bound.
     }
   }
 
@@ -27,6 +34,25 @@ export async function copyTextToClipboard(
   if (!fallbackCopy(value)) {
     throw new Error("Clipboard copy was rejected.");
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Clipboard write timed out.")),
+      timeoutMs,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 function copyUsingSelection(value: string): boolean {

@@ -21,6 +21,8 @@ import {
   updatePilotProfile,
 } from "../../pilot/api.js";
 import { usePilot } from "../../pilot/context.js";
+import { copyTextToClipboard } from "../agent/copy-text.js";
+import { runInvitationCreatedEffects } from "../invitation-effects.js";
 
 export function OnboardingAdminSettings({
   section,
@@ -81,25 +83,31 @@ export function OnboardingAdminSettings({
         { email: inviteEmail },
         developmentIdentityId,
       ),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       const link = result.activationUrl;
       setCopiedLink(link);
-      await navigator.clipboard.writeText(link);
       setInviteEmail("");
-      await queryClient.invalidateQueries({
-        queryKey: ["pilot", "invitations", team?.id],
+      runInvitationCreatedEffects({
+        copyLink: () => copyTextToClipboard(link),
+        refresh: () =>
+          queryClient.invalidateQueries({
+            queryKey: ["pilot", "invitations", team?.id],
+          }),
       });
     },
   });
   const regenerateInvitation = useMutation({
     mutationFn: (invitationId: string) =>
       regeneratePilotInvitation(invitationId, 7, developmentIdentityId),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       const link = result.activationUrl;
       setCopiedLink(link);
-      await navigator.clipboard.writeText(link);
-      await queryClient.invalidateQueries({
-        queryKey: ["pilot", "invitations", team?.id],
+      runInvitationCreatedEffects({
+        copyLink: () => copyTextToClipboard(link),
+        refresh: () =>
+          queryClient.invalidateQueries({
+            queryKey: ["pilot", "invitations", team?.id],
+          }),
       });
     },
   });

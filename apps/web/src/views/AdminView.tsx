@@ -60,6 +60,8 @@ import {
   type PilotOrganizationDirectoryPayload,
   type PilotTeamPayload,
 } from "../pilot/api.js";
+import { copyTextToClipboard } from "./agent/copy-text.js";
+import { runInvitationCreatedEffects } from "./invitation-effects.js";
 import {
   projectInTeam,
   useGovernance,
@@ -850,23 +852,27 @@ function MembersTab({
         { email: email.trim() },
         developmentIdentityId,
       ),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       const link = result.activationUrl;
+      const invitationId = result.invitation.id;
       setInvitationLinks((current) => ({
         ...current,
-        [result.invitation.id]: link,
+        [invitationId]: link,
       }));
       setEmail("");
       setInviteOpen(false);
-      try {
-        await copyTextToClipboard(link);
-        setCopiedInvitationId(result.invitation.id);
-        setCopyFailedInvitationId(undefined);
-      } catch {
-        setCopiedInvitationId(undefined);
-        setCopyFailedInvitationId(result.invitation.id);
-      }
-      await onInvited();
+      runInvitationCreatedEffects({
+        copyLink: () => copyTextToClipboard(link),
+        refresh: onInvited,
+        onCopySuccess: () => {
+          setCopiedInvitationId(invitationId);
+          setCopyFailedInvitationId(undefined);
+        },
+        onCopyFailure: () => {
+          setCopiedInvitationId(undefined);
+          setCopyFailedInvitationId(invitationId);
+        },
+      });
     },
   });
   const copyInvitation = useMutation({
@@ -1205,33 +1211,6 @@ function MembersTab({
       ) : null}
     </div>
   );
-}
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // Browsers can deny the async API outside a secure context. The
-      // selection fallback below still works from the explicit copy action.
-    }
-  }
-
-  const input = document.createElement("textarea");
-  input.value = value;
-  input.setAttribute("readonly", "");
-  input.style.position = "fixed";
-  input.style.opacity = "0";
-  document.body.append(input);
-  input.select();
-  try {
-    if (!document.execCommand("copy")) {
-      throw new Error("Clipboard copy was rejected.");
-    }
-  } finally {
-    input.remove();
-  }
 }
 
 /** Trigger face for a role <SelectMenu>: current role plus an open affordance. */
