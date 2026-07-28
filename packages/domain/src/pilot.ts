@@ -231,6 +231,8 @@ export const PilotAgentTicket = z
   .strict();
 export type PilotAgentTicket = z.infer<typeof PilotAgentTicket>;
 
+export const PILOT_AGENT_CONFIGURATION_VERSION = 1;
+
 export const PilotAgentBinding = z
   .object({
     id: z.uuid(),
@@ -250,6 +252,8 @@ export const PilotAgentBinding = z
     mcpClientName: z.string().min(1).max(120).optional(),
     mcpClientVersion: z.string().min(1).max(80).optional(),
     mcpProtocolVersion: z.string().min(1).max(80).optional(),
+    configurationVersion: z.number().int().positive().optional(),
+    configurationUpdatedAt: z.iso.datetime().optional(),
     validatedAt: z.iso.datetime().optional(),
     lastSeenAt: z.iso.datetime().optional(),
     activityStatus: z.enum(["active", "idle"]).optional(),

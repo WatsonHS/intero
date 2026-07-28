@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
 
+import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -186,7 +187,10 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
         method: "tools/call",
         params: {
           name: "intero.validate_connection",
-          arguments: { verificationCode },
+          arguments: {
+            verificationCode,
+            configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+          },
         },
       },
       credential,
@@ -202,6 +206,9 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
       connected: false,
       mcpConnected: true,
       lifecycleReady: false,
+      ready: false,
+      configurationCurrent: true,
+      configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
       bindingId: ticketId,
       projectId,
     });

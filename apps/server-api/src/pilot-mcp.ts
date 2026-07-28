@@ -1,5 +1,6 @@
 import {
   containsForbiddenEventField,
+  PILOT_AGENT_CONFIGURATION_VERSION,
   PilotCheckpointEventType,
   PilotWorkNarrative,
   WorkstreamPhase,
@@ -199,19 +200,14 @@ function createPilotMcpServer(
             "Reconnect this repository from the Intero Project connection center.",
         });
       }
-      const status =
-        binding.validatedAt && binding.activityUpdatedAt
-          ? "connected"
-          : binding.validatedAt
-            ? "lifecycle_pending"
-            : binding.mcpInitializedAt
-              ? "mcp_initialized"
-              : "awaiting_initialization";
+      const state = agentConnectionState(binding);
       return toolResult({
-        status,
-        connected: status === "connected",
+        ...state,
         mcpConnected: Boolean(binding.validatedAt),
         lifecycleReady: Boolean(binding.activityUpdatedAt),
+        configurationVersion: binding.configurationVersion,
+        requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        configurationUpdatedAt: binding.configurationUpdatedAt,
         bindingId: binding.id,
         projectId: binding.projectId,
         client: binding.client,
@@ -221,12 +217,7 @@ function createPilotMcpServer(
         validatedAt: binding.validatedAt,
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
-        action:
-          status === "connected"
-            ? "Use Project-scoped Intero tools."
-            : status === "lifecycle_pending"
-              ? "Complete the Codex Hook review, then start a fresh GUI task in this repository and call intero.connection_status again."
-              : "Call intero.validate_connection with the temporary verification code.",
+        action: agentConnectionAction(state.status),
       });
     },
   );
@@ -238,23 +229,30 @@ function createPilotMcpServer(
         "Complete Intero setup verification for this Agent and Project after the native MCP connection initializes.",
       inputSchema: {
         verificationCode: z.string().min(20).max(120).optional(),
+        configurationVersion: z
+          .number()
+          .int()
+          .positive()
+          .max(10_000)
+          .optional(),
       },
     },
-    async ({ verificationCode }) => {
-      const binding =
-        initialBinding.validatedAt !== undefined
-          ? initialBinding
-          : await options.store.validateAgentBinding(
-              initialBinding.id,
-              initialBinding.ownerId,
-              verificationCode,
-              new Date().toISOString(),
-            );
+    async ({ verificationCode, configurationVersion }) => {
+      const binding = await options.store.validateAgentBinding(
+        initialBinding.id,
+        initialBinding.ownerId,
+        verificationCode,
+        new Date().toISOString(),
+        configurationVersion,
+      );
+      const state = agentConnectionState(binding);
       return toolResult({
-        status: binding.activityUpdatedAt ? "connected" : "lifecycle_pending",
-        connected: Boolean(binding.activityUpdatedAt),
+        ...state,
         mcpConnected: true,
         lifecycleReady: Boolean(binding.activityUpdatedAt),
+        configurationVersion: binding.configurationVersion,
+        requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        configurationUpdatedAt: binding.configurationUpdatedAt,
         bindingId: binding.id,
         projectId: binding.projectId,
         ownerId: binding.ownerId,
@@ -265,9 +263,7 @@ function createPilotMcpServer(
         validatedAt: binding.validatedAt,
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
-        action: binding.activityUpdatedAt
-          ? "Use Project-scoped Intero tools."
-          : "Complete the Codex Hook review, then start a fresh GUI task in this repository.",
+        action: agentConnectionAction(state.status),
       });
     },
   );
@@ -283,18 +279,14 @@ function createPilotMcpServer(
       const binding =
         (await options.store.findAgentBindingById(initialBinding.id)) ??
         initialBinding;
+      const state = agentConnectionState(binding);
       return toolResult({
-        status:
-          binding.validatedAt && binding.activityUpdatedAt
-            ? "connected"
-            : binding.validatedAt
-              ? "lifecycle_pending"
-              : binding.mcpInitializedAt
-                ? "mcp_initialized"
-                : "awaiting_initialization",
-        connected: Boolean(binding.validatedAt && binding.activityUpdatedAt),
+        ...state,
         mcpConnected: Boolean(binding.validatedAt),
         lifecycleReady: Boolean(binding.activityUpdatedAt),
+        configurationVersion: binding.configurationVersion,
+        requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        configurationUpdatedAt: binding.configurationUpdatedAt,
         bindingId: binding.id,
         projectId: binding.projectId,
         ownerId: binding.ownerId,
@@ -486,6 +478,50 @@ async function requireValidatedBinding(
 
 function isTerminalCheckpointStatus(status: string): boolean {
   return status === "published" || status === "private" || status === "failed";
+}
+
+type AgentConnectionStatus =
+  | "awaiting_initialization"
+  | "mcp_initialized"
+  | "lifecycle_pending"
+  | "configuration_outdated"
+  | "connected";
+
+function agentConnectionState(binding: PilotAgentBinding): {
+  status: AgentConnectionStatus;
+  connected: boolean;
+  ready: boolean;
+  configurationCurrent: boolean;
+} {
+  const connected = Boolean(binding.validatedAt && binding.activityUpdatedAt);
+  const configurationCurrent =
+    binding.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION;
+  const status: AgentConnectionStatus = !binding.validatedAt
+    ? binding.mcpInitializedAt
+      ? "mcp_initialized"
+      : "awaiting_initialization"
+    : !binding.activityUpdatedAt
+      ? "lifecycle_pending"
+      : !configurationCurrent
+        ? "configuration_outdated"
+        : "connected";
+  return {
+    status,
+    connected,
+    ready: connected && configurationCurrent,
+    configurationCurrent,
+  };
+}
+
+function agentConnectionAction(status: AgentConnectionStatus): string {
+  if (status === "connected") return "Use Project-scoped Intero tools.";
+  if (status === "configuration_outdated") {
+    return `Run the Project connection repair task from Intero settings, then call intero.validate_connection with configurationVersion ${PILOT_AGENT_CONFIGURATION_VERSION}.`;
+  }
+  if (status === "lifecycle_pending") {
+    return "Complete the Codex Hook review, then start a fresh GUI task in this repository and call intero.connection_status again.";
+  }
+  return "Call intero.validate_connection with the temporary verification code and the setup configurationVersion.";
 }
 
 function checkpointStatusAction(

@@ -663,6 +663,7 @@ export function createPilotAgentConnection(
   identityId: PrincipalId,
   projectId: string,
   client: PilotAgentClient,
+  bindingId?: string,
 ) {
   return request<{
     ticket: {
@@ -670,12 +671,13 @@ export function createPilotAgentConnection(
       client: PilotAgentClient;
       expiresAt: string;
     };
+    bindingId: string;
     mcpUrl: string;
     connectPrompt: string;
   }>(`/v1/pilot/projects/${projectId}/agent-connections`, {
     method: "POST",
     identityId,
-    body: { client },
+    body: { client, ...(bindingId ? { bindingId } : {}) },
   });
 }
 

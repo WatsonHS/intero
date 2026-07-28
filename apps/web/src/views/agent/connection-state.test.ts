@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 
 import type { PilotSafeAgentBinding } from "../../pilot/api.js";
 import { summarizeProjectAgentConnections } from "./connection-state.js";
@@ -27,6 +28,7 @@ describe("summarizeProjectAgentConnections", () => {
           ownerId: "018f0000-0000-7000-8000-000000000020" as never,
           validatedAt: "2026-07-27T00:01:00.000Z",
           activityUpdatedAt: "2026-07-27T00:01:30.000Z",
+          configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
         }),
         binding({
           id: "018f0000-0000-7000-8000-000000000011",
@@ -38,14 +40,22 @@ describe("summarizeProjectAgentConnections", () => {
           ownerId: "018f0000-0000-7000-8000-000000000021" as never,
           mcpInitializedAt: "2026-07-27T00:03:00.000Z",
         }),
+        binding({
+          id: "018f0000-0000-7000-8000-000000000013",
+          ownerId: "018f0000-0000-7000-8000-000000000021" as never,
+          validatedAt: "2026-07-27T00:04:00.000Z",
+          activityUpdatedAt: "2026-07-27T00:04:30.000Z",
+        }),
       ],
       "018f0000-0000-7000-8000-000000000021",
     );
 
     expect(result.connected).toHaveLength(1);
+    expect(result.outdated).toHaveLength(1);
     expect(result.lifecyclePending).toHaveLength(1);
     expect(result.pending).toHaveLength(1);
     expect(result.mineConnected).toHaveLength(0);
+    expect(result.mineOutdated).toHaveLength(1);
     expect(result.mineLifecyclePending).toHaveLength(1);
     expect(result.minePending).toHaveLength(1);
   });
@@ -57,11 +67,13 @@ describe("summarizeProjectAgentConnections", () => {
         ownerId: "018f0000-0000-7000-8000-000000000022" as never,
         validatedAt: "2026-07-27T00:01:00.000Z",
         activityUpdatedAt: "2026-07-27T00:02:00.000Z",
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
         disconnectedAt: "2026-07-27T00:03:00.000Z",
       }),
     ]);
 
     expect(result.connected).toHaveLength(0);
+    expect(result.outdated).toHaveLength(0);
     expect(result.lifecyclePending).toHaveLength(0);
     expect(result.pending).toHaveLength(0);
   });
@@ -74,10 +86,12 @@ describe("summarizeProjectAgentConnections", () => {
         authMode: "oauth",
         validatedAt: "2026-07-27T00:01:00.000Z",
         activityUpdatedAt: "2026-07-27T00:02:00.000Z",
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
       }),
     ]);
 
     expect(result.connected).toHaveLength(0);
+    expect(result.outdated).toHaveLength(0);
     expect(result.lifecyclePending).toHaveLength(0);
     expect(result.pending).toHaveLength(0);
   });

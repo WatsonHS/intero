@@ -1,5 +1,6 @@
 import {
   containsForbiddenEventField,
+  PILOT_AGENT_CONFIGURATION_VERSION,
   PILOT_DATA_POLICY,
   PilotAgentClient,
   PilotCheckpointInput,
@@ -1357,17 +1358,38 @@ export async function registerPilotRoutes(
     async (request, reply) => {
       const principal = await requireIdentity(request, options.requestAuth);
       const input = z
-        .object({ client: PilotAgentClient })
+        .object({
+          client: PilotAgentClient,
+          bindingId: z.uuid().optional(),
+        })
         .strict()
         .parse(request.body);
+      const projectId = ProjectId.parse(request.params.projectId);
+      const repairBinding = input.bindingId
+        ? (await options.store.listAgentBindings(projectId, principal.id)).find(
+            (binding) =>
+              binding.id === input.bindingId &&
+              binding.ownerId === principal.id &&
+              binding.client === input.client &&
+              !binding.disconnectedAt,
+          )
+        : undefined;
+      if (input.bindingId && !repairBinding) {
+        throw new PilotStoreError(
+          "AGENT_CONNECTION_NOT_FOUND",
+          404,
+          "The active Agent connection to repair was not found.",
+        );
+      }
       const issued = await issueAgentTicket(
         options,
         principal,
-        ProjectId.parse(request.params.projectId),
+        projectId,
         input.client,
       );
       return reply.status(201).send({
         ticket: presentAgentTicket(issued.ticket),
+        bindingId: repairBinding?.id ?? issued.ticket.id,
         mcpUrl: `${issued.baseUrl}/v1/pilot/mcp`,
         connectPrompt: buildConnectPrompt(
           input.client,
@@ -1376,6 +1398,7 @@ export async function registerPilotRoutes(
           issued.ticket.expiresAt,
           issued.project,
           issued.ticket.preferredLanguage,
+          repairBinding?.id,
         ),
       });
     },
@@ -2195,6 +2218,7 @@ function buildConnectPrompt(
   expiresAt: string,
   project: Pick<PilotProject, "id" | "name">,
   preferredLanguage: PilotAgentBinding["preferredLanguage"],
+  repairBindingId?: string,
 ): string {
   const baseUrl = deploymentBaseUrl.replace(/\/+$/, "");
   const clientLabel =
@@ -2262,6 +2286,7 @@ function buildConnectPrompt(
       ticket,
       expiresAt,
       retryableUntil: "connected_or_expired",
+      ...(repairBindingId ? { expectedBindingId: repairBindingId } : {}),
       exchangeRequest: {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2278,6 +2303,11 @@ function buildConnectPrompt(
       transport: "streamable-http",
       url: `${baseUrl}/v1/pilot/mcp`,
       authorization: "Bearer credential returned by setup exchange",
+    },
+    configuration: {
+      version: PILOT_AGENT_CONFIGURATION_VERSION,
+      localMarker: "artifacts.localCredential.configurationVersion",
+      validationArgument: "intero.validate_connection.configurationVersion",
     },
     artifacts: {
       ...artifacts,
@@ -2338,13 +2368,13 @@ function buildConnectPrompt(
         "",
         "按顺序执行：",
         "1. 定位仓库根目录并保留现有非 Intero 配置；从 .intero/connection.json 读取候选 credential 与稳定 workspaceId。",
-        "2. 用候选 credential 请求 authorization.reuseProbeUrl；HTTP 200 且 projectId、client 匹配时复用，否则进入兑换。",
-        "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前可重试；每次 HTTP 201 以最新 credential、verification 为准，原子写入 artifacts.localCredential 并设置 0600。",
+        "2. 用候选 credential 请求 authorization.reuseProbeUrl；HTTP 200 且 projectId、client、workspaceId 以及可选 authorization.expectedBindingId 匹配时复用，否则进入兑换。",
+        "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前可重试；每次 HTTP 201 以最新 credential、verification 为准。把 configuration.version 与凭据原子写入 artifacts.localCredential 并设置 0600。",
         `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 Hook；Authorization 使用已保存 credential。SessionStart Hook 发送 hooks.allowedPayload，以原生 session ID 的本地哈希生成 clientEventId 并上报 active 状态；Hook 采用 fail-open。${client === "codex" ? " Hook 命令从 git rev-parse --show-toplevel 定位实现，并把 artifacts.worktreePatterns 合并到仓库根目录 .worktreeinclude。" : ""}`,
         "5. 在项目 instructions 维护 intero-managed 规则：每个新对话理解首条用户请求后、开始实质工作前，按 projectInstructions.initialIntent 调用 stand_in.report_checkpoint，用安全摘要上报正在做的工作；保存返回的 workStateId，并按 statusTool 查询直到 projectInstructions.checkpointTerminalStatuses 之一，依据 action 处理重试或失败。后续 semanticBranchPoints 继续上报，定向协作填写当前项目成员 ID。",
         `6. 校验配置语法与 ${clientLabel} 原生 MCP 注册状态。`,
         client === "codex"
-          ? "7. HTTP 201 的 credential 与 verification 落盘后，直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话并跟进结果。按 Codex GUI 的 Hook 审核提示确认当前仓库的 Intero Hook；确认后新建任务。验证任务依次调用 intero.connection_status、用本地 verification.code 调用 intero.validate_connection、再次调用 intero.connection_status；以 connected=true 且 lifecycleReady=true 为完成信号，随后移除本地 verification 字段。若状态为 lifecycle_pending，再新建一次任务并回读。本配置任务报告 pending_gui_validation，新对话报告 MCP 与 Hook 验证结果。"
+          ? "7. 凭据与 configuration.version 落盘后，直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话并跟进结果。按 Codex GUI 的 Hook 审核提示确认当前仓库的 Intero Hook；确认后新建任务。验证任务依次调用 intero.connection_status、用本地 verification.code（已有已验证连接可省略）和 configuration.version 调用 intero.validate_connection、再次调用 intero.connection_status；以 ready=true、configurationCurrent=true 且 lifecycleReady=true 为完成信号，随后移除本地 verification 字段。若状态为 lifecycle_pending，再新建一次任务并回读。本配置任务报告 pending_gui_validation，新对话报告 MCP、配置版本与 Hook 验证结果。"
           : `7. 配置变化时在 ${clientLabel} GUI 启动新验证会话：读取状态、用本地 verification.code 调用 intero.validate_connection、回读 connected 并移除 verification。本任务报告 pending_gui_validation。`,
         "8. 报告 changed、unchanged、preserved、conflicts、verification、connected project/agent，以及 MCP/Hook 两项 readiness；凭证脱敏。验证前状态为 pending_gui_validation。",
       ].join("\n")
@@ -2358,13 +2388,13 @@ function buildConnectPrompt(
         "",
         "Execute in order:",
         "1. Locate the repository root and preserve non-Intero settings. Read the candidate credential and stable workspaceId from .intero/connection.json.",
-        "2. Probe authorization.reuseProbeUrl with the candidate credential. Reuse an HTTP 200 binding matching projectId and client; otherwise exchange.",
-        "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable until connected or expiresAt; each HTTP 201 makes its latest credential and verification authoritative. Atomically save them to artifacts.localCredential with mode 0600.",
+        "2. Probe authorization.reuseProbeUrl with the candidate credential. Reuse an HTTP 200 binding matching projectId, client, workspaceId, and optional authorization.expectedBindingId; otherwise exchange.",
+        "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable until connected or expiresAt; each HTTP 201 makes its latest credential and verification authoritative. Atomically save configuration.version with them in artifacts.localCredential using mode 0600.",
         `4. Minimally merge native ${clientLabel} MCP and hooks per nativeConfiguration. Use the saved credential for Authorization. The SessionStart hook sends hooks.allowedPayload, hashes the native session ID into clientEventId, reports active status, and fails open.${client === "codex" ? " Resolve the hook implementation from git rev-parse --show-toplevel and merge artifacts.worktreePatterns into the repository-root .worktreeinclude." : ""}`,
         "5. Maintain intero-managed Project instructions: after understanding the first user request in every new conversation and before substantive work, follow projectInstructions.initialIntent and call stand_in.report_checkpoint with a safe summary of the current work. Save the returned workStateId and use statusTool until reaching a projectInstructions.checkpointTerminalStatuses value, following action for retries or failures. Continue reporting later semanticBranchPoints and route collaboration to a current Project member.",
         `6. Validate syntax and ${clientLabel} native MCP registration.`,
         client === "codex"
-          ? "7. As soon as the HTTP 201 credential and verification are persisted, use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository and follow its result. Confirm the repository Intero Hook in the Codex GUI review flow, then start a fresh task. The validation task calls intero.connection_status, intero.validate_connection with local verification.code, then intero.connection_status again; connected=true and lifecycleReady=true are the completion signal, after which it removes the local verification field. If status is lifecycle_pending, start one more task and read status again. This setup task reports pending_gui_validation, and the new conversation reports both MCP and Hook verification."
+          ? "7. Once the credential and configuration.version are persisted, use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository and follow its result. Confirm the repository Intero Hook in the Codex GUI review flow, then start a fresh task. The validation task calls intero.connection_status, intero.validate_connection with local verification.code (optional for an already validated connection) plus configuration.version, then intero.connection_status again; ready=true, configurationCurrent=true, and lifecycleReady=true are the completion signal, after which it removes the local verification field. If status is lifecycle_pending, start one more task and read status again. This setup task reports pending_gui_validation, and the new conversation reports MCP, configuration-version, and Hook verification."
           : `7. After a config change, start a fresh ${clientLabel} GUI validation session: read status, call intero.validate_connection with local verification.code, read connected, then remove verification. This task reports pending_gui_validation.`,
         "8. Report changed, unchanged, preserved, conflicts, verification, connected Project/Agent, and both MCP/Hook readiness with redacted credentials; validation starts as pending_gui_validation.",
       ].join("\n");

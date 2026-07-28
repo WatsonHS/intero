@@ -323,6 +323,7 @@ export interface PilotStore {
     ownerId: PrincipalId,
     verificationCode: string | undefined,
     now: string,
+    configurationVersion?: number,
   ): Promise<PilotAgentBinding>;
   recordAgentLifecycle(
     bindingId: string,
@@ -1792,6 +1793,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
     ownerId: PrincipalId,
     verificationCode: string | undefined,
     now: string,
+    configurationVersion?: number,
   ): Promise<PilotAgentBinding> {
     return this.updateSnapshot(
       (snapshot) => {
@@ -1812,19 +1814,28 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Complete the native MCP initialization before validation.",
           );
         }
-        if (
-          !verificationCode ||
-          !binding.verificationCodeHash ||
-          !binding.verificationExpiresAt ||
-          createHash("sha256").update(verificationCode).digest("hex") !==
-            binding.verificationCodeHash ||
-          (!binding.verificationUsedAt && binding.verificationExpiresAt <= now)
-        ) {
-          throw new PilotStoreError(
-            "AGENT_VERIFICATION_INVALID",
-            401,
-            "Agent verification is invalid or expired.",
+        if (!binding.validatedAt) {
+          if (
+            !verificationCode ||
+            !binding.verificationCodeHash ||
+            !binding.verificationExpiresAt ||
+            createHash("sha256").update(verificationCode).digest("hex") !==
+              binding.verificationCodeHash ||
+            (!binding.verificationUsedAt &&
+              binding.verificationExpiresAt <= now)
+          ) {
+            throw new PilotStoreError(
+              "AGENT_VERIFICATION_INVALID",
+              401,
+              "Agent verification is invalid or expired.",
+            );
+          }
+          binding.verificationUsedAt ??= now;
+          binding.validatedAt = now;
+          const ticket = snapshot.agentTickets.find(
+            (item) => item.id === binding.id,
           );
+          if (ticket) ticket.usedAt ??= now;
         }
         for (const existing of snapshot.agentBindings) {
           if (
@@ -1837,13 +1848,11 @@ export abstract class SnapshotPilotStore implements PilotStore {
             existing.disconnectedAt = now;
           }
         }
-        binding.verificationUsedAt ??= now;
-        binding.validatedAt ??= now;
+        if (configurationVersion !== undefined) {
+          binding.configurationVersion = configurationVersion;
+          binding.configurationUpdatedAt = now;
+        }
         binding.lastSeenAt = now;
-        const ticket = snapshot.agentTickets.find(
-          (item) => item.id === binding.id,
-        );
-        if (ticket) ticket.usedAt ??= now;
         return binding;
       },
       {

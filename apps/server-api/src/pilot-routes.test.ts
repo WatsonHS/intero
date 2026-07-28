@@ -1,4 +1,5 @@
 import {
+  PILOT_AGENT_CONFIGURATION_VERSION,
   type PilotCheckpointInput,
   type OrganizationId,
   type PrincipalId,
@@ -228,20 +229,25 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseConnectPrompt).toContain(
       "直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话",
     );
-    expect(chineseConnectPrompt).toContain("新对话报告 MCP 与 Hook 验证结果");
+    expect(chineseConnectPrompt).toContain(
+      "新对话报告 MCP、配置版本与 Hook 验证结果",
+    );
+    expect(chineseConnectPrompt).toContain(
+      `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
+    );
     expect(chineseConnectPrompt).toContain(".worktreeinclude");
     expect(chineseConnectPrompt).toContain(
       'node \\"$(git rev-parse --show-toplevel)/.intero/hook.mjs\\"',
     );
     expect(chineseConnectPrompt).toContain(
-      "connected=true 且 lifecycleReady=true",
+      "ready=true、configurationCurrent=true 且 lifecycleReady=true",
     );
     expect(chineseConnectPrompt).not.toContain("codex://threads/new");
     expect(chineseConnectPrompt).toContain("移除本地 verification 字段");
     expect(chineseConnectPrompt).not.toContain("以下 JSON 是声明式期望状态");
     expect(chineseConnectPrompt).not.toContain("intero-mcp");
     expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
-    expect(chineseConnectPrompt.length).toBeLessThan(5_200);
+    expect(chineseConnectPrompt.length).toBeLessThan(6_000);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
@@ -315,7 +321,7 @@ describe("pilot cloud-first vertical slice", () => {
       "exactly four JSON keys: ticket, client, name, workspaceId",
     );
     expect((englishTicket.json().connectPrompt as string).length).toBeLessThan(
-      4_200,
+      4_800,
     );
     expect(englishTicket.json().connectPrompt).not.toContain("intero-mcp");
 
@@ -364,6 +370,12 @@ describe("pilot cloud-first vertical slice", () => {
     );
     expect(response.json().connectPrompt).toContain(
       '"body":{"ticket":"ticket_',
+    );
+    expect(response.json().connectPrompt).toContain(
+      `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
+    );
+    expect(response.json().connectPrompt).toContain(
+      "ready=true、configurationCurrent=true 且 lifecycleReady=true",
     );
     expect(response.json().connectPrompt).not.toContain('"clientId"');
     expect(response.json().connectPrompt).not.toContain('"repositoryName"');
@@ -1335,6 +1347,7 @@ describe("pilot cloud-first vertical slice", () => {
       name: "intero.validate_connection",
       arguments: {
         verificationCode: connected.json().verification.code,
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
       },
     });
     const validationContent = (
@@ -1348,9 +1361,15 @@ describe("pilot cloud-first vertical slice", () => {
     expect(validationText?.type).toBe("text");
     expect(
       validationText?.type === "text" && validationText.text
-        ? JSON.parse(validationText.text).status
+        ? JSON.parse(validationText.text)
         : undefined,
-    ).toBe("lifecycle_pending");
+    ).toMatchObject({
+      status: "lifecycle_pending",
+      ready: false,
+      configurationCurrent: true,
+      configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+      requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+    });
     const firstValidatedAt =
       validationText?.type === "text" && validationText.text
         ? JSON.parse(validationText.text).validatedAt
@@ -1359,6 +1378,7 @@ describe("pilot cloud-first vertical slice", () => {
       name: "intero.validate_connection",
       arguments: {
         verificationCode: connected.json().verification.code,
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
       },
     })) as { content: Array<{ type: string; text?: string }> };
     const repeatedText = repeatedValidation.content.find(
@@ -1381,6 +1401,8 @@ describe("pilot cloud-first vertical slice", () => {
       connected: false,
       mcpConnected: true,
       lifecycleReady: false,
+      ready: false,
+      configurationCurrent: true,
       projectId: fixture.project.id,
       validatedAt: firstValidatedAt,
     });
@@ -1406,7 +1428,13 @@ describe("pilot cloud-first vertical slice", () => {
       mcpInitializedAt: expect.any(String),
     });
     expect(after.bindings[0].validatedAt).toEqual(expect.any(String));
-    expect(after.bindings[0].lastSeenAt).toBe(after.bindings[0].validatedAt);
+    expect(Date.parse(after.bindings[0].lastSeenAt)).toBeGreaterThanOrEqual(
+      Date.parse(after.bindings[0].validatedAt),
+    );
+    expect(after.bindings[0]).toMatchObject({
+      configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+      configurationUpdatedAt: expect.any(String),
+    });
 
     const hook = await app.inject({
       method: "POST",
@@ -1463,6 +1491,8 @@ describe("pilot cloud-first vertical slice", () => {
       connected: true,
       mcpConnected: true,
       lifecycleReady: true,
+      ready: true,
+      configurationCurrent: true,
       projectId: fixture.project.id,
     });
 
@@ -1575,6 +1605,100 @@ describe("pilot cloud-first vertical slice", () => {
       }),
     );
     expect(rejectedCheckpointAfterDisconnect.statusCode).toBe(401);
+  });
+
+  it("repairs an outdated Project configuration on the existing binding and credential", async () => {
+    const fixture = await readyProject(app);
+    const legacy = await connectAgent(app, fixture.project.id, A, "codex", {
+      configurationVersion: false,
+    });
+    const hook = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/hooks",
+      headers: { authorization: `Bearer ${legacy.credential}` },
+      payload: {
+        clientEventId: "legacy-config-session-start",
+        lifecycle: "session_started",
+        workstreamKey: "legacy-config",
+        workstreamTitle: "Legacy configuration repair",
+      },
+    });
+    expect(hook.statusCode).toBe(202);
+
+    await expect(
+      callMcpTool(app, legacy.credential, "intero.connection_status", {}),
+    ).resolves.toMatchObject({
+      status: "configuration_outdated",
+      connected: true,
+      ready: false,
+      configurationCurrent: false,
+      requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+      bindingId: legacy.binding.id,
+    });
+
+    const foreignRepair = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/agent-connections`,
+      headers: identity(B),
+      payload: {
+        client: "codex",
+        bindingId: legacy.binding.id,
+      },
+    });
+    expect(foreignRepair.statusCode).toBe(404);
+    expect(foreignRepair.json().code).toBe("AGENT_CONNECTION_NOT_FOUND");
+
+    const repair = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/agent-connections`,
+      headers: identity(A),
+      payload: {
+        client: "codex",
+        bindingId: legacy.binding.id,
+      },
+    });
+    expect(repair.statusCode).toBe(201);
+    expect(repair.json().bindingId).toBe(legacy.binding.id);
+    expect(repair.json().connectPrompt).toContain(
+      `"expectedBindingId":"${legacy.binding.id}"`,
+    );
+    expect(repair.json().connectPrompt).toContain(
+      `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
+    );
+
+    await expect(
+      callMcpTool(app, legacy.credential, "intero.validate_connection", {
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+      }),
+    ).resolves.toMatchObject({
+      status: "connected",
+      connected: true,
+      ready: true,
+      configurationCurrent: true,
+      configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+      bindingId: legacy.binding.id,
+    });
+    await expect(
+      callMcpTool(app, legacy.credential, "intero.connection_status", {}),
+    ).resolves.toMatchObject({
+      status: "connected",
+      ready: true,
+      configurationCurrent: true,
+      bindingId: legacy.binding.id,
+    });
+
+    const after = await overview(app, fixture.project.id, A);
+    expect(
+      after.bindings.filter(
+        (binding: { id: string; disconnectedAt?: string }) =>
+          binding.id === legacy.binding.id && !binding.disconnectedAt,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        configurationUpdatedAt: expect.any(String),
+      }),
+    ]);
   });
 
   it("accepts a scoped idempotent Agent checkpoint and separates private state from Team Pulse", async () => {
@@ -2261,6 +2385,7 @@ async function connectAgent(
   projectId: string,
   owner: PrincipalId = A,
   client: "codex" | "claude-code" | "opencode" = "codex",
+  options: { configurationVersion?: number | false } = {},
 ) {
   const ticketResponse = await app.inject({
     method: "POST",
@@ -2323,6 +2448,13 @@ async function connectAgent(
         name: "intero.validate_connection",
         arguments: {
           verificationCode: connected.json().verification.code,
+          ...(options.configurationVersion === false
+            ? {}
+            : {
+                configurationVersion:
+                  options.configurationVersion ??
+                  PILOT_AGENT_CONFIGURATION_VERSION,
+              }),
         },
       },
     },
@@ -2333,6 +2465,8 @@ async function connectAgent(
     connected: false,
     mcpConnected: true,
     lifecycleReady: false,
+    ready: false,
+    configurationCurrent: options.configurationVersion !== false,
   });
   const connectReuse = await app.inject({
     method: "POST",
@@ -2341,6 +2475,8 @@ async function connectAgent(
   });
   return {
     credential: connected.json().credential as string,
+    binding: connected.json().binding,
+    verificationCode: connected.json().verification.code as string,
     connectReuse,
   };
 }

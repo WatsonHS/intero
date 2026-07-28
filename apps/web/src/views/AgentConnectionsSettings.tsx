@@ -7,7 +7,10 @@ import {
   TerminalWindowIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
-import type { PilotAgentClient } from "@intero/domain";
+import {
+  PILOT_AGENT_CONFIGURATION_VERSION,
+  type PilotAgentClient,
+} from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
@@ -118,17 +121,24 @@ export function AgentConnectionsSettings({
   );
 
   const startConnection = useMutation({
-    mutationFn: async (client: PilotAgentClient) => ({
+    mutationFn: async ({
+      client,
+      bindingId,
+    }: {
+      client: PilotAgentClient;
+      bindingId?: string;
+    }) => ({
       client,
       result: await createPilotAgentConnection(
         pilot.identityId!,
         projectId,
         client,
+        bindingId,
       ),
     }),
     onSuccess: async ({ client, result }) => {
       setIssued({
-        bindingId: result.ticket.id,
+        bindingId: result.bindingId,
         client,
         prompt: result.connectPrompt,
         mcpUrl: result.mcpUrl,
@@ -152,20 +162,38 @@ export function AgentConnectionsSettings({
 
   const issuedBinding = useMemo(() => {
     if (!issued) return undefined;
-    return (overview.data?.bindings ?? []).find(
-      (binding) => binding.id === issued.bindingId,
+    const bindings = overview.data?.bindings ?? [];
+    const exact = bindings.find(
+      (binding) => binding.id === issued.bindingId && !binding.disconnectedAt,
     );
-  }, [issued, overview.data?.bindings]);
+    return (
+      exact ??
+      bindings
+        .filter(
+          (binding) =>
+            !binding.disconnectedAt &&
+            binding.ownerId === pilot.identityId &&
+            binding.client === issued.client,
+        )
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.createdAt) - Date.parse(left.createdAt),
+        )[0]
+    );
+  }, [issued, overview.data?.bindings, pilot.identityId]);
 
-  const progress = issuedBinding?.activityUpdatedAt
-    ? 4
-    : issuedBinding?.validatedAt
-      ? 3
-      : issuedBinding?.mcpInitializedAt
-        ? 2
-        : issued
-          ? 1
-          : 0;
+  const configurationCurrent =
+    issuedBinding?.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION;
+  const progress =
+    configurationCurrent && issuedBinding?.activityUpdatedAt
+      ? 4
+      : configurationCurrent && issuedBinding?.validatedAt
+        ? 3
+        : issuedBinding?.mcpInitializedAt
+          ? 2
+          : issued
+            ? 1
+            : 0;
 
   async function launchCodex(prompt: string) {
     setLaunchError(undefined);
@@ -279,20 +307,26 @@ export function AgentConnectionsSettings({
                   "rounded-pill px-2.5 py-1 text-[10px]",
                   summary.connected.length > 0
                     ? "bg-green-soft text-green"
-                    : summary.lifecyclePending.length > 0
+                    : summary.outdated.length > 0
                       ? "bg-amber-soft text-amber"
-                      : summary.pending.length > 0
-                        ? "bg-accent-soft text-accent-strong"
-                        : "bg-amber-soft text-amber",
+                      : summary.lifecyclePending.length > 0
+                        ? "bg-amber-soft text-amber"
+                        : summary.pending.length > 0
+                          ? "bg-accent-soft text-accent-strong"
+                          : "bg-amber-soft text-amber",
                 ].join(" ")}
               >
                 {summary.connected.length > 0
-                  ? `${summary.connected.length} 个完整连接`
-                  : summary.lifecyclePending.length > 0
-                    ? `${summary.lifecyclePending.length} 个 MCP 已验证，Hook 待确认`
-                    : summary.pending.length > 0
-                      ? `${summary.pending.length} 个连接正在配置`
-                      : "尚未连接"}
+                  ? summary.outdated.length > 0
+                    ? `${summary.connected.length} 个完整连接 · ${summary.outdated.length} 个待修复`
+                    : `${summary.connected.length} 个完整连接`
+                  : summary.outdated.length > 0
+                    ? `${summary.outdated.length} 个连接配置待修复`
+                    : summary.lifecyclePending.length > 0
+                      ? `${summary.lifecyclePending.length} 个 MCP 已验证，Hook 待确认`
+                      : summary.pending.length > 0
+                        ? `${summary.pending.length} 个连接正在配置`
+                        : "尚未连接"}
               </span>
             </div>
 
@@ -310,7 +344,10 @@ export function AgentConnectionsSettings({
                       <span
                         className={[
                           "grid h-[34px] w-[34px] place-items-center rounded-[10px]",
-                          binding.validatedAt && binding.activityUpdatedAt
+                          binding.validatedAt &&
+                          binding.activityUpdatedAt &&
+                          binding.configurationVersion ===
+                            PILOT_AGENT_CONFIGURATION_VERSION
                             ? "bg-green-soft text-green"
                             : binding.validatedAt
                               ? "bg-amber-soft text-amber"
@@ -319,7 +356,10 @@ export function AgentConnectionsSettings({
                                 : "bg-amber-soft text-amber",
                         ].join(" ")}
                       >
-                        {binding.validatedAt && binding.activityUpdatedAt ? (
+                        {binding.validatedAt &&
+                        binding.activityUpdatedAt &&
+                        binding.configurationVersion ===
+                          PILOT_AGENT_CONFIGURATION_VERSION ? (
                           <CheckCircleIcon size={16} weight="fill" />
                         ) : (
                           <PlugsIcon size={16} />
@@ -333,13 +373,18 @@ export function AgentConnectionsSettings({
                           {binding.client} ·{" "}
                           {binding.authMode === "oauth"
                             ? "旧 OAuth 连接已停用，请重新连接"
-                            : binding.validatedAt && binding.activityUpdatedAt
-                              ? "原生 MCP 与 SessionStart Hook 已验证"
-                              : binding.validatedAt
-                                ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
-                                : binding.mcpInitializedAt
-                                  ? "MCP 已加载"
-                                  : "等待连接任务写入配置"}
+                            : binding.validatedAt &&
+                                binding.activityUpdatedAt &&
+                                binding.configurationVersion !==
+                                  PILOT_AGENT_CONFIGURATION_VERSION
+                              ? `项目配置 v${binding.configurationVersion ?? "旧版"} · 需要升级到 v${PILOT_AGENT_CONFIGURATION_VERSION}`
+                              : binding.validatedAt && binding.activityUpdatedAt
+                                ? "原生 MCP 与 SessionStart Hook 已验证"
+                                : binding.validatedAt
+                                  ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
+                                  : binding.mcpInitializedAt
+                                    ? "MCP 已加载"
+                                    : "等待连接任务写入配置"}
                           {binding.lastSeenAt
                             ? ` · 最后活跃 ${new Date(
                                 binding.lastSeenAt,
@@ -348,16 +393,37 @@ export function AgentConnectionsSettings({
                         </small>
                       </span>
                       {binding.ownerId === pilot.identityId ? (
-                        <button
-                          type="button"
-                          data-testid={`pilot-agent-disconnect-${binding.id}`}
-                          data-client={binding.client}
-                          disabled={disconnect.isPending}
-                          onClick={() => disconnect.mutate(binding.id)}
-                          className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-danger hover:text-danger disabled:opacity-50"
-                        >
-                          断开
-                        </button>
+                        <span className="flex items-center gap-2">
+                          {binding.validatedAt &&
+                          binding.activityUpdatedAt &&
+                          binding.configurationVersion !==
+                            PILOT_AGENT_CONFIGURATION_VERSION ? (
+                            <button
+                              type="button"
+                              data-testid={`pilot-agent-repair-${binding.id}`}
+                              disabled={startConnection.isPending}
+                              onClick={() =>
+                                startConnection.mutate({
+                                  client: binding.client,
+                                  bindingId: binding.id,
+                                })
+                              }
+                              className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
+                            >
+                              修复配置
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            data-testid={`pilot-agent-disconnect-${binding.id}`}
+                            data-client={binding.client}
+                            disabled={disconnect.isPending}
+                            onClick={() => disconnect.mutate(binding.id)}
+                            className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-danger hover:text-danger disabled:opacity-50"
+                          >
+                            断开
+                          </button>
+                        </span>
                       ) : null}
                     </div>
                   ))}
@@ -377,6 +443,16 @@ export function AgentConnectionsSettings({
                 </span>
               </div>
             ) : null}
+            {summary.outdated.length > 0 ? (
+              <div className="mt-4 flex items-start gap-2 rounded-card border border-amber-soft bg-amber-soft px-3.5 py-3 text-[11px] leading-[1.65] text-amber">
+                <WarningCircleIcon size={15} className="mt-0.5 shrink-0" />
+                <span>
+                  这些连接的凭据仍然有效，但项目级 MCP、Hook
+                  或持久化指令版本已经落后。点击“修复配置”会生成升级任务；Codex
+                  回报当前配置版本后，连接会恢复为完整状态。
+                </span>
+              </div>
+            ) : null}
           </section>
 
           <section className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3">
@@ -384,6 +460,9 @@ export function AgentConnectionsSettings({
               const mine = summary.mineConnected.filter(
                 (binding) => binding.client === client.id,
               ).length;
+              const outdatedBinding = summary.mineOutdated.find(
+                (binding) => binding.client === client.id,
+              );
               const pending = summary.minePending.some(
                 (binding) => binding.client === client.id,
               );
@@ -409,16 +488,25 @@ export function AgentConnectionsSettings({
                     type="button"
                     data-testid={`connect-agent-${client.id}`}
                     disabled={startConnection.isPending || lifecyclePending}
-                    onClick={() => startConnection.mutate(client.id)}
+                    onClick={() =>
+                      startConnection.mutate({
+                        client: client.id,
+                        ...(outdatedBinding
+                          ? { bindingId: outdatedBinding.id }
+                          : {}),
+                      })
+                    }
                     className="mt-auto h-9 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                   >
                     {lifecyclePending
                       ? `等待 ${client.label} Hook 首次上报`
-                      : pending
-                        ? `重新生成 ${client.label} 连接`
-                        : mine > 0
-                          ? `连接另一个 ${client.label} 仓库`
-                          : `连接 ${client.label}`}
+                      : outdatedBinding
+                        ? `修复 ${client.label} 项目配置`
+                        : pending
+                          ? `重新生成 ${client.label} 连接`
+                          : mine > 0
+                            ? `连接另一个 ${client.label} 仓库`
+                            : `连接 ${client.label}`}
                   </button>
                 </article>
               );
@@ -442,9 +530,9 @@ export function AgentConnectionsSettings({
               </strong>
               <p className="mt-1.5 text-[11px] leading-[1.65] text-ink-muted">
                 Codex 打开后会把当前本地仓库配置到 {project?.name}
-                。连接任务会兑换一次性 ticket，把 Project-scoped credential
-                写入本地原生配置；新的 GUI 任务完成 MCP initialize
-                和验证工具调用后，这里会自动显示已连接。
+                。任务会复用有效的 Project-scoped credential，必要时才兑换
+                ticket，并把当前配置版本写入项目原生配置；新的 GUI 任务完成
+                MCP、配置版本与 Hook 验证后，这里会自动显示完整连接。
               </p>
             </span>
           </div>
@@ -453,7 +541,7 @@ export function AgentConnectionsSettings({
             {[
               "单次连接 ticket 已创建",
               "等待原生 MCP 加载",
-              "MCP + Project credential 已验证",
+              `MCP + credential + 配置 v${PILOT_AGENT_CONFIGURATION_VERSION} 已验证`,
               "SessionStart Hook 已验证",
             ].map((label, index) => (
               <span
