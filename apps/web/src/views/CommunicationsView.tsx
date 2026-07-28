@@ -100,6 +100,29 @@ interface ComposerImage {
   status: "uploading" | "available" | "failed";
 }
 
+interface ThreadListCache {
+  items: ThreadPayload[];
+}
+
+export function markCachedThreadRead(
+  cached: ThreadListCache | undefined,
+  threadId: string,
+): ThreadListCache | undefined {
+  if (!cached) return cached;
+  let changed = false;
+  const items = cached.items.map((item) => {
+    if (
+      item.thread.id !== threadId ||
+      ((item.unreadCount ?? 0) === 0 && (item.mentionCount ?? 0) === 0)
+    ) {
+      return item;
+    }
+    changed = true;
+    return { ...item, unreadCount: 0, mentionCount: 0 };
+  });
+  return changed ? { ...cached, items } : cached;
+}
+
 export function buildGroupChatThreadInput(input: {
   currentPrincipalId: PrincipalId;
   standInPrincipalId: PrincipalId;
@@ -155,6 +178,7 @@ export function CommunicationsView({
   const retryableSendRef = useRef<
     { key: string; clientMessageId: string } | undefined
   >(undefined);
+  const [failedReadKey, setFailedReadKey] = useState<string | undefined>();
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionCursor, setMentionCursor] = useState(0);
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
@@ -395,6 +419,9 @@ export function CommunicationsView({
   );
 
   function selectThread(threadId: string) {
+    setFailedReadKey((key) =>
+      key?.startsWith(`${threadId}:`) ? undefined : key,
+    );
     setSelectedStandInOwnerId(undefined);
     setSelectedThreadId(threadId);
     onOpenThread?.(threadId);
@@ -414,7 +441,50 @@ export function CommunicationsView({
             sequence: input.sequence,
           })
         : Promise.reject(new Error(t("chat.identityUnavailable"))),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+    onMutate: (input) => {
+      const previous = queryClient.getQueryData<ThreadListCache>(["threads"]);
+      const previousItem = previous?.items.find(
+        (item) => item.thread.id === input.threadId,
+      );
+      void queryClient.cancelQueries({ queryKey: ["threads"] });
+      queryClient.setQueryData<ThreadListCache>(["threads"], (cached) =>
+        markCachedThreadRead(cached, input.threadId),
+      );
+      return {
+        previousUnread: previousItem?.unreadCount ?? 0,
+        previousMentions: previousItem?.mentionCount ?? 0,
+      };
+    },
+    onSuccess: (_result, input) => {
+      setFailedReadKey((key) =>
+        key === `${input.threadId}:${input.sequence}` ? undefined : key,
+      );
+    },
+    onError: (_error, input, context) => {
+      setFailedReadKey(`${input.threadId}:${input.sequence}`);
+      queryClient.setQueryData<ThreadListCache>(["threads"], (cached) => {
+        if (!cached) return cached;
+        return {
+          ...cached,
+          items: cached.items.map((item) =>
+            item.thread.id === input.threadId
+              ? {
+                  ...item,
+                  unreadCount: Math.max(
+                    item.unreadCount ?? 0,
+                    context?.previousUnread ?? 0,
+                  ),
+                  mentionCount: Math.max(
+                    item.mentionCount ?? 0,
+                    context?.previousMentions ?? 0,
+                  ),
+                }
+              : item,
+          ),
+        };
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
   });
   const conclude = useMutation({
     mutationFn: (input: { threadId: string; conclusion: string }) =>
@@ -475,6 +545,7 @@ export function CommunicationsView({
 
   // Opening a thread is what marks it read; nothing else moves the marker.
   const currentUnread = current?.unreadCount ?? 0;
+  const currentHeadSequence = current?.thread.sequence ?? 0;
   const currentLastSequence = current?.messages.at(-1)?.sequence ?? 0;
   const currentLastRevision = current?.messages.at(-1)?.revision ?? 1;
   useEffect(() => {
@@ -563,15 +634,15 @@ export function CommunicationsView({
       currentIsPilotStandIn ||
       currentUnread === 0 ||
       !conversationIdentity?.currentPrincipalId ||
-      markRead.isPending
+      failedReadKey === `${current.thread.id}:${currentHeadSequence}`
     ) {
       return;
     }
     markRead.mutate({
       threadId: current.thread.id,
-      sequence: currentLastSequence,
+      sequence: currentHeadSequence,
     });
-  }, [current?.thread.id, currentUnread, currentLastSequence]);
+  }, [current?.thread.id, currentHeadSequence, currentUnread, failedReadKey]);
 
   const standInReplies = useMutation({
     mutationFn: (input: {

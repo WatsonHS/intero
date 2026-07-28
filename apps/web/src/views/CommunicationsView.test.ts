@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGroupChatThreadInput,
+  markCachedThreadRead,
   mergeCommunicationItems,
   resolveConversationIdentity,
   resolvePilotCommunicationPrincipal,
@@ -131,6 +132,27 @@ describe("manual group chat creation", () => {
       teamId: "019f9ba4-3108-7000-8000-000000000099",
       participantIds: [sessionPrincipal.id, standInId, peerId],
       standInIds: [standInId],
+    });
+  });
+});
+
+describe("conversation unread state", () => {
+  it("clears unread and mention badges immediately for the opened thread", () => {
+    const threadId = crypto.randomUUID();
+    const otherThreadId = crypto.randomUUID();
+    const item = {
+      thread: { id: threadId },
+      unreadCount: 4,
+      mentionCount: 2,
+    } as ThreadPayload;
+    const other = {
+      thread: { id: otherThreadId },
+      unreadCount: 3,
+      mentionCount: 1,
+    } as ThreadPayload;
+
+    expect(markCachedThreadRead({ items: [item, other] }, threadId)).toEqual({
+      items: [{ ...item, unreadCount: 0, mentionCount: 0 }, other],
     });
   });
 });
