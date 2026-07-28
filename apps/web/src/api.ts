@@ -681,6 +681,27 @@ export async function completeAttachmentUpload(
   );
 }
 
+export async function uploadAttachmentContent(input: {
+  uploadUrl: string;
+  contentType: string;
+  checksumSha256: string;
+  requiredHeaders: Record<string, string>;
+  body: Blob;
+}): Promise<void> {
+  const response = await fetch(input.uploadUrl, {
+    method: "PUT",
+    credentials: "include",
+    headers: {
+      "content-type": input.contentType,
+      "x-amz-meta-sha256": input.checksumSha256,
+      ...input.requiredHeaders,
+      ...developmentIdentityHeaders(),
+    },
+    body: input.body,
+  });
+  await ensureResponseOk(response);
+}
+
 export async function getAttachmentDownload(
   attachmentId: string,
   signal?: AbortSignal,

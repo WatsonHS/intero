@@ -1,7 +1,11 @@
 import type { PrincipalId } from "@intero/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createConversationThread, getActionInbox } from "./api.js";
+import {
+  createConversationThread,
+  getActionInbox,
+  uploadAttachmentContent,
+} from "./api.js";
 import {
   AUTHENTICATION_REQUIRED_EVENT,
   PILOT_IDENTITY_STORAGE_KEY,
@@ -52,6 +56,35 @@ afterEach(() => {
 });
 
 describe("authenticated API requests", () => {
+  it("sends session credentials and identity with attachment bytes", async () => {
+    const storage = new MemoryStorage();
+    storage.setItem(PILOT_IDENTITY_STORAGE_KEY, "principal");
+    installBrowser(storage);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await uploadAttachmentContent({
+      uploadUrl: "http://intero.test/v1/attachments/image/content",
+      contentType: "image/png",
+      checksumSha256: "a".repeat(64),
+      requiredHeaders: { "content-type": "image/png" },
+      body: new Blob(["image"], { type: "image/png" }),
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      credentials: "include",
+      headers: {
+        "content-type": "image/png",
+        "x-amz-meta-sha256": "a".repeat(64),
+        "x-intero-dev-principal-id": "principal",
+      },
+    });
+  });
+
   it("sends the effective development identity with profile requests", async () => {
     const identityId = "019f9a00-0000-7000-8000-000000000101" as PrincipalId;
     installBrowser(new MemoryStorage());

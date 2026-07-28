@@ -24,6 +24,8 @@ import type {
   ThreadMessage,
   ThreadMessageAttachment,
 } from "@intero/domain";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -40,6 +42,7 @@ import {
   getTeamPulse,
   getThreads,
   sendThreadMessage,
+  uploadAttachmentContent,
   updateConversationThread,
   type BootstrapPayload,
   type PrincipalSummary,
@@ -890,16 +893,13 @@ export function CommunicationsView({
           checksumSha256,
           encryptionMode: "server_envelope",
         });
-        const uploaded = await fetch(upload.uploadUrl, {
-          method: "PUT",
-          headers: {
-            "content-type": file.type,
-            "x-amz-meta-sha256": checksumSha256,
-            ...upload.requiredHeaders,
-          },
+        await uploadAttachmentContent({
+          uploadUrl: upload.uploadUrl,
+          contentType: file.type,
+          checksumSha256,
+          requiredHeaders: upload.requiredHeaders,
           body: file,
         });
-        if (!uploaded.ok) throw new Error("attachment_upload_failed");
         const completed = await completeAttachmentUpload(id);
         if (completed.state !== "available") {
           throw new Error("attachment_scan_failed");
@@ -1226,8 +1226,8 @@ export function CommunicationsView({
         </div>
         <div
           className={cn(
-            "mt-[7px] max-w-[560px] rounded-card p-[12px_15px] text-left",
-            isOwn ? "w-fit bg-accent-soft" : "bg-bubble",
+            "mt-[7px] w-fit max-w-[560px] rounded-card p-[12px_15px] text-left",
+            isOwn ? "bg-accent-soft" : "bg-bubble",
           )}
         >
           {message.serverReadable ? (
@@ -2313,14 +2313,16 @@ function escapeRegularExpression(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-async function sha256Hex(file: File): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    await file.arrayBuffer(),
+export async function sha256Hex(
+  file: Blob,
+  subtleCrypto: Pick<SubtleCrypto, "digest"> | null = globalThis.crypto
+    ?.subtle ?? null,
+): Promise<string> {
+  const bytes = await file.arrayBuffer();
+  if (!subtleCrypto) return bytesToHex(sha256(new Uint8Array(bytes)));
+  return bytesToHex(
+    new Uint8Array(await subtleCrypto.digest("SHA-256", bytes)),
   );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 export interface PersonalStandInMentionCandidate {
@@ -2481,7 +2483,7 @@ function MessageAttachments({
   return (
     <div
       className={cn(
-        "mt-2 grid gap-2",
+        "mt-2 grid w-[270px] max-w-full gap-2",
         attachments.length > 1 ? "grid-cols-2" : "grid-cols-1",
       )}
     >

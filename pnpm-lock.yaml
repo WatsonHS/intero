@@ -198,6 +198,9 @@ importers:
       "@intero/ui":
         specifier: workspace:*
         version: link:../../packages/ui
+      "@noble/hashes":
+        specifier: ^2.2.0
+        version: 2.2.0
       "@phosphor-icons/react":
         specifier: ^2.1.0
         version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

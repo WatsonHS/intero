@@ -7,6 +7,7 @@ import {
   mergeCommunicationItems,
   resolveConversationIdentity,
   resolvePilotCommunicationPrincipal,
+  sha256Hex,
 } from "./CommunicationsView.js";
 import type { ThreadPayload } from "../api.js";
 
@@ -18,6 +19,14 @@ const sessionPrincipal = {
   timezone: "Asia/Shanghai",
   capabilities: [],
 };
+
+describe("conversation image hashing", () => {
+  it("hashes images without Web Crypto on a LAN HTTP origin", async () => {
+    await expect(sha256Hex(new Blob(["hello"]), null)).resolves.toBe(
+      "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    );
+  });
+});
 
 describe("CommunicationsView Pilot principal discovery", () => {
   it("uses the authenticated current principal when dev identities are absent", () => {

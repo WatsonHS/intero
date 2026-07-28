@@ -49,8 +49,8 @@ services:
       MINIO_KMS_SECRET_KEY: intero-default:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       MINIO_KMS_AUTO_ENCRYPTION: "off"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${INTERO_MINIO_API_PORT:-29000}:9000"
+      - "${INTERO_MINIO_CONSOLE_PORT:-29001}:9001"
     volumes:
       - intero-minio:/data
     healthcheck:
