@@ -7,6 +7,14 @@ English · [简体中文](README.zh-CN.md)
 Intero is a working exploration of what collaboration software and software
 engineering should become in an AI-native era.
 
+### The name
+
+`Intero` comes from _interoception_: an organism's perception of its own
+internal state. It reflects the project's original idea—helping a team know what
+is happening within itself. As people and Agents work more independently,
+Intero explores how a team can remain aware of its work, changes, conflicts,
+decisions, and capabilities.
+
 ### What changed
 
 The previous generation of software engineering was shaped by scarce individual
