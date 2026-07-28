@@ -102,6 +102,7 @@ const authorization = spiceDb
   ? new SpiceDbPilotAuthorization(pilotStore, spiceDb)
   : new MembershipAuthorizationAdapter(pilotStore);
 const coordination = new ProjectInternalCoordinationTransport(pilotStore);
+const pollingRealtime = new PollingRealtimeAdapter();
 const metrics = new PrivacySafeMetrics();
 const model = new InstrumentedModelGateway(
   new VercelAiModelGateway(
@@ -115,7 +116,7 @@ const standInHandler = new PilotStandInJobHandler(
   authorization,
   model,
   coordination,
-  new PollingRealtimeAdapter(),
+  pollingRealtime,
 );
 const pilotJobRepository = new PostgresPilotJobRepository(
   new Pool({ connectionString }),
@@ -326,36 +327,34 @@ if (standInId) {
 }
 
 const centrifugoApiUrl = pilotAdapterConfig.centrifugoApiUrl;
-let realtimeOutboxRepository: PostgresOutboxRepository | undefined;
-let centrifugoRealtime: CentrifugoRealtime | undefined;
-if (centrifugoApiUrl) {
-  realtimeOutboxRepository = new PostgresOutboxRepository(
-    new Pool({ connectionString }),
-    organizationId,
+const realtimeOutboxRepository = new PostgresOutboxRepository(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const centrifugoRealtime = centrifugoApiUrl
+  ? new CentrifugoRealtime(
+      centrifugoApiUrl,
+      pilotAdapterConfig.centrifugoApiKey,
+    )
+  : undefined;
+const realtimeOutbox = new OutboxDispatcher(
+  organizationId,
+  realtimeOutboxRepository,
+  centrifugoRealtime ?? pollingRealtime,
+);
+tasks.dispatch_outbox = async (_payload, helpers) => {
+  await realtimeOutbox.dispatch();
+  await helpers.addJob(
+    "dispatch_outbox",
+    {},
+    {
+      runAt: new Date(Date.now() + 1_000),
+      maxAttempts: 25,
+      jobKey: "intero-outbox-dispatch-loop",
+      jobKeyMode: "replace",
+    },
   );
-  centrifugoRealtime = new CentrifugoRealtime(
-    centrifugoApiUrl,
-    pilotAdapterConfig.centrifugoApiKey,
-  );
-  const realtimeOutbox = new OutboxDispatcher(
-    organizationId,
-    realtimeOutboxRepository,
-    centrifugoRealtime,
-  );
-  tasks.dispatch_outbox = async (_payload, helpers) => {
-    await realtimeOutbox.dispatch();
-    await helpers.addJob(
-      "dispatch_outbox",
-      {},
-      {
-        runAt: new Date(Date.now() + 1_000),
-        maxAttempts: 25,
-        jobKey: "intero-outbox-dispatch-loop",
-        jobKeyMode: "replace",
-      },
-    );
-  };
-}
+};
 
 await pilotJobRepository.heartbeat({
   workerId,
@@ -419,19 +418,15 @@ await Promise.all([
       jobKeyMode: "replace",
     },
   ),
-  ...(centrifugoApiUrl
-    ? [
-        workerUtils.addJob(
-          "dispatch_outbox",
-          {},
-          {
-            maxAttempts: 25,
-            jobKey: "intero-outbox-dispatch-loop",
-            jobKeyMode: "replace",
-          },
-        ),
-      ]
-    : []),
+  workerUtils.addJob(
+    "dispatch_outbox",
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-outbox-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
 ]);
 await pilotJobRepository.heartbeat({
   workerId,
@@ -538,7 +533,7 @@ try {
     metricsServer.close((error) => (error ? reject(error) : resolve())),
   );
   await publicRepository?.close();
-  await realtimeOutboxRepository?.close();
+  await realtimeOutboxRepository.close();
   await standInQuestionRepository.close();
   await conversationPool.end();
   await automationStore.close();
