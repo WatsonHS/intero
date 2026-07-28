@@ -99,12 +99,8 @@
           "name": "action_envelopes_organization_id_organizations_id_fk",
           "tableFrom": "action_envelopes",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -112,12 +108,8 @@
           "name": "action_envelopes_actor_id_principals_id_fk",
           "tableFrom": "action_envelopes",
           "tableTo": "principals",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -125,12 +117,8 @@
           "name": "action_envelopes_thread_id_threads_id_fk",
           "tableFrom": "action_envelopes",
           "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -138,12 +126,8 @@
           "name": "action_envelopes_workstream_id_workstreams_id_fk",
           "tableFrom": "action_envelopes",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -151,12 +135,8 @@
           "name": "action_envelopes_authority_grant_id_capability_grants_id_fk",
           "tableFrom": "action_envelopes",
           "tableTo": "capability_grants",
-          "columnsFrom": [
-            "authority_grant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["authority_grant_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -296,12 +276,8 @@
           "name": "action_inbox_organization_id_organizations_id_fk",
           "tableFrom": "action_inbox",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -309,12 +285,8 @@
           "name": "action_inbox_principal_id_principals_id_fk",
           "tableFrom": "action_inbox",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -440,12 +412,8 @@
           "name": "activity_events_organization_id_organizations_id_fk",
           "tableFrom": "activity_events",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -453,12 +421,8 @@
           "name": "activity_events_actor_id_principals_id_fk",
           "tableFrom": "activity_events",
           "tableTo": "principals",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -610,12 +574,8 @@
           "name": "attachments_organization_id_organizations_id_fk",
           "tableFrom": "attachments",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -623,12 +583,8 @@
           "name": "attachments_thread_id_threads_id_fk",
           "tableFrom": "attachments",
           "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -636,12 +592,8 @@
           "name": "attachments_owner_id_principals_id_fk",
           "tableFrom": "attachments",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -651,9 +603,7 @@
         "attachments_object_key_unique": {
           "name": "attachments_object_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "object_key"
-          ]
+          "columns": ["object_key"]
         }
       },
       "policies": {},
@@ -713,12 +663,8 @@
           "name": "auth_principals_principal_id_principals_id_fk",
           "tableFrom": "auth_principals",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -728,9 +674,7 @@
         "auth_principals_principal_id_unique": {
           "name": "auth_principals_principal_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "principal_id"
-          ]
+          "columns": ["principal_id"]
         }
       },
       "policies": {},
@@ -863,12 +807,8 @@
           "name": "canonical_events_organization_id_organizations_id_fk",
           "tableFrom": "canonical_events",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -876,12 +816,8 @@
           "name": "canonical_events_workstream_id_workstreams_id_fk",
           "tableFrom": "canonical_events",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -981,12 +917,8 @@
           "name": "capability_grants_organization_id_organizations_id_fk",
           "tableFrom": "capability_grants",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -994,12 +926,8 @@
           "name": "capability_grants_principal_id_principals_id_fk",
           "tableFrom": "capability_grants",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1157,12 +1085,8 @@
           "name": "claims_organization_id_organizations_id_fk",
           "tableFrom": "claims",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1170,12 +1094,8 @@
           "name": "claims_workstream_id_workstreams_id_fk",
           "tableFrom": "claims",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1287,12 +1207,8 @@
           "name": "decisions_organization_id_organizations_id_fk",
           "tableFrom": "decisions",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1300,12 +1216,8 @@
           "name": "decisions_source_spec_revision_id_spec_revisions_id_fk",
           "tableFrom": "decisions",
           "tableTo": "spec_revisions",
-          "columnsFrom": [
-            "source_spec_revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_spec_revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1313,12 +1225,8 @@
           "name": "decisions_source_thread_id_threads_id_fk",
           "tableFrom": "decisions",
           "tableTo": "threads",
-          "columnsFrom": [
-            "source_thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1371,12 +1279,8 @@
           "name": "idempotency_keys_organization_id_organizations_id_fk",
           "tableFrom": "idempotency_keys",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1446,12 +1350,8 @@
           "name": "kanban_card_workstreams_organization_id_organizations_id_fk",
           "tableFrom": "kanban_card_workstreams",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1459,12 +1359,8 @@
           "name": "kanban_card_workstreams_card_id_kanban_cards_id_fk",
           "tableFrom": "kanban_card_workstreams",
           "tableTo": "kanban_cards",
-          "columnsFrom": [
-            "card_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["card_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1472,12 +1368,8 @@
           "name": "kanban_card_workstreams_workstream_id_workstreams_id_fk",
           "tableFrom": "kanban_card_workstreams",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1485,10 +1377,7 @@
       "compositePrimaryKeys": {
         "kanban_card_workstreams_card_id_workstream_id_pk": {
           "name": "kanban_card_workstreams_card_id_workstream_id_pk",
-          "columns": [
-            "card_id",
-            "workstream_id"
-          ]
+          "columns": ["card_id", "workstream_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1620,12 +1509,8 @@
           "name": "kanban_cards_organization_id_organizations_id_fk",
           "tableFrom": "kanban_cards",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1633,12 +1518,8 @@
           "name": "kanban_cards_project_id_projects_id_fk",
           "tableFrom": "kanban_cards",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1646,12 +1527,8 @@
           "name": "kanban_cards_owner_id_principals_id_fk",
           "tableFrom": "kanban_cards",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1705,12 +1582,8 @@
           "name": "memberships_organization_id_organizations_id_fk",
           "tableFrom": "memberships",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1718,12 +1591,8 @@
           "name": "memberships_principal_id_principals_id_fk",
           "tableFrom": "memberships",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1731,10 +1600,7 @@
       "compositePrimaryKeys": {
         "memberships_organization_id_principal_id_pk": {
           "name": "memberships_organization_id_principal_id_pk",
-          "columns": [
-            "organization_id",
-            "principal_id"
-          ]
+          "columns": ["organization_id", "principal_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1885,12 +1751,8 @@
           "name": "messages_organization_id_organizations_id_fk",
           "tableFrom": "messages",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1898,12 +1760,8 @@
           "name": "messages_thread_id_threads_id_fk",
           "tableFrom": "messages",
           "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1911,12 +1769,8 @@
           "name": "messages_sender_id_principals_id_fk",
           "tableFrom": "messages",
           "tableTo": "principals",
-          "columnsFrom": [
-            "sender_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["sender_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2086,12 +1940,8 @@
           "name": "object_store_objects_organization_id_organizations_id_fk",
           "tableFrom": "object_store_objects",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2101,9 +1951,7 @@
         "object_store_objects_object_key_unique": {
           "name": "object_store_objects_object_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "object_key"
-          ]
+          "columns": ["object_key"]
         }
       },
       "policies": {},
@@ -2227,12 +2075,8 @@
           "name": "outbox_organization_id_organizations_id_fk",
           "tableFrom": "outbox",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2353,12 +2197,8 @@
           "name": "pilot_agent_bindings_organization_id_organizations_id_fk",
           "tableFrom": "pilot_agent_bindings",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2366,12 +2206,8 @@
           "name": "pilot_agent_bindings_project_id_projects_id_fk",
           "tableFrom": "pilot_agent_bindings",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2379,12 +2215,8 @@
           "name": "pilot_agent_bindings_owner_id_principals_id_fk",
           "tableFrom": "pilot_agent_bindings",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2511,12 +2343,8 @@
           "name": "pilot_agent_tickets_organization_id_organizations_id_fk",
           "tableFrom": "pilot_agent_tickets",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2524,12 +2352,8 @@
           "name": "pilot_agent_tickets_project_id_projects_id_fk",
           "tableFrom": "pilot_agent_tickets",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2537,12 +2361,8 @@
           "name": "pilot_agent_tickets_owner_id_principals_id_fk",
           "tableFrom": "pilot_agent_tickets",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2611,12 +2431,8 @@
           "name": "pilot_checkpoint_idempotency_organization_id_organizations_id_fk",
           "tableFrom": "pilot_checkpoint_idempotency",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2624,12 +2440,8 @@
           "name": "pilot_checkpoint_idempotency_work_state_id_pilot_work_states_id_fk",
           "tableFrom": "pilot_checkpoint_idempotency",
           "tableTo": "pilot_work_states",
-          "columnsFrom": [
-            "work_state_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["work_state_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2637,10 +2449,7 @@
       "compositePrimaryKeys": {
         "pilot_checkpoint_idempotency_organization_id_client_event_id_pk": {
           "name": "pilot_checkpoint_idempotency_organization_id_client_event_id_pk",
-          "columns": [
-            "organization_id",
-            "client_event_id"
-          ]
+          "columns": ["organization_id", "client_event_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2707,12 +2516,8 @@
           "name": "pilot_coordination_participants_organization_id_organizations_id_fk",
           "tableFrom": "pilot_coordination_participants",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2720,12 +2525,8 @@
           "name": "pilot_coordination_participants_thread_id_pilot_coordination_threads_id_fk",
           "tableFrom": "pilot_coordination_participants",
           "tableTo": "pilot_coordination_threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2733,12 +2534,8 @@
           "name": "pilot_coordination_participants_principal_id_principals_id_fk",
           "tableFrom": "pilot_coordination_participants",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2746,10 +2543,7 @@
       "compositePrimaryKeys": {
         "pilot_coordination_participants_thread_id_principal_id_pk": {
           "name": "pilot_coordination_participants_thread_id_principal_id_pk",
-          "columns": [
-            "thread_id",
-            "principal_id"
-          ]
+          "columns": ["thread_id", "principal_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2861,12 +2655,8 @@
           "name": "pilot_coordination_threads_organization_id_organizations_id_fk",
           "tableFrom": "pilot_coordination_threads",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2874,12 +2664,8 @@
           "name": "pilot_coordination_threads_project_id_projects_id_fk",
           "tableFrom": "pilot_coordination_threads",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2887,12 +2673,8 @@
           "name": "pilot_coordination_threads_work_state_id_pilot_work_states_id_fk",
           "tableFrom": "pilot_coordination_threads",
           "tableTo": "pilot_work_states",
-          "columnsFrom": [
-            "work_state_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["work_state_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2900,12 +2682,8 @@
           "name": "pilot_coordination_threads_source_binding_id_pilot_agent_bindings_id_fk",
           "tableFrom": "pilot_coordination_threads",
           "tableTo": "pilot_agent_bindings",
-          "columnsFrom": [
-            "source_binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_binding_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2987,12 +2765,8 @@
           "name": "pilot_deployment_settings_organization_id_organizations_id_fk",
           "tableFrom": "pilot_deployment_settings",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3000,12 +2774,8 @@
           "name": "pilot_deployment_settings_administrator_id_principals_id_fk",
           "tableFrom": "pilot_deployment_settings",
           "tableTo": "principals",
-          "columnsFrom": [
-            "administrator_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["administrator_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3112,12 +2882,8 @@
           "name": "pilot_dm_messages_organization_id_organizations_id_fk",
           "tableFrom": "pilot_dm_messages",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3125,12 +2891,8 @@
           "name": "pilot_dm_messages_thread_id_pilot_dm_threads_id_fk",
           "tableFrom": "pilot_dm_messages",
           "tableTo": "pilot_dm_threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3138,12 +2900,8 @@
           "name": "pilot_dm_messages_sender_id_principals_id_fk",
           "tableFrom": "pilot_dm_messages",
           "tableTo": "principals",
-          "columnsFrom": [
-            "sender_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["sender_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3280,12 +3038,8 @@
           "name": "pilot_dm_threads_organization_id_organizations_id_fk",
           "tableFrom": "pilot_dm_threads",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3293,12 +3047,8 @@
           "name": "pilot_dm_threads_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_dm_threads",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3306,12 +3056,8 @@
           "name": "pilot_dm_threads_participant_a_id_principals_id_fk",
           "tableFrom": "pilot_dm_threads",
           "tableTo": "principals",
-          "columnsFrom": [
-            "participant_a_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["participant_a_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3319,12 +3065,8 @@
           "name": "pilot_dm_threads_participant_b_id_principals_id_fk",
           "tableFrom": "pilot_dm_threads",
           "tableTo": "principals",
-          "columnsFrom": [
-            "participant_b_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["participant_b_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3445,12 +3187,8 @@
           "name": "pilot_private_claims_organization_id_organizations_id_fk",
           "tableFrom": "pilot_private_claims",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3458,12 +3196,8 @@
           "name": "pilot_private_claims_work_state_id_pilot_work_states_id_fk",
           "tableFrom": "pilot_private_claims",
           "tableTo": "pilot_work_states",
-          "columnsFrom": [
-            "work_state_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["work_state_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3557,12 +3291,8 @@
           "name": "pilot_project_settings_project_id_projects_id_fk",
           "tableFrom": "pilot_project_settings",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3570,12 +3300,8 @@
           "name": "pilot_project_settings_organization_id_organizations_id_fk",
           "tableFrom": "pilot_project_settings",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3583,12 +3309,8 @@
           "name": "pilot_project_settings_owner_id_principals_id_fk",
           "tableFrom": "pilot_project_settings",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3596,12 +3318,8 @@
           "name": "pilot_project_settings_primary_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_project_settings",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "primary_team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["primary_team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3677,12 +3395,8 @@
           "name": "pilot_project_teams_organization_id_organizations_id_fk",
           "tableFrom": "pilot_project_teams",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3690,12 +3404,8 @@
           "name": "pilot_project_teams_project_id_projects_id_fk",
           "tableFrom": "pilot_project_teams",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3703,12 +3413,8 @@
           "name": "pilot_project_teams_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_project_teams",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3716,10 +3422,7 @@
       "compositePrimaryKeys": {
         "pilot_project_teams_project_id_team_id_pk": {
           "name": "pilot_project_teams_project_id_team_id_pk",
-          "columns": [
-            "project_id",
-            "team_id"
-          ]
+          "columns": ["project_id", "team_id"]
         }
       },
       "uniqueConstraints": {},
@@ -3776,12 +3479,8 @@
           "name": "pilot_provider_configs_organization_id_organizations_id_fk",
           "tableFrom": "pilot_provider_configs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3908,12 +3607,8 @@
           "name": "pilot_pulse_entries_organization_id_organizations_id_fk",
           "tableFrom": "pilot_pulse_entries",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3921,12 +3616,8 @@
           "name": "pilot_pulse_entries_project_id_projects_id_fk",
           "tableFrom": "pilot_pulse_entries",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3934,12 +3625,8 @@
           "name": "pilot_pulse_entries_work_state_id_pilot_work_states_id_fk",
           "tableFrom": "pilot_pulse_entries",
           "tableTo": "pilot_work_states",
-          "columnsFrom": [
-            "work_state_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["work_state_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3947,12 +3634,8 @@
           "name": "pilot_pulse_entries_owner_id_principals_id_fk",
           "tableFrom": "pilot_pulse_entries",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4038,12 +3721,8 @@
           "name": "pilot_stand_in_exchanges_organization_id_organizations_id_fk",
           "tableFrom": "pilot_stand_in_exchanges",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4051,12 +3730,8 @@
           "name": "pilot_stand_in_exchanges_project_id_projects_id_fk",
           "tableFrom": "pilot_stand_in_exchanges",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4064,12 +3739,8 @@
           "name": "pilot_stand_in_exchanges_principal_id_principals_id_fk",
           "tableFrom": "pilot_stand_in_exchanges",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4286,12 +3957,8 @@
           "name": "pilot_stand_in_jobs_organization_id_organizations_id_fk",
           "tableFrom": "pilot_stand_in_jobs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4299,12 +3966,8 @@
           "name": "pilot_stand_in_jobs_project_id_projects_id_fk",
           "tableFrom": "pilot_stand_in_jobs",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4312,12 +3975,8 @@
           "name": "pilot_stand_in_jobs_work_state_id_pilot_work_states_id_fk",
           "tableFrom": "pilot_stand_in_jobs",
           "tableTo": "pilot_work_states",
-          "columnsFrom": [
-            "work_state_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["work_state_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4325,12 +3984,8 @@
           "name": "pilot_stand_in_jobs_binding_id_pilot_agent_bindings_id_fk",
           "tableFrom": "pilot_stand_in_jobs",
           "tableTo": "pilot_agent_bindings",
-          "columnsFrom": [
-            "binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["binding_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4378,12 +4033,8 @@
           "name": "pilot_state_organization_id_organizations_id_fk",
           "tableFrom": "pilot_state",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4555,12 +4206,8 @@
           "name": "pilot_team_invitations_organization_id_organizations_id_fk",
           "tableFrom": "pilot_team_invitations",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4568,12 +4215,8 @@
           "name": "pilot_team_invitations_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_team_invitations",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4581,12 +4224,8 @@
           "name": "pilot_team_invitations_created_by_principals_id_fk",
           "tableFrom": "pilot_team_invitations",
           "tableTo": "principals",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4594,12 +4233,8 @@
           "name": "pilot_team_invitations_accepted_by_principals_id_fk",
           "tableFrom": "pilot_team_invitations",
           "tableTo": "principals",
-          "columnsFrom": [
-            "accepted_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["accepted_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4727,12 +4362,8 @@
           "name": "pilot_team_join_links_organization_id_organizations_id_fk",
           "tableFrom": "pilot_team_join_links",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4740,12 +4371,8 @@
           "name": "pilot_team_join_links_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_team_join_links",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4835,12 +4462,8 @@
           "name": "pilot_team_memberships_organization_id_organizations_id_fk",
           "tableFrom": "pilot_team_memberships",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4848,12 +4471,8 @@
           "name": "pilot_team_memberships_team_id_pilot_teams_id_fk",
           "tableFrom": "pilot_team_memberships",
           "tableTo": "pilot_teams",
-          "columnsFrom": [
-            "team_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["team_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -4861,12 +4480,8 @@
           "name": "pilot_team_memberships_principal_id_principals_id_fk",
           "tableFrom": "pilot_team_memberships",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4874,10 +4489,7 @@
       "compositePrimaryKeys": {
         "pilot_team_memberships_team_id_principal_id_pk": {
           "name": "pilot_team_memberships_team_id_principal_id_pk",
-          "columns": [
-            "team_id",
-            "principal_id"
-          ]
+          "columns": ["team_id", "principal_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4956,12 +4568,8 @@
           "name": "pilot_teams_organization_id_organizations_id_fk",
           "tableFrom": "pilot_teams",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5113,12 +4721,8 @@
           "name": "pilot_work_states_organization_id_organizations_id_fk",
           "tableFrom": "pilot_work_states",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5126,12 +4730,8 @@
           "name": "pilot_work_states_project_id_projects_id_fk",
           "tableFrom": "pilot_work_states",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5139,12 +4739,8 @@
           "name": "pilot_work_states_owner_id_principals_id_fk",
           "tableFrom": "pilot_work_states",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5152,12 +4748,8 @@
           "name": "pilot_work_states_binding_id_pilot_agent_bindings_id_fk",
           "tableFrom": "pilot_work_states",
           "tableTo": "pilot_agent_bindings",
-          "columnsFrom": [
-            "binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["binding_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5258,12 +4850,8 @@
           "name": "pilot_worker_heartbeats_organization_id_organizations_id_fk",
           "tableFrom": "pilot_worker_heartbeats",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5271,10 +4859,7 @@
       "compositePrimaryKeys": {
         "pilot_worker_heartbeats_organization_id_worker_id_pk": {
           "name": "pilot_worker_heartbeats_organization_id_worker_id_pk",
-          "columns": [
-            "organization_id",
-            "worker_id"
-          ]
+          "columns": ["organization_id", "worker_id"]
         }
       },
       "uniqueConstraints": {},
@@ -5393,12 +4978,8 @@
           "name": "projects_organization_id_organizations_id_fk",
           "tableFrom": "projects",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5486,12 +5067,8 @@
           "name": "public_work_projections_workstream_id_workstreams_id_fk",
           "tableFrom": "public_work_projections",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5499,12 +5076,8 @@
           "name": "public_work_projections_organization_id_organizations_id_fk",
           "tableFrom": "public_work_projections",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5610,12 +5183,8 @@
           "name": "public_stand_in_runs_organization_id_organizations_id_fk",
           "tableFrom": "public_stand_in_runs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5623,12 +5192,8 @@
           "name": "public_stand_in_runs_thread_id_threads_id_fk",
           "tableFrom": "public_stand_in_runs",
           "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5636,12 +5201,8 @@
           "name": "public_stand_in_runs_workstream_id_workstreams_id_fk",
           "tableFrom": "public_stand_in_runs",
           "tableTo": "workstreams",
-          "columnsFrom": [
-            "workstream_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workstream_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5753,12 +5314,8 @@
           "name": "spec_reviews_organization_id_organizations_id_fk",
           "tableFrom": "spec_reviews",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5766,12 +5323,8 @@
           "name": "spec_reviews_spec_id_specs_id_fk",
           "tableFrom": "spec_reviews",
           "tableTo": "specs",
-          "columnsFrom": [
-            "spec_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["spec_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5779,12 +5332,8 @@
           "name": "spec_reviews_revision_id_spec_revisions_id_fk",
           "tableFrom": "spec_reviews",
           "tableTo": "spec_revisions",
-          "columnsFrom": [
-            "revision_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["revision_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5792,12 +5341,8 @@
           "name": "spec_reviews_reviewer_id_principals_id_fk",
           "tableFrom": "spec_reviews",
           "tableTo": "principals",
-          "columnsFrom": [
-            "reviewer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reviewer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5909,12 +5454,8 @@
           "name": "spec_revisions_organization_id_organizations_id_fk",
           "tableFrom": "spec_revisions",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5922,12 +5463,8 @@
           "name": "spec_revisions_spec_id_specs_id_fk",
           "tableFrom": "spec_revisions",
           "tableTo": "specs",
-          "columnsFrom": [
-            "spec_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["spec_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5935,12 +5472,8 @@
           "name": "spec_revisions_created_by_principals_id_fk",
           "tableFrom": "spec_revisions",
           "tableTo": "principals",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6047,12 +5580,8 @@
           "name": "specs_organization_id_organizations_id_fk",
           "tableFrom": "specs",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6060,12 +5589,8 @@
           "name": "specs_project_id_projects_id_fk",
           "tableFrom": "specs",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6073,12 +5598,8 @@
           "name": "specs_review_thread_id_threads_id_fk",
           "tableFrom": "specs",
           "tableTo": "threads",
-          "columnsFrom": [
-            "review_thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["review_thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6139,12 +5660,8 @@
           "name": "thread_participants_organization_id_organizations_id_fk",
           "tableFrom": "thread_participants",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6152,12 +5669,8 @@
           "name": "thread_participants_thread_id_threads_id_fk",
           "tableFrom": "thread_participants",
           "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["thread_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6165,12 +5678,8 @@
           "name": "thread_participants_principal_id_principals_id_fk",
           "tableFrom": "thread_participants",
           "tableTo": "principals",
-          "columnsFrom": [
-            "principal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["principal_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6178,10 +5687,7 @@
       "compositePrimaryKeys": {
         "thread_participants_thread_id_principal_id_pk": {
           "name": "thread_participants_thread_id_principal_id_pk",
-          "columns": [
-            "thread_id",
-            "principal_id"
-          ]
+          "columns": ["thread_id", "principal_id"]
         }
       },
       "uniqueConstraints": {},
@@ -6292,12 +5798,8 @@
           "name": "threads_organization_id_organizations_id_fk",
           "tableFrom": "threads",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6305,12 +5807,8 @@
           "name": "threads_project_id_projects_id_fk",
           "tableFrom": "threads",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6444,12 +5942,8 @@
           "name": "workstreams_organization_id_organizations_id_fk",
           "tableFrom": "workstreams",
           "tableTo": "organizations",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6457,12 +5951,8 @@
           "name": "workstreams_project_id_projects_id_fk",
           "tableFrom": "workstreams",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -6470,12 +5960,8 @@
           "name": "workstreams_owner_id_principals_id_fk",
           "tableFrom": "workstreams",
           "tableTo": "principals",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }

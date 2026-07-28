@@ -3,14 +3,12 @@ import { fileURLToPath } from "node:url";
 
 import {
   BootstrapResponse,
-  CoordinateRequest,
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
   CreateDecisionRequest,
   CreateKanbanCardRequest,
   CreateSpecRequest,
   CreateWorkstreamRequest,
-  IngestEventRequest,
   KanbanBoardResponse,
   KanbanCardResponse,
   SpecListResponse,
@@ -25,14 +23,12 @@ import { z } from "zod";
 
 const schemas = {
   BootstrapResponse,
-  CoordinateRequest,
   CreateCapabilityGrantRequest,
   CreateClaimRequest,
   CreateDecisionRequest,
   CreateKanbanCardRequest,
   CreateSpecRequest,
   CreateWorkstreamRequest,
-  IngestEventRequest,
   KanbanBoardResponse,
   KanbanCardResponse,
   SpecListResponse,
@@ -46,30 +42,19 @@ const document = {
   openapi: "3.0.3",
   info: { title: "Intero API", version: "0.1.0" },
   servers: [{ url: "http://localhost:4310" }],
+  security: [{ sessionCookie: [] }],
   paths: {
     "/health": {
       get: {
         operationId: "health",
+        security: [],
         responses: { "200": { description: "Healthy" } },
-      },
-    },
-    "/v1/events": {
-      post: {
-        operationId: "ingestCanonicalWorkEvent",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/IngestEventRequest" },
-            },
-          },
-        },
-        responses: { "202": { description: "Accepted" } },
       },
     },
     "/v1/bootstrap": {
       get: {
         operationId: "getBootstrap",
+        security: [],
         responses: {
           "200": {
             description: "Current organization and principal",
@@ -166,20 +151,6 @@ const document = {
         },
       },
     },
-    "/v1/coordination": {
-      post: {
-        operationId: "requestCoordination",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/CoordinateRequest" },
-            },
-          },
-        },
-        responses: { "200": { description: "Structured coordination result" } },
-      },
-    },
     "/v1/threads": {
       get: {
         operationId: "listThreads",
@@ -250,6 +221,13 @@ const document = {
     },
   },
   components: {
+    securitySchemes: {
+      sessionCookie: {
+        type: "apiKey",
+        in: "cookie",
+        name: "better-auth.session_token",
+      },
+    },
     schemas: Object.fromEntries(
       Object.entries(schemas).map(([name, schema]) => [
         name,

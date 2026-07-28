@@ -67,6 +67,7 @@ export interface ApiServiceConfig {
   objectStorage: ObjectStorageConfig;
   metricsEnabled: boolean;
   spiceDbInsecure: boolean;
+  spiceDbCaPath?: string;
   allowDevelopmentIdentity: boolean;
   realtime: {
     publicUrl: string;
@@ -88,6 +89,7 @@ export interface WorkerServiceConfig {
   metricsHost: string;
   metricsPort: number;
   spiceDbInsecure: boolean;
+  spiceDbCaPath?: string;
 }
 
 export interface MigratorServiceConfig {
@@ -97,6 +99,7 @@ export interface MigratorServiceConfig {
     endpoint: string;
     token: string;
     insecure: boolean;
+    caPath?: string;
   };
 }
 
@@ -144,6 +147,15 @@ export function loadApiServiceConfig(
   const publicUrl = normalizePublicUrl(
     environment.INTERO_PUBLIC_URL ?? `http://localhost:${runtime.port}`,
   );
+  const spiceDbInsecure = environment.INTERO_SPICEDB_INSECURE === "true";
+  if (runtimeMode === "product" && new URL(publicUrl).protocol !== "https:") {
+    throw new Error(
+      "Product runtime requires an HTTPS INTERO_PUBLIC_URL for secure sessions, passkeys, and realtime connections.",
+    );
+  }
+  if (runtimeMode === "product" && spiceDbInsecure) {
+    throw new Error("Product runtime cannot enable INTERO_SPICEDB_INSECURE.");
+  }
   const publicUrlHost = new URL(publicUrl).hostname;
   const configuredTrustedOrigins =
     environment.INTERO_AUTH_TRUSTED_ORIGINS?.split(",").map((origin) =>
@@ -214,7 +226,10 @@ export function loadApiServiceConfig(
     ),
     objectStorage: loadObjectStorageConfig(environment),
     metricsEnabled: environment.INTERO_METRICS_ENABLED !== "false",
-    spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
+    spiceDbInsecure,
+    ...(environment.INTERO_SPICEDB_CA_PATH
+      ? { spiceDbCaPath: environment.INTERO_SPICEDB_CA_PATH }
+      : {}),
     allowDevelopmentIdentity:
       runtimeMode === "development" && developmentIdentityRequested,
     realtime: {
@@ -284,6 +299,10 @@ export function loadWorkerServiceConfig(
     environment.INTERO_RUNTIME_MODE ??
       (environment.NODE_ENV === "production" ? "product" : "development"),
   );
+  const spiceDbInsecure = environment.INTERO_SPICEDB_INSECURE === "true";
+  if (runtimeMode === "product" && spiceDbInsecure) {
+    throw new Error("Product runtime cannot enable INTERO_SPICEDB_INSECURE.");
+  }
   const pilot = loadPilotAdapterConfig(
     withDevelopmentCentrifugoDefaults(environment, runtimeMode),
   );
@@ -325,7 +344,10 @@ export function loadWorkerServiceConfig(
       .max(65_535)
       .default(9464)
       .parse(environment.INTERO_WORKER_METRICS_PORT),
-    spiceDbInsecure: environment.INTERO_SPICEDB_INSECURE === "true",
+    spiceDbInsecure,
+    ...(environment.INTERO_SPICEDB_CA_PATH
+      ? { spiceDbCaPath: environment.INTERO_SPICEDB_CA_PATH }
+      : {}),
   };
 }
 
@@ -367,6 +389,9 @@ export function loadMigratorServiceConfig(
             endpoint,
             token,
             insecure: environment.INTERO_SPICEDB_INSECURE === "true",
+            ...(environment.INTERO_SPICEDB_CA_PATH
+              ? { caPath: environment.INTERO_SPICEDB_CA_PATH }
+              : {}),
           },
         }
       : {}),
@@ -382,5 +407,8 @@ export function loadSpiceDbMigratorConfig(
     endpoint,
     token,
     insecure: environment.INTERO_SPICEDB_INSECURE === "true",
+    ...(environment.INTERO_SPICEDB_CA_PATH
+      ? { caPath: environment.INTERO_SPICEDB_CA_PATH }
+      : {}),
   };
 }

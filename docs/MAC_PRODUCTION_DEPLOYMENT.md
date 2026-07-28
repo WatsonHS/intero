@@ -35,7 +35,9 @@ image, so an application rollback never replays an older authorization schema.
    after moving it.
 3. Keep the macOS user logged in after a reboot. OrbStack and a user LaunchAgent
    cannot start before that user's login.
-4. Ensure ports `4311` and `15432` are not held by the development stack at
+4. Configure an HTTPS hostname whose certificate is trusted by every pilot
+   device. Product mode refuses a plaintext LAN-IP origin.
+5. Ensure ports `443` and `15432` are not held by the development stack at
    cutover time.
 
 ## Prepare the environment
@@ -61,14 +63,24 @@ openssl rand -base64 32
 
 Fill every placeholder. Important migration rules:
 
+- set `INTERO_PUBLIC_URL` to the final HTTPS origin before users register
+  passkeys;
 - keep `INTERO_POSTGRES_VOLUME=intero-codex_intero-postgres` to reuse the
   current Intero PostgreSQL data on this Mac;
 - set `INTERO_POSTGRES_BOOTSTRAP_PASSWORD` to the current `intero` database
   role password; provisioning rotates it to `INTERO_POSTGRES_ADMIN_PASSWORD`;
 - preserve the currently deployed `INTERO_PROVIDER_ENCRYPTION_KEY`, otherwise
   stored model-provider credentials cannot be decrypted;
-- keep the current public origin
-  `http://172.21.1.123:4311` until the domain cutover.
+- generate the private CA and server certificate used on the internal
+  SpiceDB connection:
+
+```bash
+pnpm production:generate-spicedb-tls
+```
+
+The generator refuses to overwrite existing material and writes it under
+`.intero-production/`. Back up the CA key securely; only the CA certificate and
+server keypair are mounted into containers.
 
 Validate interpolation without starting anything:
 
@@ -98,7 +110,8 @@ The deployment:
 4. applies and verifies Intero, Graphile Worker, and authorization schemas,
    then records the successful schema image independently;
 5. starts worker before API/gateway;
-6. requires the canonical `/ready` endpoint to succeed.
+6. waits for the API's internal `/ready` health check through Compose, then
+   requires the public `/health` endpoint to succeed.
 
 After the first successful deployment, install automatic recovery and backups:
 
@@ -111,7 +124,7 @@ Inspect the running stack:
 ```bash
 pnpm production:compose ps
 pnpm production:compose logs --tail=200 api worker gateway
-curl --fail http://172.21.1.123:4311/ready
+curl --fail https://intero.example.com/health
 ```
 
 ## Routine deployment and rollback
@@ -156,9 +169,9 @@ The script verifies both custom-format archives before publishing the backup
 directory. It does not delete old backups; storage retention remains an
 operator decision.
 
-## Moving to a domain
+## Changing the public domain
 
-When an internal DNS name and certificate path are ready:
+When the public domain changes:
 
 1. change `INTERO_PUBLIC_URL`, Caddy ports, and optional passkey RP ID;
 2. ensure ports 80/443 do not conflict with the existing Zenova Caddy on this

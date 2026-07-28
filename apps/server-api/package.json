@@ -29,7 +29,7 @@
     "@intero/config": "workspace:*",
     "@intero/domain": "workspace:*",
     "@intero/stand-in-core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ai": "^7.0.37",
     "better-auth": "^1.3.0",
     "drizzle-orm": "^0.45.2",

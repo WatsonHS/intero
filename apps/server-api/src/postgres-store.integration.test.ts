@@ -28,6 +28,7 @@ databaseSuite("PostgreSQL platform store", () => {
   const projectId = uuidv7() as Workstream["projectId"];
   const workstreamId = uuidv7() as Workstream["id"];
   const workspaceId = uuidv7() as Workstream["workspaceId"];
+  const ownerAuth = { "x-intero-dev-principal-id": ownerId };
   const admin = new Client({ connectionString: databaseUrl });
   let store: PostgresPlatformStore;
   let app: Awaited<ReturnType<typeof buildTestApp>>;
@@ -118,6 +119,7 @@ databaseSuite("PostgreSQL platform store", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/workstreams",
+      headers: ownerAuth,
       payload: {
         id: workstreamId,
         workspaceId,
@@ -157,6 +159,7 @@ databaseSuite("PostgreSQL platform store", () => {
         await app.inject({
           method: "POST",
           url: "/v1/events",
+          headers: ownerAuth,
           payload: { event },
         })
       ).json(),
@@ -166,13 +169,18 @@ databaseSuite("PostgreSQL platform store", () => {
         await app.inject({
           method: "POST",
           url: "/v1/events",
+          headers: ownerAuth,
           payload: { event },
         })
       ).json(),
     ).toMatchObject({ accepted: true, duplicate: true });
 
     const pulse = (
-      await app.inject({ method: "GET", url: "/v1/team-pulse" })
+      await app.inject({
+        method: "GET",
+        url: "/v1/team-pulse",
+        headers: ownerAuth,
+      })
     ).json();
     expect(pulse.projections[0]).toMatchObject({
       id: workstreamId,
@@ -180,7 +188,11 @@ databaseSuite("PostgreSQL platform store", () => {
       blockers: ["Waiting for schema review."],
     });
     const activity = (
-      await app.inject({ method: "GET", url: "/v1/activity" })
+      await app.inject({
+        method: "GET",
+        url: "/v1/activity",
+        headers: ownerAuth,
+      })
     ).json();
     expect(
       activity.items.map((item: { eventType: string }) => item.eventType),
@@ -226,6 +238,7 @@ databaseSuite("PostgreSQL platform store", () => {
     await app.inject({
       method: "POST",
       url: "/v1/capability-grants",
+      headers: ownerAuth,
       payload: grant,
     });
     const envelope: ActionEnvelope = {
@@ -247,6 +260,7 @@ databaseSuite("PostgreSQL platform store", () => {
     const result = await app.inject({
       method: "POST",
       url: "/v1/coordination",
+      headers: ownerAuth,
       payload: { envelope },
     });
     expect(result.statusCode, result.body).toBe(200);
@@ -286,6 +300,7 @@ databaseSuite("PostgreSQL platform store", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/kanban/cards",
+      headers: ownerAuth,
       payload: {
         id: cardId,
         projectId,
@@ -301,6 +316,7 @@ databaseSuite("PostgreSQL platform store", () => {
     const linked = await app.inject({
       method: "PATCH",
       url: `/v1/kanban/cards/${cardId}`,
+      headers: ownerAuth,
       payload: {
         column: "in_progress",
         relatedWorkstreamIds: [workstreamId],

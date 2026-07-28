@@ -7,6 +7,12 @@
   "engines": {
     "node": ">=24"
   },
+  "pnpm": {
+    "overrides": {
+      "@esbuild-kit/core-utils>esbuild": "^0.25.12",
+      "@modelcontextprotocol/sdk>@hono/node-server": "^2.0.12"
+    }
+  },
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev --filter=@intero/web --filter=@intero/server-api --filter=@intero/server-worker",
@@ -32,6 +38,7 @@
     "backup:postgres": "scripts/ops/backup-postgres.sh",
     "restore:postgres": "scripts/ops/restore-postgres.sh",
     "production:compose": "scripts/ops/production-compose.sh",
+    "production:generate-spicedb-tls": "scripts/ops/generate-spicedb-tls.sh",
     "production:deploy": "scripts/ops/deploy-production.sh",
     "production:rollback": "scripts/ops/rollback-production.sh",
     "production:backup": "scripts/ops/backup-production.sh",

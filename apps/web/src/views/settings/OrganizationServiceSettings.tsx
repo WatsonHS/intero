@@ -105,9 +105,7 @@ export function OrganizationServiceSettings({
               </button>
             ) : (
               <StatusPill tone="faint" size="sm">
-                {deploymentEndpointManaged
-                  ? "由部署配置管理"
-                  : "继承组织配置"}
+                {deploymentEndpointManaged ? "由部署配置管理" : "继承组织配置"}
               </StatusPill>
             )}
           </div>

@@ -15,22 +15,6 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/v1/events": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post: operations["ingestCanonicalWorkEvent"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/v1/bootstrap": {
     parameters: {
       query?: never;
@@ -111,22 +95,6 @@ export interface paths {
     patch: operations["updateKanbanCard"];
     trace?: never;
   };
-  "/v1/coordination": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post: operations["requestCoordination"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/v1/threads": {
     parameters: {
       query?: never;
@@ -198,58 +166,6 @@ export interface components {
         displayName: string;
         /** @enum {string} */
         kind: "human" | "stand_in" | "service";
-      };
-    };
-    CoordinateRequest: {
-      envelope: {
-        /** @enum {number} */
-        schemaVersion: 1;
-        /** Format: uuid */
-        operationId: string;
-        /** @enum {string} */
-        action:
-          | "status_query"
-          | "status_response"
-          | "ownership_declaration"
-          | "dependency_request"
-          | "conflict_notice"
-          | "coordination_request"
-          | "correction"
-          | "withdrawal"
-          | "human_escalation";
-        /** Format: uuid */
-        actorId: string;
-        /** Format: uuid */
-        authorityGrantId: string;
-        policyVersion: string;
-        /** Format: uuid */
-        threadId: string;
-        /** Format: uuid */
-        workstreamId?: string;
-        humanMessage: string;
-        resourceScope: string[];
-        relatedClaimIds: string[];
-        evidenceRefs: string[];
-        requestedActions: (
-          | "read_public_state"
-          | "answer_status"
-          | "declare_ownership"
-          | "register_blocker"
-          | "register_dependency"
-          | "request_coordination"
-          | "arrange_review"
-          | "publish_state"
-          | "expand_scope"
-          | "promise_deadline"
-          | "approve_architecture"
-          | "irreversible_action"
-        )[];
-        /** Format: date-time */
-        createdAt: string;
-        /** Format: uuid */
-        correctionOf?: string;
-        /** Format: uuid */
-        withdrawalOf?: string;
       };
     };
     CreateCapabilityGrantRequest: {
@@ -420,71 +336,6 @@ export interface components {
       /** Format: date-time */
       freshnessAt: string;
       confidence: number;
-    };
-    IngestEventRequest: {
-      event: {
-        /** Format: uuid */
-        id: string;
-        /** Format: uuid */
-        operationId: string;
-        /** @enum {number} */
-        schemaVersion: 1;
-        /** @enum {string} */
-        source: "codex" | "claude-code" | "opencode" | "desktop" | "system";
-        /** @enum {string} */
-        type:
-          | "SessionStarted"
-          | "SessionPaused"
-          | "SessionStopped"
-          | "WorkspaceChanged"
-          | "ResourceTouched"
-          | "GitStateChanged"
-          | "PlanChanged"
-          | "ValidationChanged"
-          | "ArtifactDetected"
-          | "CoordinationRequested"
-          | "CheckpointReported";
-        /** Format: date-time */
-        occurredAt: string;
-        /** Format: date-time */
-        receivedAt: string;
-        /** Format: uuid */
-        workspaceId: string;
-        /** Format: uuid */
-        workstreamId?: string;
-        /** @enum {string} */
-        privacy:
-          | "P0_LOCAL_ONLY"
-          | "P1_STAND_IN_PRIVATE"
-          | "P2_COORDINATION"
-          | "P3_PROJECT"
-          | "P4_ORGANIZATION";
-        payload: {
-          phase?: string;
-          summary?: string;
-          /** @enum {string} */
-          resourceKind?:
-            "file" | "symbol" | "api" | "schema" | "config" | "artifact";
-          resourceRef?: string;
-          gitBranch?: string;
-          gitHead?: string;
-          validationName?: string;
-          /** @enum {string} */
-          validationStatus?: "pending" | "passed" | "failed" | "skipped";
-          /** @enum {string} */
-          checkpointKind?:
-            | "intent"
-            | "decision"
-            | "blocker"
-            | "dependency"
-            | "scope"
-            | "artifact"
-            | "validation"
-            | "pause"
-            | "completion";
-        };
-        idempotencyKey: string;
-      };
     };
     KanbanBoardResponse: {
       projects: {
@@ -769,6 +620,8 @@ export interface components {
         /** Format: uuid */
         operationId?: string;
         mentionedPrincipalIds?: string[];
+        /** Format: uuid */
+        replyToMessageId?: string;
         attachments?: {
           /** Format: uuid */
           id: string;
@@ -779,6 +632,10 @@ export interface components {
         /** @enum {string} */
         streamState?: "pending" | "streaming" | "complete" | "failed";
         revision?: number;
+        reactions?: {
+          emoji: string;
+          principalIds: string[];
+        }[];
       }[];
       /** @default 0 */
       unreadCount: number;
@@ -884,28 +741,6 @@ export interface operations {
     responses: {
       /** @description Healthy */
       200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-    };
-  };
-  ingestCanonicalWorkEvent: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["IngestEventRequest"];
-      };
-    };
-    responses: {
-      /** @description Accepted */
-      202: {
         headers: {
           [name: string]: unknown;
         };
@@ -1020,28 +855,6 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["KanbanCardResponse"];
         };
-      };
-    };
-  };
-  requestCoordination: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["CoordinateRequest"];
-      };
-    };
-    responses: {
-      /** @description Structured coordination result */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
       };
     };
   };

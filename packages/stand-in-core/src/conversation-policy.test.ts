@@ -6,10 +6,7 @@ import type {
 import { uuidv7 } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
-import {
-  addStandIn,
-  canStandInRead,
-} from "./conversation-policy.js";
+import { addStandIn, canStandInRead } from "./conversation-policy.js";
 
 describe("conversation privacy boundary", () => {
   it("withholds earlier history when a Stand-in is added", () => {
@@ -43,8 +40,6 @@ describe("conversation privacy boundary", () => {
     expect(transition.thread.accessMode).toBe("agent_readable");
     expect(transition.event.sequence).toBe(5);
     expect(canStandInRead(transition.thread, earlier)).toBe(false);
-    expect(canStandInRead(transition.thread, transition.event)).toBe(
-      true,
-    );
+    expect(canStandInRead(transition.thread, transition.event)).toBe(true);
   });
 });

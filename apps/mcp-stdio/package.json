@@ -15,7 +15,7 @@
     "@intero/api-contracts": "workspace:*",
     "@intero/domain": "workspace:*",
     "@intero/integrations": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.15.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.0.0"
   }
 }

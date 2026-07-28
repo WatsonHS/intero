@@ -11,6 +11,25 @@ if [[ ! -f "$env_file" ]]; then
   echo "Copy .env.production.example and fill every required value." >&2
   exit 1
 fi
+public_url="$(
+  awk -F= '$1 == "INTERO_PUBLIC_URL" { sub(/^[^=]*=/, ""); print; exit }' \
+    "$env_file" |
+    tr -d "\"'"
+)"
+if [[ "$public_url" != https://* ]]; then
+  echo "INTERO_PUBLIC_URL must use HTTPS in product mode: $public_url" >&2
+  exit 1
+fi
+for tls_file in \
+  "$state_dir/spicedb-ca.crt" \
+  "$state_dir/spicedb-server.crt" \
+  "$state_dir/spicedb-server.key"; do
+  if [[ ! -r "$tls_file" ]]; then
+    echo "Missing SpiceDB TLS material: $tls_file" >&2
+    echo "Run: pnpm production:generate-spicedb-tls" >&2
+    exit 1
+  fi
+done
 if [[ ! "$image_tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   echo "Invalid image tag: $image_tag" >&2
   exit 1
@@ -31,6 +50,9 @@ compose=(
 )
 export INTERO_IMAGE_TAG="$image_tag"
 export INTERO_MIGRATOR_IMAGE_TAG="$image_tag"
+export INTERO_SPICEDB_CA_FILE="${INTERO_SPICEDB_CA_FILE:-$state_dir/spicedb-ca.crt}"
+export INTERO_SPICEDB_CERT_FILE="${INTERO_SPICEDB_CERT_FILE:-$state_dir/spicedb-server.crt}"
+export INTERO_SPICEDB_KEY_FILE="${INTERO_SPICEDB_KEY_FILE:-$state_dir/spicedb-server.key}"
 
 mkdir -p "$state_dir"
 if [[ -f "$state_dir/current-tag" ]]; then
@@ -70,26 +92,16 @@ echo "Starting worker, API, and static gateway..."
 "${compose[@]}" up -d api gateway
 "${compose[@]}" up -d --wait --wait-timeout 120 api
 
-public_url="$(
-  awk -F= '$1 == "INTERO_PUBLIC_URL" { sub(/^[^=]*=/, ""); print; exit }' \
-    "$env_file" |
-    tr -d "\"'"
-)"
-if [[ -z "$public_url" ]]; then
-  echo "INTERO_PUBLIC_URL is missing from $env_file" >&2
-  exit 1
-fi
-
-ready=false
+healthy=false
 for _attempt in {1..30}; do
-  if curl --fail --silent --show-error --max-time 3 "$public_url/ready" >/dev/null; then
-    ready=true
+  if curl --fail --silent --show-error --max-time 3 "$public_url/health" >/dev/null; then
+    healthy=true
     break
   fi
   sleep 2
 done
-if [[ "$ready" != "true" ]]; then
-  echo "Deployment started but $public_url/ready did not become ready." >&2
+if [[ "$healthy" != "true" ]]; then
+  echo "Deployment started but $public_url/health did not become healthy." >&2
   echo "Inspect: scripts/ops/production-compose.sh ps" >&2
   echo "Logs:    scripts/ops/production-compose.sh logs --tail=200 api worker gateway" >&2
   exit 1

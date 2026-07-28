@@ -37,6 +37,8 @@ type TestBuildAppOptions = Omit<BuildAppOptions, "attachments"> & {
 export function buildTestApp(options: TestBuildAppOptions = {}) {
   return buildApp({
     ...options,
+    allowDevelopmentOrigins: options.allowDevelopmentOrigins ?? true,
+    enableLegacyApi: options.enableLegacyApi ?? true,
     attachments: options.attachments ?? testAttachments,
   });
 }

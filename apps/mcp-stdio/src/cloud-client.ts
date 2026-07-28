@@ -207,9 +207,7 @@ export class CloudPilotClient {
     return result;
   }
 
-  private async mcpRequest(
-    request: Record<string, unknown>,
-  ): Promise<unknown> {
+  private async mcpRequest(request: Record<string, unknown>): Promise<unknown> {
     const response = await fetch(`${this.connection.baseUrl}/v1/pilot/mcp`, {
       method: "POST",
       headers: {
@@ -234,8 +232,7 @@ export class CloudPilotClient {
     }
     if (!response.ok || body.error) {
       throw new Error(
-        body.error?.message ??
-          `Agent MCP request failed (${response.status}).`,
+        body.error?.message ?? `Agent MCP request failed (${response.status}).`,
       );
     }
     return body;

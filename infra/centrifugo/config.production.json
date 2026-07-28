@@ -1,9 +1,13 @@
 {
   "client": {
-    "allowed_origins": ["https://intero.example.com"]
+    "allowed_origins": ["https://intero.example.com"],
+    "disallow_anonymous_connection_tokens": true
   },
   "admin": {
     "enabled": false
+  },
+  "http_api": {
+    "insecure": false
   },
   "channel": {
     "namespaces": [

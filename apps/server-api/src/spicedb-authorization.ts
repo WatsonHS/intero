@@ -1,4 +1,5 @@
 import { v1 } from "@authzed/authzed-node";
+import { readFile } from "node:fs/promises";
 
 import type { AuthorizationPort } from "./ports.js";
 
@@ -6,6 +7,7 @@ export interface SpiceDbAuthorizationConfig {
   endpoint: string;
   token: string;
   insecureLocalhost?: boolean;
+  certificate?: Buffer;
   timeoutMs?: number;
 }
 
@@ -14,15 +16,26 @@ export class SpiceDbAuthorization implements AuthorizationPort {
   readonly #timeoutMs: number;
 
   constructor(config: SpiceDbAuthorizationConfig) {
-    this.#client = v1.NewClient(
-      config.token,
-      config.endpoint,
-      config.insecureLocalhost
-        ? config.endpoint.startsWith("localhost:")
-          ? v1.ClientSecurity.INSECURE_LOCALHOST_ALLOWED
-          : v1.ClientSecurity.INSECURE_PLAINTEXT_CREDENTIALS
-        : v1.ClientSecurity.SECURE,
-    );
+    if (config.insecureLocalhost && config.certificate) {
+      throw new Error(
+        "SpiceDB cannot use both insecure transport and a custom CA certificate.",
+      );
+    }
+    this.#client = config.certificate
+      ? v1.NewClientWithCustomCert(
+          config.token,
+          config.endpoint,
+          config.certificate,
+        )
+      : v1.NewClient(
+          config.token,
+          config.endpoint,
+          config.insecureLocalhost
+            ? config.endpoint.startsWith("localhost:")
+              ? v1.ClientSecurity.INSECURE_LOCALHOST_ALLOWED
+              : v1.ClientSecurity.INSECURE_PLAINTEXT_CREDENTIALS
+            : v1.ClientSecurity.SECURE,
+        );
     this.#timeoutMs = config.timeoutMs ?? 2_000;
   }
 
@@ -159,6 +172,12 @@ export class SpiceDbAuthorization implements AuthorizationPort {
   close(): void {
     this.#client.close();
   }
+}
+
+export async function loadSpiceDbCertificate(
+  path?: string,
+): Promise<Buffer | undefined> {
+  return path ? readFile(path) : undefined;
 }
 
 function unary<T>(

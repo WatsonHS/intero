@@ -711,6 +711,7 @@ describe("Intero API vertical slice", () => {
     const first = await app.inject({
       method: "POST",
       url: "/v1/events",
+      headers: auth(workstream.ownerId),
       payload: { event },
     });
     expect(first.statusCode).toBe(202);
@@ -719,11 +720,16 @@ describe("Intero API vertical slice", () => {
     const duplicate = await app.inject({
       method: "POST",
       url: "/v1/events",
+      headers: auth(workstream.ownerId),
       payload: { event },
     });
     expect(duplicate.json()).toMatchObject({ accepted: true, duplicate: true });
 
-    const pulse = await app.inject({ method: "GET", url: "/v1/team-pulse" });
+    const pulse = await app.inject({
+      method: "GET",
+      url: "/v1/team-pulse",
+      headers: auth(workstream.ownerId),
+    });
     expect(pulse.json().projections[0]).toMatchObject({
       id: workstream.id,
       phase: "blocked",
@@ -732,7 +738,7 @@ describe("Intero API vertical slice", () => {
     expect(pulse.json().principals).toEqual([
       expect.objectContaining({
         id: workstream.ownerId,
-        displayName: `Principal ${workstream.ownerId.slice(0, 8)}`,
+        displayName: "Alex Rivera",
       }),
     ]);
     expect(JSON.stringify(pulse.json())).not.toContain("prompt");
@@ -740,11 +746,13 @@ describe("Intero API vertical slice", () => {
     const firstPage = await app.inject({
       method: "GET",
       url: "/v1/activity?after=0&limit=1",
+      headers: auth(workstream.ownerId),
     });
     expect(firstPage.json()).toMatchObject({ hasMore: true });
     const repaired = await app.inject({
       method: "GET",
       url: `/v1/activity?after=${firstPage.json().nextCursor}&limit=100`,
+      headers: auth(workstream.ownerId),
     });
     expect(repaired.json().items.length).toBeGreaterThan(0);
     expect(
@@ -766,6 +774,7 @@ describe("Intero API vertical slice", () => {
     const independent = await app.inject({
       method: "POST",
       url: "/v1/kanban/cards",
+      headers: auth(workstream.ownerId),
       payload: {
         id: independentCardId,
         projectId,
@@ -785,6 +794,7 @@ describe("Intero API vertical slice", () => {
     const linked = await app.inject({
       method: "POST",
       url: "/v1/kanban/cards",
+      headers: auth(workstream.ownerId),
       payload: {
         id: linkedCardId,
         projectId,
@@ -801,6 +811,7 @@ describe("Intero API vertical slice", () => {
     const associated = await app.inject({
       method: "PATCH",
       url: `/v1/kanban/cards/${independentCardId}`,
+      headers: auth(workstream.ownerId),
       payload: { relatedWorkstreamIds: [workstream.id], column: "review" },
     });
     expect(associated.json()).toMatchObject({
@@ -808,7 +819,11 @@ describe("Intero API vertical slice", () => {
       relatedWorkstreamIds: [workstream.id],
     });
 
-    const board = await app.inject({ method: "GET", url: "/v1/kanban" });
+    const board = await app.inject({
+      method: "GET",
+      url: "/v1/kanban",
+      headers: auth(workstream.ownerId),
+    });
     expect(board.statusCode).toBe(200);
     expect(board.json()).toMatchObject({
       selectedProjectId: projectId,
@@ -828,6 +843,7 @@ describe("Intero API vertical slice", () => {
     const duplicateLink = await app.inject({
       method: "PATCH",
       url: `/v1/kanban/cards/${independentCardId}`,
+      headers: auth(workstream.ownerId),
       payload: {
         relatedWorkstreamIds: [workstream.id, workstream.id],
       },
@@ -837,6 +853,7 @@ describe("Intero API vertical slice", () => {
     const missingWorkstream = await app.inject({
       method: "PATCH",
       url: `/v1/kanban/cards/${independentCardId}`,
+      headers: auth(workstream.ownerId),
       payload: { relatedWorkstreamIds: [uuidv7()] },
     });
     expect(missingWorkstream.statusCode).toBe(404);
@@ -844,6 +861,7 @@ describe("Intero API vertical slice", () => {
     const missingProject = await app.inject({
       method: "GET",
       url: `/v1/kanban?projectId=${uuidv7()}`,
+      headers: auth(workstream.ownerId),
     });
     expect(missingProject.statusCode).toBe(404);
   });
@@ -861,6 +879,93 @@ describe("Intero API vertical slice", () => {
       },
       adapters: { realtime: "centrifugo" },
     });
+  });
+
+  it("requires identity on organization data and rejects actor spoofing", async () => {
+    const unauthenticatedRead = await app.inject({
+      method: "GET",
+      url: "/v1/team-pulse",
+    });
+    expect(unauthenticatedRead.statusCode).toBe(401);
+    expect(unauthenticatedRead.json()).toMatchObject({
+      code: "AUTHENTICATION_REQUIRED",
+    });
+
+    const unauthenticatedWrite = await app.inject({
+      method: "POST",
+      url: "/v1/specs",
+      payload: {},
+    });
+    expect(unauthenticatedWrite.statusCode).toBe(401);
+
+    const spoofedWorkstream = await app.inject({
+      method: "POST",
+      url: "/v1/workstreams",
+      headers: auth(ALEX),
+      payload: {
+        id: uuidv7(),
+        workspaceId: uuidv7(),
+        ownerId: PRIYA,
+        title: "Spoofed ownership",
+        phase: "planning",
+        scope: [],
+        blockers: [],
+        dependencies: [],
+        decisions: [],
+        artifactIds: [],
+        freshnessAt: "2026-07-24T09:00:00.000Z",
+        confidence: 0.7,
+      },
+    });
+    expect(spoofedWorkstream.statusCode).toBe(403);
+    expect(spoofedWorkstream.json()).toMatchObject({
+      code: "WORKSTREAM_OWNER_INVALID",
+    });
+  });
+
+  it("does not mount legacy canonical mutation routes outside development", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      enableLegacyApi: false,
+    });
+
+    for (const url of ["/v1/events", "/v1/authorization/check"]) {
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers: auth(ALEX),
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+    }
+  });
+
+  it("does not trust local development origins when they are disabled", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      allowDevelopmentOrigins: false,
+      authCorsOrigins: ["https://intero.example.com"],
+    });
+
+    const local = await app.inject({
+      method: "GET",
+      url: "/health",
+      headers: { origin: "http://localhost:5173" },
+    });
+    expect(local.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const trusted = await app.inject({
+      method: "GET",
+      url: "/health",
+      headers: { origin: "https://intero.example.com" },
+    });
+    expect(trusted.headers["access-control-allow-origin"]).toBe(
+      "https://intero.example.com",
+    );
   });
 
   it("separates liveness from critical dependency readiness", async () => {
@@ -932,6 +1037,7 @@ describe("Intero API vertical slice", () => {
     await app.inject({
       method: "POST",
       url: "/v1/capability-grants",
+      headers: auth(actorId),
       payload: grant,
     });
 
@@ -954,6 +1060,7 @@ describe("Intero API vertical slice", () => {
     const allowed = await app.inject({
       method: "POST",
       url: "/v1/coordination",
+      headers: auth(actorId),
       payload: { envelope },
     });
     expect(allowed.json().result).toMatchObject({ status: "resolved" });
@@ -961,6 +1068,7 @@ describe("Intero API vertical slice", () => {
     const rejected = await app.inject({
       method: "POST",
       url: "/v1/coordination",
+      headers: auth(actorId),
       payload: {
         envelope: {
           ...envelope,
@@ -1222,11 +1330,12 @@ describe("Intero API vertical slice", () => {
   });
 
   it("invalidates only affected Spec approvals after a material revision", async () => {
-    const author = uuidv7() as PrincipalId;
+    const author = ALEX;
     const specId = uuidv7() as SpecId;
     const created = await app.inject({
       method: "POST",
       url: "/v1/specs",
+      headers: auth(author),
       payload: {
         id: specId,
         title: "Public Work State API",
@@ -1246,12 +1355,13 @@ describe("Intero API vertical slice", () => {
       }),
     ]);
     for (const [scope, reviewerId] of [
-      ["api", uuidv7()],
-      ["security", uuidv7()],
-    ]) {
+      ["api", PRIYA],
+      ["security", MORGAN],
+    ] as const) {
       await app.inject({
         method: "POST",
         url: `/v1/specs/${specId}/reviews`,
+        headers: auth(reviewerId),
         payload: {
           revisionId,
           reviewerId,
@@ -1265,6 +1375,7 @@ describe("Intero API vertical slice", () => {
     await app.inject({
       method: "POST",
       url: `/v1/specs/${specId}/revisions`,
+      headers: auth(author),
       payload: {
         specId,
         revision: 2,
@@ -1278,6 +1389,7 @@ describe("Intero API vertical slice", () => {
     const result = await app.inject({
       method: "GET",
       url: `/v1/specs/${specId}`,
+      headers: auth(author),
     });
     const reviews = result.json().reviews as Array<{
       affectedScopes: string[];
@@ -1291,7 +1403,11 @@ describe("Intero API vertical slice", () => {
       reviews.find((review) => review.affectedScopes[0] === "security")
         ?.invalidatedAt,
     ).toBeUndefined();
-    const list = await app.inject({ method: "GET", url: "/v1/specs" });
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/specs",
+      headers: auth(author),
+    });
     expect(list.json().items).toHaveLength(1);
     expect(list.json().items[0]).toMatchObject({
       spec: { id: specId, status: "in_review" },
@@ -1302,7 +1418,7 @@ describe("Intero API vertical slice", () => {
 
 async function createWorkstream(
   app: Awaited<ReturnType<typeof buildTestApp>>,
-  ownerId = uuidv7() as PrincipalId,
+  ownerId = ALEX,
 ): Promise<Workstream> {
   const payload = {
     id: uuidv7(),
@@ -1321,6 +1437,7 @@ async function createWorkstream(
   const response = await app.inject({
     method: "POST",
     url: "/v1/workstreams",
+    headers: auth(ownerId),
     payload,
   });
   expect(response.statusCode).toBe(201);

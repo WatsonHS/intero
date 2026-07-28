@@ -7,7 +7,10 @@ import {
   assertDatabaseMigrationReadiness,
   REQUIRED_DATABASE_MIGRATION_AT,
 } from "../../server-api/src/database/migration-readiness.js";
-import { SpiceDbAuthorization } from "../../server-api/src/spicedb-authorization.js";
+import {
+  loadSpiceDbCertificate,
+  SpiceDbAuthorization,
+} from "../../server-api/src/spicedb-authorization.js";
 import { migrateWorker } from "./migrate.js";
 
 const config = loadMigratorServiceConfig();
@@ -24,10 +27,12 @@ try {
 }
 await migrateWorker(config.workerDatabaseUrl);
 if (config.spiceDb) {
+  const certificate = await loadSpiceDbCertificate(config.spiceDb.caPath);
   const authorization = new SpiceDbAuthorization({
     endpoint: config.spiceDb.endpoint,
     token: config.spiceDb.token,
     insecureLocalhost: config.spiceDb.insecure,
+    ...(certificate ? { certificate } : {}),
     timeoutMs: 5_000,
   });
   try {

@@ -2,30 +2,19 @@
   "openapi": "3.0.3",
   "info": { "title": "Intero API", "version": "0.1.0" },
   "servers": [{ "url": "http://localhost:4310" }],
+  "security": [{ "sessionCookie": [] }],
   "paths": {
     "/health": {
       "get": {
         "operationId": "health",
+        "security": [],
         "responses": { "200": { "description": "Healthy" } }
-      }
-    },
-    "/v1/events": {
-      "post": {
-        "operationId": "ingestCanonicalWorkEvent",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/IngestEventRequest" }
-            }
-          }
-        },
-        "responses": { "202": { "description": "Accepted" } }
       }
     },
     "/v1/bootstrap": {
       "get": {
         "operationId": "getBootstrap",
+        "security": [],
         "responses": {
           "200": {
             "description": "Current organization and principal",
@@ -126,22 +115,6 @@
         }
       }
     },
-    "/v1/coordination": {
-      "post": {
-        "operationId": "requestCoordination",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/CoordinateRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": { "description": "Structured coordination result" }
-        }
-      }
-    },
     "/v1/threads": {
       "get": {
         "operationId": "listThreads",
@@ -208,6 +181,13 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "better-auth.session_token"
+      }
+    },
     "schemas": {
       "BootstrapResponse": {
         "type": "object",
@@ -269,139 +249,6 @@
           }
         },
         "required": ["organization", "currentPrincipal", "standInPrincipal"],
-        "additionalProperties": false
-      },
-      "CoordinateRequest": {
-        "type": "object",
-        "properties": {
-          "envelope": {
-            "type": "object",
-            "properties": {
-              "schemaVersion": { "type": "number", "enum": [1] },
-              "operationId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "action": {
-                "type": "string",
-                "enum": [
-                  "status_query",
-                  "status_response",
-                  "ownership_declaration",
-                  "dependency_request",
-                  "conflict_notice",
-                  "coordination_request",
-                  "correction",
-                  "withdrawal",
-                  "human_escalation"
-                ]
-              },
-              "actorId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "authorityGrantId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "policyVersion": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 80
-              },
-              "threadId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "workstreamId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "humanMessage": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4000
-              },
-              "resourceScope": {
-                "maxItems": 50,
-                "type": "array",
-                "items": { "type": "string", "maxLength": 300 }
-              },
-              "relatedClaimIds": {
-                "maxItems": 100,
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "format": "uuid",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                }
-              },
-              "evidenceRefs": {
-                "maxItems": 100,
-                "type": "array",
-                "items": { "type": "string", "maxLength": 300 }
-              },
-              "requestedActions": {
-                "maxItems": 20,
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "read_public_state",
-                    "answer_status",
-                    "declare_ownership",
-                    "register_blocker",
-                    "register_dependency",
-                    "request_coordination",
-                    "arrange_review",
-                    "publish_state",
-                    "expand_scope",
-                    "promise_deadline",
-                    "approve_architecture",
-                    "irreversible_action"
-                  ]
-                }
-              },
-              "createdAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-              },
-              "correctionOf": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "withdrawalOf": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              }
-            },
-            "required": [
-              "schemaVersion",
-              "operationId",
-              "action",
-              "actorId",
-              "authorityGrantId",
-              "policyVersion",
-              "threadId",
-              "humanMessage",
-              "resourceScope",
-              "relatedClaimIds",
-              "evidenceRefs",
-              "requestedActions",
-              "createdAt"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": ["envelope"],
         "additionalProperties": false
       },
       "CreateCapabilityGrantRequest": {
@@ -853,145 +700,6 @@
           "freshnessAt",
           "confidence"
         ],
-        "additionalProperties": false
-      },
-      "IngestEventRequest": {
-        "type": "object",
-        "properties": {
-          "event": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "operationId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "schemaVersion": { "type": "number", "enum": [1] },
-              "source": {
-                "type": "string",
-                "enum": [
-                  "codex",
-                  "claude-code",
-                  "opencode",
-                  "desktop",
-                  "system"
-                ]
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "SessionStarted",
-                  "SessionPaused",
-                  "SessionStopped",
-                  "WorkspaceChanged",
-                  "ResourceTouched",
-                  "GitStateChanged",
-                  "PlanChanged",
-                  "ValidationChanged",
-                  "ArtifactDetected",
-                  "CoordinationRequested",
-                  "CheckpointReported"
-                ]
-              },
-              "occurredAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-              },
-              "receivedAt": {
-                "type": "string",
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-              },
-              "workspaceId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "workstreamId": {
-                "type": "string",
-                "format": "uuid",
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-              },
-              "privacy": {
-                "type": "string",
-                "enum": [
-                  "P0_LOCAL_ONLY",
-                  "P1_STAND_IN_PRIVATE",
-                  "P2_COORDINATION",
-                  "P3_PROJECT",
-                  "P4_ORGANIZATION"
-                ]
-              },
-              "payload": {
-                "type": "object",
-                "properties": {
-                  "phase": { "type": "string", "maxLength": 80 },
-                  "summary": { "type": "string", "maxLength": 600 },
-                  "resourceKind": {
-                    "type": "string",
-                    "enum": [
-                      "file",
-                      "symbol",
-                      "api",
-                      "schema",
-                      "config",
-                      "artifact"
-                    ]
-                  },
-                  "resourceRef": { "type": "string", "maxLength": 300 },
-                  "gitBranch": { "type": "string", "maxLength": 240 },
-                  "gitHead": { "type": "string", "maxLength": 64 },
-                  "validationName": { "type": "string", "maxLength": 160 },
-                  "validationStatus": {
-                    "type": "string",
-                    "enum": ["pending", "passed", "failed", "skipped"]
-                  },
-                  "checkpointKind": {
-                    "type": "string",
-                    "enum": [
-                      "intent",
-                      "decision",
-                      "blocker",
-                      "dependency",
-                      "scope",
-                      "artifact",
-                      "validation",
-                      "pause",
-                      "completion"
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              },
-              "idempotencyKey": {
-                "type": "string",
-                "minLength": 8,
-                "maxLength": 200
-              }
-            },
-            "required": [
-              "id",
-              "operationId",
-              "schemaVersion",
-              "source",
-              "type",
-              "occurredAt",
-              "receivedAt",
-              "workspaceId",
-              "privacy",
-              "payload",
-              "idempotencyKey"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": ["event"],
         "additionalProperties": false
       },
       "KanbanBoardResponse": {
@@ -1898,6 +1606,11 @@
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
+                "replyToMessageId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
                 "attachments": {
                   "maxItems": 8,
                   "type": "array",
@@ -1939,6 +1652,32 @@
                   "minimum": 0,
                   "exclusiveMinimum": true,
                   "maximum": 9007199254740991
+                },
+                "reactions": {
+                  "maxItems": 40,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "emoji": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "principalIds": {
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        }
+                      }
+                    },
+                    "required": ["emoji", "principalIds"],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [

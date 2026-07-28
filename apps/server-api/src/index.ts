@@ -23,7 +23,10 @@ import { InMemoryPilotStore } from "./pilot-store.js";
 import { TransactionalOutboxJobRunner } from "./pilot-service.js";
 import { PostgresPlatformStore } from "./postgres-store.js";
 import { PostgresProjectWorkStore } from "./project-work-store.js";
-import { SpiceDbAuthorization } from "./spicedb-authorization.js";
+import {
+  loadSpiceDbCertificate,
+  SpiceDbAuthorization,
+} from "./spicedb-authorization.js";
 import { SpiceDbPilotAuthorization } from "./spicedb-pilot-authorization.js";
 import { demoSeedingEnabled } from "./store.js";
 
@@ -140,6 +143,9 @@ const auth = serviceConfig.auth
   : undefined;
 const spiceDbEndpoint = pilotAdapterConfig.spiceDbEndpoint;
 const spiceDbToken = pilotAdapterConfig.spiceDbToken;
+const spiceDbCertificate = await loadSpiceDbCertificate(
+  serviceConfig.spiceDbCaPath,
+);
 const authorization =
   pilotAdapterConfig.authorization === "spicedb" &&
   spiceDbEndpoint &&
@@ -148,6 +154,7 @@ const authorization =
         endpoint: spiceDbEndpoint,
         token: spiceDbToken,
         insecureLocalhost: serviceConfig.spiceDbInsecure,
+        ...(spiceDbCertificate ? { certificate: spiceDbCertificate } : {}),
       })
     : undefined;
 const app = await buildApp({
@@ -162,6 +169,8 @@ const app = await buildApp({
   currentPrincipal,
   standInPrincipal,
   allowDevelopmentIdentity: serviceConfig.allowDevelopmentIdentity,
+  allowDevelopmentOrigins: serviceConfig.runtimeMode === "development",
+  enableLegacyApi: serviceConfig.runtimeMode === "development",
   authDatabase,
   ...(providerEncryptionSecret ? { providerEncryptionSecret } : {}),
   readinessDependencies: [

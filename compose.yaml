@@ -19,7 +19,7 @@ services:
       retries: 12
 
   spicedb:
-    image: authzed/spicedb:v1.45.3
+    image: authzed/spicedb:v1.56.0
     command: serve
     environment:
       SPICEDB_GRPC_PRESHARED_KEY: intero-development
@@ -29,7 +29,7 @@ services:
       - "8443:8443"
 
   centrifugo:
-    image: centrifugo/centrifugo:v6.3
+    image: centrifugo/centrifugo:v6.8.1
     command: centrifugo -c /centrifugo/config.json
     environment:
       CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY: ${INTERO_CENTRIFUGO_TOKEN_SECRET:-intero-development-realtime-token-secret-v1}

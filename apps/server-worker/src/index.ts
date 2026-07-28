@@ -25,7 +25,10 @@ import {
 } from "../../server-api/src/pilot-ports.js";
 import { PilotStandInJobHandler } from "../../server-api/src/pilot-service.js";
 import { AesGcmProviderSecretCipher } from "../../server-api/src/provider-secrets.js";
-import { SpiceDbAuthorization } from "../../server-api/src/spicedb-authorization.js";
+import {
+  loadSpiceDbCertificate,
+  SpiceDbAuthorization,
+} from "../../server-api/src/spicedb-authorization.js";
 import { SpiceDbPilotAuthorization } from "../../server-api/src/spicedb-pilot-authorization.js";
 import { VercelAiModelGateway } from "../../server-api/src/vercel-model-gateway.js";
 import {
@@ -95,6 +98,9 @@ const pilotStore = new NormalizedPostgresPilotStore(
 );
 const spiceDbEndpoint = pilotAdapterConfig.spiceDbEndpoint;
 const spiceDbToken = pilotAdapterConfig.spiceDbToken;
+const spiceDbCertificate = await loadSpiceDbCertificate(
+  serviceConfig.spiceDbCaPath,
+);
 const spiceDb =
   pilotAdapterConfig.authorization === "spicedb" &&
   spiceDbEndpoint &&
@@ -103,6 +109,7 @@ const spiceDb =
         endpoint: spiceDbEndpoint,
         token: spiceDbToken,
         insecureLocalhost: serviceConfig.spiceDbInsecure,
+        ...(spiceDbCertificate ? { certificate: spiceDbCertificate } : {}),
       })
     : undefined;
 const authorization = spiceDb

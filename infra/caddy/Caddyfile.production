@@ -1,12 +1,21 @@
 {$INTERO_PUBLIC_URL:http://localhost:4311} {
 	encode zstd gzip
 
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
 	@realtime path /connection/* /emulation
 	handle @realtime {
 		reverse_proxy centrifugo:8000
 	}
 
-	@api path /v1/* /api/auth/* /.well-known/* /health /ready /metrics
+	@api path /v1/* /api/auth/* /.well-known/* /health
 	handle @api {
 		reverse_proxy api:4310
 	}

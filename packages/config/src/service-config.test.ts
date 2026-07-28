@@ -179,6 +179,7 @@ describe("service environment schemas", () => {
         ...postgresEnvironment,
         INTERO_RUNTIME_MODE: "product",
         INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
+        INTERO_PUBLIC_URL: "https://intero.example.com",
         INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
@@ -194,6 +195,7 @@ describe("service environment schemas", () => {
         ...postgresEnvironment,
         INTERO_RUNTIME_MODE: "product",
         INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
+        INTERO_PUBLIC_URL: "https://intero.example.com",
         INTERO_SEED_DEMO: "true",
       }),
     ).toThrow("Product runtime requires INTERO_AUTH_SECRET");
@@ -206,7 +208,7 @@ describe("service environment schemas", () => {
         INTERO_SEED_DEMO: "true",
         INTERO_AUTH_SECRET:
           "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "http://intero.internal.example:4311",
+        INTERO_PUBLIC_URL: "https://intero.internal.example",
         INTERO_CENTRIFUGO_TOKEN_SECRET:
           "realtime-token-secret-at-least-thirty-two-bytes",
         INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
@@ -216,6 +218,62 @@ describe("service environment schemas", () => {
       allowDevelopmentIdentity: false,
       auth: {},
     });
+  });
+
+  it("rejects plaintext browser and SpiceDB transport in product mode", () => {
+    const product = {
+      ...postgresEnvironment,
+      INTERO_RUNTIME_MODE: "product",
+      INTERO_AUTH_SECRET:
+        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      INTERO_CENTRIFUGO_TOKEN_SECRET:
+        "realtime-token-secret-at-least-thirty-two-bytes",
+      INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+    } as const;
+
+    expect(() =>
+      loadApiServiceConfig({
+        ...product,
+        INTERO_PUBLIC_URL: "http://intero.example.com",
+      }),
+    ).toThrow("Product runtime requires an HTTPS INTERO_PUBLIC_URL");
+
+    expect(() =>
+      loadApiServiceConfig({
+        ...product,
+        INTERO_PUBLIC_URL: "https://intero.example.com",
+        INTERO_SPICEDB_INSECURE: "true",
+      }),
+    ).toThrow("Product runtime cannot enable INTERO_SPICEDB_INSECURE");
+
+    expect(() =>
+      loadWorkerServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "product",
+        INTERO_WORKER_DATABASE_URL:
+          "postgres://intero_worker:secret@db.internal/intero",
+        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+        INTERO_SPICEDB_INSECURE: "true",
+      }),
+    ).toThrow("Product runtime cannot enable INTERO_SPICEDB_INSECURE");
+  });
+
+  it("carries a private SpiceDB CA path into service and migrator config", () => {
+    const caPath = "/run/intero/spicedb/ca.crt";
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_SPICEDB_CA_PATH: caPath,
+      }),
+    ).toMatchObject({ spiceDbCaPath: caPath });
+    expect(
+      loadMigratorServiceConfig({
+        DATABASE_URL: "postgres://admin:secret@db.internal/intero",
+        INTERO_SPICEDB_ENDPOINT: "spicedb.internal:50051",
+        INTERO_SPICEDB_TOKEN: "server-only-spicedb-token",
+        INTERO_SPICEDB_CA_PATH: caPath,
+      }),
+    ).toMatchObject({ spiceDb: { caPath } });
   });
 
   it("requires both browser-token and publish credentials for product realtime", () => {

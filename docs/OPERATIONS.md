@@ -36,6 +36,7 @@ manager rather than committing an environment file.
 
 Required for the persistent API:
 
+- `INTERO_PUBLIC_URL`: an HTTPS origin. Product mode rejects plaintext HTTP.
 - `INTERO_DATABASE_URL`: RLS-constrained application connection.
 - `INTERO_PROVIDER_ENCRYPTION_KEY`: at least 16 characters, server only.
 - `INTERO_PILOT_PERSISTENCE=postgres`.
@@ -50,10 +51,18 @@ Required for the worker:
 - optional `INTERO_WORKER_CONCURRENCY` (1-64);
 - optional metrics bind at `INTERO_WORKER_METRICS_HOST:INTERO_WORKER_METRICS_PORT`.
 
-`INTERO_SPICEDB_INSECURE=true` is local-development-only. Omit it in production.
-Authentication is enabled only when both `INTERO_AUTH_SECRET` and
-`INTERO_MAGIC_LINK_WEBHOOK` are present. GitHub OAuth likewise requires both
-client ID and client secret.
+`INTERO_SPICEDB_INSECURE=true` is local-development-only and is rejected in
+product mode. A private-CA deployment sets `INTERO_SPICEDB_CA_PATH` to the
+mounted CA certificate; the certificate SAN must cover the configured SpiceDB
+hostname. Authentication is enabled when `INTERO_AUTH_SECRET` is configured.
+GitHub OAuth likewise requires both client ID and client secret.
+
+The supported production Compose topology terminates public HTTPS at Caddy,
+uses TLS for the token-bearing API/worker/migrator connection to SpiceDB, and
+keeps PostgreSQL, MinIO, and the Centrifugo publish API on the private
+single-host Compose network. Development CORS aliases, legacy canonical
+mutation routes, and the Prometheus endpoint are not exposed by the production
+gateway.
 
 Object storage requires `INTERO_OBJECT_STORAGE=minio`, endpoint, access key,
 server-only secret key, and bucket. Supported
@@ -79,6 +88,7 @@ export DATABASE_URL='postgres://migration-user:...@db/intero'
 export INTERO_WORKER_DATABASE_URL='postgres://worker-migration-user:...@db/intero'
 export INTERO_SPICEDB_ENDPOINT='spicedb.internal:50051'
 export INTERO_SPICEDB_TOKEN='server-only-token'
+export INTERO_SPICEDB_CA_PATH='/run/secrets/spicedb-ca.crt'
 pnpm --filter @intero/server-worker migrate:all
 ```
 
@@ -108,7 +118,8 @@ API:
 - `GET /health`: process liveness only.
 - `GET /ready`: PostgreSQL and SpiceDB are critical; worker, Centrifugo-backed
   delivery, and optional object storage can report degraded/unavailable without
-  making coding/MCP ingress blocking.
+  making coding/MCP ingress blocking. Production Compose uses this endpoint
+  internally; Caddy does not expose it publicly.
 - `GET /metrics`: Prometheus text with bounded labels.
 
 Worker metrics listener:

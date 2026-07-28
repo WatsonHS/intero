@@ -85,8 +85,18 @@
   --intero-tint-6: #d9c188;
 
   /* Motion — curves and durations are tokens, not ad-hoc numbers */
-  --intero-ease-decelerate: cubic-bezier(0.2, 0.8, 0.2, 1); /* enter, expand, switch */
-  --intero-ease-standard: cubic-bezier(0.4, 0, 0.2, 1); /* two-way size/position */
+  --intero-ease-decelerate: cubic-bezier(
+    0.2,
+    0.8,
+    0.2,
+    1
+  ); /* enter, expand, switch */
+  --intero-ease-standard: cubic-bezier(
+    0.4,
+    0,
+    0.2,
+    1
+  ); /* two-way size/position */
   --intero-ease-exit: cubic-bezier(0.4, 0, 1, 1); /* leaving; accelerate away */
   --intero-duration-press: 120ms;
   --intero-duration-hover: 180ms;

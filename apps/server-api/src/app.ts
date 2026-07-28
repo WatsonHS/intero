@@ -151,6 +151,8 @@ export interface BuildAppOptions {
   automationStore?: PostgresAutomationStore;
   actionInboxEvents?: ActionInboxEventSource;
   allowDevelopmentIdentity?: boolean;
+  allowDevelopmentOrigins?: boolean;
+  enableLegacyApi?: boolean;
   principalDirectory?: PrincipalDirectory;
   requestAuth?: RequestAuth;
   authorization?: AuthorizationPort;
@@ -186,6 +188,10 @@ export async function buildApp(
         ? false
         : loggerOptions(process.env.INTERO_LOG_LEVEL),
   });
+  const allowDevelopmentOrigins =
+    options.allowDevelopmentOrigins ?? process.env.NODE_ENV === "test";
+  const enableLegacyApi =
+    options.enableLegacyApi ?? process.env.NODE_ENV === "test";
   for (const contentType of CONVERSATION_IMAGE_TYPES) {
     app.addContentTypeParser(
       contentType,
@@ -313,7 +319,9 @@ export async function buildApp(
   await app.register(cors, {
     origin: [
       ...(options.authCorsOrigins ?? []),
-      /^http:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+$/,
+      ...(allowDevelopmentOrigins
+        ? [/^http:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+$/]
+        : []),
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -466,27 +474,36 @@ export async function buildApp(
     });
   }
 
-  app.post("/v1/authorization/check", async (request) => {
-    const input = parse(
-      z.object({
-        principalId: z.string().min(1).max(200),
-        permission: z.string().min(1).max(120),
-        resourceType: z.string().min(1).max(120),
-        resourceId: z.string().min(1).max(300),
-        consistencyToken: z.string().max(1_000).optional(),
-      }),
-      request.body,
-    );
-    return authorization.check({
-      principalId: input.principalId,
-      permission: input.permission,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      ...(input.consistencyToken
-        ? { consistencyToken: input.consistencyToken }
-        : {}),
+  if (enableLegacyApi) {
+    app.post("/v1/authorization/check", async (request) => {
+      const principal = await requestAuth.resolve(request);
+      const input = parse(
+        z.object({
+          principalId: z.string().min(1).max(200),
+          permission: z.string().min(1).max(120),
+          resourceType: z.string().min(1).max(120),
+          resourceId: z.string().min(1).max(300),
+          consistencyToken: z.string().max(1_000).optional(),
+        }),
+        request.body,
+      );
+      assertCurrentPrincipal(
+        principal!.id,
+        input.principalId,
+        "AUTHORIZATION_PRINCIPAL_INVALID",
+        "Authorization checks can only inspect the current principal.",
+      );
+      return authorization.check({
+        principalId: principal!.id,
+        permission: input.permission,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        ...(input.consistencyToken
+          ? { consistencyToken: input.consistencyToken }
+          : {}),
+      });
     });
-  });
+  }
 
   const attachments = options.attachments;
   app.post("/v1/attachments/uploads", async (request, reply) => {
@@ -628,28 +645,71 @@ export async function buildApp(
     },
   );
 
-  app.post("/v1/workstreams", async (request, reply) => {
-    const input = parse(CreateWorkstreamRequest, request.body);
-    const mutation = await store.createWorkstream(input);
-    return reply.status(201).send(mutation.value);
-  });
+  if (enableLegacyApi) {
+    app.post("/v1/workstreams", async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const input = parse(CreateWorkstreamRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        input.ownerId,
+        "WORKSTREAM_OWNER_INVALID",
+        "Workstreams can only be created for the current principal.",
+      );
+      const mutation = await store.createWorkstream(input);
+      return reply.status(201).send(mutation.value);
+    });
 
-  app.post("/v1/claims", async (request, reply) => {
-    const claim = parse(CreateClaimRequest, request.body);
-    return reply.status(201).send((await store.addClaim(claim)).value);
-  });
+    app.post("/v1/claims", async (request, reply) => {
+      await requestAuth.resolve(request);
+      const claim = parse(CreateClaimRequest, request.body);
+      return reply.status(201).send((await store.addClaim(claim)).value);
+    });
 
-  app.post("/v1/events", async (request, reply) => {
-    const { event } = parse(IngestEventRequest, request.body);
-    return reply.status(202).send(await store.ingestEvent(event));
-  });
+    app.post("/v1/events", async (request, reply) => {
+      await requestAuth.resolve(request);
+      const { event } = parse(IngestEventRequest, request.body);
+      return reply.status(202).send(await store.ingestEvent(event));
+    });
 
-  app.post("/v1/projections", async (request, reply) => {
-    const { projection } = parse(ApplyPublicProjectionRequest, request.body);
-    return reply.status(202).send(await store.applyProjection(projection));
-  });
+    app.post("/v1/projections", async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const { projection } = parse(ApplyPublicProjectionRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        projection.ownerId,
+        "PROJECTION_OWNER_INVALID",
+        "Work projections can only be published for the current principal.",
+      );
+      return reply.status(202).send(await store.applyProjection(projection));
+    });
 
-  app.get("/v1/team-pulse", async () => {
+    app.post("/v1/capability-grants", async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const grant = parse(CreateCapabilityGrantRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        grant.principalId,
+        "CAPABILITY_GRANT_PRINCIPAL_INVALID",
+        "Legacy capability grants can only target the current principal.",
+      );
+      return reply.status(201).send(await store.putGrant(grant));
+    });
+
+    app.post("/v1/coordination", async (request) => {
+      const principal = await requestAuth.resolve(request);
+      const { envelope } = parse(CoordinateRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        envelope.actorId,
+        "COORDINATION_ACTOR_INVALID",
+        "Coordination actions can only be submitted as the current principal.",
+      );
+      return { result: await store.coordinate(envelope) };
+    });
+  }
+
+  app.get("/v1/team-pulse", async (request) => {
+    await requestAuth.resolve(request);
     const projections = await store.listProjections();
     return {
       generatedAt: new Date().toISOString(),
@@ -662,6 +722,7 @@ export async function buildApp(
   });
 
   app.get("/v1/kanban", async (request) => {
+    await requestAuth.resolve(request);
     const query = parse(
       z.object({
         projectId: z.string().uuid().optional(),
@@ -694,6 +755,7 @@ export async function buildApp(
   });
 
   app.post("/v1/kanban/cards", async (request, reply) => {
+    await requestAuth.resolve(request);
     const input = parse(CreateKanbanCardRequest, request.body);
     const now = new Date().toISOString();
     return reply.status(201).send(
@@ -708,6 +770,7 @@ export async function buildApp(
   app.patch<{ Params: { cardId: string } }>(
     "/v1/kanban/cards/:cardId",
     async (request, reply) => {
+      await requestAuth.resolve(request);
       const input = parse(UpdateKanbanCardRequest, request.body);
       return reply.send(
         await store.updateKanbanCard(
@@ -717,16 +780,6 @@ export async function buildApp(
       );
     },
   );
-
-  app.post("/v1/capability-grants", async (request, reply) => {
-    const grant = parse(CreateCapabilityGrantRequest, request.body);
-    return reply.status(201).send(await store.putGrant(grant));
-  });
-
-  app.post("/v1/coordination", async (request) => {
-    const { envelope } = parse(CoordinateRequest, request.body);
-    return { result: await store.coordinate(envelope) };
-  });
 
   app.get("/v1/action-inbox", async (request) => {
     const principal = await requestAuth.resolve(request);
@@ -1181,7 +1234,14 @@ export async function buildApp(
   );
 
   app.post("/v1/specs", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
     const input = parse(CreateSpecRequest, request.body);
+    assertCurrentPrincipal(
+      principal!.id,
+      input.createdBy,
+      "SPEC_AUTHOR_INVALID",
+      "Specs can only be created as the current principal.",
+    );
     const { markdown, changeSummary, affectedScopes, createdBy, ...spec } =
       input;
     return reply.status(201).send(
@@ -1198,7 +1258,14 @@ export async function buildApp(
   app.post<{ Params: { specId: string } }>(
     "/v1/specs/:specId/revisions",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const input = parse(CreateSpecRevisionRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        input.createdBy,
+        "SPEC_AUTHOR_INVALID",
+        "Spec revisions can only be created as the current principal.",
+      );
       return reply
         .status(201)
         .send(
@@ -1210,7 +1277,14 @@ export async function buildApp(
   app.post<{ Params: { specId: string } }>(
     "/v1/specs/:specId/reviews",
     async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
       const review = parse(AddReviewResponseRequest, request.body);
+      assertCurrentPrincipal(
+        principal!.id,
+        review.reviewerId,
+        "SPEC_REVIEWER_INVALID",
+        "Spec reviews can only be submitted as the current principal.",
+      );
       return reply
         .status(201)
         .send(await store.addReview(request.params.specId as SpecId, review));
@@ -1220,6 +1294,7 @@ export async function buildApp(
   app.get<{ Params: { specId: string } }>(
     "/v1/specs/:specId",
     async (request, reply) => {
+      await requestAuth.resolve(request);
       const specId = request.params.specId as SpecId;
       const result = await store.getSpec(specId);
       if (!result) return notFound(reply, "Spec");
@@ -1227,22 +1302,46 @@ export async function buildApp(
     },
   );
 
-  app.get("/v1/specs", async () => ({
-    items: await Promise.all(
-      (await store.listSpecs()).map((item) => presentSpec(store, item)),
-    ),
-  }));
+  app.get("/v1/specs", async (request) => {
+    await requestAuth.resolve(request);
+    return {
+      items: await Promise.all(
+        (await store.listSpecs()).map((item) => presentSpec(store, item)),
+      ),
+    };
+  });
 
   app.post("/v1/decisions", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
     const input = parse(CreateDecisionRequest, request.body);
+    if (!input.decidedBy.includes(principal!.id)) {
+      throw new PilotStoreError(
+        "DECISION_ACTOR_REQUIRED",
+        403,
+        "The current principal must be included among the decision makers.",
+      );
+    }
+    const decisionMakers = await principalDirectory.list(input.decidedBy);
+    if (
+      decisionMakers.length !== new Set(input.decidedBy).size ||
+      decisionMakers.some((candidate) => candidate.kind !== "human")
+    ) {
+      throw new PilotStoreError(
+        "DECISION_ACTOR_INVALID",
+        400,
+        "Decision makers must be known human members.",
+      );
+    }
     return reply.status(201).send(await store.createDecision(input));
   });
 
-  app.get("/v1/decisions", async () => ({
-    items: await store.listDecisions(),
-  }));
+  app.get("/v1/decisions", async (request) => {
+    await requestAuth.resolve(request);
+    return { items: await store.listDecisions() };
+  });
 
   app.get("/v1/activity", async (request) => {
+    await requestAuth.resolve(request);
     const query = parse(CursorQuery, request.query);
     return await store.cursor(query.after, query.limit);
   });
@@ -1254,7 +1353,15 @@ export async function buildApp(
    * there is no second trail to keep in sync. Only membership and invitation
    * events are exposed — never checkpoints, prompts or file contents.
    */
-  app.get("/v1/governance-audit", async () => {
+  app.get("/v1/governance-audit", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    if ((await pilotStore.getOrganizationRole(principal!.id)) !== "admin") {
+      throw new PilotStoreError(
+        "ORGANIZATION_ADMIN_REQUIRED",
+        403,
+        "Organization administrator access is required.",
+      );
+    }
     const events = await store.listActivity();
     const entries = events
       .filter((event) => GOVERNANCE_EVENT_TYPES.has(event.eventType))
@@ -1348,6 +1455,17 @@ async function presentSpec(
 
 function parse<T>(schema: ZodType<T>, input: unknown): T {
   return schema.parse(input);
+}
+
+function assertCurrentPrincipal(
+  currentPrincipalId: PrincipalId,
+  claimedPrincipalId: string,
+  code: string,
+  message: string,
+): void {
+  if (claimedPrincipalId !== currentPrincipalId) {
+    throw new PilotStoreError(code, 403, message);
+  }
 }
 
 function notFound(reply: FastifyReply, resource: string) {

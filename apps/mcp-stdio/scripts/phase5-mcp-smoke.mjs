@@ -124,8 +124,7 @@ try {
         {
           connectedMcp: true,
           specId,
-          previousConfirmedRevision:
-            confirmed?.revision?.revision ?? null,
+          previousConfirmedRevision: confirmed?.revision?.revision ?? null,
           addressedThreadIds: relevant.map((item) => item.thread.id),
           newRevisionId: updated.spec.currentRevisionId,
           versionCount: updated.revisions.length,

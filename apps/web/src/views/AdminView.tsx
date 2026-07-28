@@ -190,7 +190,10 @@ export function AdminView({
   const governance = useQuery({
     queryKey: ["governance-audit"],
     queryFn: ({ signal }) => getGovernanceAudit(signal),
-    enabled: canGovern,
+    // The endpoint is organization-wide. Team leads still see their
+    // project-automation audit below, but only org admins may load role and
+    // invitation changes outside their own team.
+    enabled: isOrgAdmin,
   });
 
   const refreshInvites = async () => {

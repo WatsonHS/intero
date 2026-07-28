@@ -15,7 +15,7 @@ x-app-environment: &app-environment
   INTERO_PILOT_AUTHORIZATION: spicedb
   INTERO_SPICEDB_ENDPOINT: spicedb:50051
   INTERO_SPICEDB_TOKEN: ${INTERO_SPICEDB_TOKEN:?Set INTERO_SPICEDB_TOKEN}
-  INTERO_SPICEDB_INSECURE: "true"
+  INTERO_SPICEDB_CA_PATH: /run/intero/spicedb/ca.crt
   INTERO_CENTRIFUGO_API_URL: http://centrifugo:8000
   INTERO_CENTRIFUGO_API_KEY: ${INTERO_CENTRIFUGO_API_KEY:?Set INTERO_CENTRIFUGO_API_KEY}
   INTERO_CENTRIFUGO_PUBLIC_URL: ${INTERO_PUBLIC_URL:?Set INTERO_PUBLIC_URL}
@@ -77,7 +77,7 @@ services:
     restart: "no"
 
   spicedb-migrate:
-    image: authzed/spicedb:v1.45.3
+    image: authzed/spicedb:v1.56.0
     profiles: ["migrate"]
     command: ["datastore", "migrate", "head"]
     environment: &spicedb-environment
@@ -90,12 +90,17 @@ services:
     restart: "no"
 
   spicedb:
-    image: authzed/spicedb:v1.45.3
+    image: authzed/spicedb:v1.56.0
     command: ["serve"]
     restart: unless-stopped
     environment:
       <<: *spicedb-environment
       SPICEDB_GRPC_PRESHARED_KEY: ${INTERO_SPICEDB_TOKEN:?Set INTERO_SPICEDB_TOKEN}
+      SPICEDB_GRPC_TLS_CERT_PATH: /run/intero/spicedb/server.crt
+      SPICEDB_GRPC_TLS_KEY_PATH: /run/intero/spicedb/server.key
+    volumes:
+      - ${INTERO_SPICEDB_CERT_FILE:-./.intero-production/spicedb-server.crt}:/run/intero/spicedb/server.crt:ro
+      - ${INTERO_SPICEDB_KEY_FILE:-./.intero-production/spicedb-server.key}:/run/intero/spicedb/server.key:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,7 +112,7 @@ services:
       start_period: 10s
 
   centrifugo:
-    image: centrifugo/centrifugo:v6.3
+    image: centrifugo/centrifugo:v6.8.1
     command: ["centrifugo", "-c", "/centrifugo/config.json"]
     restart: unless-stopped
     ulimits:
@@ -119,7 +124,7 @@ services:
       CENTRIFUGO_HTTP_API_KEY: ${INTERO_CENTRIFUGO_API_KEY:?Set INTERO_CENTRIFUGO_API_KEY}
       CENTRIFUGO_CLIENT_ALLOWED_ORIGINS: ${INTERO_PUBLIC_URL:?Set INTERO_PUBLIC_URL}
     volumes:
-      - ./infra/centrifugo/config.json:/centrifugo/config.json:ro
+      - ./infra/centrifugo/config.production.json:/centrifugo/config.json:ro
 
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z
@@ -149,7 +154,9 @@ services:
       INTERO_WORKER_DATABASE_URL: postgres://intero_worker:${INTERO_POSTGRES_WORKER_PASSWORD:?Set INTERO_POSTGRES_WORKER_PASSWORD}@postgres:5432/intero
       INTERO_SPICEDB_ENDPOINT: spicedb:50051
       INTERO_SPICEDB_TOKEN: ${INTERO_SPICEDB_TOKEN:?Set INTERO_SPICEDB_TOKEN}
-      INTERO_SPICEDB_INSECURE: "true"
+      INTERO_SPICEDB_CA_PATH: /run/intero/spicedb/ca.crt
+    volumes:
+      - ${INTERO_SPICEDB_CA_FILE:-./.intero-production/spicedb-ca.crt}:/run/intero/spicedb/ca.crt:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,6 +177,8 @@ services:
       INTERO_WORKER_METRICS_HOST: 0.0.0.0
       INTERO_WORKER_METRICS_PORT: 9464
       INTERO_WORKER_CONCURRENCY: ${INTERO_WORKER_CONCURRENCY:-8}
+    volumes:
+      - ${INTERO_SPICEDB_CA_FILE:-./.intero-production/spicedb-ca.crt}:/run/intero/spicedb/ca.crt:ro
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -201,6 +210,8 @@ services:
     restart: unless-stopped
     environment:
       <<: *app-environment
+    volumes:
+      - ${INTERO_SPICEDB_CA_FILE:-./.intero-production/spicedb-ca.crt}:/run/intero/spicedb/ca.crt:ro
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -234,7 +245,7 @@ services:
     environment:
       INTERO_PUBLIC_URL: ${INTERO_PUBLIC_URL:?Set INTERO_PUBLIC_URL}
     ports:
-      - "${INTERO_CADDY_PORT:-4311}:${INTERO_CADDY_LISTEN_PORT:-4311}"
+      - "${INTERO_CADDY_PORT:-443}:${INTERO_CADDY_LISTEN_PORT:-443}"
     volumes:
       - caddy-data:/data
       - caddy-config:/config

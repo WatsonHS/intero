@@ -8,6 +8,20 @@ const endpoint = process.env.INTERO_SPICEDB_ENDPOINT;
 const token = process.env.INTERO_SPICEDB_TOKEN;
 const integrationSuite = endpoint && token ? describe : describe.skip;
 
+describe("SpiceDB transport configuration", () => {
+  it("rejects conflicting plaintext and custom-CA settings", () => {
+    expect(
+      () =>
+        new SpiceDbAuthorization({
+          endpoint: "spicedb:50051",
+          token: "server-only-token",
+          insecureLocalhost: true,
+          certificate: Buffer.from("not-a-certificate"),
+        }),
+    ).toThrow("cannot use both insecure transport and a custom CA certificate");
+  });
+});
+
 integrationSuite("SpiceDB Authorization port", () => {
   let authorization: SpiceDbAuthorization;
   const principalId = `principal-${Date.now()}`;
