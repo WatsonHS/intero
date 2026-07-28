@@ -1394,16 +1394,15 @@ async function seedProjectWork(
     jordan,
     "demo-work-auth-tuple",
   );
-  const active = await store.createWorkItem(
+  const agentCreatedActive = await store.createWorkItem(
     {
       projectId,
       featureId: rolloutFeature.id,
       title: "执行 10% 租户安全灰度",
       description: "只有主团队和参与团队的权限检查结果一致时，才继续推进发布。",
       status: "in_progress",
-      ownerId: DEMO_IDS.principals.priya,
       specId: releaseSpec.spec.id,
-      priority: "P0",
+      priority: "unset",
       points: 8,
       piId: current.pi.id,
       sprintId: current.sprints[0]!.id,
@@ -1414,6 +1413,13 @@ async function seedProjectWork(
     },
     agent,
     "demo-work-rollout",
+  );
+  const active = await store.updateWorkItem(
+    projectId,
+    agentCreatedActive.id,
+    { ownerId: DEMO_IDS.principals.priya, priority: "P0" },
+    priya,
+    "demo-work-rollout-human-choice",
   );
   const ready = await store.createWorkItem(
     {

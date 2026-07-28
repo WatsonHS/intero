@@ -9,12 +9,13 @@ import { expect, test, type Page } from "@playwright/test";
 const execFileAsync = promisify(execFile);
 const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://localhost:4333";
 const projectId = "019f9a00-0000-7000-8000-000000000401";
+const priyaPrincipalId = "019f9a00-0000-7000-8000-000000000102";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 
 async function signIn(page: Page, email: string) {
   await page.goto("/");
   await page.getByLabel("邮箱").fill(email);
-  await page.getByLabel("密码").fill("Intero-demo-2026!");
+  await page.getByLabel("密码", { exact: true }).fill("Intero-demo-2026!");
   await page.getByRole("button", { name: "使用邮箱和密码登录" }).click();
   await expect(page.getByTitle("Team Pulse")).toBeVisible();
 }
@@ -141,6 +142,8 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
         "请 Priya 确认幂等键边界与验收条件。",
         "--requested-from",
         "Priya Shah",
+        "--target-principal-id",
+        priyaPrincipalId,
         "--client-event-id",
         `phase7-browser-${suffix}`,
         "--workstream-key",
@@ -187,7 +190,14 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     await expect(
       leader.getByTestId("pilot-coordination-confirm"),
     ).toBeVisible();
+    const confirmResponsePromise = leader.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/confirm"),
+    );
     await leader.getByTestId("pilot-coordination-confirm").click();
+    const confirmResponse = await confirmResponsePromise;
+    expect(confirmResponse.ok()).toBe(true);
     await expect(leader.getByText(conclusion)).toBeVisible();
 
     const automationResponse = await admin.request.get(

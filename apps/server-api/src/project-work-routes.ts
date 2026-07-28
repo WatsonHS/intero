@@ -263,12 +263,18 @@ export async function registerProjectWorkRoutes(
         .object({ historyId: z.uuid() })
         .strict()
         .parse(request.body);
-      return options.store.revertFeature(
-        access.projectId,
-        FeatureId.parse(request.params.featureId),
-        input.historyId,
-        access.actor,
-        idempotencyKey(request),
+      return withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "feature.revert",
+        () =>
+          options.store.revertFeature(
+            access.projectId,
+            FeatureId.parse(request.params.featureId),
+            input.historyId,
+            access.actor,
+            idempotencyKey(request),
+          ),
       );
     },
   );
@@ -277,10 +283,16 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/features/:featureId",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      await options.store.revokeFeature(
-        access.projectId,
-        FeatureId.parse(request.params.featureId),
-        access.actor,
+      await withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "feature.revoke",
+        () =>
+          options.store.revokeFeature(
+            access.projectId,
+            FeatureId.parse(request.params.featureId),
+            access.actor,
+          ),
       );
       return reply.status(204).send();
     },
@@ -386,12 +398,18 @@ export async function registerProjectWorkRoutes(
         .object({ historyId: z.uuid() })
         .strict()
         .parse(request.body);
-      return options.store.revertWorkItem(
-        access.projectId,
-        WorkItemId.parse(request.params.workItemId),
-        input.historyId,
-        access.actor,
-        idempotencyKey(request),
+      return withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "work_item.revert",
+        () =>
+          options.store.revertWorkItem(
+            access.projectId,
+            WorkItemId.parse(request.params.workItemId),
+            input.historyId,
+            access.actor,
+            idempotencyKey(request),
+          ),
       );
     },
   );
@@ -402,11 +420,17 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId/comments/:commentId",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      await options.store.revokeWorkComment(
-        access.projectId,
-        WorkItemId.parse(request.params.workItemId),
-        WorkCommentId.parse(request.params.commentId),
-        access.actor,
+      await withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "work_comment.revoke",
+        () =>
+          options.store.revokeWorkComment(
+            access.projectId,
+            WorkItemId.parse(request.params.workItemId),
+            WorkCommentId.parse(request.params.commentId),
+            access.actor,
+          ),
       );
       return reply.status(204).send();
     },
@@ -416,10 +440,16 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      await options.store.revokeWorkItem(
-        access.projectId,
-        WorkItemId.parse(request.params.workItemId),
-        access.actor,
+      await withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "work_item.revoke",
+        () =>
+          options.store.revokeWorkItem(
+            access.projectId,
+            WorkItemId.parse(request.params.workItemId),
+            access.actor,
+          ),
       );
       return reply.status(204).send();
     },
@@ -483,12 +513,18 @@ export async function registerProjectWorkRoutes(
     "/v1/project-work/:projectId/items/:workItemId/relations/:targetId/:kind",
     async (request, reply) => {
       const access = await requireProjectAccess(request, options, "either");
-      await options.store.revokeRelation(
-        access.projectId,
-        WorkItemId.parse(request.params.workItemId),
-        WorkItemId.parse(request.params.targetId),
-        WorkRelationKind.parse(request.params.kind),
-        access.actor,
+      await withAutomationAuthorityAudit(
+        options.store,
+        access,
+        "work_relation.revoke",
+        () =>
+          options.store.revokeRelation(
+            access.projectId,
+            WorkItemId.parse(request.params.workItemId),
+            WorkItemId.parse(request.params.targetId),
+            WorkRelationKind.parse(request.params.kind),
+            access.actor,
+          ),
       );
       return reply.status(204).send();
     },
@@ -1157,4 +1193,28 @@ async function assertAgentWorkItemBoundaries(
 
 function automationAuthorityDenied(message: string): PilotStoreError {
   return new PilotStoreError("AUTOMATION_AUTHORITY_DENIED", 403, message);
+}
+
+async function withAutomationAuthorityAudit<T>(
+  store: PostgresProjectWorkStore,
+  access: Access,
+  attemptedAction: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (
+      error instanceof PilotStoreError &&
+      error.code === "AUTOMATION_AUTHORITY_DENIED"
+    ) {
+      await store.recordAutomationAuthorityDenial(
+        access.projectId,
+        access.actor,
+        attemptedAction,
+        error.message,
+      );
+    }
+    throw error;
+  }
 }

@@ -82,6 +82,7 @@ export class CloudPilotClient {
   private constructor(
     private readonly connection: CloudConnection,
     private readonly outbox: EncryptedOutbox,
+    private verificationCode?: string,
   ) {}
 
   static async connect(input: {
@@ -107,9 +108,16 @@ export class CloudPilotClient {
       credential?: string;
       projectId?: string;
       binding?: CloudConnection["binding"];
+      verification?: { code?: string };
       message?: string;
     };
-    if (!response.ok || !body.credential || !body.projectId || !body.binding) {
+    if (
+      !response.ok ||
+      !body.credential ||
+      !body.projectId ||
+      !body.binding ||
+      !body.verification?.code
+    ) {
       throw new Error(
         body.message ?? `Agent ticket exchange failed (${response.status}).`,
       );
@@ -126,6 +134,7 @@ export class CloudPilotClient {
     return new CloudPilotClient(
       connection,
       new EncryptedOutbox(outboxPath(directory, input.client), key),
+      body.verification.code,
     );
   }
 
@@ -158,6 +167,49 @@ export class CloudPilotClient {
   }
 
   async validateConnection(): Promise<unknown> {
+    await this.mcpRequest({
+      jsonrpc: "2.0",
+      id: `initialize-${this.connection.binding.id}`,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: {
+          name: this.connection.binding.client,
+          version: "0.1.0",
+        },
+      },
+    });
+    const body = await this.mcpRequest({
+      jsonrpc: "2.0",
+      id: `validate-${this.connection.binding.id}`,
+      method: "tools/call",
+      params: {
+        name: "intero.validate_connection",
+        arguments: {
+          ...(this.verificationCode
+            ? { verificationCode: this.verificationCode }
+            : {}),
+        },
+      },
+    });
+    const resultBody = body as {
+      result?: { content?: Array<{ type?: string; text?: string }> };
+    };
+    const text = resultBody.result?.content?.find(
+      (item) => item.type === "text",
+    )?.text;
+    const result = text ? (JSON.parse(text) as { status?: string }) : undefined;
+    if (result?.status !== "connected") {
+      throw new Error("Agent connection validation did not complete.");
+    }
+    this.verificationCode = undefined;
+    return result;
+  }
+
+  private async mcpRequest(
+    request: Record<string, unknown>,
+  ): Promise<unknown> {
     const response = await fetch(`${this.connection.baseUrl}/v1/pilot/mcp`, {
       method: "POST",
       headers: {
@@ -165,35 +217,28 @@ export class CloudPilotClient {
         accept: "application/json, text/event-stream",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: `validate-${this.connection.binding.id}`,
-        method: "tools/call",
-        params: {
-          name: "intero.validate_connection",
-          arguments: {},
-        },
-      }),
+      body: JSON.stringify(request),
       signal: AbortSignal.timeout(5_000),
     });
-    const body = (await response.json()) as {
-      result?: { content?: Array<{ type?: string; text?: string }> };
+    const responseText = await response.text();
+    let body: {
       error?: { message?: string };
     };
+    try {
+      body = JSON.parse(responseText) as typeof body;
+    } catch {
+      throw new Error(
+        responseText ||
+          `Agent MCP request returned an invalid response (${response.status}).`,
+      );
+    }
     if (!response.ok || body.error) {
       throw new Error(
         body.error?.message ??
-          `Agent connection validation failed (${response.status}).`,
+          `Agent MCP request failed (${response.status}).`,
       );
     }
-    const text = body.result?.content?.find(
-      (item) => item.type === "text",
-    )?.text;
-    const result = text ? (JSON.parse(text) as { status?: string }) : undefined;
-    if (result?.status !== "connected") {
-      throw new Error("Agent connection validation did not complete.");
-    }
-    return result;
+    return body;
   }
 
   async reportConnectionCheck(): Promise<unknown> {

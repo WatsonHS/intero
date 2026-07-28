@@ -96,6 +96,9 @@ describe("cloud MCP client", () => {
               workspaceId: "019f9b01-2222-7222-8222-222222222222",
               preferredLanguage: "zh-CN",
             },
+            verification: {
+              code: "verification-code-connection-test",
+            },
           }),
         );
         return;
@@ -105,10 +108,24 @@ describe("cloud MCP client", () => {
           authorization: request.headers.authorization,
           body,
         });
+        if (body.method === "initialize") {
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: {},
+                serverInfo: { name: "intero-project-cloud", version: "0.2.0" },
+              },
+            }),
+          );
+          return;
+        }
         response.end(
           JSON.stringify({
             jsonrpc: "2.0",
-            id: "validate",
+            id: body.id,
             result: {
               content: [
                 {
@@ -151,10 +168,27 @@ describe("cloud MCP client", () => {
           authorization: "Bearer agent-credential",
           body: expect.objectContaining({
             jsonrpc: "2.0",
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: {
+                name: "codex",
+                version: "0.1.0",
+              },
+            },
+          }),
+        },
+        {
+          authorization: "Bearer agent-credential",
+          body: expect.objectContaining({
+            jsonrpc: "2.0",
             method: "tools/call",
             params: {
               name: "intero.validate_connection",
-              arguments: {},
+              arguments: {
+                verificationCode: "verification-code-connection-test",
+              },
             },
           }),
         },
@@ -214,6 +248,9 @@ describe("cloud MCP client", () => {
               name: "Codex · delivery",
               workspaceId: "019f9b01-2222-7222-8222-222222222222",
               preferredLanguage: "en-US",
+            },
+            verification: {
+              code: "verification-code-project-test",
             },
           }),
         );

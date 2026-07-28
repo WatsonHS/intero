@@ -1222,10 +1222,6 @@ export class PostgresAutomationStore {
          AND j.data#>>'{checkpoint,eventType}' IN (
            'blocker_raised','dependency_declared','review_requested',
            'coordination_requested'
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM pilot_coordination_threads c
-           WHERE c.work_state_id=j.work_state_id
          )`,
       [policy.projectId],
     );

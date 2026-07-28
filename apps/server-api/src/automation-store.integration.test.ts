@@ -500,7 +500,7 @@ databaseSuite("bounded Project automation store", () => {
     ]);
   });
 
-  it("correlates automation and provider recovery to one targeted thread", async () => {
+  it("correlates provider recovery and later automation to one targeted thread", async () => {
     await storeA.updatePolicy({
       projectId: projectA,
       enabled: true,
@@ -509,31 +509,19 @@ databaseSuite("bounded Project automation store", () => {
       unresolvedCoordinationHours: 24,
       actorId: adminA,
     });
-    expect(
-      await storeA.detectMeaningfulSignals("2026-07-26T04:20:01.000Z"),
-    ).toBe(1);
-    const [queued] = await storeA.claimOutbox();
-    expect(queued).toBeDefined();
-    const opened = await storeA.openCoordination(
-      queued!.payload.signalId,
-      "2026-07-26T04:20:02.000Z",
-    );
-    expect(opened).toMatchObject({
-      sourceRef: `work-state:${workStateA}`,
-      participantIds: expect.arrayContaining([adminA, memberA]),
-    });
 
     const normalized = new NormalizedPostgresPilotStore(
       new Pool({ connectionString: databaseAppUrl }),
       organizationA,
     );
+    let providerThreadId: string | undefined;
     try {
       await normalized.claimStandInJob({
         jobKey: checkpointA.clientEventId,
         workerId: "provider-recovery-test",
         attempt: 1,
         maxAttempts: 8,
-        now: "2026-07-26T04:20:03.000Z",
+        now: "2026-07-26T04:20:01.000Z",
       });
       const completed = await normalized.completeStandInJob({
         jobKey: checkpointA.clientEventId,
@@ -554,14 +542,28 @@ databaseSuite("bounded Project automation store", () => {
           safeContext: "Morgan must confirm the retry contract.",
           candidateNextSteps: ["Confirm the bounded retry behavior."],
         },
-        now: "2026-07-26T04:20:04.000Z",
+        now: "2026-07-26T04:20:02.000Z",
       });
-      expect(completed.coordinationThread?.id).toBe(
-        opened.coordinationThreadId,
-      );
+      providerThreadId = completed.coordinationThread?.id;
+      expect(providerThreadId).toBeTruthy();
     } finally {
       await normalized.close();
     }
+
+    expect(
+      await storeA.detectMeaningfulSignals("2026-07-26T04:20:03.000Z"),
+    ).toBe(1);
+    const [queued] = await storeA.claimOutbox();
+    expect(queued).toBeDefined();
+    const opened = await storeA.openCoordination(
+      queued!.payload.signalId,
+      "2026-07-26T04:20:04.000Z",
+    );
+    expect(opened).toMatchObject({
+      sourceRef: `work-state:${workStateA}`,
+      participantIds: expect.arrayContaining([adminA, memberA]),
+      coordinationThreadId: providerThreadId,
+    });
 
     const effects = await admin.query<{
       thread_count: string;
@@ -583,7 +585,7 @@ databaseSuite("bounded Project automation store", () => {
         organizationA,
         workStateA,
         `work-state-coordination:${workStateA}`,
-        opened.coordinationThreadId,
+        providerThreadId,
       ],
     );
     expect(effects.rows[0]).toMatchObject({

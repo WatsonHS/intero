@@ -2,7 +2,7 @@ import { PrincipalId, ProjectId, type WorkActor, uuidv7 } from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
-import type { PilotStore } from "./pilot-store.js";
+import { PilotStoreError, type PilotStore } from "./pilot-store.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 
 const principalId = PrincipalId.parse("019b5ac0-7600-7000-8000-0000000000a1");
@@ -18,6 +18,13 @@ describe("Phase 5 Project Work routes", () => {
   let createdInput: Record<string, unknown> | undefined;
   const projectStore = {
     recordAutomationAuthorityDenial: vi.fn(async () => undefined),
+    revokeWorkItem: vi.fn(async () => {
+      throw new PilotStoreError(
+        "AUTOMATION_AUTHORITY_DENIED",
+        403,
+        "Agent-authored work cannot be revoked by automation.",
+      );
+    }),
     listProject: vi.fn(async (requestedProjectId: ProjectId) => ({
       project: { id: requestedProjectId, name: "Delivery", timezone: "UTC" },
       epics: [],
@@ -201,6 +208,29 @@ describe("Phase 5 Project Work routes", () => {
       expect.objectContaining({ kind: "agent", principalId }),
       "work_item.create",
       expect.any(String),
+    );
+  });
+
+  it("audits a destructive Agent action denied by the store", async () => {
+    signedIn = false;
+    const workItemId = uuidv7();
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/v1/project-work/${projectId}/items/${workItemId}`,
+      headers: {
+        authorization: "Bearer one-time-bound-agent-credential",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      code: "AUTOMATION_AUTHORITY_DENIED",
+    });
+    expect(projectStore.recordAutomationAuthorityDenial).toHaveBeenCalledWith(
+      projectId,
+      expect.objectContaining({ kind: "agent", principalId }),
+      "work_item.revoke",
+      "Agent-authored work cannot be revoked by automation.",
     );
   });
 
