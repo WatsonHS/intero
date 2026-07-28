@@ -8,7 +8,10 @@ import {
 } from "@intero/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ModelGateway } from "../../server-api/src/pilot-ports.js";
+import type {
+  ModelGateway,
+  StandInQuestionInput,
+} from "../../server-api/src/pilot-ports.js";
 import type { PilotStore } from "../../server-api/src/pilot-store.js";
 import type { PlatformStore } from "../../server-api/src/platform-store.js";
 import {
@@ -33,6 +36,7 @@ describe("StandInQuestionHandler", () => {
           threadId: uuidv7() as ThreadId,
           projectId: PROJECT_ID,
           standInOwnerId: OWNER_ID,
+          standInOwnerDisplayName: "Owner",
           askedByPrincipalId: ASKER_ID,
           questionMessageId: uuidv7(),
           answerMessageId: uuidv7(),
@@ -74,7 +78,7 @@ describe("StandInQuestionHandler", () => {
     expect(model.answerStandInQuestion).not.toHaveBeenCalled();
   });
 
-  it("answers an empty-context group mention in its originating Thread without recording a private exchange", async () => {
+  it("answers a projectless group mention in its originating Thread without requiring Work State", async () => {
     const jobId = uuidv7();
     const threadId = uuidv7() as ThreadId;
     const questionMessageId = uuidv7();
@@ -85,12 +89,12 @@ describe("StandInQuestionHandler", () => {
         job: {
           id: jobId,
           threadId,
-          projectId: PROJECT_ID,
           standInOwnerId: OWNER_ID,
+          standInOwnerDisplayName: "Owner",
           askedByPrincipalId: ASKER_ID,
           questionMessageId,
           answerMessageId,
-          question: "What is the current status?",
+          question: "@Owner's Stand-in What is the current status?",
           preferredLanguage: "en-US" as const,
           recordExchange: false,
         },
@@ -100,14 +104,7 @@ describe("StandInQuestionHandler", () => {
     } as unknown as PostgresStandInQuestionRepository;
     const recordStandInExchange = vi.fn();
     const pilotStore = {
-      listProjects: vi.fn(async () => [
-        {
-          id: PROJECT_ID,
-          organizationId: ORGANIZATION_ID,
-          name: "Intero",
-          posture: "collaborative",
-        },
-      ]),
+      listProjects: vi.fn(),
       listStandInExchanges: vi.fn(async () => []),
       listTeamPulse: vi.fn(async () => []),
       recordStandInExchange,
@@ -117,15 +114,17 @@ describe("StandInQuestionHandler", () => {
       updateMessageStream,
       appendMessage: vi.fn(async () => ({})),
     } as unknown as PlatformStore;
-    const answerStandInQuestion = vi.fn(async () => ({
-      answer: "No structured Work State has been published for this member.",
-      currentStatus: "No published structured Work State.",
-      completedOutcome: "",
-      evidence: [],
-      nextStep: "Ask the member to publish a project update.",
-      neededCollaboration: "",
-      sourceWorkStateIds: [],
-    }));
+    const answerStandInQuestion = vi.fn(
+      async (_input: StandInQuestionInput) => ({
+        answer: "No structured Work State has been published for this member.",
+        currentStatus: "No published structured Work State.",
+        completedOutcome: "",
+        evidence: [],
+        nextStep: "Ask the member to publish a project update.",
+        neededCollaboration: "",
+        sourceWorkStateIds: [],
+      }),
+    );
     const model = {
       generateStandInOutput: vi.fn(),
       answerStandInQuestion,
@@ -140,10 +139,9 @@ describe("StandInQuestionHandler", () => {
 
     await handler.handle(
       {
-        schemaVersion: 2,
+        schemaVersion: 3,
         organizationId: ORGANIZATION_ID,
         jobId,
-        projectId: PROJECT_ID,
       },
       { workerId: "worker-1", attempt: 1, maxAttempts: 8 },
     );
@@ -154,6 +152,10 @@ describe("StandInQuestionHandler", () => {
         sources: [],
       }),
     );
+    expect(answerStandInQuestion.mock.calls[0]?.[0]).not.toHaveProperty(
+      "project",
+    );
+    expect(pilotStore.listProjects).not.toHaveBeenCalled();
     expect(recordStandInExchange).not.toHaveBeenCalled();
     expect(updateMessageStream).toHaveBeenLastCalledWith({
       threadId,
@@ -222,6 +224,7 @@ describe("StandInQuestionHandler", () => {
           threadId,
           projectId: PROJECT_ID,
           standInOwnerId: OWNER_ID,
+          standInOwnerDisplayName: "Owner",
           askedByPrincipalId: ASKER_ID,
           questionMessageId,
           answerMessageId,

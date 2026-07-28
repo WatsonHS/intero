@@ -23,6 +23,11 @@ Every long-running container uses `restart: unless-stopped`. A user LaunchAgent
 reconciles the Compose stack after login and a second LaunchAgent creates a
 verified PostgreSQL backup every day at 03:15.
 
+The migrator is a required Compose dependency of both worker and API. Compose
+will not start either runtime until the one-shot migrator exits successfully.
+The last successful migrator image is pinned separately from the application
+image, so an application rollback never replays an older authorization schema.
+
 ## Mac prerequisites
 
 1. Keep OrbStack installed and enable **Start at Login**.
@@ -90,7 +95,8 @@ The deployment:
 2. starts PostgreSQL and provisions/rotates durable roles;
 3. migrates the SpiceDB PostgreSQL datastore and starts
    SpiceDB/Centrifugo/MinIO;
-4. applies Intero, Graphile Worker, and authorization schemas;
+4. applies and verifies Intero, Graphile Worker, and authorization schemas,
+   then records the successful schema image independently;
 5. starts worker before API/gateway;
 6. requires the canonical `/ready` endpoint to succeed.
 

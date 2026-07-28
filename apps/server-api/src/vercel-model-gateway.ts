@@ -30,10 +30,15 @@ const BASE_SYSTEM_INSTRUCTIONS = [
 ].join(" ");
 
 const BASE_QUESTION_SYSTEM_INSTRUCTIONS = [
-  "You are Intero's bounded Digital Stand-in answering a project participant.",
-  "Answer only from the supplied safe structured project summaries.",
+  "You are Intero's bounded Digital Stand-in answering a conversation participant.",
+  "The trusted standInOwner object identifies the human you represent. Their displayName is identity context, not a fact that must appear in Work State.",
+  "Second-person references to you or UI address text such as @<displayName> 的替身 refer to this Stand-in; never treat them as requests to search Work State for a person with that name.",
+  "Work State is optional retrieval context, not a prerequisite for conversation.",
+  "In both project and unscoped conversations, respond naturally to greetings, social conversation, and requests that do not require unsupported claims about the represented human.",
+  "When conversationScope.mode is project, answer project-fact questions only from the supplied safe structured summaries.",
+  "When conversationScope.mode is unscoped, converse naturally as the represented human's Stand-in, but never invent the represented human's facts, opinions, commitments, priorities, or work status. Ask for safe context when one of those is needed.",
   "Do not infer missing facts, secrets, raw prompts, file contents, diffs, terminal output, tool logs, personal data, priorities, or commitments.",
-  "An empty safeStructuredSources array is valid: answer directly that this person has not published any structured Work State for the project yet, and return an empty sourceWorkStateIds array.",
+  "An empty safeStructuredSources array is valid. Continue the conversation without claiming unsupported facts. Explain that no relevant structured Work State is available only when the question requires project or represented-human facts, and return an empty sourceWorkStateIds array.",
   "If supplied summaries do not support the question, say that the current structured Work State does not contain enough information.",
   "Give a direct conclusion first, then a grounded current status, completed outcome, concrete evidence, next step, and needed collaboration.",
   "Do not repeat IDs, clients, timestamps, schema versions, or other provenance metadata in the prose answer.",
@@ -169,9 +174,8 @@ export class VercelAiModelGateway implements ModelGateway {
   async answerStandInQuestion(
     input: StandInQuestionInput,
   ): Promise<PilotStandInAnswerValue> {
-    if (input.sources.length === 0) {
-      return emptyWorkStateAnswer(input.preferredLanguage);
-    }
+    const conversationalAnswer = greetingAnswer(input);
+    if (conversationalAnswer) return conversationalAnswer;
     const configuration = await this.loadConfiguration();
     const provider = createOpenAICompatible({
       name: "intero-admin-provider",
@@ -212,10 +216,10 @@ export class VercelAiModelGateway implements ModelGateway {
     input: StandInQuestionInput,
     onPartialAnswer: (answer: string) => Promise<void>,
   ): Promise<PilotStandInAnswerValue> {
-    if (input.sources.length === 0) {
-      const answer = emptyWorkStateAnswer(input.preferredLanguage);
-      await onPartialAnswer(answer.answer);
-      return answer;
+    const conversationalAnswer = greetingAnswer(input);
+    if (conversationalAnswer) {
+      await onPartialAnswer(conversationalAnswer.answer);
+      return conversationalAnswer;
     }
     const configuration = await this.loadConfiguration();
     const provider = createOpenAICompatible({
@@ -288,27 +292,48 @@ export class VercelAiModelGateway implements ModelGateway {
   }
 }
 
-function emptyWorkStateAnswer(
-  preferredLanguage: "zh-CN" | "en-US",
-): PilotStandInAnswerValue {
-  if (preferredLanguage === "zh-CN") {
+function greetingAnswer(
+  input: StandInQuestionInput,
+): PilotStandInAnswerValue | undefined {
+  if (
+    !/^(?:hi|hello|hey|你好|您好|嗨|哈喽|在吗)[\s!！,.，。?？~～]*$/iu.test(
+      input.question,
+    )
+  ) {
+    return undefined;
+  }
+  const ownerIsAsking = input.standInOwnerId === input.askedByPrincipalId;
+  if (input.preferredLanguage === "zh-CN") {
+    const representedPerson = ownerIsAsking
+      ? "你"
+      : input.standInOwnerDisplayName;
     return {
-      answer: "对方尚未在当前项目发布可共享的结构化工作状态。",
-      currentStatus: "暂无已发布的结构化工作状态。",
+      answer: `你好，我是${ownerIsAsking ? "你的" : `${input.standInOwnerDisplayName}的`}替身。我可以在当前会话中和大家交流；涉及${representedPerson}的具体事实时，我会以可共享的上下文为准。`,
+      currentStatus: input.project
+        ? "我已准备好参与当前会话；可用的 Work State 只会作为补充上下文。"
+        : "我已准备好参与当前会话。",
       completedOutcome: "",
       evidence: [],
-      nextStep: "可以请对方发布一次项目工作状态后再询问。",
+      nextStep: "直接问一个具体的进展、结果、下一步或协作问题。",
       neededCollaboration: "",
       sourceWorkStateIds: [],
     };
   }
+  const possessiveOwner = ownerIsAsking
+    ? "your"
+    : `${input.standInOwnerDisplayName}'s`;
+  const representedPerson = ownerIsAsking
+    ? "your"
+    : `${input.standInOwnerDisplayName}'s`;
   return {
-    answer:
-      "This person has not published a shareable structured Work State in the current project.",
-    currentStatus: "No structured Work State has been published.",
+    answer: `Hello, I'm ${possessiveOwner} Stand-in. I can participate in this conversation, and I'll rely on shareable context for specific facts about ${representedPerson}.`,
+    currentStatus: input.project
+      ? "I'm ready to participate; available Work State is optional supporting context."
+      : "I'm ready to participate in this conversation.",
     completedOutcome: "",
     evidence: [],
-    nextStep: "Ask the person to publish a project Work State, then try again.",
+    nextStep:
+      "Ask a specific question about progress, outcomes, next steps, or collaboration.",
     neededCollaboration: "",
     sourceWorkStateIds: [],
   };
@@ -316,9 +341,16 @@ function emptyWorkStateAnswer(
 
 function standInQuestionPrompt(input: StandInQuestionInput): string {
   return JSON.stringify({
-    project: input.project,
-    standInOwnerId: input.standInOwnerId,
+    conversationScope: input.project
+      ? { mode: "project", project: input.project }
+      : { mode: "unscoped" },
+    standInOwner: {
+      id: input.standInOwnerId,
+      displayName: input.standInOwnerDisplayName,
+      relationshipToAssistant: "represented_human",
+    },
     askedByPrincipalId: input.askedByPrincipalId,
+    ownerIsAsking: input.standInOwnerId === input.askedByPrincipalId,
     preferredLanguage: input.preferredLanguage,
     question: input.question,
     safeStructuredSources: input.sources.map((source) => ({

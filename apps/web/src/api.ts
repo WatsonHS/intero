@@ -744,6 +744,8 @@ export async function createConversationThread(input: {
   title: string;
   participantIds: string[];
   standInIds: string[];
+  /** Project whose shared Work State is available to joined Stand-ins. */
+  projectId?: string;
   /** Optional owning team — a conversation may deliberately have none. */
   teamId?: string;
   /** Set when branching a temporary discussion out of another conversation. */

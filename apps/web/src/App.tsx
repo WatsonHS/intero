@@ -763,6 +763,7 @@ export function RoutedWorkspace() {
   if (view === "chat") {
     return (
       <CommunicationsView
+        {...(selectedProjectId ? { selectedProjectId } : {})}
         {...(communicationMatch
           ? { initialThreadId: communicationMatch.threadId }
           : {})}

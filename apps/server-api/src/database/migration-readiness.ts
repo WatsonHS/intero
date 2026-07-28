@@ -48,3 +48,34 @@ export async function checkDatabaseMigrationReadiness(
     };
   }
 }
+
+export async function assertDatabaseMigrationReadiness(
+  client: MigrationQuery,
+): Promise<void> {
+  const readiness = await checkDatabaseMigrationReadiness(client);
+  if (readiness.status === "ready") return;
+
+  throw new Error(
+    `${readiness.detail}: run the database migrator before starting persistent services`,
+  );
+}
+
+export async function waitForDatabaseMigrationReadiness(
+  client: MigrationQuery,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 250;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const readiness = await checkDatabaseMigrationReadiness(client);
+    if (readiness.status === "ready") return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${readiness.detail}: timed out waiting for the database migrator`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}

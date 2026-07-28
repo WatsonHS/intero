@@ -28,6 +28,18 @@ compose=(
   -f "$repo_root/compose.production.yaml"
 )
 export INTERO_IMAGE_TAG="$image_tag"
+export INTERO_MIGRATOR_IMAGE_TAG
+if [[ -f "$state_dir/current-schema-tag" ]]; then
+  INTERO_MIGRATOR_IMAGE_TAG="$(
+    tr -d '[:space:]' <"$state_dir/current-schema-tag"
+  )"
+elif [[ -f "$state_dir/current-tag" ]]; then
+  INTERO_MIGRATOR_IMAGE_TAG="$(
+    tr -d '[:space:]' <"$state_dir/current-tag"
+  )"
+else
+  INTERO_MIGRATOR_IMAGE_TAG="$image_tag"
+fi
 
 for image in intero-worker intero-api intero-gateway; do
   if ! docker image inspect "$image:$image_tag" >/dev/null 2>&1; then
@@ -35,9 +47,16 @@ for image in intero-worker intero-api intero-gateway; do
     exit 1
   fi
 done
+if ! docker image inspect \
+  "intero-migrator:$INTERO_MIGRATOR_IMAGE_TAG" >/dev/null 2>&1; then
+  echo "Missing schema migrator image: intero-migrator:$INTERO_MIGRATOR_IMAGE_TAG" >&2
+  exit 1
+fi
 
 # Database migrations are forward-only. Rollback changes only application
-# images and deliberately leaves PostgreSQL, SpiceDB, and Centrifugo intact.
+# images. The newest successfully applied migrator remains pinned separately,
+# so Compose can enforce the schema gate without replaying an older SpiceDB
+# schema during application rollback.
 "${compose[@]}" up -d --no-build worker api gateway
 "${compose[@]}" up -d --wait --wait-timeout 120 worker api
 printf '%s\n' "$image_tag" >"$state_dir/current-tag"

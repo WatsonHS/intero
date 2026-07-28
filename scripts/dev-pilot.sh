@@ -41,7 +41,9 @@ if [[ -n "${INTERO_DATABASE_URL:-}" || "${INTERO_PILOT_PERSISTENCE:-}" == "postg
   : "${INTERO_WORKER_DATABASE_URL:?Persistent Pilot requires INTERO_WORKER_DATABASE_URL so Team Pulse jobs can run.}"
   : "${INTERO_PROVIDER_ENCRYPTION_KEY:?Persistent Pilot requires INTERO_PROVIDER_ENCRYPTION_KEY.}"
   pnpm --filter @intero/server-api migrate
-  unset DATABASE_URL
+  # Keep the administrator migration URL available to the API's dev-only
+  # supervisor. It reruns the idempotent migrator before every hot restart;
+  # runtime database access still uses INTERO_DATABASE_URL.
   filters+=("--filter=@intero/server-worker")
 fi
 

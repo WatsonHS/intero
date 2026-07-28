@@ -131,6 +131,7 @@ export function pilotStandInToThreadPayload(
     thread: {
       id: threadId,
       kind: "stand_in",
+      projectId: project.id,
       title: standIn.displayName,
       participantIds: [viewerId, standInOwnerId, standInId].filter(
         (id, index, ids) => ids.indexOf(id) === index,

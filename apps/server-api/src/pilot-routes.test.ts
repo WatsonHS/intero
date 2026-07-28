@@ -2190,7 +2190,7 @@ describe("pilot cloud-first vertical slice", () => {
     ]);
   });
 
-  it("queues an addressed Stand-in reply in the originating group Thread", async () => {
+  it("queues addressed teammate and own Stand-in replies in their originating group Threads", async () => {
     const fixture = await readyProject(app);
     await app.close();
     const answerStandInQuestion = vi.fn(async () => {
@@ -2242,7 +2242,7 @@ describe("pilot cloud-first vertical slice", () => {
 
     const queued = await app.inject({
       method: "POST",
-      url: `/v1/pilot/projects/${fixture.project.id}/threads/${threadId}/messages/${messageId}/stand-in-replies`,
+      url: `/v1/threads/${threadId}/messages/${messageId}/stand-in-replies`,
       headers: identity(B),
       payload: { standInOwnerId: A },
     });
@@ -2254,11 +2254,66 @@ describe("pilot cloud-first vertical slice", () => {
       questionMessageId: messageId,
     });
     expect(answerStandInQuestion).not.toHaveBeenCalled();
+    expect(
+      (await conversationStore.getThread(threadId, B))?.thread.projectId,
+    ).toBeUndefined();
     expect((await conversationStore.getThread(threadId, B))?.messages).toEqual([
       expect.objectContaining({ id: messageId, sequence: 1 }),
       expect.objectContaining({
         senderId: standInId,
         sequence: 2,
+        body: "",
+        streamState: "pending",
+      }),
+    ]);
+
+    const ownThreadId = uuidv7() as ThreadId;
+    const ownMessageId = uuidv7() as MessageId;
+    conversationStore.createThread(
+      {
+        id: ownThreadId,
+        kind: "human_group",
+        title: "My delivery",
+        participantIds: [A, B, standInId],
+        standInIds: [standInId],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        accessVersion: 1,
+        createdAt: new Date().toISOString(),
+      },
+      A,
+    );
+    conversationStore.appendMessage(ownThreadId, {
+      id: ownMessageId,
+      senderId: A,
+      body: "@Alex Rivera 的替身 我当前有什么可共享的进度？",
+      mentionedPrincipalIds: [standInId],
+      createdAt: new Date().toISOString(),
+    });
+
+    const queuedOwn = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${ownThreadId}/messages/${ownMessageId}/stand-in-replies`,
+      headers: identity(A),
+      payload: { standInOwnerId: A },
+    });
+
+    expect(queuedOwn.statusCode).toBe(202);
+    expect(queuedOwn.json()).toMatchObject({
+      status: "pending",
+      threadId: ownThreadId,
+      questionMessageId: ownMessageId,
+    });
+    expect(
+      (await conversationStore.getThread(ownThreadId, A))?.thread.projectId,
+    ).toBeUndefined();
+    expect(
+      (await conversationStore.getThread(ownThreadId, A))?.messages,
+    ).toEqual([
+      expect.objectContaining({ id: ownMessageId, senderId: A }),
+      expect.objectContaining({
+        senderId: standInId,
         body: "",
         streamState: "pending",
       }),

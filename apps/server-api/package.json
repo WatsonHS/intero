@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
-    "dev:pilot": "pnpm dev",
+    "dev:pilot": "tsx watch src/dev-pilot.ts",
     "dev:pilot-provider": "node scripts/pilot-model-provider.mjs",
     "generate": "tsx src/generate-openapi.ts",
     "migrate": "tsx src/database/migrate.ts",

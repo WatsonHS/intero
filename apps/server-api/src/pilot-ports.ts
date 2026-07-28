@@ -45,8 +45,10 @@ export interface ModelGateway {
 
 export interface StandInQuestionInput {
   organizationId: OrganizationId;
-  project: Pick<PilotProject, "id" | "name" | "posture">;
+  /** Optional retrieval scope for grounded Work State context. */
+  project?: Pick<PilotProject, "id" | "name" | "posture">;
   standInOwnerId: PrincipalId;
+  standInOwnerDisplayName: string;
   askedByPrincipalId: PrincipalId;
   preferredLanguage: PilotAgentBinding["preferredLanguage"];
   question: string;

@@ -5,6 +5,7 @@ import {
   type MessageId,
   type OperationId,
   type OrganizationId,
+  personalStandInId,
   type PrincipalId,
   type Workstream,
   uuidv7,
@@ -23,7 +24,7 @@ const databaseSuite = databaseUrl && databaseAppUrl ? describe : describe.skip;
 databaseSuite("PostgreSQL platform store", () => {
   const organizationId = uuidv7() as OrganizationId;
   const ownerId = uuidv7() as PrincipalId;
-  const standInId = uuidv7() as PrincipalId;
+  const standInId = personalStandInId(ownerId);
   const projectId = uuidv7() as Workstream["projectId"];
   const workstreamId = uuidv7() as Workstream["id"];
   const workspaceId = uuidv7() as Workstream["workspaceId"];
@@ -397,6 +398,75 @@ databaseSuite("PostgreSQL platform store", () => {
       body: "A complete grounded answer.",
       streamState: "complete",
       revision: 3,
+    });
+  });
+
+  it("enqueues a projectless Stand-in question without an untyped SQL parameter", async () => {
+    const threadId = uuidv7() as ActionEnvelope["threadId"];
+    const questionMessageId = uuidv7() as MessageId;
+    const answerMessageId = uuidv7() as MessageId;
+    const jobId = uuidv7() as OperationId;
+    await store.upsertPrincipal({
+      id: ownerId,
+      displayName: "Owner",
+      kind: "human",
+    });
+    await store.upsertPrincipal({
+      id: standInId,
+      displayName: "Owner Stand-in",
+      kind: "stand_in",
+    });
+
+    await expect(
+      store.enqueueStandInQuestion({
+        jobId,
+        standInOwnerId: ownerId,
+        askedByPrincipalId: ownerId,
+        answerMessageId,
+        preferredLanguage: "en-US",
+        recordExchange: false,
+        source: {
+          kind: "new_message",
+          thread: {
+            id: threadId,
+            kind: "stand_in",
+            title: "Projectless Stand-in",
+            participantIds: [ownerId, standInId],
+            standInIds: [standInId],
+            accessMode: "agent_readable",
+            priorHistoryGranted: false,
+            sequence: 0,
+            accessVersion: 1,
+            createdAt: new Date().toISOString(),
+          },
+          messageId: questionMessageId,
+          body: "Hello without a project",
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    ).resolves.toMatchObject({ id: questionMessageId });
+
+    const persisted = await admin.query<{
+      project_id: string | null;
+      payload: {
+        schemaVersion: number;
+        organizationId: string;
+        jobId: string;
+      };
+    }>(
+      `SELECT jobs.project_id, outbox.payload
+       FROM stand_in_question_jobs jobs
+       JOIN outbox ON outbox.operation_id = jobs.id
+       WHERE jobs.id = $1`,
+      [jobId],
+    );
+    expect(persisted.rows[0]).toEqual({
+      project_id: null,
+      payload: {
+        schemaVersion: 3,
+        organizationId,
+        jobId,
+      },
     });
   });
 

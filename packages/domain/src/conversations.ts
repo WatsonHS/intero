@@ -5,6 +5,7 @@ import {
   MessageId,
   OperationId,
   PrincipalId,
+  ProjectId,
   ThreadId,
 } from "./ids.js";
 
@@ -38,6 +39,8 @@ export const ConversationThread = z
     accessVersion: z.number().int().positive().optional(),
     /** Denormalized ordering field; message history remains authoritative. */
     latestMessageAt: z.iso.datetime().optional(),
+    /** Project whose shareable Work State bounds Stand-in answers. */
+    projectId: ProjectId.optional(),
     /** Owning team. Optional on purpose: a thread may span teams or none. */
     teamId: z.uuid().optional(),
     /** The conversation this one was branched out of, if any. */

@@ -23,6 +23,14 @@ fi
 
 export INTERO_IMAGE_TAG
 INTERO_IMAGE_TAG="$(tr -d '[:space:]' <"$state_dir/current-tag")"
+export INTERO_MIGRATOR_IMAGE_TAG
+if [[ -f "$state_dir/current-schema-tag" ]]; then
+  INTERO_MIGRATOR_IMAGE_TAG="$(
+    tr -d '[:space:]' <"$state_dir/current-schema-tag"
+  )"
+else
+  INTERO_MIGRATOR_IMAGE_TAG="$INTERO_IMAGE_TAG"
+fi
 exec docker compose \
   --env-file "$env_file" \
   -f "$repo_root/compose.production.yaml" \

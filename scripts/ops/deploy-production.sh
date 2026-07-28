@@ -30,6 +30,7 @@ compose=(
   -f "$repo_root/compose.production.yaml"
 )
 export INTERO_IMAGE_TAG="$image_tag"
+export INTERO_MIGRATOR_IMAGE_TAG="$image_tag"
 
 mkdir -p "$state_dir"
 if [[ -f "$state_dir/current-tag" ]]; then
@@ -49,7 +50,19 @@ echo "Migrating and starting persistent SpiceDB and object storage..."
 "${compose[@]}" up -d --wait --wait-timeout 90 spicedb minio
 
 echo "Applying Intero, Graphile Worker, and SpiceDB schema migrations..."
-"${compose[@]}" --profile migrate run --rm migrator
+"${compose[@]}" up -d migrator
+migrator_container="$("${compose[@]}" ps -q migrator)"
+if [[ -z "$migrator_container" ]]; then
+  echo "Compose did not create the production migrator container." >&2
+  exit 1
+fi
+migrator_exit="$(docker wait "$migrator_container")"
+if [[ "$migrator_exit" != "0" ]]; then
+  "${compose[@]}" logs --tail=200 migrator >&2
+  echo "Production migrator failed with exit code $migrator_exit." >&2
+  exit 1
+fi
+printf '%s\n' "$image_tag" >"$state_dir/current-schema-tag"
 
 echo "Starting worker, API, and static gateway..."
 "${compose[@]}" up -d worker

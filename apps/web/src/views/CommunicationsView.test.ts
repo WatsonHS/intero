@@ -1,12 +1,15 @@
-import { PrincipalId } from "@intero/domain";
+import { PrincipalId, ProjectId } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
 import {
   buildGroupChatThreadInput,
   markCachedThreadRead,
   mergeCommunicationItems,
+  personalStandInPrincipalId,
   resolveConversationIdentity,
+  resolveConversationProjectId,
   resolvePilotCommunicationPrincipal,
+  resolveStandInAvatarIdentity,
   sha256Hex,
 } from "./CommunicationsView.js";
 import type { ThreadPayload } from "../api.js";
@@ -122,6 +125,27 @@ describe("CommunicationsView conversation identity", () => {
   });
 });
 
+describe("personal Stand-in avatar identity", () => {
+  it("uses the owner's id and name in group chats", () => {
+    const standInId = personalStandInPrincipalId(sessionPrincipal.id);
+
+    expect(
+      resolveStandInAvatarIdentity({
+        standInId,
+        standInOwnerIds: new Map([[standInId, sessionPrincipal.id]]),
+        principalNames: new Map([
+          [sessionPrincipal.id, sessionPrincipal.displayName],
+          [standInId, `${sessionPrincipal.displayName} 的替身`],
+        ]),
+        fallbackName: `${sessionPrincipal.displayName} 的替身`,
+      }),
+    ).toEqual({
+      ownerId: sessionPrincipal.id,
+      ownerName: sessionPrincipal.displayName,
+    });
+  });
+});
+
 describe("manual group chat creation", () => {
   it("always creates a durable room instead of a direct or discussion thread", () => {
     const peerId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000003");
@@ -133,15 +157,34 @@ describe("manual group chat creation", () => {
         standInPrincipalId: standInId,
         title: "产品群",
         memberIds: [peerId],
+        projectId: "019f9ba4-3108-7000-8000-000000000098",
         teamId: "019f9ba4-3108-7000-8000-000000000099",
       }),
     ).toEqual({
       kind: "room",
       title: "产品群",
+      projectId: "019f9ba4-3108-7000-8000-000000000098",
       teamId: "019f9ba4-3108-7000-8000-000000000099",
       participantIds: [sessionPrincipal.id, standInId, peerId],
       standInIds: [standInId],
     });
+  });
+
+  it("uses the durable Thread project before the current shell fallback", () => {
+    const durableProjectId = ProjectId.parse(
+      "019f9ba4-3108-7000-8000-000000000098",
+    );
+    const selectedProjectId = "019f9ba4-3108-7000-8000-000000000099";
+
+    expect(
+      resolveConversationProjectId(
+        { projectId: durableProjectId },
+        selectedProjectId,
+      ),
+    ).toBe(durableProjectId);
+    expect(resolveConversationProjectId({}, selectedProjectId)).toBe(
+      selectedProjectId,
+    );
   });
 });
 

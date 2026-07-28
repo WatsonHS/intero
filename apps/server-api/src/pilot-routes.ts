@@ -47,6 +47,7 @@ import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
 import type { PlatformStore } from "./platform-store.js";
 import type { ProviderSecretCipher } from "./provider-secrets.js";
+import { normalizeStandInQuestion } from "./stand-in-question-context.js";
 
 export interface PilotRoutesOptions {
   store: PilotStore;
@@ -1278,8 +1279,10 @@ export async function registerPilotRoutes(
         });
       }
       const generated = await generateStandInAnswer(options, {
+        organizationId: project.organizationId,
         project,
         standInOwnerId,
+        standInOwnerDisplayName: standInOwner.displayName,
         askedByPrincipalId: principal.id,
         preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
         question: input.question,
@@ -1318,126 +1321,36 @@ export async function registerPilotRoutes(
     "/v1/pilot/projects/:projectId/threads/:threadId/messages/:messageId/stand-in-replies",
     async (request, reply) => {
       const principal = await requireIdentity(request, options.requestAuth);
-      const projectId = ProjectId.parse(request.params.projectId);
-      const threadId = request.params.threadId as ThreadId;
-      const messageId = request.params.messageId as ThreadMessage["id"];
       const input = z
         .object({ standInOwnerId: z.uuid() })
         .strict()
         .parse(request.body);
-      const standInOwnerId = PrincipalId.parse(input.standInOwnerId);
-      const project = (await options.store.listProjects(principal.id)).find(
-        (item) => item.id === projectId,
-      );
-      if (!project) {
-        throw new PilotStoreError(
-          "PROJECT_NOT_FOUND",
-          404,
-          "Project was not found.",
-        );
-      }
-      await options.store.listStandInExchanges(
-        projectId,
-        principal.id,
-        standInOwnerId,
-      );
-      const standInOwner = await requireDirectoryPrincipal(
-        options,
-        standInOwnerId,
-      );
-      const standInId = personalStandInId(standInOwnerId);
-      const visibleThread = await options.conversations.getThread(
-        threadId,
-        principal.id,
-      );
-      if (
-        !visibleThread ||
-        visibleThread.thread.accessMode !== "agent_readable" ||
-        !visibleThread.thread.standInIds.includes(standInId)
-      ) {
-        throw new PilotStoreError(
-          "STAND_IN_REPLY_THREAD_NOT_FOUND",
-          404,
-          "The Stand-in reply Thread was not found.",
-        );
-      }
-      const questionMessage = await options.conversations.getThreadMessage(
-        threadId,
-        principal.id,
-        messageId,
-      );
-      if (
-        !questionMessage?.body ||
-        questionMessage.senderId !== principal.id ||
-        !questionMessage.mentionedPrincipalIds?.includes(standInId)
-      ) {
-        throw new PilotStoreError(
-          "STAND_IN_REPLY_MESSAGE_NOT_FOUND",
-          404,
-          "The message that addressed this Stand-in was not found.",
-        );
-      }
-      const answerMessageId = derivedUuid(
-        "intero-group-stand-in-answer-v1",
-        `${messageId}:${standInOwnerId}`,
-      ) as ThreadMessage["id"];
-      const pulse = (
-        await options.store.listTeamPulse(projectId, principal.id)
-      ).filter((entry) => entry.ownerId === standInOwnerId);
-      if (options.adapters.jobs === "transactional-outbox") {
-        await options.conversations.enqueueStandInQuestion({
-          jobId: derivedUuid(
-            "intero-group-stand-in-question-job-v1",
-            `${messageId}:${standInOwnerId}`,
-          ) as import("@intero/domain").OperationId,
-          projectId,
-          standInOwnerId,
-          askedByPrincipalId: principal.id,
-          answerMessageId,
-          preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
-          recordExchange: false,
-          source: {
-            kind: "existing_message",
-            threadId,
-            messageId,
-            createdAt: new Date().toISOString(),
-          },
-        });
-        return reply.status(202).send({
-          status: "pending",
-          threadId,
-          questionMessageId: messageId,
-          answerMessageId,
-          standInOwner,
-          standIn: personalStandInPrincipal(standInOwner),
-        });
-      }
-      const generated = await generateStandInAnswer(options, {
-        project,
-        standInOwnerId,
-        askedByPrincipalId: principal.id,
-        preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
-        question: questionMessage.body,
-        pulse,
+      const result = await handleGroupStandInReply(options, {
+        principal,
+        threadId: request.params.threadId as ThreadId,
+        messageId: request.params.messageId as ThreadMessage["id"],
+        standInOwnerId: PrincipalId.parse(input.standInOwnerId),
+        requestedProjectId: ProjectId.parse(request.params.projectId),
       });
-      const answerMessage = await options.conversations.appendMessage(
-        threadId,
-        {
-          id: answerMessageId,
-          senderId: standInId,
-          body: generated.answer.answer,
-          createdAt: new Date().toISOString(),
-        },
-      );
-      return reply.status(201).send({
-        status: "complete",
-        threadId,
-        questionMessageId: messageId,
-        answerMessage,
-        sources: generated.sources,
-        standInOwner,
-        standIn: personalStandInPrincipal(standInOwner),
+      return reply.status(result.statusCode).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId/stand-in-replies",
+    async (request, reply) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({ standInOwnerId: z.uuid() })
+        .strict()
+        .parse(request.body);
+      const result = await handleGroupStandInReply(options, {
+        principal,
+        threadId: request.params.threadId as ThreadId,
+        messageId: request.params.messageId as ThreadMessage["id"],
+        standInOwnerId: PrincipalId.parse(input.standInOwnerId),
       });
+      return reply.status(result.statusCode).send(result.body);
     },
   );
 
@@ -1700,11 +1613,169 @@ export async function registerPilotRoutes(
   );
 }
 
+async function handleGroupStandInReply(
+  options: PilotRoutesOptions,
+  input: {
+    principal: AuthenticatedPrincipal;
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    standInOwnerId: PrincipalId;
+    requestedProjectId?: ProjectId;
+  },
+): Promise<{ statusCode: 201 | 202; body: Record<string, unknown> }> {
+  const standInOwner = await requireDirectoryPrincipal(
+    options,
+    input.standInOwnerId,
+  );
+  const standInId = personalStandInId(input.standInOwnerId);
+  const visibleThread = await options.conversations.getThread(
+    input.threadId,
+    input.principal.id,
+  );
+  if (
+    !visibleThread ||
+    visibleThread.thread.accessMode !== "agent_readable" ||
+    !visibleThread.thread.standInIds.includes(standInId)
+  ) {
+    throw new PilotStoreError(
+      "STAND_IN_REPLY_THREAD_NOT_FOUND",
+      404,
+      "The Stand-in reply Thread was not found.",
+    );
+  }
+  if (
+    input.requestedProjectId &&
+    visibleThread.thread.projectId &&
+    visibleThread.thread.projectId !== input.requestedProjectId
+  ) {
+    throw new PilotStoreError(
+      "STAND_IN_REPLY_PROJECT_MISMATCH",
+      409,
+      "The Thread belongs to a different Project.",
+    );
+  }
+  const contextualProjectId =
+    input.requestedProjectId ?? visibleThread.thread.projectId;
+  const project = contextualProjectId
+    ? (await options.store.listProjects(input.principal.id)).find(
+        (candidate) => candidate.id === contextualProjectId,
+      )
+    : undefined;
+  if (input.requestedProjectId && !project) {
+    throw new PilotStoreError(
+      "PROJECT_NOT_FOUND",
+      404,
+      "Project was not found.",
+    );
+  }
+  if (project) {
+    await options.store.listStandInExchanges(
+      project.id,
+      input.principal.id,
+      input.standInOwnerId,
+    );
+  }
+  const questionMessage = await options.conversations.getThreadMessage(
+    input.threadId,
+    input.principal.id,
+    input.messageId,
+  );
+  if (
+    !questionMessage?.body ||
+    questionMessage.senderId !== input.principal.id ||
+    !questionMessage.mentionedPrincipalIds?.includes(standInId)
+  ) {
+    throw new PilotStoreError(
+      "STAND_IN_REPLY_MESSAGE_NOT_FOUND",
+      404,
+      "The message that addressed this Stand-in was not found.",
+    );
+  }
+  const answerMessageId = derivedUuid(
+    "intero-group-stand-in-answer-v1",
+    `${input.messageId}:${input.standInOwnerId}`,
+  ) as ThreadMessage["id"];
+  const pulse = project
+    ? (
+        await options.store.listTeamPulse(project.id, input.principal.id)
+      ).filter((entry) => entry.ownerId === input.standInOwnerId)
+    : [];
+  if (options.adapters.jobs === "transactional-outbox") {
+    await options.conversations.enqueueStandInQuestion({
+      jobId: derivedUuid(
+        "intero-group-stand-in-question-job-v1",
+        `${input.messageId}:${input.standInOwnerId}`,
+      ) as import("@intero/domain").OperationId,
+      ...(project ? { projectId: project.id } : {}),
+      standInOwnerId: input.standInOwnerId,
+      askedByPrincipalId: input.principal.id,
+      answerMessageId,
+      preferredLanguage: standInOwner.preferredLanguage ?? "en-US",
+      recordExchange: false,
+      source: {
+        kind: "existing_message",
+        threadId: input.threadId,
+        messageId: input.messageId,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    return {
+      statusCode: 202,
+      body: {
+        status: "pending",
+        threadId: input.threadId,
+        questionMessageId: input.messageId,
+        answerMessageId,
+        standInOwner,
+        standIn: personalStandInPrincipal(standInOwner),
+      },
+    };
+  }
+  const preferredLanguage = standInOwner.preferredLanguage ?? "en-US";
+  const generated = await generateStandInAnswer(options, {
+    organizationId: options.organizationId,
+    ...(project ? { project } : {}),
+    standInOwnerId: input.standInOwnerId,
+    standInOwnerDisplayName: standInOwner.displayName,
+    askedByPrincipalId: input.principal.id,
+    preferredLanguage,
+    question: normalizeStandInQuestion({
+      question: questionMessage.body,
+      standInOwnerDisplayName: standInOwner.displayName,
+      preferredLanguage,
+    }),
+    pulse,
+  });
+  const answerMessage = await options.conversations.appendMessage(
+    input.threadId,
+    {
+      id: answerMessageId,
+      senderId: standInId,
+      body: generated.answer.answer,
+      createdAt: new Date().toISOString(),
+    },
+  );
+  return {
+    statusCode: 201,
+    body: {
+      status: "complete",
+      threadId: input.threadId,
+      questionMessageId: input.messageId,
+      answerMessage,
+      sources: generated.sources,
+      standInOwner,
+      standIn: personalStandInPrincipal(standInOwner),
+    },
+  };
+}
+
 async function generateStandInAnswer(
   options: PilotRoutesOptions,
   input: {
-    project: PilotProject;
+    organizationId: PilotOrganization["id"];
+    project?: PilotProject;
     standInOwnerId: PrincipalId;
+    standInOwnerDisplayName: string;
     askedByPrincipalId: PrincipalId;
     preferredLanguage: "zh-CN" | "en-US";
     question: string;
@@ -1712,13 +1783,18 @@ async function generateStandInAnswer(
   },
 ): Promise<{ answer: PilotStandInAnswer; sources: PilotStandInSource[] }> {
   const answer = await options.modelGateway.answerStandInQuestion({
-    organizationId: input.project.organizationId,
-    project: {
-      id: input.project.id,
-      name: input.project.name,
-      posture: input.project.posture,
-    },
+    organizationId: input.organizationId,
+    ...(input.project
+      ? {
+          project: {
+            id: input.project.id,
+            name: input.project.name,
+            posture: input.project.posture,
+          },
+        }
+      : {}),
     standInOwnerId: input.standInOwnerId,
+    standInOwnerDisplayName: input.standInOwnerDisplayName,
     askedByPrincipalId: input.askedByPrincipalId,
     preferredLanguage: input.preferredLanguage,
     question: input.question,

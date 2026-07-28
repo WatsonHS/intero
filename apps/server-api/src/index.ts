@@ -15,6 +15,7 @@ import { Pool } from "pg";
 import { PostgresActionInboxEventSource } from "./action-inbox-events.js";
 import { buildApp } from "./app.js";
 import { createInteroAuth } from "./auth.js";
+import { assertDatabaseMigrationReadiness } from "./database/migration-readiness.js";
 import { NormalizedPostgresPilotStore } from "./normalized-postgres-pilot-store.js";
 import type { PlatformStore } from "./platform-store.js";
 import type { PilotStore } from "./pilot-store.js";
@@ -64,6 +65,12 @@ let projectWorkStore: PostgresProjectWorkStore | undefined;
 let actionInboxEvents: PostgresActionInboxEventSource | undefined;
 if (databaseUrl) {
   const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    await assertDatabaseMigrationReadiness(pool);
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
   databasePool = pool;
   authDatabase = pool;
   const postgresStore = new PostgresPlatformStore(pool, organizationId);

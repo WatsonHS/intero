@@ -323,6 +323,7 @@ describe("pilot adapter contracts", () => {
           posture: "collaborative",
         },
         standInOwnerId: ADMIN,
+        standInOwnerDisplayName: "Admin",
         askedByPrincipalId: MEMBER,
         preferredLanguage: "en-US",
         question: "What is the current status?",

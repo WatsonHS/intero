@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
-    "dev:pilot": "pnpm dev",
+    "dev:pilot": "tsx watch src/dev-pilot.ts",
     "migrate": "tsx src/migrate.ts",
     "migrate:all": "tsx src/migrate-all.ts",
     "test:database": "vitest run --root ../.. apps/server-worker/src/postgres-repository.integration.test.ts",

@@ -644,7 +644,6 @@ export function askPilotStandIn(
 
 export function enqueuePilotStandInReply(
   identityId: PrincipalId,
-  projectId: string,
   threadId: string,
   messageId: string,
   standInOwnerId: PrincipalId,
@@ -654,14 +653,11 @@ export function enqueuePilotStandInReply(
     threadId: string;
     questionMessageId: string;
     answerMessageId?: string;
-  }>(
-    `/v1/pilot/projects/${projectId}/threads/${threadId}/messages/${messageId}/stand-in-replies`,
-    {
-      method: "POST",
-      identityId,
-      body: { standInOwnerId },
-    },
-  );
+  }>(`/v1/threads/${threadId}/messages/${messageId}/stand-in-replies`, {
+    method: "POST",
+    identityId,
+    body: { standInOwnerId },
+  });
 }
 
 export function createPilotAgentConnection(

@@ -16,24 +16,26 @@ import type {
 } from "../../server-api/src/pilot-ports.js";
 import type { PilotStore } from "../../server-api/src/pilot-store.js";
 import type { PlatformStore } from "../../server-api/src/platform-store.js";
+import { normalizeStandInQuestion } from "../../server-api/src/stand-in-question-context.js";
 
 export const PILOT_STAND_IN_QUESTION_TASK = "pilot_stand_in_question";
 export const PILOT_STAND_IN_QUESTION_DISPATCH_TASK =
   "pilot_stand_in_question_dispatch";
 
 export interface StandInQuestionReference {
-  /** Version 2 requires a worker that preserves originating-Thread semantics. */
-  schemaVersion: 1 | 2;
+  /** Version 2 preserves Thread semantics; version 3 makes context optional. */
+  schemaVersion: 1 | 2 | 3;
   organizationId: OrganizationId;
   jobId: string;
-  projectId: ProjectId;
+  projectId?: ProjectId;
 }
 
 interface StandInQuestionJob {
   id: string;
   threadId: ThreadId;
-  projectId: ProjectId;
+  projectId?: ProjectId;
   standInOwnerId: PrincipalId;
+  standInOwnerDisplayName: string;
   askedByPrincipalId: PrincipalId;
   questionMessageId: MessageId;
   answerMessageId: MessageId;
@@ -159,8 +161,9 @@ export class PostgresStandInQuestionRepository {
       const result = await client.query<{
         id: string;
         thread_id: ThreadId;
-        project_id: ProjectId;
+        project_id: ProjectId | null;
         stand_in_owner_id: PrincipalId;
+        stand_in_owner_display_name: string;
         asked_by_principal_id: PrincipalId;
         question_message_id: MessageId;
         answer_message_id: MessageId;
@@ -171,12 +174,14 @@ export class PostgresStandInQuestionRepository {
           "pending" | "streaming" | "complete" | "failed" | null;
       }>(
         `SELECT j.id, j.thread_id, j.project_id, j.stand_in_owner_id,
+                owner.display_name AS stand_in_owner_display_name,
                 j.asked_by_principal_id, j.question_message_id,
                 j.answer_message_id, j.preferred_language,
                 j.record_exchange, m.body,
                 answer.stream_state AS answer_stream_state
          FROM stand_in_question_jobs j
          JOIN messages m ON m.id = j.question_message_id
+         JOIN principals owner ON owner.id = j.stand_in_owner_id
          LEFT JOIN messages answer ON answer.id = j.answer_message_id
          WHERE j.id = $1`,
         [jobId],
@@ -188,8 +193,9 @@ export class PostgresStandInQuestionRepository {
         job: {
           id: row.id,
           threadId: row.thread_id,
-          projectId: row.project_id,
+          ...(row.project_id ? { projectId: row.project_id } : {}),
           standInOwnerId: row.stand_in_owner_id,
+          standInOwnerDisplayName: row.stand_in_owner_display_name,
           askedByPrincipalId: row.asked_by_principal_id,
           questionMessageId: row.question_message_id,
           answerMessageId: row.answer_message_id,
@@ -284,7 +290,9 @@ export class StandInQuestionOutboxDispatcher {
           {
             jobKey: `stand-in-question:${this.organizationId}:${publication.reference.jobId}`,
             jobKeyMode: "unsafe_dedupe",
-            queueName: `pilot-project-${publication.reference.projectId}`,
+            queueName: publication.reference.projectId
+              ? `pilot-project-${publication.reference.projectId}`
+              : "stand-in-conversation",
             maxAttempts: 8,
           },
         );
@@ -344,21 +352,29 @@ export class StandInQuestionHandler {
     let streamStarted = false;
     let lastPersistedAnswer = "";
     try {
-      const project = (
-        await this.pilotStore.listProjects(job.askedByPrincipalId)
-      ).find((candidate) => candidate.id === job.projectId);
-      if (!project) throw new Error("stand_in_question_project_not_found");
-      await this.pilotStore.listStandInExchanges(
-        job.projectId,
-        job.askedByPrincipalId,
-        job.standInOwnerId,
-      );
-      const pulse = (
-        await this.pilotStore.listTeamPulse(
-          job.projectId,
+      const project = job.projectId
+        ? (await this.pilotStore.listProjects(job.askedByPrincipalId)).find(
+            (candidate) => candidate.id === job.projectId,
+          )
+        : undefined;
+      if (job.projectId && !project) {
+        throw new Error("stand_in_question_project_not_found");
+      }
+      if (project) {
+        await this.pilotStore.listStandInExchanges(
+          project.id,
           job.askedByPrincipalId,
-        )
-      ).filter((entry) => entry.ownerId === job.standInOwnerId);
+          job.standInOwnerId,
+        );
+      }
+      const pulse = project
+        ? (
+            await this.pilotStore.listTeamPulse(
+              project.id,
+              job.askedByPrincipalId,
+            )
+          ).filter((entry) => entry.ownerId === job.standInOwnerId)
+        : [];
       if (typeof this.conversations.updateMessageStream === "function") {
         try {
           await this.conversations.updateMessageStream({
@@ -381,16 +397,25 @@ export class StandInQuestionHandler {
         }
       }
       const modelInput: StandInQuestionInput = {
-        organizationId: project.organizationId,
-        project: {
-          id: project.id,
-          name: project.name,
-          posture: project.posture,
-        },
+        organizationId: this.organizationId,
+        ...(project
+          ? {
+              project: {
+                id: project.id,
+                name: project.name,
+                posture: project.posture,
+              },
+            }
+          : {}),
         standInOwnerId: job.standInOwnerId,
+        standInOwnerDisplayName: job.standInOwnerDisplayName,
         askedByPrincipalId: job.askedByPrincipalId,
         preferredLanguage: job.preferredLanguage,
-        question: job.question,
+        question: normalizeStandInQuestion({
+          question: job.question,
+          standInOwnerDisplayName: job.standInOwnerDisplayName,
+          preferredLanguage: job.preferredLanguage,
+        }),
         sources: pulse,
       };
       const answer = this.model.streamStandInQuestion
@@ -438,28 +463,29 @@ export class StandInQuestionHandler {
         },
       );
       const completedAt = new Date().toISOString();
-      const exchange = job.recordExchange
-        ? await this.pilotStore.recordStandInExchange({
-            id: job.id,
-            questionMessageId: job.questionMessageId,
-            answerMessageId: job.answerMessageId,
-            projectId: job.projectId,
-            standInOwnerId: job.standInOwnerId,
-            askedByPrincipalId: job.askedByPrincipalId,
-            question: job.question,
-            answer: answer.answer,
-            structuredAnswer: {
+      const exchange =
+        job.recordExchange && job.projectId
+          ? await this.pilotStore.recordStandInExchange({
+              id: job.id,
+              questionMessageId: job.questionMessageId,
+              answerMessageId: job.answerMessageId,
+              projectId: job.projectId,
+              standInOwnerId: job.standInOwnerId,
+              askedByPrincipalId: job.askedByPrincipalId,
+              question: job.question,
               answer: answer.answer,
-              currentStatus: answer.currentStatus,
-              completedOutcome: answer.completedOutcome,
-              evidence: answer.evidence,
-              nextStep: answer.nextStep,
-              neededCollaboration: answer.neededCollaboration,
-            },
-            sources,
-            now: completedAt,
-          })
-        : undefined;
+              structuredAnswer: {
+                answer: answer.answer,
+                currentStatus: answer.currentStatus,
+                completedOutcome: answer.completedOutcome,
+                evidence: answer.evidence,
+                nextStep: answer.nextStep,
+                neededCollaboration: answer.neededCollaboration,
+              },
+              sources,
+              now: completedAt,
+            })
+          : undefined;
       const completedAnswer = exchange?.answer ?? answer.answer;
       const answerCreatedAt = exchange?.createdAt ?? completedAt;
       if (streamStarted) {
@@ -514,10 +540,13 @@ function parseReference(
   organizationId: OrganizationId,
 ): StandInQuestionReference {
   if (
-    (payload?.schemaVersion !== 1 && payload?.schemaVersion !== 2) ||
+    (payload?.schemaVersion !== 1 &&
+      payload?.schemaVersion !== 2 &&
+      payload?.schemaVersion !== 3) ||
     payload.organizationId !== organizationId ||
     typeof payload.jobId !== "string" ||
-    typeof payload.projectId !== "string"
+    ((payload.schemaVersion === 1 || payload.schemaVersion === 2) &&
+      typeof payload.projectId !== "string")
   ) {
     throw new Error("invalid_stand_in_question_reference");
   }

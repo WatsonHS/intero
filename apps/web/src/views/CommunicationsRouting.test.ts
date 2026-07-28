@@ -11,6 +11,7 @@ import {
   filterConversationMentionCandidates,
   mentionedStandIns,
   mergeCommunicationItems,
+  moveMentionCandidateIndex,
   ownStandInControlState,
   personalStandInMentionCandidates,
   personalStandInMentionQuery,
@@ -20,6 +21,7 @@ import {
   sendCanonicalConversationMessage,
   shouldSubmitComposerKey,
   splitConversationMentions,
+  standInsAddressedByMessage,
 } from "./CommunicationsView.js";
 import type { ThreadPayload } from "../api.js";
 
@@ -218,6 +220,37 @@ describe("Communications personal Stand-in routing", () => {
     ]);
   });
 
+  it("moves through mention candidates with wrapping arrow navigation", () => {
+    expect(
+      moveMentionCandidateIndex({
+        currentIndex: 0,
+        direction: "next",
+        candidateCount: 3,
+      }),
+    ).toBe(1);
+    expect(
+      moveMentionCandidateIndex({
+        currentIndex: 2,
+        direction: "next",
+        candidateCount: 3,
+      }),
+    ).toBe(0);
+    expect(
+      moveMentionCandidateIndex({
+        currentIndex: 0,
+        direction: "previous",
+        candidateCount: 3,
+      }),
+    ).toBe(2);
+    expect(
+      moveMentionCandidateIndex({
+        currentIndex: 4,
+        direction: "previous",
+        candidateCount: 0,
+      }),
+    ).toBe(0);
+  });
+
   it("replaces the active @ fragment at the cursor", () => {
     const candidate = {
       principalId: DEV_PRINCIPAL_ID,
@@ -285,6 +318,46 @@ describe("Communications personal Stand-in routing", () => {
         ownerId: DEV_PRINCIPAL_ID,
       },
     ]);
+  });
+
+  it("routes a mention of the sender's own joined Stand-in back to that owner", () => {
+    const standInId = personalStandInPrincipalId(SESSION_PRINCIPAL_ID);
+    const candidates = conversationMentionCandidates({
+      participantIds: [SESSION_PRINCIPAL_ID, standInId],
+      standInIds: [standInId],
+      principalNames: new Map([[standInId, "Session Member 的替身"]]),
+      standInOwnerIds: new Map([[standInId, SESSION_PRINCIPAL_ID]]),
+    });
+
+    expect(
+      mentionedStandIns(
+        "@Session Member 的替身 我现在有什么进展？",
+        candidates,
+      ),
+    ).toEqual([
+      {
+        principalId: standInId,
+        ownerId: SESSION_PRINCIPAL_ID,
+      },
+    ]);
+  });
+
+  it("addresses the sole Stand-in implicitly in a direct Stand-in Thread", () => {
+    const standInId = personalStandInPrincipalId(SESSION_PRINCIPAL_ID);
+    const candidates = conversationMentionCandidates({
+      participantIds: [SESSION_PRINCIPAL_ID, standInId],
+      standInIds: [standInId],
+      principalNames: new Map([[standInId, "Session Member 的替身"]]),
+      standInOwnerIds: new Map([[standInId, SESSION_PRINCIPAL_ID]]),
+    });
+
+    expect(standInsAddressedByMessage("你好", candidates, "stand_in")).toEqual([
+      {
+        principalId: standInId,
+        ownerId: SESSION_PRINCIPAL_ID,
+      },
+    ]);
+    expect(standInsAddressedByMessage("你好", candidates, "room")).toEqual([]);
   });
 
   it("adds an unjoined Stand-in only when navigation supplies it explicitly", () => {
@@ -367,7 +440,6 @@ describe("Communications personal Stand-in routing", () => {
         threadId,
         messageId,
         senderId: SESSION_PRINCIPAL_ID,
-        projectId: "019f9f20-0000-7000-8000-000000000088",
         mentionedStandIns: [
           {
             principalId: standInId,
@@ -380,7 +452,6 @@ describe("Communications personal Stand-in routing", () => {
 
     expect(enqueueReply).toHaveBeenCalledWith(
       SESSION_PRINCIPAL_ID,
-      "019f9f20-0000-7000-8000-000000000088",
       threadId,
       messageId,
       DEV_PRINCIPAL_ID,
@@ -400,7 +471,6 @@ describe("Communications personal Stand-in routing", () => {
     const enqueueReply = vi.fn(
       async (
         _identityId: PrincipalId,
-        _projectId: string,
         _threadId: string,
         _messageId: string,
         ownerId: PrincipalId,
@@ -416,7 +486,6 @@ describe("Communications personal Stand-in routing", () => {
           threadId: "019f9f20-0000-7000-8000-000000000099",
           messageId: "019f9f20-0000-7000-8000-000000000098",
           senderId: SESSION_PRINCIPAL_ID,
-          projectId: "019f9f20-0000-7000-8000-000000000088",
           mentionedStandIns: [
             {
               principalId: firstStandInId,
@@ -435,7 +504,6 @@ describe("Communications personal Stand-in routing", () => {
     expect(enqueueReply).toHaveBeenCalledTimes(2);
     expect(enqueueReply).toHaveBeenLastCalledWith(
       SESSION_PRINCIPAL_ID,
-      "019f9f20-0000-7000-8000-000000000088",
       "019f9f20-0000-7000-8000-000000000099",
       "019f9f20-0000-7000-8000-000000000098",
       secondOwnerId,

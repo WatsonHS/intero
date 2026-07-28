@@ -86,6 +86,7 @@ const RELEVANT_KINDS = new Set(THREAD_GROUPS.map((group) => group.kind));
 const DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
 const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 25 * 1024 * 1024;
+const MENTION_LISTBOX_ID = "communications-mention-listbox";
 const MESSAGE_IMAGE_TYPES = new Set([
   "image/avif",
   "image/gif",
@@ -131,10 +132,12 @@ export function buildGroupChatThreadInput(input: {
   standInPrincipalId: PrincipalId;
   title: string;
   memberIds: string[];
+  projectId?: string;
   teamId?: string;
 }) {
   return {
     kind: "room" as const,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.teamId ? { teamId: input.teamId } : {}),
     title: input.title,
     participantIds: [
@@ -146,14 +149,23 @@ export function buildGroupChatThreadInput(input: {
   };
 }
 
+export function resolveConversationProjectId(
+  thread: Pick<ConversationThread, "projectId"> | undefined,
+  selectedProjectId: string | undefined,
+): string | undefined {
+  return thread?.projectId ?? selectedProjectId;
+}
+
 export function CommunicationsView({
   initialThreadId,
   initialStandInOwnerId,
+  selectedProjectId,
   onOpenThread,
   onOpenStandIn,
 }: {
   initialThreadId?: string;
   initialStandInOwnerId?: string;
+  selectedProjectId?: string;
   onOpenThread?: (threadId: string) => void;
   onOpenStandIn?: (ownerId: string) => void;
 } = {}) {
@@ -184,6 +196,8 @@ export function CommunicationsView({
   const [failedReadKey, setFailedReadKey] = useState<string | undefined>();
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionCursor, setMentionCursor] = useState(0);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const mentionOptionRefs = useRef(new Map<string, HTMLButtonElement>());
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
     PrincipalId | undefined
   >(initialStandInOwnerId as PrincipalId | undefined);
@@ -320,6 +334,10 @@ export function CommunicationsView({
     !currentIsPilot &&
     !currentIsPilotStandIn &&
     (current?.thread.kind === "room" || current?.thread.kind === "human_group");
+  const conversationProjectId = resolveConversationProjectId(
+    current?.thread,
+    selectedProjectId ?? pilot?.selectedProjectId,
+  );
   const ownStandInState =
     currentIsCanonicalGroup && current
       ? ownStandInControlState(
@@ -338,6 +356,12 @@ export function CommunicationsView({
   const pilotTeamMembers =
     pilot?.teams.data?.teams.flatMap((team) => team.members) ?? [];
   const standInOwnerIds = new Map<PrincipalId, PrincipalId>();
+  for (const principal of principals.filter(
+    (candidate) => candidate.kind === "human",
+  )) {
+    const ownerId = principal.id as PrincipalId;
+    standInOwnerIds.set(personalStandInPrincipalId(ownerId), ownerId);
+  }
   for (const member of pilotTeamMembers.filter(
     (candidate) => candidate.kind === "human",
   )) {
@@ -407,6 +431,9 @@ export function CommunicationsView({
         activeMention?.query ?? "",
       )
     : [];
+  const activeMentionCandidate =
+    visibleMentionCandidates[activeMentionIndex] ?? visibleMentionCandidates[0];
+  const activeMentionCandidateId = activeMentionCandidate?.principalId;
   const currentSenderId = !current
     ? undefined
     : currentIsPilot || currentIsPilotStandIn
@@ -425,6 +452,13 @@ export function CommunicationsView({
     !currentIsPilotStandIn &&
     current.thread.accessMode === "agent_readable",
   );
+
+  useEffect(() => {
+    if (!mentionPickerOpen || !activeMentionCandidateId) return;
+    mentionOptionRefs.current
+      .get(activeMentionCandidateId)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeMentionCandidateId, mentionPickerOpen]);
 
   function selectThread(threadId: string) {
     setFailedReadKey((key) =>
@@ -657,7 +691,6 @@ export function CommunicationsView({
       threadId: string;
       messageId: string;
       senderId: string;
-      projectId?: string;
       mentionedStandIns: MentionedStandIn[];
     }) =>
       requestConversationStandInReplies(input, {
@@ -690,6 +723,7 @@ export function CommunicationsView({
       senderId: string;
       body: string;
       mode: "canonical" | "pilot-dm" | "pilot-stand-in";
+      projectId?: string;
       standInOwnerId?: PrincipalId;
       mentionedStandIns?: MentionedStandIn[];
       clientMessageId: string;
@@ -709,9 +743,14 @@ export function CommunicationsView({
         if (!input.standInOwnerId) {
           throw new Error("Choose a personal Stand-in.");
         }
+        if (!input.projectId) {
+          throw new Error(
+            "The legacy project-backed Stand-in conversation is no longer available.",
+          );
+        }
         await askPilotStandIn(
           input.senderId as PrincipalId,
-          pilot!.selectedProjectId!,
+          input.projectId,
           input.standInOwnerId,
           input.body,
           input.clientMessageId,
@@ -744,9 +783,6 @@ export function CommunicationsView({
           threadId: input.threadId,
           messageId: input.messageId,
           senderId: input.senderId,
-          ...(pilot?.selectedProjectId
-            ? { projectId: pilot.selectedProjectId }
-            : {}),
           mentionedStandIns: input.mentionedStandIns ?? [],
         });
       }
@@ -778,6 +814,7 @@ export function CommunicationsView({
           ...identity,
           title: input.title || t("chat.defaultRoomTitle"),
           memberIds: input.memberIds,
+          ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
           ...(input.teamId ? { teamId: input.teamId } : {}),
         }),
       );
@@ -842,7 +879,10 @@ export function CommunicationsView({
       if (!identity) throw new Error(t("chat.identityUnavailable"));
       return createConversationThread({
         kind: "stand_in",
-        title: t("chat.group.standIn"),
+        title:
+          principalNames.get(identity.standInPrincipalId) ??
+          t("chat.group.standIn"),
+        ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
         participantIds: [
           identity.currentPrincipalId,
           identity.standInPrincipalId,
@@ -853,6 +893,12 @@ export function CommunicationsView({
     onSuccess: async (thread) => {
       selectThread(thread.id);
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.createFailed"),
+        { title: t("chat.createFailed") },
+      );
     },
   });
 
@@ -974,17 +1020,28 @@ export function CommunicationsView({
         clientMessageId: createClientUuid(),
       };
     }
+    const addressedStandIns = standInsAddressedByMessage(
+      body,
+      mentionCandidates,
+      current.thread.kind,
+    );
     send.mutate({
       threadId: current.thread.id,
       senderId: currentSenderId,
       body,
-      mentionedStandIns: mentionedStandIns(body, mentionCandidates),
+      ...(conversationProjectId ? { projectId: conversationProjectId } : {}),
+      mentionedStandIns: addressedStandIns,
       clientMessageId: retryableSendRef.current.clientMessageId,
-      mentionedPrincipalIds: extractConversationMentionPrincipalIds(
-        body,
-        mentionCandidates,
-        currentSenderId,
-      ),
+      mentionedPrincipalIds: [
+        ...new Set([
+          ...extractConversationMentionPrincipalIds(
+            body,
+            mentionCandidates,
+            currentSenderId,
+          ),
+          ...addressedStandIns.map((standIn) => standIn.principalId),
+        ]),
+      ],
       attachmentIds: availableImages.map((image) => image.id),
       ...(currentIsPilotStandIn && activeStandInOwnerId
         ? { standInOwnerId: activeStandInOwnerId }
@@ -1080,7 +1137,15 @@ export function CommunicationsView({
       principalNames.get(message.senderId) ?? message.senderId.slice(0, 8);
 
     if (isStandIn) {
-      const ownerName = ownerNameFor(thread, principalNames);
+      const avatarIdentity = resolveStandInAvatarIdentity({
+        standInId: message.senderId,
+        standInOwnerIds,
+        principalNames,
+        fallbackName: senderName,
+      });
+      const ownerName = standInOwnerIds.has(message.senderId)
+        ? avatarIdentity.ownerName
+        : ownerNameFor(thread, principalNames);
       const isOpen = expanded.has(message.id);
       const groundedExchange = currentIsPilotStandIn
         ? pilotStandIn.data?.exchanges.find(
@@ -1089,12 +1154,10 @@ export function CommunicationsView({
         : undefined;
       return (
         <div className="grid grid-cols-[30px_minmax(0,1fr)] gap-3">
-          <span
-            className="grid h-[30px] w-[30px] place-items-center rounded-[9px_13px_9px_9px] text-[9.5px] font-[700] text-on-tint"
-            style={{ background: tintFor(message.senderId) }}
-          >
-            {initials(senderName)}
-          </span>
+          <StandInAvatar
+            ownerId={avatarIdentity.ownerId}
+            ownerName={avatarIdentity.ownerName}
+          />
           <div className="min-w-0 max-w-[620px] rounded-card border border-line2 bg-panel2 p-[15px_17px]">
             <div className="mb-[9px] flex items-center gap-[9px]">
               <strong className="text-[12px] font-[620]">{senderName}</strong>
@@ -1359,38 +1422,67 @@ export function CommunicationsView({
         }) ? (
           <div className="min-h-0 flex-1 overflow-auto px-2.5 pb-4">
             {THREAD_GROUPS.map((group) => {
-              const grouped = visibleItems.filter(
-                (item) => item.thread.kind === group.kind,
-              );
-              if (grouped.length === 0) return null;
+              const grouped = (
+                group.kind === "stand_in" ? items : visibleItems
+              ).filter((item) => item.thread.kind === group.kind);
+              if (grouped.length === 0 && group.kind !== "stand_in")
+                return null;
               return (
                 <div key={group.kind}>
                   <div className="px-2.5 py-2 text-[10.5px] font-[650] tracking-[0.1em] text-faint">
                     {t(group.label)}
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    {grouped.map((item) => (
-                      <SidebarThreadItem
-                        key={item.thread.id}
-                        item={item}
-                        active={current?.thread.id === item.thread.id}
-                        principalNames={principalNames}
-                        teamNames={teamNames}
-                        threadTitles={threadTitles}
-                        formatRelative={formatRelative}
-                        t={t}
-                        onSelect={() => {
-                          if (
-                            item.thread.id === pilotStandInItem?.thread.id &&
-                            activeStandInOwnerId
-                          ) {
-                            selectStandIn(activeStandInOwnerId);
-                          } else {
-                            selectThread(item.thread.id);
-                          }
-                        }}
+                    {grouped.length > 0 ? (
+                      grouped.map((item) => (
+                        <SidebarThreadItem
+                          key={item.thread.id}
+                          item={item}
+                          active={current?.thread.id === item.thread.id}
+                          principalNames={principalNames}
+                          standInOwnerIds={standInOwnerIds}
+                          teamNames={teamNames}
+                          threadTitles={threadTitles}
+                          formatRelative={formatRelative}
+                          t={t}
+                          onSelect={() => {
+                            if (
+                              item.thread.id === pilotStandInItem?.thread.id &&
+                              activeStandInOwnerId
+                            ) {
+                              selectStandIn(activeStandInOwnerId);
+                            } else {
+                              selectThread(item.thread.id);
+                            }
+                          }}
+                        />
+                      ))
+                    ) : (
+                      <StandInThreadStarter
+                        title={
+                          (conversationIdentity
+                            ? principalNames.get(
+                                conversationIdentity.standInPrincipalId,
+                              )
+                            : undefined) ?? t("chat.group.standIn")
+                        }
+                        busy={createStandIn.isPending}
+                        disabled={!conversationIdentity}
+                        label={t("chat.empty.start")}
+                        ownerId={
+                          conversationIdentity?.currentPrincipalId ??
+                          "personal-stand-in"
+                        }
+                        ownerName={
+                          (conversationIdentity
+                            ? principalNames.get(
+                                conversationIdentity.currentPrincipalId,
+                              )
+                            : undefined) ?? t("chat.group.standIn")
+                        }
+                        onSelect={() => createStandIn.mutate()}
                       />
-                    ))}
+                    )}
                   </div>
                 </div>
               );
@@ -1433,7 +1525,7 @@ export function CommunicationsView({
               </strong>
               <small className="mt-[3px] truncate text-[11px] text-ink-muted">
                 {currentIsPilotStandIn
-                  ? "个人替身 · 仅使用该成员在当前项目内已共享的 Work State"
+                  ? "个人替身 · Work State 是可选上下文，没有也可以聊天"
                   : currentIsPilot
                     ? "同团队 · 仅参与者可见 · 持久化 1:1"
                     : t("chat.subPeopleStandIns", {
@@ -1670,6 +1762,7 @@ export function CommunicationsView({
                       const cursor =
                         composerRef.current?.selectionStart ?? draft.length;
                       setMentionCursor(cursor);
+                      setActiveMentionIndex(0);
                       setMentionPickerOpen((open) => !open);
                     }}
                     className={cn(
@@ -1747,17 +1840,44 @@ export function CommunicationsView({
                 </div>
                 {mentionPickerOpen ? (
                   <div
+                    id={MENTION_LISTBOX_ID}
+                    role="listbox"
                     data-testid="communications-mention-picker"
                     className="absolute bottom-[54px] left-[11px] right-[11px] z-20 grid max-h-[220px] gap-1 overflow-auto rounded-inset border border-line bg-panel p-1.5 shadow-[0_16px_42px_rgba(0,0,0,0.22)] sm:right-auto sm:w-[360px]"
                   >
                     {visibleMentionCandidates.length > 0 ? (
-                      visibleMentionCandidates.map((candidate) => (
+                      visibleMentionCandidates.map((candidate, index) => (
                         <button
                           type="button"
                           key={candidate.principalId}
+                          id={mentionOptionId(candidate.principalId)}
+                          role="option"
+                          aria-selected={
+                            candidate.principalId ===
+                            activeMentionCandidate?.principalId
+                          }
+                          ref={(element) => {
+                            if (element) {
+                              mentionOptionRefs.current.set(
+                                candidate.principalId,
+                                element,
+                              );
+                            } else {
+                              mentionOptionRefs.current.delete(
+                                candidate.principalId,
+                              );
+                            }
+                          }}
                           data-testid={`communications-mention-option-${candidate.principalId}`}
                           onClick={() => selectMention(candidate)}
-                          className="grid cursor-pointer grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 rounded-btn border-0 bg-transparent px-2.5 py-2 text-left hover:bg-raise"
+                          onMouseEnter={() => setActiveMentionIndex(index)}
+                          className={cn(
+                            "grid cursor-pointer grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 rounded-btn border-0 px-2.5 py-2 text-left",
+                            candidate.principalId ===
+                              activeMentionCandidate?.principalId
+                              ? "bg-raise"
+                              : "bg-transparent hover:bg-raise",
+                          )}
                         >
                           {candidate.kind === "stand_in" ? (
                             <span className="grid h-7 w-7 place-items-center rounded-[9px] bg-accent-soft text-accent-strong">
@@ -1863,6 +1983,7 @@ export function CommunicationsView({
                           event.currentTarget.value.length;
                         setDraft(event.currentTarget.value);
                         setMentionCursor(cursor);
+                        setActiveMentionIndex(0);
                         setMentionPickerOpen(
                           Boolean(
                             conversationMentionQuery(
@@ -1890,6 +2011,23 @@ export function CommunicationsView({
                         const isComposing =
                           event.nativeEvent.isComposing ||
                           event.nativeEvent.keyCode === 229;
+                        if (
+                          mentionPickerOpen &&
+                          visibleMentionCandidates.length > 0 &&
+                          !isComposing &&
+                          (event.key === "ArrowDown" || event.key === "ArrowUp")
+                        ) {
+                          event.preventDefault();
+                          setActiveMentionIndex((currentIndex) =>
+                            moveMentionCandidateIndex({
+                              currentIndex,
+                              direction:
+                                event.key === "ArrowDown" ? "next" : "previous",
+                              candidateCount: visibleMentionCandidates.length,
+                            }),
+                          );
+                          return;
+                        }
                         if (event.key === "Escape" && mentionPickerOpen) {
                           event.preventDefault();
                           setMentionPickerOpen(false);
@@ -1900,10 +2038,10 @@ export function CommunicationsView({
                           !event.shiftKey &&
                           !isComposing &&
                           mentionPickerOpen &&
-                          visibleMentionCandidates[0]
+                          activeMentionCandidate
                         ) {
                           event.preventDefault();
-                          selectMention(visibleMentionCandidates[0]);
+                          selectMention(activeMentionCandidate);
                           return;
                         }
                         if (
@@ -1918,6 +2056,17 @@ export function CommunicationsView({
                         }
                       }}
                       placeholder={t("chat.placeholder")}
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded={mentionPickerOpen}
+                      aria-controls={
+                        mentionPickerOpen ? MENTION_LISTBOX_ID : undefined
+                      }
+                      aria-activedescendant={
+                        mentionPickerOpen && activeMentionCandidate
+                          ? mentionOptionId(activeMentionCandidate.principalId)
+                          : undefined
+                      }
                       disabled={
                         !currentSenderId ||
                         current.thread.accessMode === "human_only_e2ee"
@@ -2119,6 +2268,30 @@ export function mentionedStandIns(
   return [...mentioned.values()];
 }
 
+export function standInsAddressedByMessage(
+  body: string,
+  candidates: ConversationMentionCandidate[],
+  threadKind: ConversationThread["kind"],
+): MentionedStandIn[] {
+  const explicit = mentionedStandIns(body, candidates);
+  if (explicit.length > 0 || threadKind !== "stand_in") return explicit;
+  const directStandIns = candidates.filter(
+    (
+      candidate,
+    ): candidate is ConversationMentionCandidate & {
+      standInOwnerId: PrincipalId;
+    } => candidate.kind === "stand_in" && Boolean(candidate.standInOwnerId),
+  );
+  return directStandIns.length === 1
+    ? [
+        {
+          principalId: directStandIns[0]!.principalId,
+          ownerId: directStandIns[0]!.standInOwnerId,
+        },
+      ]
+    : [];
+}
+
 export async function sendCanonicalConversationMessage(
   input: {
     threadId: string;
@@ -2169,13 +2342,11 @@ export async function requestConversationStandInReplies(
     threadId: string;
     messageId: string;
     senderId: string;
-    projectId?: string;
     mentionedStandIns: MentionedStandIn[];
   },
   dependencies: {
     enqueueReply: (
       identityId: PrincipalId,
-      projectId: string,
       threadId: string,
       messageId: string,
       standInOwnerId: PrincipalId,
@@ -2183,18 +2354,11 @@ export async function requestConversationStandInReplies(
   },
 ): Promise<void> {
   if (input.mentionedStandIns.length === 0) return;
-
-  if (!input.projectId) {
-    throw new StandInReplyError(
-      new Error("No active project is available for the Stand-in."),
-    );
-  }
   const errors: unknown[] = [];
   for (const mentioned of input.mentionedStandIns) {
     try {
       await dependencies.enqueueReply(
         input.senderId as PrincipalId,
-        input.projectId,
         input.threadId,
         input.messageId,
         mentioned.ownerId,
@@ -2231,6 +2395,22 @@ export function filterConversationMentionCandidates(
       .toLocaleLowerCase()
       .includes(needle),
   );
+}
+
+export function moveMentionCandidateIndex(input: {
+  currentIndex: number;
+  direction: "next" | "previous";
+  candidateCount: number;
+}): number {
+  if (input.candidateCount <= 0) return 0;
+  const offset = input.direction === "next" ? 1 : -1;
+  return (
+    (input.currentIndex + offset + input.candidateCount) % input.candidateCount
+  );
+}
+
+function mentionOptionId(principalId: PrincipalId): string {
+  return `communications-mention-option-${principalId}`;
 }
 
 export function applyConversationMention(
@@ -2579,6 +2759,7 @@ function SidebarThreadItem({
   item,
   active,
   principalNames,
+  standInOwnerIds,
   teamNames,
   threadTitles,
   formatRelative,
@@ -2588,6 +2769,7 @@ function SidebarThreadItem({
   item: ThreadPayload;
   active: boolean;
   principalNames: Map<string, string>;
+  standInOwnerIds: Map<PrincipalId, PrincipalId>;
   teamNames: Map<string, string>;
   threadTitles: Map<string, string>;
   formatRelative: (value: string) => string;
@@ -2632,7 +2814,11 @@ function SidebarThreadItem({
           : "grid w-full grid-cols-[30px_minmax(0,1fr)_auto] items-start gap-[11px] rounded-[11px] border-0 bg-transparent p-[10px_11px] text-left cursor-pointer hover:bg-hover-wash"
       }
     >
-      <ThreadGlyph thread={item.thread} principalNames={principalNames} />
+      <ThreadGlyph
+        thread={item.thread}
+        principalNames={principalNames}
+        standInOwnerIds={standInOwnerIds}
+      />
       <span className="grid min-w-0 gap-[3px]">
         <span className="flex min-w-0 items-center gap-1.5">
           <span
@@ -2712,18 +2898,71 @@ function SidebarThreadItem({
   );
 }
 
+export function StandInThreadStarter({
+  title,
+  label,
+  busy,
+  disabled,
+  ownerId,
+  ownerName,
+  onSelect,
+}: {
+  title: string;
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  ownerId: string;
+  ownerName: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="personal-stand-in-conversation"
+      disabled={disabled || busy}
+      onClick={onSelect}
+      className="grid w-full cursor-pointer grid-cols-[30px_minmax(0,1fr)_auto] items-start gap-[11px] rounded-[11px] border-0 bg-transparent p-[10px_11px] text-left hover:bg-hover-wash disabled:cursor-not-allowed disabled:opacity-55"
+    >
+      <StandInAvatar ownerId={ownerId} ownerName={ownerName} busy={busy} />
+      <span className="grid min-w-0 gap-[3px]">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[12.5px] font-[570]">{title}</span>
+          <RobotIcon
+            size={11}
+            className="shrink-0 text-accent-strong"
+            aria-hidden="true"
+          />
+        </span>
+        <span className="truncate text-[11px] text-ink-muted">{label}</span>
+      </span>
+    </button>
+  );
+}
+
 function ThreadGlyph({
   thread,
   principalNames,
+  standInOwnerIds,
 }: {
   thread: ConversationThread;
   principalNames: Map<string, string>;
+  standInOwnerIds: Map<PrincipalId, PrincipalId>;
 }) {
   if (thread.kind === "stand_in") {
+    const standInId = thread.standInIds[0];
+    const avatarIdentity = standInId
+      ? resolveStandInAvatarIdentity({
+          standInId,
+          standInOwnerIds,
+          principalNames,
+          fallbackName: thread.title,
+        })
+      : { ownerId: thread.id, ownerName: thread.title };
     return (
-      <span className="grid h-[30px] w-[30px] place-items-center rounded-[9px] bg-accent-strong text-[10px] font-[650] text-on-accent">
-        IR
-      </span>
+      <StandInAvatar
+        ownerId={avatarIdentity.ownerId}
+        ownerName={avatarIdentity.ownerName}
+      />
     );
   }
   if (thread.kind === "room") {
@@ -2754,6 +2993,50 @@ function ThreadGlyph({
       style={humanId ? { background: tintFor(humanId) } : undefined}
     >
       {initials(name)}
+    </span>
+  );
+}
+
+export function resolveStandInAvatarIdentity(input: {
+  standInId: PrincipalId;
+  standInOwnerIds: Map<PrincipalId, PrincipalId>;
+  principalNames: Map<string, string>;
+  fallbackName: string;
+}): { ownerId: string; ownerName: string } {
+  const ownerId = input.standInOwnerIds.get(input.standInId);
+  return {
+    ownerId: ownerId ?? input.standInId,
+    ownerName:
+      (ownerId ? input.principalNames.get(ownerId) : undefined) ??
+      input.fallbackName,
+  };
+}
+
+function StandInAvatar({
+  ownerId,
+  ownerName,
+  busy = false,
+}: {
+  ownerId: string;
+  ownerName: string;
+  busy?: boolean;
+}) {
+  return (
+    <span className="relative block h-[30px] w-[30px] shrink-0">
+      <span
+        className="grid h-[30px] w-[30px] place-items-center rounded-[9px_13px_9px_9px] text-[10px] font-[650] text-on-tint"
+        style={{ background: tintFor(ownerId) }}
+        title={ownerName}
+      >
+        {busy ? (
+          <CircleNotchIcon size={15} className="animate-spin" />
+        ) : (
+          initials(ownerName)
+        )}
+      </span>
+      <span className="absolute -bottom-0.5 -right-0.5 grid h-[13px] w-[13px] place-items-center rounded-full border-2 border-panel bg-accent-soft text-accent-strong">
+        <RobotIcon size={8} weight="fill" aria-hidden="true" />
+      </span>
     </span>
   );
 }

@@ -140,11 +140,10 @@ services:
       start_period: 10s
 
   migrator:
-    image: intero-migrator:${INTERO_IMAGE_TAG:-local}
+    image: intero-migrator:${INTERO_MIGRATOR_IMAGE_TAG:-local}
     build:
       context: .
       target: migrator
-    profiles: ["migrate"]
     environment:
       DATABASE_URL: postgres://intero:${INTERO_POSTGRES_ADMIN_PASSWORD:?Set INTERO_POSTGRES_ADMIN_PASSWORD}@postgres:5432/intero
       INTERO_WORKER_DATABASE_URL: postgres://intero_worker:${INTERO_POSTGRES_WORKER_PASSWORD:?Set INTERO_POSTGRES_WORKER_PASSWORD}@postgres:5432/intero
@@ -172,6 +171,8 @@ services:
       INTERO_WORKER_METRICS_PORT: 9464
       INTERO_WORKER_CONCURRENCY: ${INTERO_WORKER_CONCURRENCY:-8}
     depends_on:
+      migrator:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       spicedb:
@@ -201,6 +202,8 @@ services:
     environment:
       <<: *app-environment
     depends_on:
+      migrator:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       spicedb:

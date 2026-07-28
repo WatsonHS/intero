@@ -739,6 +739,8 @@ export interface components {
         /** Format: date-time */
         latestMessageAt?: string;
         /** Format: uuid */
+        projectId?: string;
+        /** Format: uuid */
         teamId?: string;
         /** Format: uuid */
         parentThreadId?: string;

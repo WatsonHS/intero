@@ -80,7 +80,8 @@ export interface ThreadMessagePage {
 
 export interface StandInQuestionInput {
   jobId: OperationId;
-  projectId: ProjectId;
+  /** Optional retrieval scope; Stand-in conversation does not require it. */
+  projectId?: ProjectId;
   standInOwnerId: PrincipalId;
   askedByPrincipalId: PrincipalId;
   answerMessageId: ThreadMessage["id"];
@@ -1336,6 +1337,7 @@ export function sameThreadCreation(
     left.accessMode === right.accessMode &&
     left.accessChangedAtSequence === right.accessChangedAtSequence &&
     left.priorHistoryGranted === right.priorHistoryGranted &&
+    left.projectId === right.projectId &&
     left.teamId === right.teamId &&
     left.parentThreadId === right.parentThreadId &&
     sameIds(left.participantIds, right.participantIds) &&

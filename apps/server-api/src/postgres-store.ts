@@ -521,15 +521,16 @@ export class PostgresPlatformStore implements PlatformStore {
     return this.write(async (client) => {
       const inserted = await client.query(
         `INSERT INTO threads
-          (id, organization_id, kind, title, access_mode, access_changed_at_sequence,
-           prior_history_granted, sequence, access_version, team_id,
-           parent_thread_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11)
+          (id, organization_id, project_id, kind, title, access_mode,
+           access_changed_at_sequence, prior_history_granted, sequence,
+           access_version, team_id, parent_thread_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12)
          ON CONFLICT (id) DO NOTHING
          RETURNING id`,
         [
           thread.id,
           this.organizationId,
+          thread.projectId ?? null,
           thread.kind,
           thread.title,
           thread.accessMode,
@@ -928,14 +929,15 @@ export class PostgresPlatformStore implements PlatformStore {
         }
         const insertedThread = await client.query(
           `INSERT INTO threads
-            (id, organization_id, kind, title, access_mode,
+            (id, organization_id, project_id, kind, title, access_mode,
              prior_history_granted, sequence, access_version, created_at)
-           VALUES ($1, $2, $3, $4, $5, false, 0, 1, $6)
+           VALUES ($1, $2, $3, $4, $5, $6, false, 0, 1, $7)
            ON CONFLICT (id) DO NOTHING
            RETURNING id`,
           [
             input.source.thread.id,
             this.organizationId,
+            input.projectId ?? null,
             input.source.thread.kind,
             input.source.thread.title,
             input.source.thread.accessMode,
@@ -1120,20 +1122,13 @@ export class PostgresPlatformStore implements PlatformStore {
          VALUES (
            $1::uuid, $2::uuid, 'pilot.stand_in.question.enqueue',
            jsonb_build_object(
-             'schemaVersion', CASE WHEN $5 THEN 1 ELSE 2 END,
+             'schemaVersion', 3,
              'organizationId', $2::uuid::text,
-             'jobId', $1::uuid::text,
-             'projectId', $3::uuid::text
+             'jobId', $1::uuid::text
            ),
-           $4
+           $3
          )`,
-        [
-          input.jobId,
-          this.organizationId,
-          input.projectId,
-          createdAt,
-          input.recordExchange,
-        ],
+        [input.jobId, this.organizationId, createdAt],
       );
       return stored;
     });
@@ -2179,6 +2174,7 @@ export class PostgresPlatformStore implements PlatformStore {
         ...(row.latest_message_at
           ? { latestMessageAt: asIso(row.latest_message_at) }
           : {}),
+        ...(row.project_id ? { projectId: row.project_id } : {}),
         ...(row.team_id ? { teamId: row.team_id } : {}),
         ...(row.parent_thread_id
           ? { parentThreadId: row.parent_thread_id }

@@ -1304,9 +1304,7 @@ export const standInQuestionJobs = pgTable(
     threadId: uuid("thread_id")
       .notNull()
       .references(() => threads.id),
-    projectId: uuid("project_id")
-      .notNull()
-      .references(() => projects.id),
+    projectId: uuid("project_id").references(() => projects.id),
     standInOwnerId: uuid("stand_in_owner_id")
       .notNull()
       .references(() => principals.id),

@@ -16,6 +16,7 @@ import {
   type PortfolioSummaryJobReference,
   PostgresAutomationStore,
 } from "../../server-api/src/automation-store.js";
+import { assertDatabaseMigrationReadiness } from "../../server-api/src/database/migration-readiness.js";
 import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
   InstrumentedModelGateway,
@@ -81,8 +82,15 @@ if (!providerEncryptionSecret) {
 
 const workerId = `${hostname()}-${process.pid}-${randomUUID()}`;
 const startedAt = new Date().toISOString();
+const pilotDatabasePool = new Pool({ connectionString });
+try {
+  await assertDatabaseMigrationReadiness(pilotDatabasePool);
+} catch (error) {
+  await pilotDatabasePool.end();
+  throw error;
+}
 const pilotStore = new NormalizedPostgresPilotStore(
-  new Pool({ connectionString }),
+  pilotDatabasePool,
   organizationId,
 );
 const spiceDbEndpoint = pilotAdapterConfig.spiceDbEndpoint;
