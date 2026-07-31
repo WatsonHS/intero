@@ -16,6 +16,7 @@ import {
   type PortfolioSummaryJobReference,
   PostgresAutomationStore,
 } from "../../server-api/src/automation-store.js";
+import { CoordinationKernel } from "../../server-api/src/coordination-kernel.js";
 import { assertDatabaseMigrationReadiness } from "../../server-api/src/database/migration-readiness.js";
 import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
@@ -124,11 +125,17 @@ const model = new InstrumentedModelGateway(
   ),
   metrics,
 );
+const conversationPool = new Pool({ connectionString });
+const conversations = new PostgresPlatformStore(
+  conversationPool,
+  organizationId,
+);
 const standInHandler = new PilotStandInJobHandler(
   pilotStore,
   authorization,
   model,
   coordination,
+  new CoordinationKernel(pilotStore, conversations),
 );
 const pilotJobRepository = new PostgresPilotJobRepository(
   new Pool({ connectionString }),
@@ -137,11 +144,6 @@ const pilotJobRepository = new PostgresPilotJobRepository(
 const workerUtils = await makeWorkerUtils({
   connectionString: queueConnectionString,
 });
-const conversationPool = new Pool({ connectionString });
-const conversations = new PostgresPlatformStore(
-  conversationPool,
-  organizationId,
-);
 const standInQuestionRepository = new PostgresStandInQuestionRepository(
   new Pool({ connectionString }),
   organizationId,

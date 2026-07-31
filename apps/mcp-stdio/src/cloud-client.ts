@@ -2,6 +2,7 @@ import {
   PILOT_AGENT_CONFIGURATION_VERSION,
   type PilotAgentClient,
   type PilotCheckpointEventType,
+  type PilotSharedBoundaryInput,
   type PilotWorkNarrative,
   type PreferredLanguage,
   type WorkstreamPhase,
@@ -77,6 +78,7 @@ export interface CloudCheckpointInput {
   workstreamKey?: string | undefined;
   workstreamTitle?: string | undefined;
   phase?: WorkstreamPhase | undefined;
+  sharedBoundaries?: PilotSharedBoundaryInput[] | undefined;
 }
 
 export class CloudPilotClient {
@@ -308,6 +310,7 @@ export class CloudPilotClient {
       },
       narrative: input.narrative,
       evidenceRefs: input.evidenceRefs ?? [],
+      sharedBoundaries: input.sharedBoundaries ?? [],
     };
 
     await this.flush();

@@ -901,6 +901,12 @@ export function RoutedWorkspace() {
             search: { standInOwnerId },
           })
         }
+        onOpenCoordination={(threadId) =>
+          void navigate({
+            to: "/coordination/$threadId",
+            params: { threadId },
+          })
+        }
       />
     );
   }

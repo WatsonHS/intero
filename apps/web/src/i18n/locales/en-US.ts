@@ -665,6 +665,9 @@ export const enUS: Record<TranslationKey, string> = {
   "admin.signal.project_work_risk": "Delivery risk",
   "admin.signalDetail.project_work_risk":
     "Work item progress does not match what was promised.",
+  "admin.signal.work_state_conflict": "Work State boundary conflict",
+  "admin.signalDetail.work_state_conflict":
+    "Two active Work States hold incompatible assumptions about one shared boundary.",
   "admin.audit.lede":
     "Member and role changes, and how escalation signals were handled. Never prompts, model replies or file contents.",
   "admin.audit.empty": "No audit events yet.",
@@ -912,6 +915,17 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.concluded": "Concluded",
   "chat.concludedInto": "Conclusion posted back to “{title}”",
   "chat.openOrigin": "Open the origin",
+  "chat.coordination.summary": "Boundary coordination",
+  "chat.coordination.status.open": "Open",
+  "chat.coordination.status.waiting": "Waiting",
+  "chat.coordination.status.needsAction": "Needs confirmation",
+  "chat.coordination.status.resolved": "Resolved",
+  "chat.coordination.open": "Open temporary discussion",
+  "chat.coordination.relevanceTitle":
+    "This coordination is relevant to what you are viewing",
+  "chat.coordination.dismiss": "Dismiss",
+  "chat.coordination.mute": "Mute",
+  "chat.coordination.revisit": "Restore relevance prompt",
   "admin.audit.tag.governance": "Permissions",
   "admin.audit.event.pilot.team_member.role_changed": "Team role changed",
   "admin.audit.event.pilot.organization_member.role_changed":

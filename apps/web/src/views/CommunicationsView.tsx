@@ -72,9 +72,11 @@ import {
   askPilotStandIn,
   enqueuePilotStandInReply,
   getPilotDms,
+  getPilotOverview,
   getPilotStandIn,
   sendPilotDm,
   type PilotTeamPayload,
+  updatePilotCoordinationRelevance,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { useConversationRealtime } from "../realtime/context.js";
@@ -228,12 +230,14 @@ export function CommunicationsView({
   selectedProjectId,
   onOpenThread,
   onOpenStandIn,
+  onOpenCoordination,
 }: {
   initialThreadId?: string;
   initialStandInOwnerId?: string;
   selectedProjectId?: string;
   onOpenThread?: (threadId: string) => void;
   onOpenStandIn?: (ownerId: string) => void;
+  onOpenCoordination?: (threadId: string) => void;
 } = {}) {
   const { formatRelative, formatTime, t } = useI18n();
   const notifications = useNotifications();
@@ -423,6 +427,48 @@ export function CommunicationsView({
     current?.thread,
     selectedProjectId ?? pilot?.selectedProjectId,
   );
+  const pilotOverview = useQuery({
+    queryKey: ["pilot", "overview", pilot?.identityId, conversationProjectId],
+    queryFn: ({ signal }) =>
+      getPilotOverview(pilot!.identityId!, conversationProjectId!, signal),
+    enabled: Boolean(
+      pilot?.enabled && pilot.identityId && conversationProjectId,
+    ),
+    refetchOnWindowFocus: true,
+  });
+  const activeRelevanceContext =
+    current?.thread.kind === "room"
+      ? current.messages
+          .toReversed()
+          .flatMap((message) =>
+            message.kind === "coordination_summary" &&
+            message.coordinationSummary
+              ? [message.coordinationSummary]
+              : [],
+          )
+          .map((summary) => {
+            const coordination = pilotOverview.data?.coordination.find(
+              (thread) =>
+                (thread.conversationThreadId ?? thread.id) ===
+                summary.coordinationThreadId,
+            );
+            const relevance = coordination
+              ? pilotOverview.data?.coordinationRelevance.find(
+                  (item) =>
+                    item.coordinationThreadId === coordination.id &&
+                    item.sourceRoomThreadId === current.thread.id &&
+                    !item.dismissedAt &&
+                    !item.mutedAt,
+                )
+              : undefined;
+            return coordination && relevance
+              ? { coordination, relevance }
+              : undefined;
+          })
+          .find((context) => context !== undefined)
+      : undefined;
+  const currentCoordination = activeRelevanceContext?.coordination;
+  const activeRelevance = activeRelevanceContext?.relevance;
   const ownStandInState =
     currentIsCanonicalGroup && current
       ? ownStandInControlState(
@@ -909,6 +955,19 @@ export function CommunicationsView({
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
+  const coordinationRelevance = useMutation({
+    mutationFn: (input: {
+      coordinationThreadId: string;
+      action: "dismiss" | "mute" | "revisit";
+    }) =>
+      updatePilotCoordinationRelevance(
+        pilot!.identityId!,
+        input.coordinationThreadId,
+        input.action,
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["pilot", "overview"] }),
+  });
   const create = useMutation({
     mutationFn: async (input: {
       title: string;
@@ -1310,6 +1369,54 @@ export function CommunicationsView({
             seq {message.sequence}
           </span>
         </div>
+      );
+    }
+
+    if (
+      message.kind === "coordination_summary" &&
+      message.coordinationSummary
+    ) {
+      const summary = message.coordinationSummary;
+      const statusLabel =
+        summary.status === "resolved"
+          ? t("chat.coordination.status.resolved")
+          : summary.status === "needs_action"
+            ? t("chat.coordination.status.needsAction")
+            : summary.status === "waiting"
+              ? t("chat.coordination.status.waiting")
+              : t("chat.coordination.status.open");
+      return (
+        <article
+          data-testid={`coordination-summary-${message.id}`}
+          className="rounded-card border border-amber-soft bg-amber-soft p-[17px_19px]"
+        >
+          <div className="flex items-center gap-2">
+            <GitBranchIcon size={16} className="text-amber" />
+            <strong className="text-[12.5px] font-[650] text-ink">
+              {t("chat.coordination.summary")}
+            </strong>
+            <span className="rounded-pill bg-panel px-2 py-0.5 text-[10px] text-amber">
+              {statusLabel}
+            </span>
+            <span className="ml-auto font-mono text-[9.5px] text-faint">
+              {summary.boundaryKey}
+            </span>
+          </div>
+          <p className="mt-2.5 text-[13px] leading-[1.7] text-ink">
+            {summary.situation}
+          </p>
+          <p className="mt-2 text-[11.5px] leading-[1.65] text-ink-muted">
+            {summary.conclusion || summary.unresolvedQuestion}
+          </p>
+          <button
+            type="button"
+            onClick={() => onOpenCoordination?.(summary.coordinationThreadId)}
+            className="mt-3 inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-btn border border-amber bg-transparent px-3 text-[11.5px] text-amber hover:bg-panel"
+          >
+            <GitBranchIcon size={13} />
+            {t("chat.coordination.open")}
+          </button>
+        </article>
       );
     }
 
@@ -1861,6 +1968,63 @@ export function CommunicationsView({
               </span>
             ) : null}
           </header>
+
+          {activeRelevance && currentCoordination ? (
+            <div
+              data-testid="coordination-relevance-prompt"
+              className="border-b border-amber-soft bg-amber-soft px-[26px] py-3"
+            >
+              <div className="flex items-center gap-3">
+                <GitBranchIcon size={15} className="shrink-0 text-amber" />
+                <span className="min-w-0">
+                  <strong className="block text-[11.5px] font-[650] text-ink">
+                    {t("chat.coordination.relevanceTitle")}
+                  </strong>
+                  <small className="mt-0.5 block truncate text-[10.5px] text-ink-muted">
+                    {activeRelevance.reason}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenCoordination?.(
+                      currentCoordination.conversationThreadId ??
+                        currentCoordination.id,
+                    )
+                  }
+                  className="ml-auto h-7 rounded-btn border border-amber px-2.5 text-[10.5px] text-amber"
+                >
+                  {t("chat.coordination.open")}
+                </button>
+                <button
+                  type="button"
+                  disabled={coordinationRelevance.isPending}
+                  onClick={() =>
+                    coordinationRelevance.mutate({
+                      coordinationThreadId: currentCoordination.id,
+                      action: "dismiss",
+                    })
+                  }
+                  className="h-7 border-0 bg-transparent px-1.5 text-[10.5px] text-faint hover:text-ink"
+                >
+                  {t("chat.coordination.dismiss")}
+                </button>
+                <button
+                  type="button"
+                  disabled={coordinationRelevance.isPending}
+                  onClick={() =>
+                    coordinationRelevance.mutate({
+                      coordinationThreadId: currentCoordination.id,
+                      action: "mute",
+                    })
+                  }
+                  className="h-7 border-0 bg-transparent px-1.5 text-[10.5px] text-faint hover:text-ink"
+                >
+                  {t("chat.coordination.mute")}
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {legacyStandInRecord ? (
             <div

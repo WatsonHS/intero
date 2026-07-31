@@ -3,6 +3,7 @@ import type {
   PilotAgentClient,
   PilotCollaborationPosture,
   PilotCoordinationThread,
+  PilotCoordinationRelevance,
   PilotDirectMessage,
   PilotDirectMessageThread,
   PilotOrganization,
@@ -114,6 +115,7 @@ export interface PilotOverviewPayload {
   privateWorkState: PilotPrivateWorkState[];
   pulse: PilotPulseEntry[];
   coordination: PilotCoordinationThread[];
+  coordinationRelevance: PilotCoordinationRelevance[];
   principals: PrincipalSummary[];
   organization?: PilotOrganization;
 }
@@ -515,6 +517,21 @@ export function getPilotOverview(
   return request<PilotOverviewPayload>(
     `/v1/pilot/projects/${projectId}/overview`,
     { identityId, ...(signal ? { signal } : {}) },
+  );
+}
+
+export function updatePilotCoordinationRelevance(
+  identityId: PrincipalId,
+  coordinationThreadId: string,
+  action: "dismiss" | "mute" | "revisit",
+) {
+  return request<{ relevance: PilotCoordinationRelevance }>(
+    `/v1/pilot/coordination/${coordinationThreadId}/relevance`,
+    {
+      method: "POST",
+      identityId,
+      body: { action },
+    },
   );
 }
 

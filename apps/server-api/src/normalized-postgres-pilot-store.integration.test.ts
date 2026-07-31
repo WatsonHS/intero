@@ -313,6 +313,155 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     });
   });
 
+  it("persists one shared-boundary conflict with multi-source provenance", async () => {
+    const activeBinding = (
+      await store.listAgentBindings(projectId, adminId)
+    )[0]!;
+    const memberTicketId = uuidv7();
+    const memberTicketHash = "e".repeat(64);
+    await store.createAgentTicket({
+      id: memberTicketId,
+      projectId,
+      ownerId: memberId,
+      client: "claude-code",
+      preferredLanguage: "en-US",
+      ticketHash: memberTicketHash,
+      expiresAt: "2026-07-31T09:00:00.000Z",
+      createdAt: "2026-07-31T08:00:00.000Z",
+    });
+    const memberBinding = await store.exchangeAgentTicket(
+      memberTicketHash,
+      {
+        ...binding(memberTicketId, projectId, memberId, "f".repeat(64)),
+        client: "claude-code",
+        name: "Claude Code validation",
+        createdAt: "2026-07-31T08:00:01.000Z",
+      },
+      "2026-07-31T08:00:01.000Z",
+    );
+    const assumption = "v1 response keeps account_id";
+    const checkpointWithBoundary = (
+      clientEventId: string,
+      relation: "changing" | "depending_on",
+      change: "compatible" | "breaking" | "unknown",
+      preserves: string[],
+    ): PilotCheckpointInput => ({
+      ...checkpointInput(projectId),
+      clientEventId,
+      occurredAt: "2026-07-31T08:01:00.000Z",
+      workstream: {
+        key: "account-api",
+        title: "Account API",
+        phase: "implementing",
+      },
+      sharedBoundaries: [
+        {
+          key: "api/accounts.v1",
+          kind: "api",
+          relation,
+          assumption,
+          change,
+          preserves,
+        },
+      ],
+    });
+    const producer = checkpointWithBoundary(
+      "postgres-compatible-producer-0001",
+      "changing",
+      "compatible",
+      [assumption],
+    );
+    const consumer = checkpointWithBoundary(
+      "postgres-compatible-consumer-0001",
+      "depending_on",
+      "unknown",
+      [],
+    );
+    const producerState = await store.ingestCheckpoint(
+      activeBinding,
+      producer,
+      "2026-07-31T08:01:01.000Z",
+    );
+    const consumerState = await store.ingestCheckpoint(
+      memberBinding,
+      consumer,
+      "2026-07-31T08:01:02.000Z",
+    );
+    const project = (await store.listProjects(adminId)).find(
+      (candidate) => candidate.id === projectId,
+    )!;
+    await store.reconcileSharedBoundaries({
+      project,
+      binding: activeBinding,
+      workStateId: producerState.workState.id,
+      checkpoint: producer,
+      now: "2026-07-31T08:01:01.000Z",
+    });
+    const control = await store.reconcileSharedBoundaries({
+      project,
+      binding: memberBinding,
+      workStateId: consumerState.workState.id,
+      checkpoint: consumer,
+      now: "2026-07-31T08:01:02.000Z",
+    });
+    expect(control.coordinationThreads).toEqual([]);
+
+    const breaking = checkpointWithBoundary(
+      "postgres-breaking-producer-0001",
+      "changing",
+      "breaking",
+      [],
+    );
+    const breakingState = await store.ingestCheckpoint(
+      activeBinding,
+      breaking,
+      "2026-07-31T08:02:00.000Z",
+    );
+    const conflict = await store.reconcileSharedBoundaries({
+      project,
+      binding: activeBinding,
+      workStateId: breakingState.workState.id,
+      checkpoint: breaking,
+      now: "2026-07-31T08:02:00.000Z",
+    });
+    expect(conflict.coordinationThreads).toHaveLength(1);
+    expect(conflict.coordinationThreads[0]).toMatchObject({
+      trigger: "work_state_conflict",
+      boundaryKey: "api/accounts.v1",
+      sourceWorkStateIds: [expect.any(String), expect.any(String)],
+      sourceClaimIds: [expect.any(String), expect.any(String)],
+    });
+
+    const restarted = new NormalizedPostgresPilotStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    await expect(
+      restarted.listCoordination(projectId, adminId),
+    ).resolves.toHaveLength(1);
+    await expect(
+      restarted.listCoordinationRelevance(projectId, adminId),
+    ).resolves.toHaveLength(1);
+    await expect(
+      restarted.listCoordinationRelevance(projectId, memberId),
+    ).resolves.toHaveLength(1);
+    await restarted.close();
+    const sources = await admin.query<{ count: string }>(
+      `SELECT count(*)
+       FROM pilot_coordination_sources
+       WHERE organization_id = $1`,
+      [organizationId],
+    );
+    expect(sources.rows[0]?.count).toBe("2");
+    const signals = await admin.query<{ count: string }>(
+      `SELECT count(*)
+       FROM project_automation_signals
+       WHERE organization_id = $1 AND kind = 'work_state_conflict'`,
+      [organizationId],
+    );
+    expect(signals.rows[0]?.count).toBe("1");
+  });
+
   it("enforces cross-Organization RLS on every normalized table", async () => {
     const otherStore = new NormalizedPostgresPilotStore(
       new Pool({ connectionString: databaseAppUrl }),
@@ -372,11 +521,14 @@ const normalizedPilotTables = [
   "pilot_agent_tickets",
   "pilot_checkpoint_idempotency",
   "pilot_coordination_participants",
+  "pilot_coordination_relevance",
+  "pilot_coordination_sources",
   "pilot_coordination_threads",
   "pilot_deployment_settings",
   "pilot_dm_messages",
   "pilot_dm_threads",
   "pilot_private_claims",
+  "pilot_shared_boundary_claims",
   "pilot_project_settings",
   "pilot_project_teams",
   "pilot_provider_configs",
@@ -522,14 +674,31 @@ async function deleteOrganizationFixture(
   admin: Client,
   organizationId: OrganizationId,
 ): Promise<void> {
+  await admin.query(
+    "DELETE FROM project_automation_audit WHERE organization_id = $1",
+    [organizationId],
+  );
+  await admin.query(
+    `UPDATE pilot_coordination_threads
+     SET automation_signal_id = NULL
+     WHERE organization_id = $1`,
+    [organizationId],
+  );
+  await admin.query(
+    "DELETE FROM project_automation_signals WHERE organization_id = $1",
+    [organizationId],
+  );
   const tables = [
     "outbox",
     "activity_events",
     "pilot_checkpoint_idempotency",
     "pilot_coordination_participants",
+    "pilot_coordination_relevance",
+    "pilot_coordination_sources",
     "pilot_coordination_threads",
     "pilot_pulse_entries",
     "pilot_private_claims",
+    "pilot_shared_boundary_claims",
     "pilot_stand_in_jobs",
     "pilot_work_states",
     "pilot_agent_bindings",

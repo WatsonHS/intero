@@ -1,5 +1,6 @@
 export * from "./capability-policy.js";
 export * from "./claim-resolver.js";
+export * from "./shared-boundary.js";
 export * from "./context-builder.js";
 export * from "./conversation-policy.js";
 export * from "./public-projection.js";

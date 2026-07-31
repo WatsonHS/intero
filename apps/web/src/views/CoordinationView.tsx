@@ -46,6 +46,7 @@ import {
   confirmPilotConclusion,
   getPilotOverview,
   proposePilotConclusion,
+  updatePilotCoordinationRelevance,
 } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 
@@ -129,7 +130,15 @@ export function CoordinationView({
     ).values(),
   ];
   const pilotThreadById = new Map(
-    pilotThreads.map((thread) => [thread.id, thread]),
+    pilotThreads.flatMap((thread) => [
+      [thread.id, thread] as const,
+      ...(thread.conversationThreadId
+        ? ([[thread.conversationThreadId, thread]] as const)
+        : []),
+    ]),
+  );
+  const coordinationRelevance = pilotOverviews.flatMap(
+    (overview) => overview.data?.coordinationRelevance ?? [],
   );
   const projectNames = new Map(
     pilot?.projects.data?.projects.map((project) => [
@@ -144,14 +153,23 @@ export function CoordinationView({
       `Project · ${thread.projectId.slice(0, 8)}`
     );
   }
-  const pilotItems = pilotThreads.map((thread) =>
-    pilotCoordinationToThreadPayload(
-      thread,
-      pilotPrincipals,
-      pilot?.bootstrap.data?.standIn,
-    ),
-  );
-  const items = [...(threads.data?.items ?? []), ...pilotItems];
+  const pilotItems = pilotThreads
+    .filter((thread) => !thread.conversationThreadId)
+    .map((thread) =>
+      pilotCoordinationToThreadPayload(
+        thread,
+        pilotPrincipals,
+        pilot?.bootstrap.data?.standIn,
+      ),
+    );
+  const items = [
+    ...new Map(
+      [...(threads.data?.items ?? []), ...pilotItems].map((item) => [
+        item.thread.id,
+        item,
+      ]),
+    ).values(),
+  ];
   const filtered = items.filter(
     (item) =>
       filter === "all" ||
@@ -172,6 +190,13 @@ export function CoordinationView({
     ? pilotThreadById.get(current.thread.id)
     : undefined;
   const currentProjectId = currentPilotThread?.projectId ?? pilotProject?.id;
+  const currentRelevance = currentPilotThread
+    ? coordinationRelevance.find(
+        (item) =>
+          item.coordinationThreadId === currentPilotThread.id &&
+          item.principalId === pilot?.identityId,
+      )
+    : undefined;
   const automation = useQuery({
     queryKey: ["project-automation", currentProjectId],
     queryFn: ({ signal }) => getProjectAutomation(currentProjectId!, signal),
@@ -239,6 +264,15 @@ export function CoordinationView({
   const confirm = useMutation({
     mutationFn: () =>
       confirmPilotConclusion(pilot!.identityId!, currentPilotThread!.id),
+    onSuccess: invalidatePilot,
+  });
+  const revisit = useMutation({
+    mutationFn: () =>
+      updatePilotCoordinationRelevance(
+        pilot!.identityId!,
+        currentPilotThread!.id,
+        "revisit",
+      ),
     onSuccess: invalidatePilot,
   });
   const revertAutomation = useMutation({
@@ -514,6 +548,16 @@ export function CoordinationView({
         <p className="mt-3 max-w-[620px] text-[13px] leading-[1.75] text-ink-muted [text-wrap:pretty]">
           {t("coord.lede")}
         </p>
+        {currentRelevance?.dismissedAt || currentRelevance?.mutedAt ? (
+          <button
+            type="button"
+            disabled={revisit.isPending}
+            onClick={() => revisit.mutate()}
+            className="mt-3 inline-flex h-8 cursor-pointer items-center rounded-btn border border-line2 bg-panel2 px-3 text-[11px] text-ink-muted hover:border-accent-strong hover:text-accent-strong disabled:opacity-45"
+          >
+            {t("chat.coordination.revisit")}
+          </button>
+        ) : null}
 
         {!currentPilotThread ? (
           <div
@@ -776,9 +820,9 @@ export function CoordinationView({
             </span>
           </div>
         ) : null}
-        {propose.isError || confirm.isError ? (
+        {propose.isError || confirm.isError || revisit.isError ? (
           <p className="mt-3 text-[11.5px] text-danger">
-            {(propose.error ?? confirm.error)?.message}
+            {(propose.error ?? confirm.error ?? revisit.error)?.message}
           </p>
         ) : null}
 

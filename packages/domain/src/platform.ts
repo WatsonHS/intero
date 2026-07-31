@@ -110,6 +110,7 @@ export const ProjectAutomationSignalKind = z.enum([
   "spec_review_stale",
   "coordination_unresolved",
   "project_work_risk",
+  "work_state_conflict",
 ]);
 export type ProjectAutomationSignalKind = z.infer<
   typeof ProjectAutomationSignalKind

@@ -260,6 +260,13 @@
       "when": 1786723200000,
       "tag": "0036_workspace_cache_events",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786809600000,
+      "tag": "0037_r1_r2_coordination_kernel",
+      "breakpoints": true
     }
   ]
 }

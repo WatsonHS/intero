@@ -65,6 +65,7 @@ import {
 } from "./action-inbox-events.js";
 import { registerAutomationRoutes } from "./automation-routes.js";
 import { PostgresAutomationStore } from "./automation-store.js";
+import { CoordinationKernel } from "./coordination-kernel.js";
 import { PostgresInformationStore } from "./information-store.js";
 import {
   InMemoryPilotStore,
@@ -307,11 +308,13 @@ export async function buildApp(
     metrics && !(rawPilotModelGateway instanceof InstrumentedModelGateway)
       ? new InstrumentedModelGateway(rawPilotModelGateway, metrics)
       : rawPilotModelGateway;
+  const coordinationKernel = new CoordinationKernel(pilotStore, store);
   const standInJobHandler = new PilotStandInJobHandler(
     pilotStore,
     pilotAuthorization,
     pilotModelGateway,
     pilotCoordination,
+    coordinationKernel,
   );
   const pilotJobs =
     options.pilotJobs ??
@@ -435,6 +438,7 @@ export async function buildApp(
     providerSecretCipher,
     checkpointService: pilotCheckpointService,
     coordination: pilotCoordination,
+    coordinationKernel,
     modelGateway: pilotModelGateway,
     adapters: {
       ...(realtimeEnabled ? { realtime: "centrifugo" as const } : {}),
@@ -1096,6 +1100,19 @@ export async function buildApp(
         principal!.id,
       );
       if (!visible) return notFound(reply, "Thread");
+      const managedCoordination =
+        await pilotStore.findCoordinationByConversationThread(
+          request.params.threadId,
+        );
+      if (managedCoordination) {
+        return reply.status(409).send({
+          error: {
+            code: "managed_coordination_requires_confirmation",
+            message:
+              "This coordination branch must be concluded through its responsible-participant confirmation flow.",
+          },
+        });
+      }
       try {
         const result = await store.concludeThreadIntoParent({
           threadId: request.params.threadId as ThreadId,

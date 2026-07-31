@@ -151,6 +151,12 @@ Exit evidence:
 
 ### R1 — Prove the coordination kernel
 
+Implementation status (2026-07-31): the explicit shared-Claim contract,
+deterministic matcher, multi-source persistence, MCP evaluation pair, and
+canonical conflict materialization are implemented and locally validated.
+Browser acceptance, a deployed durable-worker canary, and target-environment
+release evidence are still required before this gate is marked proven.
+
 Run one controlled pair through real authorized Work State:
 
 1. A compatible cross-boundary change stays quiet.
@@ -171,6 +177,12 @@ Exit evidence:
   Coordination data.
 
 ### R2 — Prove low-noise collaboration
+
+Implementation status (2026-07-31): the canonical child Thread, one
+in-place-updated Room summary, contextual dismiss/mute/revisit controls,
+confirmation-only Action Inbox routing, and specialized idempotent closure are
+implemented and locally validated. The user-visible browser evaluation and
+real-provider canary remain open evidence.
 
 Turn the detected conflict into a complete user interaction:
 

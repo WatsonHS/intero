@@ -188,6 +188,7 @@ export const PilotCoordinationThread = z
       "blocker_raised",
       "review_requested",
       "coordination_requested",
+      "work_state_conflict",
     ]),
     sourceBindingId: z.uuid().optional(),
     automationSignalId: z.uuid().optional(),
@@ -198,8 +199,16 @@ export const PilotCoordinationThread = z
         "spec_review_stale",
         "coordination_unresolved",
         "project_work_risk",
+        "work_state_conflict",
       ])
       .optional(),
+    boundaryKey: z.string().min(3).max(160).optional(),
+    dedupeKey: z.string().min(16).max(200).optional(),
+    sourceWorkStateIds: z.array(z.uuid()).min(2).max(20).optional(),
+    sourceClaimIds: z.array(z.uuid()).min(2).max(20).optional(),
+    conversationThreadId: z.uuid().optional(),
+    sourceRoomThreadId: z.uuid().optional(),
+    summaryMessageId: z.uuid().optional(),
     participantIds: z.array(PrincipalId).min(1).max(20),
     safeContext: z.string().min(1).max(600),
     candidateNextSteps: z.array(z.string().min(1).max(300)).max(5),
@@ -288,6 +297,25 @@ export const PilotWorkNarrative = z
   .strict();
 export type PilotWorkNarrative = z.infer<typeof PilotWorkNarrative>;
 
+export const PilotSharedBoundaryInput = z
+  .object({
+    key: z
+      .string()
+      .min(3)
+      .max(160)
+      .regex(
+        /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/,
+        "Boundary keys must be short semantic identifiers.",
+      ),
+    kind: z.enum(["api", "schema", "permission", "module", "release", "other"]),
+    relation: z.enum(["changing", "depending_on", "validating"]),
+    assumption: z.string().min(1).max(240),
+    change: z.enum(["additive", "compatible", "breaking", "unknown"]),
+    preserves: z.array(z.string().min(1).max(160)).max(12).default([]),
+  })
+  .strict();
+export type PilotSharedBoundaryInput = z.infer<typeof PilotSharedBoundaryInput>;
+
 export const PilotCheckpointInput = z
   .object({
     schemaVersion: z.literal(2),
@@ -304,9 +332,89 @@ export const PilotCheckpointInput = z
       .strict(),
     narrative: PilotWorkNarrative,
     evidenceRefs: z.array(z.string().max(200)).max(10).default([]),
+    sharedBoundaries: z
+      .array(PilotSharedBoundaryInput)
+      .max(12)
+      .optional()
+      .describe(
+        "Explicit project-visible coordination Claims. Use semantic identifiers only; never include prompts, files, diffs, terminal output, logs, or secrets.",
+      ),
   })
   .strict();
 export type PilotCheckpointInput = z.infer<typeof PilotCheckpointInput>;
+
+export const PilotSharedBoundaryClaim = z
+  .object({
+    id: z.uuid(),
+    projectId: ProjectId,
+    workStateId: z.uuid(),
+    ownerId: PrincipalId,
+    bindingId: z.uuid(),
+    checkpointClientEventId: z.string().min(8).max(200),
+    key: z.string().min(3).max(160),
+    kind: z.enum(["api", "schema", "permission", "module", "release", "other"]),
+    relation: z.enum(["changing", "depending_on", "validating"]),
+    assumption: z.string().min(1).max(240),
+    change: z.enum(["additive", "compatible", "breaking", "unknown"]),
+    preserves: z.array(z.string().min(1).max(160)).max(12),
+    revision: z.number().int().positive(),
+    observedAt: z.iso.datetime(),
+    createdAt: z.iso.datetime(),
+    supersededAt: z.iso.datetime().optional(),
+    withdrawnAt: z.iso.datetime().optional(),
+  })
+  .strict();
+export type PilotSharedBoundaryClaim = z.infer<typeof PilotSharedBoundaryClaim>;
+
+export const PilotBoundaryMatchClassification = z.enum([
+  "compatible",
+  "potential_conflict",
+  "insufficient_evidence",
+]);
+export type PilotBoundaryMatchClassification = z.infer<
+  typeof PilotBoundaryMatchClassification
+>;
+
+export const PilotBoundaryMatch = z
+  .object({
+    boundaryKey: z.string().min(3).max(160),
+    classification: PilotBoundaryMatchClassification,
+    producerClaimId: z.uuid(),
+    consumerClaimId: z.uuid(),
+    sourceWorkStateIds: z.tuple([z.uuid(), z.uuid()]),
+    reason: z.string().min(1).max(400),
+  })
+  .strict();
+export type PilotBoundaryMatch = z.infer<typeof PilotBoundaryMatch>;
+
+export const PilotCoordinationSource = z
+  .object({
+    coordinationThreadId: z.uuid(),
+    workStateId: z.uuid(),
+    claimId: z.uuid(),
+    ownerId: PrincipalId,
+    claimRevision: z.number().int().positive(),
+    observedAt: z.iso.datetime(),
+  })
+  .strict();
+export type PilotCoordinationSource = z.infer<typeof PilotCoordinationSource>;
+
+export const PilotCoordinationRelevance = z
+  .object({
+    coordinationThreadId: z.uuid(),
+    projectId: ProjectId,
+    sourceRoomThreadId: z.uuid().optional(),
+    principalId: PrincipalId,
+    reason: z.string().min(1).max(400),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+    dismissedAt: z.iso.datetime().optional(),
+    mutedAt: z.iso.datetime().optional(),
+  })
+  .strict();
+export type PilotCoordinationRelevance = z.infer<
+  typeof PilotCoordinationRelevance
+>;
 
 export const PilotPrivateClaim = z
   .object({

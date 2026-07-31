@@ -295,6 +295,114 @@ databaseSuite("PostgreSQL platform store", () => {
     await secondStore.close();
   });
 
+  it("refreshes one durable Room coordination summary and closes only the child branch", async () => {
+    const roomThreadId = uuidv7() as ActionEnvelope["threadId"];
+    const coordinationThreadId = uuidv7() as ActionEnvelope["threadId"];
+    const summaryMessageId = uuidv7() as MessageId;
+    const createdAt = "2026-07-31T08:10:00.000Z";
+    await store.createThread(
+      {
+        id: roomThreadId,
+        kind: "room",
+        projectId,
+        title: "Account API room",
+        participantIds: [ownerId],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        createdAt,
+      },
+      ownerId,
+    );
+    await store.createThread(
+      {
+        id: coordinationThreadId,
+        kind: "coordination",
+        projectId,
+        parentThreadId: roomThreadId,
+        title: "Account API boundary",
+        participantIds: [ownerId],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        createdAt,
+      },
+      ownerId,
+    );
+    const open = await store.upsertCoordinationSummary({
+      roomThreadId,
+      messageId: summaryMessageId,
+      senderId: ownerId,
+      body: "The account API boundary needs coordination.",
+      summary: {
+        coordinationThreadId,
+        status: "open",
+        situation: "A breaking change may remove account_id.",
+        boundaryKey: "api/accounts.v1",
+        affectedPrincipalIds: [ownerId],
+        conclusion: "",
+        unresolvedQuestion: "Keep account_id through the compatibility window?",
+        actionRequired: false,
+        freshnessAt: createdAt,
+        sourceCount: 2,
+      },
+      at: createdAt,
+    });
+    expect(open).toMatchObject({ sequence: 1, revision: 1 });
+
+    const refreshed = await store.upsertCoordinationSummary({
+      roomThreadId,
+      messageId: summaryMessageId,
+      senderId: ownerId,
+      body: "The responsible participant must confirm the compatibility window.",
+      summary: {
+        ...open.coordinationSummary!,
+        status: "needs_action",
+        actionRequired: true,
+        freshnessAt: "2026-07-31T08:11:00.000Z",
+      },
+      at: "2026-07-31T08:11:00.000Z",
+    });
+    expect(refreshed).toMatchObject({ sequence: 1, revision: 2 });
+    expect(
+      (await store.getThread(roomThreadId, ownerId))?.thread.sequence,
+    ).toBe(1);
+
+    await store.concludeCoordinationThread({
+      threadId: coordinationThreadId,
+      actorId: ownerId,
+      at: "2026-07-31T08:12:00.000Z",
+    });
+    await store.concludeCoordinationThread({
+      threadId: coordinationThreadId,
+      actorId: ownerId,
+      at: "2026-07-31T08:12:01.000Z",
+    });
+    const restarted = new PostgresPlatformStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    const persistedRoom = await restarted.getThread(roomThreadId, ownerId);
+    expect(persistedRoom?.messages).toHaveLength(1);
+    expect(persistedRoom?.messages[0]).toMatchObject({
+      id: summaryMessageId,
+      sequence: 1,
+      revision: 2,
+      coordinationSummary: {
+        coordinationThreadId,
+        status: "needs_action",
+        actionRequired: true,
+      },
+    });
+    expect(
+      (await restarted.getThread(coordinationThreadId, ownerId))?.thread
+        .concludedAt,
+    ).toBe("2026-07-31T08:12:00.000Z");
+    await restarted.close();
+  });
+
   it("persists optional Kanban-to-Workstream associations", async () => {
     const cardId = uuidv7();
     const created = await app.inject({

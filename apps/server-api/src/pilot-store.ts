@@ -3,8 +3,11 @@ import {
   type PilotAgentBinding,
   type PilotAgentTicket,
   type PilotCheckpointInput,
+  type PilotBoundaryMatch,
   type PilotCollaborationPosture,
   type PilotCoordinationThread,
+  type PilotCoordinationRelevance,
+  type PilotCoordinationSource,
   type PilotDirectMessage,
   type PilotDirectMessageThread,
   type PilotJoinLink,
@@ -15,6 +18,7 @@ import {
   type PilotPrivateWorkState,
   type PilotProject,
   type PilotPulseEntry,
+  type PilotSharedBoundaryClaim,
   type PilotStandInAnswerDetail,
   type PilotStandInExchange,
   type PilotStandInSource,
@@ -26,9 +30,14 @@ import {
   type PilotTeamRole,
   type PilotWorkNarrative,
   type PrincipalId,
+  type ProjectAutomationSignal,
   type ProjectId,
   uuidv7,
 } from "@intero/domain";
+import {
+  evaluateSharedBoundaryClaims,
+  normalizeSharedBoundaryKey,
+} from "@intero/stand-in-core";
 import { createHash } from "node:crypto";
 
 export class PilotStoreError extends Error {
@@ -66,11 +75,25 @@ export interface PilotSnapshot {
   agentTickets: PilotAgentTicket[];
   agentBindings: PilotAgentBinding[];
   workStates: PilotPrivateWorkState[];
+  sharedBoundaryClaims: PilotSharedBoundaryClaim[];
   pulseEntries: PilotPulseEntry[];
   coordinationThreads: PilotCoordinationThread[];
+  coordinationSources: PilotCoordinationSource[];
+  coordinationRelevance: PilotCoordinationRelevance[];
+  coordinationSignals: PilotWorkStateConflictSignal[];
   standInExchanges: PilotStandInExchange[];
   standInJobs: PilotStoredStandInJob[];
   idempotency: Record<string, string>;
+}
+
+export interface PilotWorkStateConflictSignal extends ProjectAutomationSignal {
+  fingerprint: string;
+}
+
+export interface PilotBoundaryReconciliation {
+  claims: PilotSharedBoundaryClaim[];
+  matches: PilotBoundaryMatch[];
+  coordinationThreads: PilotCoordinationThread[];
 }
 
 export interface PilotStoredStandInJob {
@@ -378,6 +401,33 @@ export interface PilotStore {
     pulseEntry?: PilotPulseEntry;
     coordinationThread?: PilotCoordinationThread;
   }>;
+  reconcileSharedBoundaries(input: {
+    project: PilotProject;
+    binding: PilotAgentBinding;
+    workStateId: string;
+    checkpoint: PilotCheckpointInput;
+    now: string;
+  }): Promise<PilotBoundaryReconciliation>;
+  getCoordination(
+    threadId: string,
+  ): Promise<PilotCoordinationThread | undefined>;
+  linkCoordinationArtifacts(input: {
+    coordinationThreadId: string;
+    conversationThreadId: string;
+    sourceRoomThreadId: string;
+    summaryMessageId: string;
+    now: string;
+  }): Promise<PilotCoordinationThread>;
+  listCoordinationRelevance(
+    projectId: ProjectId,
+    principalId: PrincipalId,
+  ): Promise<PilotCoordinationRelevance[]>;
+  updateCoordinationRelevance(input: {
+    coordinationThreadId: string;
+    principalId: PrincipalId;
+    action: "dismiss" | "mute" | "revisit";
+    now: string;
+  }): Promise<PilotCoordinationRelevance>;
   failStandInJob(input: {
     jobKey: string;
     workerId: string;
@@ -447,6 +497,9 @@ export interface PilotStore {
     projectId: ProjectId,
     principalId: PrincipalId,
   ): Promise<PilotCoordinationThread[]>;
+  findCoordinationByConversationThread(
+    threadId: string,
+  ): Promise<PilotCoordinationThread | undefined>;
   proposeCoordinationConclusion(input: {
     threadId: string;
     principalId: PrincipalId;
@@ -1999,7 +2052,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
             (entry) => entry.workStateId === workState.id,
           );
           const coordinationThread = snapshot.coordinationThreads.find(
-            (thread) => thread.workStateId === workState.id,
+            (thread) =>
+              thread.workStateId === workState.id ||
+              thread.sourceWorkStateIds?.includes(workState.id),
           );
           return {
             accepted: true,
@@ -2112,7 +2167,9 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
     const coordinationThread = snapshot.coordinationThreads.find(
       (thread) =>
-        thread.workStateId === workState.id && thread.status !== "resolved",
+        (thread.workStateId === workState.id ||
+          thread.sourceWorkStateIds?.includes(workState.id)) &&
+        thread.status !== "resolved",
     );
     const standInJob = snapshot.standInJobs.find(
       (job) => job.id === workState.standIn.jobId,
@@ -2304,6 +2361,287 @@ export abstract class SnapshotPilotStore implements PilotStore {
         projectId: input.projectId,
       },
     );
+  }
+
+  async reconcileSharedBoundaries(input: {
+    project: PilotProject;
+    binding: PilotAgentBinding;
+    workStateId: string;
+    checkpoint: PilotCheckpointInput;
+    now: string;
+  }): Promise<PilotBoundaryReconciliation> {
+    return this.updateSnapshot(
+      (snapshot) => {
+        const boundaries = input.checkpoint.sharedBoundaries ?? [];
+        if (boundaries.length === 0) {
+          return { claims: [], matches: [], coordinationThreads: [] };
+        }
+        const workState = requireWorkState(snapshot, input.workStateId);
+        if (
+          workState.projectId !== input.project.id ||
+          workState.ownerId !== input.binding.ownerId ||
+          workState.bindingId !== input.binding.id
+        ) {
+          throw new PilotStoreError(
+            "SHARED_BOUNDARY_SOURCE_INVALID",
+            403,
+            "The shared boundary source does not match this Work State.",
+          );
+        }
+
+        const changedClaims: PilotSharedBoundaryClaim[] = [];
+        for (const boundary of boundaries) {
+          const key = normalizeSharedBoundaryKey(boundary.key);
+          const duplicate = snapshot.sharedBoundaryClaims.find(
+            (claim) =>
+              claim.workStateId === workState.id &&
+              claim.checkpointClientEventId ===
+                input.checkpoint.clientEventId &&
+              claim.key === key,
+          );
+          if (duplicate) {
+            changedClaims.push(duplicate);
+            continue;
+          }
+          const previous = snapshot.sharedBoundaryClaims
+            .filter(
+              (claim) =>
+                claim.workStateId === workState.id &&
+                claim.key === key &&
+                !claim.supersededAt &&
+                !claim.withdrawnAt,
+            )
+            .toSorted((left, right) => right.revision - left.revision)[0];
+          if (previous) previous.supersededAt = input.now;
+          const claim: PilotSharedBoundaryClaim = {
+            id: uuidv7(),
+            projectId: input.project.id,
+            workStateId: workState.id,
+            ownerId: input.binding.ownerId,
+            bindingId: input.binding.id,
+            checkpointClientEventId: input.checkpoint.clientEventId,
+            key,
+            kind: boundary.kind,
+            relation: boundary.relation,
+            assumption: boundary.assumption.trim(),
+            change: boundary.change,
+            preserves: [
+              ...new Set(boundary.preserves.map((item) => item.trim())),
+            ],
+            revision: (previous?.revision ?? 0) + 1,
+            observedAt: input.checkpoint.occurredAt,
+            createdAt: input.now,
+          };
+          snapshot.sharedBoundaryClaims.push(claim);
+          changedClaims.push(claim);
+        }
+
+        const changedIds = new Set(changedClaims.map((claim) => claim.id));
+        const matches = evaluateSharedBoundaryClaims(
+          snapshot.sharedBoundaryClaims.filter(
+            (claim) => claim.projectId === input.project.id,
+          ),
+          input.now,
+        ).filter(
+          (match) =>
+            changedIds.has(match.producerClaimId) ||
+            changedIds.has(match.consumerClaimId),
+        );
+        const coordinationThreads: PilotCoordinationThread[] = [];
+        for (const match of matches) {
+          if (match.classification !== "potential_conflict") continue;
+          const producer = snapshot.sharedBoundaryClaims.find(
+            (claim) => claim.id === match.producerClaimId,
+          )!;
+          const consumer = snapshot.sharedBoundaryClaims.find(
+            (claim) => claim.id === match.consumerClaimId,
+          )!;
+          const sources = [producer, consumer].toSorted((left, right) =>
+            left.workStateId.localeCompare(right.workStateId),
+          );
+          const dedupeKey = sharedBoundaryConflictFingerprint(
+            input.project.id,
+            match.boundaryKey,
+            sources,
+          );
+          let thread = snapshot.coordinationThreads.find(
+            (candidate) =>
+              candidate.dedupeKey === dedupeKey &&
+              candidate.status !== "resolved",
+          );
+          let signal = snapshot.coordinationSignals.find(
+            (candidate) => candidate.fingerprint === dedupeKey,
+          );
+          const participantIds = [
+            ...new Set(sources.map((claim) => claim.ownerId)),
+          ];
+          const safeContext = `Shared boundary ${match.boundaryKey}: ${match.reason}`;
+          if (!thread) {
+            const threadId = uuidv7();
+            const signalId = signal?.id ?? uuidv7();
+            thread = {
+              id: threadId,
+              projectId: input.project.id,
+              trigger: "work_state_conflict",
+              automationSignalId: signalId,
+              automationKind: "work_state_conflict",
+              boundaryKey: match.boundaryKey,
+              dedupeKey,
+              sourceWorkStateIds: sources.map((claim) => claim.workStateId),
+              sourceClaimIds: sources.map((claim) => claim.id),
+              participantIds,
+              safeContext,
+              candidateNextSteps: [
+                "Confirm the compatibility window",
+                "Choose the shared boundary contract",
+              ],
+              status: "open",
+              createdAt: input.now,
+              updatedAt: input.now,
+            };
+            snapshot.coordinationThreads.push(thread);
+            signal ??= {
+              id: signalId,
+              projectId: input.project.id,
+              kind: "work_state_conflict",
+              status: "opened",
+              fingerprint: dedupeKey,
+              sourceRef: `shared-boundary:${match.boundaryKey}`,
+              safeContext,
+              candidateNextSteps: thread.candidateNextSteps,
+              participantIds,
+              coordinationThreadId: thread.id,
+              detectedAt: input.now,
+              processedAt: input.now,
+              updatedAt: input.now,
+            };
+            snapshot.coordinationSignals.push(signal);
+          }
+          for (const source of sources) {
+            if (
+              !snapshot.coordinationSources.some(
+                (item) =>
+                  item.coordinationThreadId === thread!.id &&
+                  item.claimId === source.id,
+              )
+            ) {
+              snapshot.coordinationSources.push({
+                coordinationThreadId: thread.id,
+                workStateId: source.workStateId,
+                claimId: source.id,
+                ownerId: source.ownerId,
+                claimRevision: source.revision,
+                observedAt: source.observedAt,
+              });
+            }
+            if (
+              !snapshot.coordinationRelevance.some(
+                (item) =>
+                  item.coordinationThreadId === thread!.id &&
+                  item.principalId === source.ownerId,
+              )
+            ) {
+              snapshot.coordinationRelevance.push({
+                coordinationThreadId: thread.id,
+                projectId: input.project.id,
+                principalId: source.ownerId,
+                reason: `${match.boundaryKey} is affected by another active Work State.`,
+                createdAt: input.now,
+                updatedAt: input.now,
+              });
+            }
+          }
+          coordinationThreads.push(thread);
+        }
+        return { claims: changedClaims, matches, coordinationThreads };
+      },
+      {
+        eventType: "work_state.shared_boundaries_changed",
+        actorId: input.binding.ownerId,
+        aggregateType: "pilot_work_state",
+        aggregateId: input.workStateId,
+        visibility: "project",
+        projectId: input.project.id,
+      },
+    );
+  }
+
+  async getCoordination(
+    threadId: string,
+  ): Promise<PilotCoordinationThread | undefined> {
+    return (await this.readSnapshot()).coordinationThreads.find(
+      (thread) => thread.id === threadId,
+    );
+  }
+
+  async linkCoordinationArtifacts(input: {
+    coordinationThreadId: string;
+    conversationThreadId: string;
+    sourceRoomThreadId: string;
+    summaryMessageId: string;
+    now: string;
+  }): Promise<PilotCoordinationThread> {
+    return this.updateSnapshot((snapshot) => {
+      const thread = snapshot.coordinationThreads.find(
+        (item) => item.id === input.coordinationThreadId,
+      );
+      if (!thread) throw notFound("Coordination thread");
+      thread.conversationThreadId = input.conversationThreadId;
+      thread.sourceRoomThreadId = input.sourceRoomThreadId;
+      thread.summaryMessageId = input.summaryMessageId;
+      thread.updatedAt = input.now;
+      for (const relevance of snapshot.coordinationRelevance) {
+        if (relevance.coordinationThreadId !== thread.id) continue;
+        relevance.sourceRoomThreadId = input.sourceRoomThreadId;
+        relevance.updatedAt = input.now;
+      }
+      return thread;
+    });
+  }
+
+  async listCoordinationRelevance(
+    projectId: ProjectId,
+    principalId: PrincipalId,
+  ): Promise<PilotCoordinationRelevance[]> {
+    const snapshot = await this.readSnapshot();
+    requireParticipant(
+      snapshot,
+      requireProject(snapshot, projectId),
+      principalId,
+    );
+    return snapshot.coordinationRelevance.filter(
+      (item) =>
+        item.projectId === projectId && item.principalId === principalId,
+    );
+  }
+
+  async updateCoordinationRelevance(input: {
+    coordinationThreadId: string;
+    principalId: PrincipalId;
+    action: "dismiss" | "mute" | "revisit";
+    now: string;
+  }): Promise<PilotCoordinationRelevance> {
+    return this.updateSnapshot((snapshot) => {
+      const relevance = snapshot.coordinationRelevance.find(
+        (item) =>
+          item.coordinationThreadId === input.coordinationThreadId &&
+          item.principalId === input.principalId,
+      );
+      if (!relevance) throw notFound("Coordination relevance");
+      requireParticipant(
+        snapshot,
+        requireProject(snapshot, relevance.projectId),
+        input.principalId,
+      );
+      if (input.action === "dismiss") relevance.dismissedAt = input.now;
+      if (input.action === "mute") relevance.mutedAt = input.now;
+      if (input.action === "revisit") {
+        delete relevance.dismissedAt;
+        delete relevance.mutedAt;
+      }
+      relevance.updatedAt = input.now;
+      return relevance;
+    });
   }
 
   async failStandInJob(input: {
@@ -2613,6 +2951,11 @@ export abstract class SnapshotPilotStore implements PilotStore {
           return { entry, duplicate: true };
         }
         entry.withdrawnAt = now;
+        for (const claim of snapshot.sharedBoundaryClaims) {
+          if (claim.workStateId === workStateId && !claim.withdrawnAt) {
+            claim.withdrawnAt = now;
+          }
+        }
         return { entry, duplicate: false };
       },
       {
@@ -2637,8 +2980,21 @@ export abstract class SnapshotPilotStore implements PilotStore {
       principalId,
     );
     return snapshot.coordinationThreads
-      .filter((thread) => thread.projectId === projectId)
+      .filter(
+        (thread) =>
+          thread.projectId === projectId &&
+          (thread.trigger !== "work_state_conflict" ||
+            thread.participantIds.includes(principalId)),
+      )
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async findCoordinationByConversationThread(
+    threadId: string,
+  ): Promise<PilotCoordinationThread | undefined> {
+    return (await this.readSnapshot()).coordinationThreads.find(
+      (item) => item.conversationThreadId === threadId,
+    );
   }
 
   async proposeCoordinationConclusion(input: {
@@ -2659,6 +3015,13 @@ export abstract class SnapshotPilotStore implements PilotStore {
           requireProject(snapshot, thread.projectId),
           input.principalId,
         );
+        if (!thread.participantIds.includes(input.principalId)) {
+          throw new PilotStoreError(
+            "COORDINATION_PARTICIPANT_REQUIRED",
+            403,
+            "Only an affected coordination participant can propose a conclusion.",
+          );
+        }
         if (!thread.participantIds.includes(input.responsibleParticipantId)) {
           throw new PilotStoreError(
             "RESPONSIBLE_PARTICIPANT_REQUIRED",
@@ -2693,6 +3056,12 @@ export abstract class SnapshotPilotStore implements PilotStore {
           (item) => item.id === threadId,
         );
         if (!thread) throw notFound("Coordination thread");
+        if (
+          thread.status === "resolved" &&
+          thread.responsibleParticipantId === principalId
+        ) {
+          return thread;
+        }
         if (
           thread.status !== "needs_confirmation" ||
           thread.responsibleParticipantId !== principalId
@@ -2750,12 +3119,30 @@ export function emptyPilotSnapshot(): PilotSnapshot {
     agentTickets: [],
     agentBindings: [],
     workStates: [],
+    sharedBoundaryClaims: [],
     pulseEntries: [],
     coordinationThreads: [],
+    coordinationSources: [],
+    coordinationRelevance: [],
+    coordinationSignals: [],
     standInExchanges: [],
     standInJobs: [],
     idempotency: {},
   };
+}
+
+function sharedBoundaryConflictFingerprint(
+  projectId: ProjectId,
+  boundaryKey: string,
+  sources: readonly PilotSharedBoundaryClaim[],
+): string {
+  const sourceRevisions = sources
+    .map((claim) => `${claim.workStateId}:${claim.revision}`)
+    .toSorted()
+    .join("|");
+  return createHash("sha256")
+    .update(`${projectId}|${boundaryKey}|${sourceRevisions}`)
+    .digest("hex");
 }
 
 function processingState(

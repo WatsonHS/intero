@@ -1,7 +1,7 @@
 ---
 title: "feat: prove the R1/R2 coordination kernel"
 type: feat
-status: planned
+status: implemented-awaiting-canary
 date: 2026-07-31
 roadmap: docs/PRODUCT_ROADMAP.md
 ---
@@ -32,9 +32,60 @@ cross-Project scope routing, the ambiguous-scope branch, and the complete
 human-readable browser flow. Those requirements are not implied by the local
 R1/R2 implementation evidence alone.
 
-## Current code reality
+## Implementation status — 2026-07-31
 
-Intero already has useful parts of the loop:
+The production-shaped R1/R2 path is implemented in the current change set:
+
+- `stand_in.report_checkpoint` accepts tightly bounded, explicitly
+  project-visible `sharedBoundaries`;
+- distinct `PilotSharedBoundaryClaim` records retain owner, binding, Work
+  State, checkpoint, freshness, revision, supersession, and withdrawal
+  provenance;
+- a deterministic matcher classifies compatible, potential-conflict, and
+  insufficient-evidence pairs without allowing model output to create a
+  conflict;
+- PostgreSQL migration `0037_r1_r2_coordination_kernel.sql` persists Claims,
+  multi-source case provenance, contextual relevance, canonical Thread links,
+  and the `work_state_conflict` signal under tenant RLS;
+- one `CoordinationKernel` materializes a canonical child Thread and one
+  structured `coordination_summary` message in the authorized source Room;
+- Room summary refresh updates the same message revision without advancing the
+  Room sequence;
+- passive relevance is locally contextual, dismissible, mutable, and
+  revisit-able without creating Action Inbox work;
+- proposing a conclusion creates the explicit confirmation action, while only
+  the responsible participant may confirm and close the specialized child
+  branch;
+- generic parent-message conclusion is rejected for managed coordination
+  branches, preserving the single Room summary.
+
+Local evidence completed:
+
+- matcher coverage for normalization, compatible control, conflict, unknown,
+  same-owner, superseded, withdrawn, and stale Claims;
+- an MCP evaluation pair with two validated Agent bindings proves zero control
+  noise, one conflict case, replay safety, one canonical Thread, one Room
+  summary, in-place refresh, responsible-participant confirmation, and
+  relevance dismissal/revisit;
+- a clean disposable PostgreSQL database migrated from `0000` through `0037`;
+- normalized PostgreSQL persistence, multi-source provenance, signal
+  uniqueness, RLS, structured message metadata, in-place summary revision, and
+  idempotent child-branch closure passed integration tests;
+- repository TypeScript, Prettier, unit/API tests, production builds, and all
+  locally runnable PostgreSQL/worker integration suites passed.
+
+The roadmap gates remain evidence-gated rather than marked proven. Still
+required before calling R1/R2 exited:
+
+- browser acceptance for the control, conflict, relevance, and confirmation
+  experience;
+- a separately recorded real-provider canary through the durable deployed
+  worker path;
+- target-environment migration and release validation.
+
+## Starting code reality
+
+At plan creation, Intero already had useful parts of the loop:
 
 - `stand_in.report_checkpoint` accepts structured semantic Work State through
   the real MCP path.
@@ -49,7 +100,7 @@ Intero already has useful parts of the loop:
 - Action Inbox already supports deduplication, resolution, preferences, and
   browser delivery.
 
-The current path does **not** yet prove R1 or R2:
+The starting path did **not** yet prove R1 or R2:
 
 - Stand-in evaluation sees one checkpoint at a time and cannot compare two
   active Work States.

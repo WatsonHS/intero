@@ -4,6 +4,8 @@ import {
   type PilotAgentBinding,
   type PilotAgentTicket,
   type PilotCoordinationThread,
+  type PilotCoordinationRelevance,
+  type PilotCoordinationSource,
   type PilotDirectMessage,
   type PilotDirectMessageThread,
   type PilotJoinLink,
@@ -13,11 +15,13 @@ import {
   type PilotPrivateWorkState,
   type PilotProject,
   type PilotPulseEntry,
+  type PilotSharedBoundaryClaim,
   type PilotStandInExchange,
   type PilotTeam,
   type PilotTeamInvitation,
   type PilotTeamMembership,
   type PrincipalId,
+  type ProjectId,
   uuidv7,
 } from "@intero/domain";
 import { Pool, type PoolClient } from "pg";
@@ -27,6 +31,7 @@ import {
   type PilotMutationContext,
   type PilotSnapshot,
   type PilotStoredStandInJob,
+  type PilotWorkStateConflictSignal,
   SnapshotPilotStore,
   type PilotStoredProvider,
 } from "./pilot-store.js";
@@ -298,6 +303,12 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         .filter((claim) => claim.work_state_id === state.id)
         .map((claim) => claim.data),
     }));
+    snapshot.sharedBoundaryClaims =
+      await this.readDataRows<PilotSharedBoundaryClaim>(
+        client,
+        "pilot_shared_boundary_claims",
+        "observed_at, revision, id",
+      );
     snapshot.pulseEntries = await this.readDataRows<PilotPulseEntry>(
       client,
       "pilot_pulse_entries",
@@ -325,6 +336,11 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         .filter((participant) => participant.thread_id === thread.id)
         .map((participant) => participant.principal_id),
     }));
+    snapshot.coordinationSources = await this.readCoordinationSources(client);
+    snapshot.coordinationRelevance =
+      await this.readCoordinationRelevance(client);
+    snapshot.coordinationSignals =
+      await this.readWorkStateConflictSignals(client);
     snapshot.standInExchanges = await this.readDataRows<PilotStandInExchange>(
       client,
       "pilot_stand_in_exchanges",
@@ -359,6 +375,118 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       [this.organizationId],
     );
     return result.rows.map((row) => row.data);
+  }
+
+  private async readCoordinationSources(
+    client: PoolClient,
+  ): Promise<PilotCoordinationSource[]> {
+    const result = await client.query<{
+      thread_id: string;
+      work_state_id: string;
+      claim_id: string;
+      owner_id: PrincipalId;
+      claim_revision: number;
+      observed_at: Date;
+    }>(
+      `SELECT thread_id, work_state_id, claim_id, owner_id, claim_revision,
+              observed_at
+       FROM pilot_coordination_sources
+       WHERE organization_id = $1
+       ORDER BY thread_id, claim_revision, claim_id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      coordinationThreadId: row.thread_id,
+      workStateId: row.work_state_id,
+      claimId: row.claim_id,
+      ownerId: row.owner_id,
+      claimRevision: row.claim_revision,
+      observedAt: row.observed_at.toISOString(),
+    }));
+  }
+
+  private async readCoordinationRelevance(
+    client: PoolClient,
+  ): Promise<PilotCoordinationRelevance[]> {
+    const result = await client.query<{
+      thread_id: string;
+      project_id: ProjectId;
+      source_room_thread_id: string | null;
+      principal_id: PrincipalId;
+      reason: string;
+      dismissed_at: Date | null;
+      muted_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT thread_id, project_id, source_room_thread_id, principal_id,
+              reason, dismissed_at, muted_at, created_at, updated_at
+       FROM pilot_coordination_relevance
+       WHERE organization_id = $1
+       ORDER BY created_at, thread_id, principal_id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      coordinationThreadId: row.thread_id,
+      projectId: row.project_id,
+      ...(row.source_room_thread_id
+        ? { sourceRoomThreadId: row.source_room_thread_id }
+        : {}),
+      principalId: row.principal_id,
+      reason: row.reason,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      ...(row.dismissed_at
+        ? { dismissedAt: row.dismissed_at.toISOString() }
+        : {}),
+      ...(row.muted_at ? { mutedAt: row.muted_at.toISOString() } : {}),
+    }));
+  }
+
+  private async readWorkStateConflictSignals(
+    client: PoolClient,
+  ): Promise<PilotWorkStateConflictSignal[]> {
+    const result = await client.query<{
+      id: string;
+      project_id: ProjectId;
+      status: PilotWorkStateConflictSignal["status"];
+      fingerprint: string;
+      source_ref: string;
+      safe_context: string;
+      candidate_next_steps: string[];
+      participant_ids: PrincipalId[];
+      coordination_thread_id: string | null;
+      detected_at: Date;
+      processed_at: Date | null;
+      updated_at: Date;
+    }>(
+      `SELECT id, project_id, status, fingerprint, source_ref, safe_context,
+              candidate_next_steps, participant_ids, coordination_thread_id,
+              detected_at, processed_at, updated_at
+       FROM project_automation_signals
+       WHERE organization_id = $1 AND kind = 'work_state_conflict'
+       ORDER BY detected_at, id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      kind: "work_state_conflict",
+      status: row.status,
+      fingerprint: row.fingerprint,
+      sourceRef: row.source_ref,
+      safeContext: row.safe_context,
+      candidateNextSteps: row.candidate_next_steps,
+      participantIds: row.participant_ids,
+      ...(row.coordination_thread_id
+        ? { coordinationThreadId: row.coordination_thread_id }
+        : {}),
+      detectedAt: row.detected_at.toISOString(),
+      ...(row.processed_at
+        ? { processedAt: row.processed_at.toISOString() }
+        : {}),
+      updatedAt: row.updated_at.toISOString(),
+    }));
   }
 
   private async persistSnapshot(
@@ -803,6 +931,40 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         ],
       );
     }
+    for (const claim of snapshot.sharedBoundaryClaims) {
+      await client.query(
+        `INSERT INTO pilot_shared_boundary_claims
+          (id, organization_id, project_id, work_state_id, owner_id,
+           binding_id, checkpoint_client_event_id, boundary_key, revision,
+           observed_at, superseded_at, withdrawn_at, data, created_at,
+           updated_at)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+           $14, $15)
+         ON CONFLICT (id) DO UPDATE SET
+           superseded_at = EXCLUDED.superseded_at,
+           withdrawn_at = EXCLUDED.withdrawn_at,
+           data = EXCLUDED.data,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          claim.id,
+          this.organizationId,
+          claim.projectId,
+          claim.workStateId,
+          claim.ownerId,
+          claim.bindingId,
+          claim.checkpointClientEventId,
+          claim.key,
+          claim.revision,
+          claim.observedAt,
+          claim.supersededAt ?? null,
+          claim.withdrawnAt ?? null,
+          json(claim),
+          claim.createdAt,
+          claim.supersededAt ?? claim.withdrawnAt ?? claim.createdAt,
+        ],
+      );
+    }
     const expiryByState = new Map(
       snapshot.workStates.map((state) => [state.id, state.expiresAt]),
     );
@@ -909,8 +1071,12 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       await client.query(
         `INSERT INTO pilot_coordination_threads
           (id, organization_id, project_id, work_state_id, source_binding_id,
-           automation_signal_id, status, data, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           automation_signal_id, boundary_key, dedupe_key,
+           conversation_thread_id, source_room_thread_id, summary_message_id,
+           status, data, created_at, updated_at)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+           $15)
          ON CONFLICT (id) DO UPDATE SET
            work_state_id = COALESCE(
              pilot_coordination_threads.work_state_id,
@@ -924,6 +1090,26 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
              pilot_coordination_threads.automation_signal_id,
              EXCLUDED.automation_signal_id
            ),
+           boundary_key = COALESCE(
+             pilot_coordination_threads.boundary_key,
+             EXCLUDED.boundary_key
+           ),
+           dedupe_key = COALESCE(
+             pilot_coordination_threads.dedupe_key,
+             EXCLUDED.dedupe_key
+           ),
+           conversation_thread_id = COALESCE(
+             pilot_coordination_threads.conversation_thread_id,
+             EXCLUDED.conversation_thread_id
+           ),
+           source_room_thread_id = COALESCE(
+             pilot_coordination_threads.source_room_thread_id,
+             EXCLUDED.source_room_thread_id
+           ),
+           summary_message_id = COALESCE(
+             pilot_coordination_threads.summary_message_id,
+             EXCLUDED.summary_message_id
+           ),
            status = EXCLUDED.status,
            data = EXCLUDED.data,
            updated_at = EXCLUDED.updated_at`,
@@ -933,7 +1119,12 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           thread.projectId,
           thread.workStateId ?? null,
           thread.sourceBindingId ?? null,
-          thread.automationSignalId ?? null,
+          null,
+          thread.boundaryKey ?? null,
+          thread.dedupeKey ?? null,
+          thread.conversationThreadId ?? null,
+          thread.sourceRoomThreadId ?? null,
+          thread.summaryMessageId ?? null,
           thread.status,
           json(thread),
           thread.createdAt,
@@ -949,6 +1140,107 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           [this.organizationId, thread.id, principalId],
         );
       }
+    }
+    for (const source of snapshot.coordinationSources) {
+      await client.query(
+        `INSERT INTO pilot_coordination_sources
+          (organization_id, thread_id, work_state_id, claim_id, owner_id,
+           claim_revision, observed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (thread_id, claim_id) DO NOTHING`,
+        [
+          this.organizationId,
+          source.coordinationThreadId,
+          source.workStateId,
+          source.claimId,
+          source.ownerId,
+          source.claimRevision,
+          source.observedAt,
+        ],
+      );
+    }
+    for (const relevance of snapshot.coordinationRelevance) {
+      await client.query(
+        `INSERT INTO pilot_coordination_relevance
+          (organization_id, thread_id, project_id, source_room_thread_id,
+           principal_id, reason, dismissed_at, muted_at, created_at,
+           updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (thread_id, principal_id) DO UPDATE SET
+           source_room_thread_id = EXCLUDED.source_room_thread_id,
+           reason = EXCLUDED.reason,
+           dismissed_at = EXCLUDED.dismissed_at,
+           muted_at = EXCLUDED.muted_at,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          this.organizationId,
+          relevance.coordinationThreadId,
+          relevance.projectId,
+          relevance.sourceRoomThreadId ?? null,
+          relevance.principalId,
+          relevance.reason,
+          relevance.dismissedAt ?? null,
+          relevance.mutedAt ?? null,
+          relevance.createdAt,
+          relevance.updatedAt,
+        ],
+      );
+    }
+    for (const signal of snapshot.coordinationSignals) {
+      await client.query(
+        `INSERT INTO project_automation_signals
+          (id, organization_id, project_id, kind, status, fingerprint,
+           source_ref, safe_context, candidate_next_steps, participant_ids,
+           target_ids, coordination_thread_id, detected_at, processed_at,
+           updated_at)
+         VALUES
+          ($1, $2, $3, 'work_state_conflict', $4, $5, $6, $7, $8, $9,
+           '{}'::uuid[], $10, $11, $12, $13)
+         ON CONFLICT (organization_id, project_id, fingerprint) DO UPDATE SET
+           status = EXCLUDED.status,
+           safe_context = EXCLUDED.safe_context,
+           candidate_next_steps = EXCLUDED.candidate_next_steps,
+           participant_ids = EXCLUDED.participant_ids,
+           coordination_thread_id = COALESCE(
+             project_automation_signals.coordination_thread_id,
+             EXCLUDED.coordination_thread_id
+           ),
+           processed_at = COALESCE(
+             project_automation_signals.processed_at,
+             EXCLUDED.processed_at
+           ),
+           updated_at = EXCLUDED.updated_at`,
+        [
+          signal.id,
+          this.organizationId,
+          signal.projectId,
+          signal.status,
+          signal.fingerprint,
+          signal.sourceRef,
+          signal.safeContext,
+          json(signal.candidateNextSteps),
+          signal.participantIds,
+          signal.coordinationThreadId ?? null,
+          signal.detectedAt,
+          signal.processedAt ?? null,
+          signal.updatedAt,
+        ],
+      );
+    }
+    for (const thread of snapshot.coordinationThreads) {
+      if (!thread.automationSignalId) continue;
+      await client.query(
+        `UPDATE pilot_coordination_threads
+         SET automation_signal_id = $3,
+             updated_at = $4
+         WHERE organization_id = $1 AND id = $2`,
+        [
+          this.organizationId,
+          thread.id,
+          thread.automationSignalId,
+          thread.updatedAt,
+        ],
+      );
     }
   }
 
@@ -1106,12 +1398,15 @@ function collectPrincipalIds(snapshot: PilotSnapshot): Set<PrincipalId> {
   for (const ticket of snapshot.agentTickets) ids.add(ticket.ownerId);
   for (const binding of snapshot.agentBindings) ids.add(binding.ownerId);
   for (const state of snapshot.workStates) ids.add(state.ownerId);
+  for (const claim of snapshot.sharedBoundaryClaims) ids.add(claim.ownerId);
   for (const entry of snapshot.pulseEntries) ids.add(entry.ownerId);
   for (const thread of snapshot.coordinationThreads) {
     for (const participantId of thread.participantIds) ids.add(participantId);
     if (thread.responsibleParticipantId)
       ids.add(thread.responsibleParticipantId);
   }
+  for (const relevance of snapshot.coordinationRelevance)
+    ids.add(relevance.principalId);
   for (const exchange of snapshot.standInExchanges)
     ids.add(exchange.principalId);
   return ids;

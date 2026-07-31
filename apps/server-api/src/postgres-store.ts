@@ -963,6 +963,113 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async upsertCoordinationSummary(input: {
+    roomThreadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    senderId: PrincipalId;
+    body: string;
+    summary: NonNullable<ThreadMessage["coordinationSummary"]>;
+    at: string;
+  }): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        input.roomThreadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        input.roomThreadId,
+        undefined,
+        0,
+      );
+      if (!current || current.thread.kind !== "room") {
+        throw new Error("Source Room was not found.");
+      }
+      if (!current.thread.participantIds.includes(input.senderId)) {
+        throw new Error("Summary sender is not a Room participant.");
+      }
+      const existingResult = await client.query(
+        `SELECT * FROM messages WHERE thread_id = $1 AND id = $2 FOR UPDATE`,
+        [input.roomThreadId, input.messageId],
+      );
+      const existing = existingResult.rows[0]
+        ? messageFromRow(existingResult.rows[0])
+        : undefined;
+      if (existing) {
+        if (
+          existing.kind !== "coordination_summary" ||
+          existing.senderId !== input.senderId ||
+          existing.coordinationSummary?.coordinationThreadId !==
+            input.summary.coordinationThreadId
+        ) {
+          throw new Error("Coordination summary message ID was already used.");
+        }
+        const updated = await client.query(
+          `UPDATE messages
+           SET body = $3,
+               metadata = $4,
+               revision = revision + 1,
+               updated_at = now()
+           WHERE thread_id = $1 AND id = $2
+           RETURNING *`,
+          [
+            input.roomThreadId,
+            input.messageId,
+            input.body,
+            json({ coordinationSummary: input.summary }),
+          ],
+        );
+        const message = messageFromRow(updated.rows[0]!);
+        await this.recordConversationChange(client, {
+          eventId: uuidv7() as OperationId,
+          thread: current.thread,
+          actorId: input.senderId,
+          reason: "message_updated",
+          messageId: message.id,
+        });
+        return message;
+      }
+      const nextThread = await client.query<{
+        sequence: number;
+        access_version: number;
+      }>(
+        `UPDATE threads
+         SET sequence = sequence + 1,
+             latest_message_at = $2,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING sequence, access_version`,
+        [input.roomThreadId, input.at],
+      );
+      const message: ThreadMessage = {
+        id: input.messageId,
+        threadId: input.roomThreadId,
+        senderId: input.senderId,
+        sequence: nextThread.rows[0]!.sequence,
+        kind: "coordination_summary",
+        body: input.body,
+        createdAt: input.at,
+        serverReadable: true,
+        coordinationSummary: input.summary,
+        streamState: "complete",
+        revision: 1,
+      };
+      await this.insertMessage(client, message);
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: {
+          ...current.thread,
+          sequence: message.sequence,
+          accessVersion: nextThread.rows[0]!.access_version,
+          latestMessageAt: input.at,
+        },
+        actorId: input.senderId,
+        reason: "message_appended",
+        messageId: message.id,
+      });
+      return message;
+    });
+  }
+
   async setMessageReaction(input: {
     threadId: ThreadId;
     messageId: ThreadMessage["id"];
@@ -1524,6 +1631,56 @@ export class PostgresPlatformStore implements PlatformStore {
         reason: "thread_concluded",
       });
       return { thread: updated!.thread, parentMessage };
+    });
+  }
+
+  async concludeCoordinationThread(input: {
+    threadId: ThreadId;
+    actorId: PrincipalId;
+    at: string;
+  }): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        input.threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (
+        !current ||
+        current.thread.kind !== "coordination" ||
+        !current.thread.parentThreadId
+      ) {
+        throw new Error("Coordination Thread was not found.");
+      }
+      if (!current.thread.participantIds.includes(input.actorId)) {
+        throw new Error("Only a participant can conclude the Thread.");
+      }
+      if (current.thread.concludedAt) return current.thread;
+      await client.query(
+        `UPDATE threads
+         SET concluded_at = $2, concluded_by = $3, updated_at = now()
+         WHERE id = $1
+        `,
+        [input.threadId, input.at, input.actorId],
+      );
+      const concluded = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (!concluded) throw new Error("Coordination Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: concluded.thread,
+        actorId: input.actorId,
+        reason: "thread_concluded",
+      });
+      return concluded.thread;
     });
   }
 
@@ -2373,11 +2530,11 @@ export class PostgresPlatformStore implements PlatformStore {
       `INSERT INTO messages
         (id, organization_id, thread_id, sender_id, client_message_id,
          sequence, kind, body, encrypted_body, server_readable,
-         mentioned_principal_ids, attachments, stream_state, revision,
-         reply_to_message_id, created_at)
+         mentioned_principal_ids, attachments, metadata, stream_state,
+         revision, reply_to_message_id, created_at)
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15, $16
+         $11, $12, $13, $14, $15, $16, $17
        )`,
       [
         message.id,
@@ -2392,6 +2549,11 @@ export class PostgresPlatformStore implements PlatformStore {
         message.serverReadable,
         message.mentionedPrincipalIds ?? [],
         json(message.attachments ?? []),
+        json(
+          message.coordinationSummary
+            ? { coordinationSummary: message.coordinationSummary }
+            : {},
+        ),
         message.streamState ?? "complete",
         message.revision ?? 1,
         message.replyToMessageId ?? null,
@@ -2761,6 +2923,10 @@ function claimFromRow(row: QueryResultRow): Claim {
 }
 
 function messageFromRow(row: QueryResultRow): ThreadMessage {
+  const metadata =
+    (row.metadata as
+      | { coordinationSummary?: ThreadMessage["coordinationSummary"] }
+      | undefined) ?? {};
   return {
     id: row.id,
     threadId: row.thread_id,
@@ -2772,6 +2938,9 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     serverReadable: row.server_readable,
     ...(row.encrypted_body ? { encryptedBody: row.encrypted_body } : {}),
     ...(row.operation_id ? { operationId: row.operation_id } : {}),
+    ...(metadata.coordinationSummary
+      ? { coordinationSummary: metadata.coordinationSummary }
+      : {}),
     ...(row.reply_to_message_id
       ? { replyToMessageId: row.reply_to_message_id }
       : {}),

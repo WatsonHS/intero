@@ -44,6 +44,7 @@ export interface PlatformStore {
     input: StandInQuestionInput,
   ): Awaitable<import("@intero/domain").ThreadMessage>;
   updateMessageStream: StoreMethod<"updateMessageStream">;
+  upsertCoordinationSummary: StoreMethod<"upsertCoordinationSummary">;
   setMessageReaction: StoreMethod<"setMessageReaction">;
   addStandInToThread: StoreMethod<"addStandInToThread">;
   markThreadRead: StoreMethod<"markThreadRead">;
@@ -51,6 +52,7 @@ export interface PlatformStore {
   listThreadMessages: StoreMethod<"listThreadMessages">;
   getThreadMessage: StoreMethod<"getThreadMessage">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
+  concludeCoordinationThread: StoreMethod<"concludeCoordinationThread">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;
   addReview: StoreMethod<"addReview">;

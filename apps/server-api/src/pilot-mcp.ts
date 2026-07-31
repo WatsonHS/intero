@@ -2,6 +2,7 @@ import {
   containsForbiddenEventField,
   PILOT_AGENT_CONFIGURATION_VERSION,
   PilotCheckpointEventType,
+  PilotSharedBoundaryInput,
   PilotWorkNarrative,
   WorkstreamPhase,
   type PilotAgentBinding,
@@ -308,8 +309,8 @@ function createPilotMcpServer(
     {
       description:
         initialBinding.preferredLanguage === "zh-CN"
-          ? "向当前项目的私有 Work State 上报结构化语义检查点；禁止包含原始 prompt、文件、diff、终端或工具日志。"
-          : "Report a structured semantic checkpoint to this Project's private Work State; never include raw prompts, files, diffs, terminal output, or tool logs.",
+          ? "向当前项目的私有 Work State 上报结构化语义检查点。sharedBoundaries 是显式的项目可见边界声明，只能使用短语义标识；禁止包含原始 prompt、文件、diff、终端、工具日志或秘密。"
+          : "Report a structured semantic checkpoint to this Project's private Work State. sharedBoundaries are explicit Project-visible boundary claims and must use short semantic identifiers; never include raw prompts, files, diffs, terminal output, tool logs, or secrets.",
       inputSchema: {
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
@@ -318,6 +319,7 @@ function createPilotMcpServer(
         workstreamKey: z.string().min(1).max(160).optional(),
         workstreamTitle: z.string().min(1).max(160).optional(),
         phase: WorkstreamPhase.optional(),
+        sharedBoundaries: z.array(PilotSharedBoundaryInput).max(12).optional(),
       },
     },
     async (input) => {
@@ -361,6 +363,7 @@ function createPilotMcpServer(
         },
         narrative: input.narrative,
         evidenceRefs: input.evidenceRefs ?? [],
+        sharedBoundaries: input.sharedBoundaries ?? [],
       };
       const result = await options.checkpointService.submit(
         binding,

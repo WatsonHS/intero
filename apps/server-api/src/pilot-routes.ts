@@ -39,6 +39,7 @@ import type {
   RequestAuth,
 } from "./auth.js";
 import type { PostgresAutomationStore } from "./automation-store.js";
+import type { CoordinationKernel } from "./coordination-kernel.js";
 import { ACTIVATION_BOOTSTRAP_HEADER } from "./auth.js";
 import type { CoordinationTransport, ModelGateway } from "./pilot-ports.js";
 import type { PostgresInformationStore } from "./information-store.js";
@@ -66,6 +67,7 @@ export interface PilotRoutesOptions {
   providerSecretCipher: ProviderSecretCipher;
   checkpointService: PilotCheckpointService;
   coordination: CoordinationTransport;
+  coordinationKernel?: CoordinationKernel;
   modelGateway: ModelGateway;
   adapters: {
     realtime?: "centrifugo";
@@ -1130,14 +1132,21 @@ export async function registerPilotRoutes(
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
       const projectId = ProjectId.parse(request.params.projectId);
-      const [projects, bindings, privateWorkState, pulse, coordination] =
-        await Promise.all([
-          options.store.listProjects(principal.id),
-          options.store.listAgentBindings(projectId, principal.id),
-          options.store.listPrivateWorkState(projectId, principal.id),
-          options.store.listTeamPulse(projectId, principal.id),
-          options.coordination.list(projectId, principal.id),
-        ]);
+      const [
+        projects,
+        bindings,
+        privateWorkState,
+        pulse,
+        coordination,
+        coordinationRelevance,
+      ] = await Promise.all([
+        options.store.listProjects(principal.id),
+        options.store.listAgentBindings(projectId, principal.id),
+        options.store.listPrivateWorkState(projectId, principal.id),
+        options.store.listTeamPulse(projectId, principal.id),
+        options.coordination.list(projectId, principal.id),
+        options.store.listCoordinationRelevance(projectId, principal.id),
+      ]);
       const project = projects.find((item) => item.id === projectId);
       if (!project) {
         throw new PilotStoreError(
@@ -1152,6 +1161,7 @@ export async function registerPilotRoutes(
         privateWorkState,
         pulse,
         coordination,
+        coordinationRelevance,
         principals: await visiblePrincipals(options, principal.id),
         organization: await options.store.getOrganization(),
       };
@@ -1556,6 +1566,7 @@ export async function registerPilotRoutes(
     "/v1/pilot/coordination/:threadId/conclusion",
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
+      const now = new Date().toISOString();
       const input = z
         .object({
           conclusion: z.string().min(1).max(600),
@@ -1568,7 +1579,7 @@ export async function registerPilotRoutes(
         principalId: principal.id,
         conclusion: input.conclusion,
         responsibleParticipantId: input.responsibleParticipantId as PrincipalId,
-        now: new Date().toISOString(),
+        now,
       });
       await options.informationStore?.createAttention({
         principalId: input.responsibleParticipantId as PrincipalId,
@@ -1579,6 +1590,7 @@ export async function registerPilotRoutes(
         sourceRef: `coordination:${thread.id}`,
         dedupeKey: `coordination-confirm:${thread.id}`,
       });
+      await options.coordinationKernel?.refresh(thread, now);
       return { thread };
     },
   );
@@ -1608,7 +1620,29 @@ export async function registerPilotRoutes(
         principal.id,
         `coordination-confirm:${thread.id}`,
       );
+      await options.coordinationKernel?.refresh(thread, now, principal.id);
       return { thread };
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/pilot/coordination/:threadId/relevance",
+    async (request) => {
+      const principal = await requireIdentity(request, options.requestAuth);
+      const input = z
+        .object({
+          action: z.enum(["dismiss", "mute", "revisit"]),
+        })
+        .strict()
+        .parse(request.body);
+      return {
+        relevance: await options.store.updateCoordinationRelevance({
+          coordinationThreadId: request.params.threadId,
+          principalId: principal.id,
+          action: input.action,
+          now: new Date().toISOString(),
+        }),
+      };
     },
   );
 }
