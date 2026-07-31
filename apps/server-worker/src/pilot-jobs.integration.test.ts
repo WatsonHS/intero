@@ -370,6 +370,34 @@ databaseSuite("durable Pilot Stand-in jobs", () => {
       status: "unavailable",
     });
   });
+
+  it("starts safely before the API initializes a new production organization", async () => {
+    const pendingOrganizationId = OrganizationId.parse(uuidv7());
+    const earlyRepository = new PostgresPilotJobRepository(
+      new Pool({ connectionString: databaseAppUrl }),
+      pendingOrganizationId,
+    );
+    const now = new Date().toISOString();
+    try {
+      await expect(
+        earlyRepository.heartbeat({
+          workerId: "pre-organization-bootstrap",
+          status: "starting",
+          startedAt: now,
+          now,
+        }),
+      ).resolves.toBeUndefined();
+      const persisted = await admin.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM pilot_worker_heartbeats
+         WHERE organization_id = $1`,
+        [pendingOrganizationId],
+      );
+      expect(persisted.rows[0]?.count).toBe("0");
+    } finally {
+      await earlyRepository.close();
+    }
+  });
 });
 
 class RecoveringModelGateway implements ModelGateway {

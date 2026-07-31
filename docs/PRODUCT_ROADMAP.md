@@ -140,6 +140,11 @@ The `R` stages are research and delivery gates, not release-number promises.
 Finish the current product-closure work and target-infrastructure release
 evidence before adding another major surface.
 
+Repository status on 2026-08-01: the implementation and repeatable local
+production-like gate are complete. The final hosted-environment canary remains
+an R0 exit blocker; see the
+[R0 release record](validation/R0_RELEASE_GATE_2026-08-01.md).
+
 Exit evidence:
 
 - the canonical Agent, Work State, realtime, Action Inbox, and authorization

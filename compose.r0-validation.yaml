@@ -1,0 +1,4 @@
+services:
+  centrifugo:
+    ports:
+      - "127.0.0.1:${INTERO_R0_CENTRIFUGO_PORT:-18000}:8000"

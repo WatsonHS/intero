@@ -498,6 +498,26 @@ databaseSuite("bounded Project automation store", () => {
       "confirmed",
       "reverted",
     ]);
+    const revertEvent = await admin.query<{
+      topic: string;
+      payload: Record<string, unknown>;
+    }>(
+      `SELECT topic,payload FROM outbox
+       WHERE organization_id=$1
+         AND payload->>'eventType'='project.automation.reverted'
+         AND payload->>'aggregateId'=$2
+       LIMIT 1`,
+      [organizationA, entry!.signal.id],
+    );
+    expect(revertEvent.rows[0]).toMatchObject({
+      topic: `project.${projectA}.phase7`,
+      payload: {
+        eventType: "project.automation.reverted",
+        aggregateType: "project_automation_signal",
+        aggregateId: entry!.signal.id,
+        projectId: projectA,
+      },
+    });
   });
 
   it("correlates provider recovery and later automation to one targeted thread", async () => {
