@@ -62,6 +62,9 @@ Acceptance:
 - [x] Complete participant-removal disconnect, shared multi-node rate limiting,
       staged rollout controls, and local outage, multi-client fanout, and
       capacity smoke evidence.
+- [x] Add and pass a repeatable local production-like release gate with fresh
+      secrets, production images, 10,000 realtime clients, 1,000 publications,
+      two API replicas, two Worker replicas, and dependency restart recovery.
 - [ ] Run production-like capacity, failover, and canary evidence in the target
       infrastructure. This is an external release validation gate, not an
       unimplemented product path.
@@ -217,3 +220,14 @@ Acceptance:
   `output/playwright/product-closure/` for onboarding, notification opt-in,
   diagnostics, Agent recovery, Work Item save state, legacy degradation,
   Action Inbox focus, and live/offline Communications delivery state.
+- 2026-08-01: reset the drifted local database after verifying a recoverable
+  backup, then passed fresh API and Worker migrations and the complete
+  real-dependency suite (93 files, 425 tests).
+- 2026-08-01: the repeatable production-like gate passed 10,000 concurrent
+  clients at 99.99% delivery (p95 255 ms, p99 267 ms), 1,000 publications at
+  30,883/s, API and Worker replica failover, and Centrifugo/PostgreSQL restart
+  recovery. See [the R0 release record](../validation/R0_RELEASE_GATE_2026-08-01.md).
+- 2026-08-01: fixed the production Worker-before-Organization cold-start crash
+  and made human automation reverts propagate to other authorized browser
+  sessions through the privacy-safe workspace event path. Phase 6, Phase 7,
+  Agent connection, and route acceptance passed after the fix.

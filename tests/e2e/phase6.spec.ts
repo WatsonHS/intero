@@ -76,6 +76,9 @@ test("two users activate, authenticate, receive targeted attention, and search s
   ).toBeVisible();
   await recipient.getByRole("button", { name: "使用 Passkey 登录" }).click();
   await expect(recipient.getByTitle("Team Pulse")).toBeVisible();
+  await recipient.getByTitle("Team Pulse").click();
+  await expect(recipient).toHaveURL(/\/pulse$/);
+  await expect(recipient.getByRole("heading", { level: 1 })).toBeVisible();
 
   await admin.screenshot({
     path: "output/playwright/phase6/admin-inbox-search.png",
