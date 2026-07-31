@@ -901,6 +901,12 @@ export function RoutedWorkspace() {
             search: { standInOwnerId },
           })
         }
+        onOpenPerson={(personId) =>
+          void navigate({
+            to: "/people/$personId",
+            params: { personId },
+          })
+        }
       />
     );
   }

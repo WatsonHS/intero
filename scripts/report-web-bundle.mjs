@@ -6,6 +6,10 @@ const assetsDirectory = join(root, "apps/web/dist/assets");
 const outputPath = join(root, "apps/web/dist/bundle-report.json");
 const entryBudgetBytes = 300 * 1024;
 const lazyBudgetBytes = 500 * 1024;
+// livekit-client ships as one pre-bundled ESM module. It is loaded only after
+// somebody starts or accepts a call, so keep a narrow dependency-only budget
+// instead of raising the limit for every lazy application chunk.
+const liveKitClientBudgetBytes = 550 * 1024;
 
 const files = (await readdir(assetsDirectory))
   .filter((file) => file.endsWith(".js"))
@@ -17,14 +21,22 @@ const chunks = await Promise.all(
     kind: file.startsWith("index-") ? "entry" : "lazy",
   })),
 );
-const violations = chunks.filter((chunk) =>
-  chunk.kind === "entry"
-    ? chunk.bytes > entryBudgetBytes
-    : chunk.bytes > lazyBudgetBytes,
-);
+const violations = chunks.filter((chunk) => {
+  const budget =
+    chunk.kind === "entry"
+      ? entryBudgetBytes
+      : chunk.file.startsWith("vendor-livekit-client-")
+        ? liveKitClientBudgetBytes
+        : lazyBudgetBytes;
+  return chunk.bytes > budget;
+});
 const report = {
   generatedAt: new Date().toISOString(),
-  budgets: { entryBudgetBytes, lazyBudgetBytes },
+  budgets: {
+    entryBudgetBytes,
+    lazyBudgetBytes,
+    liveKitClientBudgetBytes,
+  },
   chunks: chunks.toSorted((left, right) => right.bytes - left.bytes),
   violations,
 };

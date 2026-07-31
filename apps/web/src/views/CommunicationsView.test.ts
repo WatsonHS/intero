@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGroupChatThreadInput,
+  findExistingDirectMessageThread,
   insertEmojiAtCursor,
   isBubblelessEmojiMessage,
   markCachedThreadRead,
@@ -25,6 +26,52 @@ const sessionPrincipal = {
   timezone: "Asia/Shanghai",
   capabilities: [],
 };
+
+describe("group profile direct-message routing", () => {
+  it("reuses an existing one-to-one conversation with the selected member", () => {
+    const currentPrincipalId = sessionPrincipal.id;
+    const peerId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000002");
+    const direct = {
+      thread: {
+        kind: "human_direct" as const,
+        participantIds: [currentPrincipalId, peerId],
+        standInIds: [],
+      },
+    };
+    const unrelated = {
+      thread: {
+        kind: "room" as const,
+        participantIds: [currentPrincipalId, peerId],
+        standInIds: [],
+      },
+    };
+
+    expect(
+      findExistingDirectMessageThread(
+        [unrelated, direct],
+        currentPrincipalId,
+        peerId,
+      ),
+    ).toBe(direct);
+  });
+
+  it("does not treat a direct message containing another human as a match", () => {
+    const currentPrincipalId = sessionPrincipal.id;
+    const peerId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000002");
+    const thirdId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000003");
+    const direct = {
+      thread: {
+        kind: "human_direct" as const,
+        participantIds: [currentPrincipalId, peerId, thirdId],
+        standInIds: [],
+      },
+    };
+
+    expect(
+      findExistingDirectMessageThread([direct], currentPrincipalId, peerId),
+    ).toBeUndefined();
+  });
+});
 
 describe("conversation emoji insertion", () => {
   it("inserts a multi-codepoint emoji at the active textarea cursor", () => {

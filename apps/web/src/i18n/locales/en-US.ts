@@ -146,6 +146,11 @@ export const enUS: Record<TranslationKey, string> = {
   "person.dmUnavailable":
     "You and this contact do not share an available team.",
   "person.dmFailed": "Could not start the direct message. Try again.",
+  "person.profileTitle": "Member profile",
+  "person.openProfile": "View {name}'s profile",
+  "person.viewFullProfile": "View full profile",
+  "person.organizationMember": "Organization member",
+  "person.sharedGroup": "Shared group · {group}",
   "person.atStandIn": "@ their Stand-in",
   "person.standInUpdated": "Stand-in updated {time}",
   "person.says": "Their Stand-in says ·",
@@ -912,6 +917,44 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.concluded": "Concluded",
   "chat.concludedInto": "Conclusion posted back to “{title}”",
   "chat.openOrigin": "Open the origin",
+  "chat.call": "Call",
+  "chat.startAudioCall": "Start an audio call",
+  "chat.startVideoCall": "Start a video call",
+  "chat.incomingCallFrom": "{name} is calling",
+  "chat.calling": "Calling…",
+  "chat.callConnected": "In call",
+  "chat.callPrivate": "Secure media by LiveKit",
+  "chat.acceptCall": "Accept",
+  "chat.declineCall": "Decline",
+  "chat.waitingForAnswer": "Waiting for someone to answer",
+  "chat.connectingMedia": "Establishing a secure media connection",
+  "chat.muteMicrophone": "Mute microphone",
+  "chat.unmuteMicrophone": "Unmute microphone",
+  "chat.turnOffCamera": "Turn camera off",
+  "chat.turnOnCamera": "Turn camera on",
+  "chat.microphone": "Microphone",
+  "chat.camera": "Camera",
+  "chat.noMicrophoneAvailable": "No microphone available",
+  "chat.noCameraAvailable": "No camera available",
+  "chat.minimizeCall": "Minimize call",
+  "chat.restoreCall": "Expand call",
+  "chat.hangUp": "Hang up",
+  "chat.callDeclined": "They cannot take the call right now.",
+  "chat.callSignalFailed":
+    "The call could not connect. Check realtime service and try again.",
+  "chat.mediaPermissionDenied":
+    "Allow Intero to use your microphone and camera in browser and system settings.",
+  "chat.microphoneMissing":
+    "No microphone is available. Connect one and allow browser microphone access in system settings.",
+  "chat.cameraMissing":
+    "No camera is available. Connect one and allow browser camera access in system settings.",
+  "chat.mediaDeviceInUse":
+    "The microphone or camera is in use by another app. Close it and try again.",
+  "chat.mediaSecureContextRequired":
+    "Calls require HTTPS. For local testing, open Intero at http://localhost:4311.",
+  "chat.mediaDeviceMissing": "No microphone or camera was found.",
+  "chat.callStartFailed":
+    "The call could not start. Check your devices and try again.",
   "admin.audit.tag.governance": "Permissions",
   "admin.audit.event.pilot.team_member.role_changed": "Team role changed",
   "admin.audit.event.pilot.organization_member.role_changed":

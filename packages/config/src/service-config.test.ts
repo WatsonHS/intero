@@ -63,6 +63,11 @@ describe("service environment schemas", () => {
         enabled: true,
         rolloutPercent: 100,
       },
+      calls: {
+        serverUrl: "ws://localhost:7880",
+        apiKey: "devkey",
+        apiSecret: "secret",
+      },
     });
     expect(
       loadWorkerServiceConfig({
@@ -179,7 +184,11 @@ describe("service environment schemas", () => {
       auth: {
         publicUrl: "http://10.20.30.40:4311",
         passkeyRpId: "10.20.30.40",
-        trustedOrigins: ["http://10.20.30.40:4311"],
+        trustedOrigins: expect.arrayContaining([
+          "http://10.20.30.40:4311",
+          "http://localhost:4311",
+          "http://127.0.0.1:4311",
+        ]),
       },
     });
   });
@@ -329,6 +338,47 @@ describe("service environment schemas", () => {
     ).toMatchObject({
       publicUrl: "https://intero.example.com",
     });
+  });
+
+  it("requires LiveKit settings to be configured together", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_LIVEKIT_URL: "wss://calls.example.com",
+      }),
+    ).toThrow("INTERO_LIVEKIT");
+
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_LIVEKIT_URL: "wss://calls.example.com",
+        INTERO_LIVEKIT_API_KEY: "livekit-key",
+        INTERO_LIVEKIT_API_SECRET: "livekit-secret",
+      }).calls,
+    ).toEqual({
+      serverUrl: "wss://calls.example.com",
+      apiKey: "livekit-key",
+      apiSecret: "livekit-secret",
+    });
+  });
+
+  it("requires secure LiveKit signaling in product mode", () => {
+    expect(() =>
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_RUNTIME_MODE: "product",
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "https://intero.example.com",
+        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
+        INTERO_CENTRIFUGO_TOKEN_SECRET:
+          "realtime-token-secret-at-least-thirty-two-bytes",
+        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+        INTERO_LIVEKIT_URL: "ws://calls.example.com",
+        INTERO_LIVEKIT_API_KEY: "livekit-key",
+        INTERO_LIVEKIT_API_SECRET: "livekit-secret",
+      }),
+    ).toThrow("WSS INTERO_LIVEKIT_URL");
   });
 
   it("validates ordered migrator dependencies", () => {

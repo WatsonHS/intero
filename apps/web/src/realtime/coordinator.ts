@@ -11,6 +11,7 @@ import type {
   RealtimeSessionPayload,
   RealtimeSubscriptionPayload,
 } from "../api.js";
+import type { CallEventEnvelope } from "../calls/types.js";
 
 const ConversationChangedHint = z
   .object({
@@ -43,6 +44,28 @@ const ConversationChangedHint = z
     }
   });
 
+const CallEventHint = z
+  .object({
+    schemaVersion: z.literal(1),
+    type: z.literal("conversation.call.event"),
+    eventId: z.string().uuid(),
+    threadId: z.string().uuid(),
+    callId: z.string().uuid(),
+    senderId: z.string().uuid(),
+    event: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("invite"),
+          mode: z.enum(["audio", "video"]),
+        })
+        .strict(),
+      z.object({ kind: z.literal("decline") }).strict(),
+      z.object({ kind: z.literal("hangup") }).strict(),
+    ]),
+    occurredAt: z.string().datetime(),
+  })
+  .strict();
+
 export type ConversationRealtimeStatus =
   "disabled" | "connecting" | "live" | "degraded" | "offline";
 
@@ -52,6 +75,7 @@ export interface ConversationRealtimeDependencies {
     threadId: string,
   ) => Promise<RealtimeSubscriptionPayload>;
   onChange: (event: ConversationChangedEventPayload) => void;
+  onCallEvent?: (event: CallEventEnvelope) => void;
   onRecoveryGap: (threadId?: string) => void;
   onStatus: (status: ConversationRealtimeStatus) => void;
   isOnline?: () => boolean;
@@ -65,7 +89,10 @@ export class ConversationRealtimeCoordinator {
   readonly #dependencies: ConversationRealtimeDependencies;
   readonly #seenEventIds = new Set<string>();
   readonly #seenEventOrder: string[] = [];
-  readonly #subscriptions = new Map<string, Subscription>();
+  readonly #subscriptions = new Map<
+    string,
+    { subscription: Subscription; consumers: number }
+  >();
   #client: Centrifuge | undefined;
   #stopped = false;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -85,9 +112,9 @@ export class ConversationRealtimeCoordinator {
   stop(): void {
     this.#stopped = true;
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
-    for (const subscription of this.#subscriptions.values()) {
-      subscription.unsubscribe();
-      this.#client?.removeSubscription(subscription);
+    for (const entry of this.#subscriptions.values()) {
+      entry.subscription.unsubscribe();
+      this.#client?.removeSubscription(entry.subscription);
     }
     this.#subscriptions.clear();
     this.#client?.disconnect();
@@ -115,7 +142,8 @@ export class ConversationRealtimeCoordinator {
     }
     const existing = this.#subscriptions.get(threadId);
     if (existing) {
-      return () => this.unsubscribeThread(threadId, existing);
+      existing.consumers += 1;
+      return () => this.unsubscribeThread(threadId, existing.subscription);
     }
     const initial = await this.#dependencies.createSubscription(threadId);
     if (this.#stopped || client !== this.#client) return () => undefined;
@@ -135,7 +163,7 @@ export class ConversationRealtimeCoordinator {
       // truth after the realtime transport reconnects.
       this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
     });
-    this.#subscriptions.set(threadId, subscription);
+    this.#subscriptions.set(threadId, { subscription, consumers: 1 });
     subscription.subscribe();
     return () => this.unsubscribeThread(threadId, subscription);
   }
@@ -186,14 +214,26 @@ export class ConversationRealtimeCoordinator {
 
   #publication(context: PublicationContext): void {
     const parsed = ConversationChangedHint.safeParse(context.data);
-    if (!parsed.success || this.#seenEventIds.has(parsed.data.eventId)) return;
-    this.#seenEventIds.add(parsed.data.eventId);
-    this.#seenEventOrder.push(parsed.data.eventId);
+    if (!parsed.success) {
+      const callEvent = CallEventHint.safeParse(context.data);
+      if (!callEvent.success || this.#seenEventIds.has(callEvent.data.eventId))
+        return;
+      this.#rememberEvent(callEvent.data.eventId);
+      this.#dependencies.onCallEvent?.(callEvent.data as CallEventEnvelope);
+      return;
+    }
+    if (this.#seenEventIds.has(parsed.data.eventId)) return;
+    this.#rememberEvent(parsed.data.eventId);
+    this.#dependencies.onChange(parsed.data as ConversationChangedEventPayload);
+  }
+
+  #rememberEvent(eventId: string): void {
+    this.#seenEventIds.add(eventId);
+    this.#seenEventOrder.push(eventId);
     if (this.#seenEventOrder.length > 512) {
       const expired = this.#seenEventOrder.shift();
       if (expired) this.#seenEventIds.delete(expired);
     }
-    this.#dependencies.onChange(parsed.data as ConversationChangedEventPayload);
   }
 
   #scheduleRetry(): void {
@@ -209,7 +249,10 @@ export class ConversationRealtimeCoordinator {
     threadId: string,
     subscription: Subscription,
   ): void {
-    if (this.#subscriptions.get(threadId) !== subscription) return;
+    const entry = this.#subscriptions.get(threadId);
+    if (!entry || entry.subscription !== subscription) return;
+    entry.consumers -= 1;
+    if (entry.consumers > 0) return;
     this.#subscriptions.delete(threadId);
     subscription.unsubscribe();
     this.#client?.removeSubscription(subscription);

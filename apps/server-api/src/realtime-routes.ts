@@ -13,6 +13,7 @@ export interface RealtimeRoutesOptions {
   store: PlatformStore;
   requestAuth: RequestAuth;
   publicUrl: string;
+  publicOrigins?: string[];
   tokenSecret: string;
   tokenTtlSeconds?: number;
   rateLimiter?: RealtimeRateLimiter;
@@ -28,7 +29,6 @@ export async function registerRealtimeRoutes(
     options.tokenSecret,
     options.tokenTtlSeconds,
   );
-  const endpoints = transportEndpoints(options.publicUrl);
   const rateLimiter =
     options.rateLimiter ??
     (options.rateLimitDatabase && options.organizationId
@@ -40,6 +40,13 @@ export async function registerRealtimeRoutes(
 
   app.post("/v1/realtime/session", async (request, reply) => {
     const principal = await options.requestAuth.resolve(request);
+    const endpoints = transportEndpoints(
+      realtimePublicUrlForOrigin(
+        options.publicUrl,
+        request.headers.origin,
+        options.publicOrigins,
+      ),
+    );
     const retryAfter = await rateLimiter.consume(
       `session:${principal!.id}`,
       60,
@@ -98,6 +105,21 @@ export async function registerRealtimeRoutes(
       accessVersion,
     };
   });
+}
+
+function realtimePublicUrlForOrigin(
+  configuredPublicUrl: string,
+  requestOrigin: string | undefined,
+  publicOrigins: string[] | undefined,
+): string {
+  if (!requestOrigin || !publicOrigins?.includes(requestOrigin)) {
+    return configuredPublicUrl;
+  }
+  try {
+    return new URL(requestOrigin).origin;
+  } catch {
+    return configuredPublicUrl;
+  }
 }
 
 export interface RealtimeRateLimiter {

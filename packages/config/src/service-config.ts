@@ -17,6 +17,9 @@ const DevelopmentRealtimeTokenSecret =
 const DevelopmentRealtimeApiKey = "intero-development-realtime-api-key-v1";
 const DevelopmentCentrifugoApiUrl = "http://localhost:8000";
 const DevelopmentCentrifugoPublicUrl = "http://localhost:4311";
+const DevelopmentLiveKitUrl = "ws://localhost:7880";
+const DevelopmentLiveKitApiKey = "devkey";
+const DevelopmentLiveKitApiSecret = "secret";
 
 const MinioObjectStorageConfig = z
   .object({
@@ -75,6 +78,11 @@ export interface ApiServiceConfig {
     tokenSecret: string;
     enabled: boolean;
     rolloutPercent: number;
+  };
+  calls?: {
+    serverUrl: string;
+    apiKey: string;
+    apiSecret: string;
   };
   auth?: {
     publicUrl: string;
@@ -167,6 +175,10 @@ export function loadApiServiceConfig(
   const trustedOrigins = Array.from(
     new Set([
       ...defaultAuthTrustedOrigins(publicUrl, runtime.port),
+      ...(runtimeMode === "development" &&
+      new URL(publicUrl).protocol === "http:"
+        ? localDevelopmentOrigins(runtime.port)
+        : []),
       ...configuredTrustedOrigins,
     ]),
   );
@@ -199,6 +211,45 @@ export function loadApiServiceConfig(
     .parse(environment.INTERO_REALTIME_ROLLOUT_PERCENT ?? 100);
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
+  const callConfigValues = [
+    environment.INTERO_LIVEKIT_URL,
+    environment.INTERO_LIVEKIT_API_KEY,
+    environment.INTERO_LIVEKIT_API_SECRET,
+  ];
+  const callsRequested = callConfigValues.some(Boolean);
+  if (callsRequested && callConfigValues.some((value) => !value)) {
+    throw new Error(
+      "LiveKit calling requires INTERO_LIVEKIT_URL, INTERO_LIVEKIT_API_KEY, and INTERO_LIVEKIT_API_SECRET together.",
+    );
+  }
+  const calls =
+    callsRequested || runtimeMode === "development"
+      ? {
+          serverUrl: z
+            .url()
+            .parse(environment.INTERO_LIVEKIT_URL ?? DevelopmentLiveKitUrl),
+          apiKey: z
+            .string()
+            .min(1)
+            .parse(
+              environment.INTERO_LIVEKIT_API_KEY ?? DevelopmentLiveKitApiKey,
+            ),
+          apiSecret: z
+            .string()
+            .min(1)
+            .parse(
+              environment.INTERO_LIVEKIT_API_SECRET ??
+                DevelopmentLiveKitApiSecret,
+            ),
+        }
+      : undefined;
+  if (
+    runtimeMode === "product" &&
+    calls &&
+    new URL(calls.serverUrl).protocol !== "wss:"
+  ) {
+    throw new Error("Product runtime requires a WSS INTERO_LIVEKIT_URL.");
+  }
   if (runtimeMode === "product" && developmentIdentityRequested) {
     throw new Error(
       "Product runtime cannot enable INTERO_ALLOW_DEVELOPMENT_IDENTITY.",
@@ -254,6 +305,7 @@ export function loadApiServiceConfig(
       ),
       rolloutPercent: realtimeRolloutPercent,
     },
+    ...(calls ? { calls } : {}),
     ...(authSecret
       ? {
           auth: {
@@ -316,6 +368,13 @@ function defaultAuthTrustedOrigins(
   ]);
   return ["localhost", "127.0.0.1", "0.0.0.0"].flatMap((hostname) =>
     Array.from(ports, (port) => `http://${hostname}:${port}`),
+  );
+}
+
+function localDevelopmentOrigins(apiPort: number): string[] {
+  const ports = [String(apiPort), "4311", "5173"];
+  return ["localhost", "127.0.0.1", "0.0.0.0"].flatMap((hostname) =>
+    ports.map((port) => `http://${hostname}:${port}`),
   );
 }
 

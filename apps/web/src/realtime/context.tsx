@@ -23,17 +23,23 @@ import {
   ConversationRealtimeCoordinator,
   type ConversationRealtimeStatus,
 } from "./coordinator.js";
+import type { CallEventEnvelope } from "../calls/types.js";
 import { repairConversationChange } from "./sync.js";
 
 interface ConversationRealtimeContextValue {
   status: ConversationRealtimeStatus;
   watchThread: (threadId: string) => Promise<() => void>;
+  watchCallEvents: (
+    threadId: string,
+    listener: (event: CallEventEnvelope) => void,
+  ) => Promise<() => void>;
 }
 
 const ConversationRealtimeContext =
   createContext<ConversationRealtimeContextValue>({
     status: "disabled",
     watchThread: async () => () => undefined,
+    watchCallEvents: async () => () => undefined,
   });
 
 export function ConversationRealtimeProvider({
@@ -50,6 +56,10 @@ export function ConversationRealtimeProvider({
     undefined,
   );
   const notifiedMentionIds = useRef(new Set<string>());
+  const callEventListeners = useRef(
+    new Map<string, Set<(event: CallEventEnvelope) => void>>(),
+  );
+  const pendingCallInvites = useRef(new Map<string, CallEventEnvelope>());
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
     queryFn: ({ signal }) => getBootstrap(signal),
@@ -154,6 +164,64 @@ export function ConversationRealtimeProvider({
             );
           });
       },
+      onCallEvent: (event) => {
+        const listeners =
+          callEventListeners.current.get(event.threadId) ?? new Set();
+        if (event.event.kind === "invite" && event.senderId !== identityId) {
+          if (listeners.size === 0) {
+            pendingCallInvites.current.set(event.threadId, event);
+          } else {
+            pendingCallInvites.current.delete(event.threadId);
+          }
+          const cached = queryClient.getQueryData<{
+            items: Array<{
+              thread: { id: string; title: string };
+              principals: Array<{ id: string; displayName: string }>;
+            }>;
+          }>(["threads"]);
+          const thread = cached?.items.find(
+            (item) => item.thread.id === event.threadId,
+          );
+          const sender = thread?.principals.find(
+            (principal) => principal.id === event.senderId,
+          );
+          const title = t("chat.incomingCallFrom", {
+            name: sender?.displayName ?? t("chat.someone"),
+          });
+          if (listeners.size === 0) {
+            notifications.info(thread?.thread.title ?? t("chat.title"), {
+              title,
+            });
+          }
+          if (
+            typeof Notification !== "undefined" &&
+            Notification.permission === "granted" &&
+            document.visibilityState === "hidden"
+          ) {
+            try {
+              const notification = new Notification(title, {
+                body: thread?.thread.title ?? t("chat.title"),
+                tag: `intero-call-${event.callId}`,
+              });
+              notification.onclick = () => {
+                window.focus();
+                window.location.assign(`/communications/${event.threadId}`);
+              };
+            } catch {
+              // The in-app incoming-call state remains authoritative.
+            }
+          }
+        } else if (
+          (event.event.kind === "hangup" || event.event.kind === "decline") &&
+          pendingCallInvites.current.get(event.threadId)?.callId ===
+            event.callId
+        ) {
+          pendingCallInvites.current.delete(event.threadId);
+        }
+        for (const listener of listeners) {
+          listener(event);
+        }
+      },
       onRecoveryGap: () => {
         void queryClient.invalidateQueries({ queryKey: ["threads"] });
       },
@@ -182,7 +250,40 @@ export function ConversationRealtimeProvider({
     return coordinator.subscribeThread(threadId);
   }, []);
 
-  const value = useMemo(() => ({ status, watchThread }), [status, watchThread]);
+  const watchCallEvents = useCallback(
+    async (threadId: string, listener: (event: CallEventEnvelope) => void) => {
+      const listeners =
+        callEventListeners.current.get(threadId) ??
+        new Set<(event: CallEventEnvelope) => void>();
+      listeners.add(listener);
+      callEventListeners.current.set(threadId, listeners);
+      let releaseThread: () => void = () => undefined;
+      try {
+        releaseThread = await watchThread(threadId);
+      } catch (error) {
+        listeners.delete(listener);
+        if (listeners.size === 0) callEventListeners.current.delete(threadId);
+        throw error;
+      }
+      const pending = pendingCallInvites.current.get(threadId);
+      if (pending && Date.now() - Date.parse(pending.occurredAt) <= 45_000) {
+        listener(pending);
+      } else if (pending) {
+        pendingCallInvites.current.delete(threadId);
+      }
+      return () => {
+        releaseThread();
+        listeners.delete(listener);
+        if (listeners.size === 0) callEventListeners.current.delete(threadId);
+      };
+    },
+    [watchThread],
+  );
+
+  const value = useMemo(
+    () => ({ status, watchThread, watchCallEvents }),
+    [status, watchCallEvents, watchThread],
+  );
   return (
     <ConversationRealtimeContext.Provider value={value}>
       {children}

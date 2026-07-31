@@ -70,6 +70,7 @@ import {
 import {
   addPilotStandIn,
   askPilotStandIn,
+  createPilotDm,
   enqueuePilotStandInReply,
   getPilotDms,
   getPilotStandIn,
@@ -79,6 +80,8 @@ import {
 import { usePilotOptional } from "../pilot/context.js";
 import { useConversationRealtime } from "../realtime/context.js";
 import type { ConversationRealtimeStatus } from "../realtime/coordinator.js";
+import { ConversationCall } from "../calls/ConversationCall.js";
+import { ConversationProfileModal } from "./chat/ConversationProfileModal.js";
 import { EmojiPicker } from "./chat/EmojiPicker.js";
 import { NewConversationModal } from "./chat/NewConversationModal.js";
 import { GroupChatManagementModal } from "./chat/GroupChatManagementModal.js";
@@ -222,18 +225,42 @@ export function resolveConversationProjectId(
   return thread?.projectId ?? selectedProjectId;
 }
 
+export function findExistingDirectMessageThread<
+  T extends {
+    thread: Pick<ConversationThread, "kind" | "participantIds" | "standInIds">;
+  },
+>(
+  items: T[],
+  currentPrincipalId: PrincipalId,
+  peerId: PrincipalId,
+): T | undefined {
+  return items.find((item) => {
+    if (item.thread.kind !== "human_direct") return false;
+    const humanParticipants = item.thread.participantIds.filter(
+      (participantId) => !item.thread.standInIds.includes(participantId),
+    );
+    return (
+      humanParticipants.length === 2 &&
+      humanParticipants.includes(currentPrincipalId) &&
+      humanParticipants.includes(peerId)
+    );
+  });
+}
+
 export function CommunicationsView({
   initialThreadId,
   initialStandInOwnerId,
   selectedProjectId,
   onOpenThread,
   onOpenStandIn,
+  onOpenPerson,
 }: {
   initialThreadId?: string;
   initialStandInOwnerId?: string;
   selectedProjectId?: string;
   onOpenThread?: (threadId: string) => void;
   onOpenStandIn?: (ownerId: string) => void;
+  onOpenPerson?: (personId: string) => void;
 } = {}) {
   const { formatRelative, formatTime, t } = useI18n();
   const notifications = useNotifications();
@@ -247,6 +274,9 @@ export function CommunicationsView({
   const [showSearch, setShowSearch] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showManage, setShowManage] = useState(false);
+  const [profilePrincipalId, setProfilePrincipalId] = useState<
+    PrincipalId | undefined
+  >();
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerMirrorRef = useRef<HTMLDivElement>(null);
@@ -509,6 +539,22 @@ export function CommunicationsView({
           : [],
       })
     : [];
+  const profilePrincipal = profilePrincipalId
+    ? principals.find(
+        (principal) =>
+          principal.id === profilePrincipalId && principal.kind === "human",
+      )
+    : undefined;
+  const profileTeam = profilePrincipalId
+    ? ((pilot?.teams.data?.teams ?? []).find(
+        (team) =>
+          team.id === current?.thread.teamId &&
+          team.members.some((member) => member.id === profilePrincipalId),
+      ) ??
+      (pilot?.teams.data?.teams ?? []).find((team) =>
+        team.members.some((member) => member.id === profilePrincipalId),
+      ))
+    : undefined;
   const activeMention = conversationMentionQuery(draft, mentionCursor);
   const visibleMentionCandidates = mentionPickerOpen
     ? filterConversationMentionCandidates(
@@ -1010,6 +1056,56 @@ export function CommunicationsView({
       );
     },
   });
+  const startProfileDirectMessage = useMutation({
+    mutationFn: async (peerId: PrincipalId) => {
+      const identity = conversationIdentity;
+      if (!identity || peerId === identity.currentPrincipalId) {
+        throw new Error(t("person.dmUnavailable"));
+      }
+      const existing = findExistingDirectMessageThread(
+        allItems,
+        identity.currentPrincipalId,
+        peerId,
+      );
+      if (existing) return existing.thread.id;
+
+      const sharedTeam = (pilot?.teams.data?.teams ?? []).find(
+        (team) =>
+          team.members.some(
+            (member) => member.id === identity.currentPrincipalId,
+          ) && team.members.some((member) => member.id === peerId),
+      );
+      if (pilot?.identityId && sharedTeam) {
+        const result = await createPilotDm(pilot.identityId, {
+          teamId: sharedTeam.id,
+          peerId,
+        });
+        return result.thread.id;
+      }
+
+      const thread = await createConversationThread({
+        kind: "human_direct",
+        title:
+          principalNames.get(peerId) ??
+          profilePrincipal?.displayName ??
+          peerId.slice(0, 8),
+        participantIds: [identity.currentPrincipalId, peerId],
+        standInIds: [],
+      });
+      return thread.id;
+    },
+    onSuccess: async (threadId) => {
+      setProfilePrincipalId(undefined);
+      selectThread(threadId);
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("person.dmFailed"),
+        { title: t("person.dmFailed") },
+      );
+    },
+  });
 
   async function addComposerImages(files: File[]) {
     if (!canAttachImages || !current || !currentSenderId) return;
@@ -1482,13 +1578,34 @@ export function CommunicationsView({
 
     const isOwn = message.senderId === currentSenderId;
     const bubblelessEmoji = isBubblelessEmojiMessage(message);
-    const avatar = (
+    const canOpenProfile =
+      currentIsCanonicalGroup &&
+      !isOwn &&
+      principals.some(
+        (principal) =>
+          principal.id === message.senderId && principal.kind === "human",
+      );
+    const avatarFace = (
       <span
         className="grid h-[30px] w-[30px] place-items-center rounded-full text-[9.5px] font-[650] text-on-tint"
         style={{ background: tintFor(message.senderId) }}
       >
         {initials(senderName)}
       </span>
+    );
+    const avatar = canOpenProfile ? (
+      <button
+        type="button"
+        data-testid={`conversation-profile-trigger-${message.senderId}`}
+        aria-label={t("person.openProfile", { name: senderName })}
+        title={t("person.openProfile", { name: senderName })}
+        onClick={() => setProfilePrincipalId(message.senderId as PrincipalId)}
+        className="h-[30px] w-[30px] cursor-pointer rounded-full border-0 bg-transparent p-0 outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent-strong"
+      >
+        {avatarFace}
+      </button>
+    ) : (
+      avatarFace
     );
     const content = (
       <div
@@ -1751,7 +1868,28 @@ export function CommunicationsView({
       </aside>
 
       {current ? (
-        <div className="grid h-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+        <div className="flex h-full min-w-0 flex-col">
+          {profilePrincipal && profilePrincipalId ? (
+            <ConversationProfileModal
+              principalId={profilePrincipalId}
+              displayName={profilePrincipal.displayName}
+              {...(profileTeam ? { teamName: profileTeam.name } : {})}
+              groupTitle={current.thread.title}
+              busy={startProfileDirectMessage.isPending}
+              onClose={() => setProfilePrincipalId(undefined)}
+              onOpenDirectMessage={() =>
+                startProfileDirectMessage.mutate(profilePrincipalId)
+              }
+              {...(onOpenPerson
+                ? {
+                    onOpenFullProfile: () => {
+                      setProfilePrincipalId(undefined);
+                      onOpenPerson(profilePrincipalId);
+                    },
+                  }
+                : {})}
+            />
+          ) : null}
           {showManage && current.thread.kind === "room" ? (
             <GroupChatManagementModal
               title={current.thread.title}
@@ -1775,7 +1913,7 @@ export function CommunicationsView({
               }
             />
           ) : null}
-          <header className="flex items-center gap-[13px] border-b border-line p-[18px_26px]">
+          <header className="flex shrink-0 items-center gap-[13px] border-b border-line p-[18px_26px]">
             <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-accent-soft text-[12px] font-[650] text-accent-strong">
               {initials(current.thread.title)}
             </span>
@@ -1794,8 +1932,30 @@ export function CommunicationsView({
                       })}
               </small>
             </span>
+            {currentSenderId &&
+            current.thread.kind !== "stand_in" &&
+            !currentIsPilotStandIn &&
+            !current.thread.concludedAt ? (
+              <ConversationCall
+                key={current.thread.id}
+                enabled={
+                  realtime.status === "live" &&
+                  bootstrap.data?.adapters?.calls === "livekit"
+                }
+                stageContainerId={`conversation-call-stage-${current.thread.id}`}
+                threadId={current.thread.id}
+                currentPrincipalId={currentSenderId}
+                title={current.thread.title}
+                principalNames={principalNames}
+                humanParticipantCount={
+                  current.thread.participantIds.filter(
+                    (id) => !current.thread.standInIds.includes(id),
+                  ).length
+                }
+              />
+            ) : null}
             {currentIsCanonicalGroup ? (
-              <div className="ml-auto flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 {ownStandInState === "present" ? (
                   <span
                     data-testid="group-own-stand-in-present"
@@ -1844,7 +2004,7 @@ export function CommunicationsView({
                 data-testid="pilot-add-stand-in"
                 disabled={addStandIn.isPending}
                 onClick={() => addStandIn.mutate(current.thread.id)}
-                className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
+                className="inline-flex h-8 items-center gap-1.5 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] hover:border-accent-strong"
               >
                 {addStandIn.isPending ? (
                   <CircleNotchIcon size={14} className="animate-spin" />
@@ -1855,7 +2015,7 @@ export function CommunicationsView({
               </button>
             ) : current.thread.kind === "human_direct" &&
               current.thread.standInIds.length > 0 ? (
-              <span className="ml-auto inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong">
+              <span className="inline-flex items-center gap-1.5 rounded-pill bg-accent-soft px-2.5 py-1 text-[10.5px] text-accent-strong">
                 <RobotIcon size={13} />
                 替身已加入
               </span>
@@ -1949,7 +2109,13 @@ export function CommunicationsView({
             </div>
           ) : null}
 
-          <div className="overflow-auto p-[22px_26px_30px]">
+          <div
+            id={`conversation-call-stage-${current.thread.id}`}
+            data-testid="conversation-call-stage-slot"
+            className="mx-auto w-full max-w-[1012px] flex-none px-[26px] pt-[18px] empty:hidden"
+          />
+
+          <div className="min-h-0 flex-1 overflow-auto p-[22px_26px_30px]">
             <div className="mx-auto flex max-w-[800px] flex-col gap-4">
               {!currentIsPilot &&
               !currentIsPilotStandIn &&
@@ -2010,7 +2176,7 @@ export function CommunicationsView({
             </div>
           </div>
 
-          <div className="p-[0_26px_22px]">
+          <div className="shrink-0 p-[0_26px_22px]">
             <div className="mx-auto max-w-[800px]">
               <div
                 className="relative rounded-card border border-line2 bg-panel2 p-[11px_13px]"

@@ -1,4 +1,10 @@
-{$INTERO_PUBLIC_URL:http://localhost:4311} {
+:4311 {
+	@livekit path /rtc*
+
+	handle @livekit {
+		reverse_proxy host.docker.internal:7880
+	}
+
 	@realtime path /connection/* /emulation
 
 	handle @realtime {
