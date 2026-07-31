@@ -22,8 +22,8 @@ its product surface or authority.
 
 ## Product thesis
 
-Intero is a coordination and interoception layer for software teams in which
-people and Coding Agents work with increasing autonomy:
+Intero begins as a coordination and interoception layer for software teams in
+which people and Coding Agents work with increasing autonomy:
 
 > Help a team notice when independent work requires shared understanding,
 > coordination, or validation, without monitoring private activity or turning
@@ -33,25 +33,56 @@ This thesis can survive different delivery phases. What changes between phases
 is the signal, risk threshold, and required evidence—not the need for a team to
 maintain a trustworthy shared reality.
 
+The longer-term ambition is an AI-native software-engineering and
+project-management platform where project reality grows from authorized
+conversation, actual work, decisions, and evidence. Automatic coordination is
+the initial wedge and, if the evidence supports it, the engine beneath that
+broader platform. The roadmap does not assume in advance that every traditional
+project-management object or workflow belongs inside Intero.
+
 ## Product shape
 
 ### Core product
 
 These capabilities must become trustworthy and coherent:
 
+- authorized conversation as a first-class source of human intent, questions,
+  disagreement, and candidate decisions—without treating discussion as truth;
 - privacy-bounded Agent Work State and explicit shared Claims;
+- correlation with repository, test, CI, and runtime evidence where available;
 - Team Pulse as ambient awareness rather than task ranking;
 - explainable conflict, dependency, and relevance detection;
 - bounded Coordination Threads;
 - Action Inbox for specific human decisions and commitments;
+- plain-language coordination briefs with exact technical evidence available
+  on demand;
 - provenance, authorization, correction, deduplication, and recovery.
+
+### Agent roles and scope routing
+
+The product exposes two Intero Agent roles:
+
+- a personal Stand-in represents one person and protects their private context;
+- Intero in a shared Room represents the shared space and maintains authorized,
+  human-confirmed team reality.
+
+External Coding Agents execute work. Projects remain scoped state, policy, and
+evidence contexts behind Intero rather than user-addressable Project Agents. A
+Team Room may discuss several projects; people mention only `@Intero`. Intero
+infers a single-Project, cross-Project, Team-level, or unresolved scope from the
+conversation, linked work, participants, and shareable Work State. Scope
+inference may route information but never grant access or widen visibility. If
+the evidence is ambiguous, Intero asks for one lightweight clarification rather
+than silently choosing a Project.
 
 ### Compatibility context
 
 Project, Epic, Feature, Work Item, Sprint, Spec Review, code references, and
 future provider integrations help Intero understand declared work. They are
 useful context, but they are not the product thesis and must not require Intero
-to own every team system of record.
+to own every team system of record in the initial coordination phase. Evidence
+may later justify making some of them first-class parts of the wider platform;
+that is not a prerequisite for proving the first wedge.
 
 ### Research track
 
@@ -86,6 +117,19 @@ ambient awareness
 
 A possible relationship is not automatically an action. A model confidence
 score is not permission to notify someone.
+
+Human-facing coordination should also reveal detail gradually:
+
+```text
+what happened, why it matters, and whether I need to act
+→ the conflicting work, unresolved question, and available choices
+→ exact identifiers, sources, evidence, freshness, and uncertainty
+```
+
+The first layer must use plain language. Exact API, field, module, test, and
+revision names remain available as technical anchors. Facts, model
+interpretation, suggestions, and human-confirmed decisions must never be
+presented as the same kind of statement.
 
 ## Evidence-gated roadmap
 
@@ -132,6 +176,8 @@ Turn the detected conflict into a complete user interaction:
 
 - show one temporary-discussion entry in the source Room;
 - update its compact summary silently in place;
+- explain the conflict, impact, and unresolved question in plain language while
+  keeping exact technical evidence available on demand;
 - show an explainable relevance prompt only in context;
 - route only a required decision or confirmation into Action Inbox;
 - close with a human-confirmed structured result in the same Room entry.
@@ -142,6 +188,10 @@ Exit evidence:
 - passive relevance adds no Action Inbox item;
 - the affected people can resolve the conflict without an out-of-band
   explanation;
+- an affected person can understand what happened, why it matters, and whether
+  they need to act from the compact brief without decoding internal ontology;
+- the expanded view preserves the exact boundary, sources, uncertainty, and
+  human-confirmed result;
 - the Room, Coordination Thread, Inbox, and affected work do not disagree;
 - correction, dismissal, retry, and replay remain safe.
 
@@ -167,9 +217,11 @@ Exit evidence:
 ### R4 — Read-only Capability Health experiment
 
 Collect an internal incident corpus, conduct external problem discovery, and
-reconstruct Product Capability candidates from existing authorized evidence.
-People must be able to accept, correct, merge, split, or reject every candidate.
-Health projection remains passive before it can create coordination.
+reconstruct Product Capability candidates from existing authorized
+conversation, work, and validation evidence. Conversation may reveal intent or
+an observed outcome, but does not prove that a capability works. People must be
+able to accept, correct, merge, split, or reject every candidate. Health
+projection remains passive before it can create coordination.
 
 Exit evidence:
 
@@ -185,7 +237,8 @@ Exit evidence:
 Use the accumulated evidence to decide whether Intero should:
 
 - remain primarily a conflict and attention coordination layer;
-- expand into a broader shared-product-reality layer;
+- pursue the long-term ambition of an AI-native project-management and shared
+  product-reality platform;
 - retain Capability Health as a read-only aid;
 - integrate rather than own more project-management context;
 - narrow to a specific class of AI-intensive teams; or
@@ -202,6 +255,10 @@ notifications it creates. Evaluate:
 - false prompts and Inbox interruptions per person;
 - time from conflicting state to detection and human-confirmed resolution;
 - out-of-band explanation still required;
+- whether a person can understand the event, impact, relevance, and required
+  action from the compact brief without asking for a translation;
+- manual status reporting, context transfer, follow-up, and project-record
+  maintenance avoided;
 - regressions or incompatible changes caught before integration or release;
 - human correction and dismissal rate;
 - privacy, authorization, and irreversible-authority violations, which must be
@@ -218,12 +275,18 @@ The current roadmap does not commit Intero to:
 
 - a central AI manager that assigns or approves all work;
 - a generic Agent orchestrator or AI decision-editor framework;
-- replacing chat, Git, CI, test, or project-management systems;
+- a drop-in replacement for chat, Git, CI, test, or existing
+  project-management systems before the coordination thesis is proven;
 - one mandatory software-engineering process for every product phase;
 - automatic Product Capability truth inferred without reviewable evidence.
 
+These are boundaries on the current evidence-gated sequence, not a rejection
+of the longer-term platform ambition.
+
 ## Current plan map
 
+- [Golden Case: Team-room conversation to cross-project coordination](GOLDEN_CASE.md)
+  is the canonical end-to-end product and acceptance scenario.
 - [Core product closure and pilot UX](plans/2026-07-29-001-product-closure-and-ux-plan.md)
   supplies R0.
 - [Conversation-driven AI-native collaboration](plans/2026-07-29-002-conversation-driven-collaboration-todo.md)

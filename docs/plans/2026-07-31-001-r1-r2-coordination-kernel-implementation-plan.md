@@ -25,6 +25,13 @@ This plan implements R1 and R2 from the
 [product roadmap](../PRODUCT_ROADMAP.md). It does not implement Capability
 Health, generic semantic work discovery, or an adaptive workflow-mode engine.
 
+It proves the Work State conflict and low-noise coordination slice of the
+[Intero Golden Case](../GOLDEN_CASE.md). The full Golden Case additionally
+requires Team-room `@Intero` behavior, automatic single-Project and
+cross-Project scope routing, the ambiguous-scope branch, and the complete
+human-readable browser flow. Those requirements are not implied by the local
+R1/R2 implementation evidence alone.
+
 ## Current code reality
 
 Intero already has useful parts of the loop:
