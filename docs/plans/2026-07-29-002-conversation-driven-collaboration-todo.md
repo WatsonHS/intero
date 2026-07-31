@@ -7,6 +7,11 @@ date: 2026-07-29
 
 # Conversation-driven AI-native collaboration
 
+Roadmap placement and the code-level delivery design are maintained in:
+
+- [Intero product roadmap](../PRODUCT_ROADMAP.md)
+- [R1/R2 coordination-kernel implementation plan](2026-07-31-001-r1-r2-coordination-kernel-implementation-plan.md)
+
 ## Product hypothesis
 
 Existing collaboration tools preserve messages, while project tools preserve

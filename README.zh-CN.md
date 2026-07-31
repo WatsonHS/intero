@@ -217,6 +217,7 @@ Intero 会处理私有工程上下文，应当被视为安全敏感服务。
 
 ## 文档
 
+- [产品路线图](docs/PRODUCT_ROADMAP.zh-CN.md)
 - [技术架构](docs/ARCHITECTURE.md)
 - [运维](docs/OPERATIONS.md)
 - [试点运行手册](docs/PILOT_RUNBOOK.md)
@@ -224,6 +225,7 @@ Intero 会处理私有工程上下文，应当被视为安全敏感服务。
 - [架构决策记录](docs/adr/README.md)
 - [产品需求](docs/brainstorms/2026-07-24-intero-product-requirements.md)
 - [由对话驱动的协作探索](docs/plans/2026-07-29-002-conversation-driven-collaboration-todo.md)
+- [R1/R2 协调内核实现计划](docs/plans/2026-07-31-001-r1-r2-coordination-kernel-implementation-plan.md)
 - [Product Capability Health 下一阶段研究](docs/plans/2026-07-29-003-product-capability-health-roadmap.md)
 
 ## 贡献

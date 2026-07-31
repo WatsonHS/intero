@@ -307,6 +307,7 @@ dedicated security policy and private reporting channel are published.
 
 ## Documentation
 
+- [Product roadmap](docs/PRODUCT_ROADMAP.md)
 - [Technical architecture](docs/ARCHITECTURE.md)
 - [Operations](docs/OPERATIONS.md)
 - [Pilot runbook](docs/PILOT_RUNBOOK.md)
@@ -314,6 +315,7 @@ dedicated security policy and private reporting channel are published.
 - [Architecture decision records](docs/adr/README.md)
 - [Product requirements](docs/brainstorms/2026-07-24-intero-product-requirements.md)
 - [Conversation-driven collaboration exploration](docs/plans/2026-07-29-002-conversation-driven-collaboration-todo.md)
+- [R1/R2 coordination-kernel implementation plan](docs/plans/2026-07-31-001-r1-r2-coordination-kernel-implementation-plan.md)
 - [Product Capability Health next-phase research](docs/plans/2026-07-29-003-product-capability-health-roadmap.md)
 
 ## Contributing
