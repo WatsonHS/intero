@@ -198,7 +198,9 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
     await leader.getByTestId("pilot-coordination-confirm").click();
     const confirmResponse = await confirmResponsePromise;
     expect(confirmResponse.ok()).toBe(true);
-    await expect(leader.getByText(conclusion)).toBeVisible();
+    await expect(
+      leader.getByTestId("pilot-coordination-resolved-conclusion"),
+    ).toContainText(conclusion);
 
     const automationResponse = await admin.request.get(
       `${apiUrl}/v1/project-automation/${projectId}`,

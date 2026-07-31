@@ -978,7 +978,9 @@ test.describe("R1/R2 coordination browser acceptance", () => {
       );
       await confirm.click();
       expect((await confirmationResponse).ok()).toBe(true);
-      await expect(priya.getByText(conclusion)).toBeVisible();
+      await expect(
+        priya.getByTestId("pilot-coordination-resolved-conclusion"),
+      ).toContainText(conclusion);
       await priya.screenshot({
         path: resolve(r1R2EvidenceRoot, "03-human-confirmed-closure.png"),
         fullPage: true,
@@ -1471,7 +1473,9 @@ async function resolveCoordinationThroughUi(
   await page.getByLabel("负责人").selectOption(collaborator.id);
   await page.getByTestId("pilot-coordination-propose").click();
   await page.getByTestId("pilot-coordination-confirm").click();
-  await expect(page.getByText(conclusion)).toBeVisible();
+  await expect(
+    page.getByTestId("pilot-coordination-resolved-conclusion"),
+  ).toContainText(conclusion);
 }
 
 async function navigate(page: Page, title: string): Promise<void> {

@@ -813,7 +813,10 @@ export function CoordinationView({
         ) : null}
         {currentPilotThread?.conclusion &&
         currentPilotThread.status === "resolved" ? (
-          <div className="mt-5 flex max-w-[660px] items-center gap-2.5 rounded-[13px] border border-green-soft bg-green-soft px-4 py-3.5">
+          <div
+            data-testid="pilot-coordination-resolved-conclusion"
+            className="mt-5 flex max-w-[660px] items-center gap-2.5 rounded-[13px] border border-green-soft bg-green-soft px-4 py-3.5"
+          >
             <CheckCircleIcon size={16} weight="fill" className="text-green" />
             <span className="text-[12.5px] leading-[1.6] text-ink [text-wrap:pretty]">
               {currentPilotThread.conclusion}
