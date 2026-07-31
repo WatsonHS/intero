@@ -8,7 +8,7 @@ const password = process.env.INTERO_E2E_PASSWORD ?? "Intero-demo-2026!";
 test("Web reflects authenticated MCP initialization and functional validation", async ({
   page,
 }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   await signIn(page);
   const { project, team } = await createCleanProject(page);
   await page.evaluate(
@@ -122,8 +122,38 @@ async function signIn(page: Page) {
   await page.goto("/");
   await page.getByTestId("sign-in-email").fill("alex@demo.intero.test");
   await page.getByTestId("sign-in-password").fill(password);
-  await page.getByTestId("sign-in-password-submit").click();
-  await expect(page.getByTitle("Team Pulse")).toBeVisible();
+  const submit = page.getByTestId("sign-in-password-submit");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/auth/sign-in/email" &&
+        response.request().method() === "POST",
+    );
+    await submit.click();
+    const response = await responsePromise;
+    if (response.status() !== 429) {
+      expect(
+        response.ok(),
+        `password sign-in returned ${response.status()}`,
+      ).toBe(true);
+      await expect(page.getByTitle("Team Pulse")).toBeVisible();
+      return;
+    }
+
+    const retryAfterSeconds = Number(
+      response.headers()["x-retry-after"] ??
+        response.headers()["retry-after"] ??
+        "1",
+    );
+    expect(Number.isFinite(retryAfterSeconds)).toBe(true);
+    expect(retryAfterSeconds).toBeGreaterThanOrEqual(0);
+    expect(retryAfterSeconds).toBeLessThanOrEqual(60);
+    await page.waitForTimeout((retryAfterSeconds + 1) * 1_000);
+    await expect(submit).toBeEnabled();
+  }
+  throw new Error(
+    "Password sign-in stayed rate limited after one bounded retry.",
+  );
 }
 
 async function createCleanProject(page: Page) {
