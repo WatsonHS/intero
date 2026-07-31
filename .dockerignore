@@ -1,6 +1,7 @@
 .git
 .github
 .turbo
+target
 .env
 .env.*
 !.env.production.example

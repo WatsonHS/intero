@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -19,6 +20,10 @@ const repositoryRoot = resolve(import.meta.dirname, "../..");
 const evidenceRoot = resolve(
   repositoryRoot,
   "output/playwright/collaboration-chain",
+);
+const r1R2EvidenceRoot = resolve(
+  repositoryRoot,
+  "output/playwright/r1-r2-coordination",
 );
 const evaluationEnabled = process.env.INTERO_REAL_PROVIDER_CANARY === "1";
 const demoPassword = process.env.INTERO_E2E_PASSWORD ?? "Intero-demo-2026!";
@@ -93,10 +98,19 @@ interface CoordinationThread {
   id: string;
   projectId: string;
   workStateId?: string;
+  trigger: string;
+  boundaryKey?: string;
+  sourceWorkStateIds?: string[];
+  sourceClaimIds?: string[];
+  conversationThreadId?: string;
+  sourceRoomThreadId?: string;
+  summaryMessageId?: string;
   participantIds: string[];
   safeContext: string;
   candidateNextSteps: string[];
   status: "open" | "needs_confirmation" | "resolved";
+  responsibleParticipantId?: string;
+  conclusion?: string;
 }
 
 interface OverviewPayload {
@@ -110,6 +124,49 @@ interface OverviewPayload {
   privateWorkState: Array<{ id: string }>;
   pulse: PulseEntry[];
   coordination: CoordinationThread[];
+  coordinationRelevance: Array<{
+    coordinationThreadId: string;
+    projectId: string;
+    principalId: string;
+    sourceRoomThreadId?: string;
+    dismissedAt?: string;
+    mutedAt?: string;
+  }>;
+}
+
+interface SharedBoundaryInput {
+  key: string;
+  kind: "api" | "schema" | "permission" | "module" | "release" | "other";
+  relation: "changing" | "depending_on" | "validating";
+  assumption: string;
+  change: "additive" | "compatible" | "breaking" | "unknown";
+  preserves: string[];
+}
+
+interface ThreadPayload {
+  thread: { id: string; title: string; sequence: number };
+  messages: Array<{
+    id: string;
+    kind: string;
+    revision?: number;
+    coordinationSummary?: {
+      coordinationThreadId: string;
+      status: "open" | "waiting" | "needs_action" | "resolved";
+      actionRequired: boolean;
+      conclusion?: string;
+    };
+  }>;
+  unreadCount: number;
+}
+
+interface ActionInboxPayload {
+  items: Array<{
+    id: string;
+    projectId?: string;
+    sourceRef: string;
+    resolvedAt?: string;
+  }>;
+  unreadCount: number;
 }
 
 interface StandInExchange {
@@ -622,6 +679,361 @@ test.describe("real provider collaboration chain", () => {
   }
 });
 
+test.describe("R1/R2 coordination browser acceptance", () => {
+  test.beforeAll(async () => {
+    await mkdir(r1R2EvidenceRoot, { recursive: true });
+  });
+
+  test("keeps the compatible control quiet and resolves one conflict without Room noise", async ({
+    browser,
+  }) => {
+    test.setTimeout(240_000);
+    const resources = await createRolePages(browser, [
+      principals.alex,
+      principals.priya,
+    ]);
+    const alexCloudDataDir = await mkdtemp(
+      resolve(tmpdir(), "intero-r1-r2-alex-"),
+    );
+    const priyaCloudDataDir = await mkdtemp(
+      resolve(tmpdir(), "intero-r1-r2-priya-"),
+    );
+    const connectedBindings: Array<{ page: Page; bindingId: string }> = [];
+
+    try {
+      const [alex, priya] = resources.pages as [Page, Page];
+      const { project, team } = await createCleanProject(
+        alex,
+        [principals.alex.id, principals.priya.id],
+        `R1 R2 browser acceptance ${runSuffix()}`,
+      );
+      const room = await createEvaluationRoom(
+        alex,
+        project,
+        [principals.alex.id, principals.priya.id],
+        `R1 R2 boundary room ${runSuffix()}`,
+      );
+      await scopePages(resources.pages, project.id, team.id);
+
+      const alexConnection = await connectThroughSettings(
+        alex,
+        alexCloudDataDir,
+      );
+      connectedBindings.push({
+        page: alex,
+        bindingId: alexConnection.bindingId,
+      });
+      const priyaConnection = await connectThroughSettings(
+        priya,
+        priyaCloudDataDir,
+      );
+      connectedBindings.push({
+        page: priya,
+        bindingId: priyaConnection.bindingId,
+      });
+
+      const suffix = runSuffix();
+      const boundaryKey = `api:accounts.v1/${suffix}`;
+      const assumption = "v1 response keeps account_id";
+      const producerWorkstream = `accounts-producer-${suffix}`;
+      const consumerWorkstream = `accounts-consumer-${suffix}`;
+      const compatibleProducerEvent = `r1-control-producer-${suffix}`;
+      const compatibleConsumerEvent = `r1-control-consumer-${suffix}`;
+
+      await reportCheckpoint(alexConnection.client, alexCloudDataDir, {
+        eventType: "validation_completed",
+        clientEventId: compatibleProducerEvent,
+        workstreamKey: producerWorkstream,
+        workstreamTitle: "Accounts API producer",
+        phase: "validating",
+        currentFocus: "Validate the compatible accounts boundary.",
+        completedOutcome: "The producer preserves account_id.",
+        evidence: "The compatibility contract passed.",
+        nextStep: "Keep the compatible control quiet.",
+        sharedBoundaries: [
+          {
+            key: boundaryKey,
+            kind: "api",
+            relation: "changing",
+            assumption,
+            change: "compatible",
+            preserves: [assumption],
+          },
+        ],
+      });
+      await reportCheckpoint(priyaConnection.client, priyaCloudDataDir, {
+        eventType: "validation_completed",
+        clientEventId: compatibleConsumerEvent,
+        workstreamKey: consumerWorkstream,
+        workstreamTitle: "Accounts API consumer",
+        phase: "validating",
+        currentFocus: "Validate the account_id dependency.",
+        completedOutcome: "The consumer still depends on account_id.",
+        evidence: "The consumer contract passed.",
+        nextStep: "Wait for the shared boundary result.",
+        sharedBoundaries: [
+          {
+            key: boundaryKey,
+            kind: "api",
+            relation: "depending_on",
+            assumption,
+            change: "unknown",
+            preserves: [],
+          },
+        ],
+      });
+      const compatibleProducer = await waitForPulse(
+        alex,
+        project.id,
+        compatibleProducerEvent,
+        90_000,
+      );
+      const compatibleConsumer = await waitForPulse(
+        priya,
+        project.id,
+        compatibleConsumerEvent,
+        90_000,
+      );
+      const compatibleOverview = await getOverview(priya, project.id);
+      expect(
+        compatibleOverview.coordination.filter(
+          (thread) => thread.boundaryKey === boundaryKey,
+        ),
+      ).toEqual([]);
+      expect(
+        (await getActionInbox(priya)).items.filter(
+          (item) => item.projectId === project.id,
+        ),
+      ).toEqual([]);
+      await openEvaluationRoom(priya, room.title);
+      await expect(
+        priya.locator('[data-testid^="coordination-summary-"]'),
+      ).toHaveCount(0);
+      await expect(
+        priya.getByTestId("coordination-relevance-prompt"),
+      ).toHaveCount(0);
+      await priya.screenshot({
+        path: resolve(r1R2EvidenceRoot, "01-compatible-control-quiet.png"),
+        fullPage: true,
+      });
+
+      const breakingEvent = `r1-conflict-producer-${suffix}`;
+      await reportCheckpoint(alexConnection.client, alexCloudDataDir, {
+        eventType: "validation_completed",
+        clientEventId: breakingEvent,
+        workstreamKey: producerWorkstream,
+        workstreamTitle: "Accounts API producer",
+        phase: "validating",
+        currentFocus: "Validate the breaking accounts boundary.",
+        completedOutcome: "The producer removes account_id.",
+        evidence: "The breaking contract was observed.",
+        nextStep: "Resolve the consumer compatibility window.",
+        sharedBoundaries: [
+          {
+            key: boundaryKey,
+            kind: "api",
+            relation: "changing",
+            assumption,
+            change: "breaking",
+            preserves: [],
+          },
+        ],
+      });
+      const breakingProducer = await waitForPulse(
+        alex,
+        project.id,
+        breakingEvent,
+        90_000,
+      );
+      expect(breakingProducer.workStateId).toBe(compatibleProducer.workStateId);
+      const coordination = await waitForBoundaryCoordination(
+        priya,
+        project.id,
+        boundaryKey,
+        90_000,
+      );
+      expect(coordination.sourceWorkStateIds).toEqual(
+        expect.arrayContaining([
+          compatibleProducer.workStateId,
+          compatibleConsumer.workStateId,
+        ]),
+      );
+      expect(coordination.sourceClaimIds).toHaveLength(2);
+      expect(coordination.sourceRoomThreadId).toBe(room.id);
+      expect(coordination.summaryMessageId).toBeTruthy();
+      expect(coordination.conversationThreadId).toBeTruthy();
+
+      const roomBeforeProposal = await getThread(priya, room.id);
+      const openSummaries = roomBeforeProposal.messages.filter(
+        (message) => message.kind === "coordination_summary",
+      );
+      expect(openSummaries).toHaveLength(1);
+      expect(openSummaries[0]).toMatchObject({
+        id: coordination.summaryMessageId,
+        coordinationSummary: {
+          coordinationThreadId: coordination.conversationThreadId,
+          status: "open",
+          actionRequired: false,
+        },
+      });
+      expect(
+        (await getActionInbox(priya)).items.filter(
+          (item) => item.sourceRef === `coordination:${coordination.id}`,
+        ),
+      ).toEqual([]);
+
+      await openEvaluationRoom(priya, room.title);
+      await expect(
+        priya.locator('[data-testid^="coordination-summary-"]'),
+      ).toHaveCount(1);
+      await expect(
+        priya.getByTestId("coordination-relevance-prompt"),
+      ).toBeVisible();
+      await priya.screenshot({
+        path: resolve(r1R2EvidenceRoot, "02-conflict-contextual-relevance.png"),
+        fullPage: true,
+      });
+
+      await priya.getByRole("button", { name: /忽略|Dismiss/ }).click();
+      await expect(
+        priya.getByTestId("coordination-relevance-prompt"),
+      ).toHaveCount(0);
+      await navigate(priya, "Coordination");
+      await priya
+        .getByTestId(`pilot-coordination-thread-${coordination.id}`)
+        .click();
+      const revisit = priya.getByRole("button", {
+        name: /恢复相关性提示|Restore relevance prompt/,
+      });
+      await expect(revisit).toBeVisible();
+      await revisit.click();
+      await expect
+        .poll(
+          async () =>
+            (await getOverview(priya, project.id)).coordinationRelevance.find(
+              (item) => item.coordinationThreadId === coordination.id,
+            )?.dismissedAt,
+        )
+        .toBeUndefined();
+      await openEvaluationRoom(priya, room.title);
+      await expect(
+        priya.getByTestId("coordination-relevance-prompt"),
+      ).toBeVisible();
+
+      const conclusion = `Keep account_id through the migration window (${suffix}).`;
+      await navigate(alex, "Coordination");
+      await alex
+        .getByTestId(`pilot-coordination-thread-${coordination.id}`)
+        .click();
+      await alex.getByTestId("pilot-coordination-conclusion").fill(conclusion);
+      await alex
+        .getByLabel(/负责人|Responsible person/)
+        .selectOption(principals.priya.id);
+      const proposalResponse = alex.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response
+            .url()
+            .endsWith(`/v1/pilot/coordination/${coordination.id}/conclusion`),
+      );
+      await alex.getByTestId("pilot-coordination-propose").click();
+      expect((await proposalResponse).ok()).toBe(true);
+
+      const roomAfterProposal = await getThread(priya, room.id);
+      const proposedSummaries = roomAfterProposal.messages.filter(
+        (message) => message.kind === "coordination_summary",
+      );
+      expect(roomAfterProposal.thread.sequence).toBe(
+        roomBeforeProposal.thread.sequence,
+      );
+      expect(proposedSummaries).toHaveLength(1);
+      expect(proposedSummaries[0]).toMatchObject({
+        id: openSummaries[0]!.id,
+        coordinationSummary: {
+          status: "needs_action",
+          actionRequired: true,
+        },
+      });
+      expect(proposedSummaries[0]!.revision).toBeGreaterThan(
+        openSummaries[0]!.revision ?? 1,
+      );
+      const confirmationItems = (await getActionInbox(priya)).items.filter(
+        (item) => item.sourceRef === `coordination:${coordination.id}`,
+      );
+      expect(confirmationItems).toHaveLength(1);
+      expect(confirmationItems[0]!.resolvedAt).toBeUndefined();
+
+      await navigate(priya, "Coordination");
+      await priya
+        .getByTestId(`pilot-coordination-thread-${coordination.id}`)
+        .click();
+      const confirm = priya.getByTestId("pilot-coordination-confirm");
+      await expect(confirm).toBeVisible();
+      const confirmationResponse = priya.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response
+            .url()
+            .endsWith(`/v1/pilot/coordination/${coordination.id}/confirm`),
+      );
+      await confirm.click();
+      expect((await confirmationResponse).ok()).toBe(true);
+      await expect(priya.getByText(conclusion)).toBeVisible();
+      await priya.screenshot({
+        path: resolve(r1R2EvidenceRoot, "03-human-confirmed-closure.png"),
+        fullPage: true,
+      });
+
+      const roomAfterConfirmation = await getThread(priya, room.id);
+      const resolvedSummaries = roomAfterConfirmation.messages.filter(
+        (message) => message.kind === "coordination_summary",
+      );
+      expect(roomAfterConfirmation.thread.sequence).toBe(
+        roomBeforeProposal.thread.sequence,
+      );
+      expect(resolvedSummaries).toHaveLength(1);
+      expect(resolvedSummaries[0]).toMatchObject({
+        id: openSummaries[0]!.id,
+        coordinationSummary: {
+          status: "resolved",
+          actionRequired: false,
+          conclusion,
+        },
+      });
+      expect(resolvedSummaries[0]!.revision).toBeGreaterThan(
+        proposedSummaries[0]!.revision ?? 1,
+      );
+      await expect
+        .poll(
+          async () =>
+            (await getActionInbox(priya)).items.filter(
+              (item) => item.sourceRef === `coordination:${coordination.id}`,
+            ).length,
+        )
+        .toBe(0);
+      await openEvaluationRoom(priya, room.title);
+      await expect(
+        priya.locator('[data-testid^="coordination-summary-"]'),
+      ).toContainText(/已解决|Resolved/);
+      await priya.screenshot({
+        path: resolve(r1R2EvidenceRoot, "04-room-summary-revised-in-place.png"),
+        fullPage: true,
+      });
+    } finally {
+      await Promise.all(
+        connectedBindings.map(({ page, bindingId }) =>
+          disconnectBinding(page, bindingId),
+        ),
+      );
+      await resources.close();
+      await Promise.all([
+        rm(alexCloudDataDir, { recursive: true, force: true }),
+        rm(priyaCloudDataDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+});
+
 async function createRolePages(
   browser: Browser,
   roles: Principal[],
@@ -723,6 +1135,38 @@ async function createCleanProject(
   expect(overview.privateWorkState).toEqual([]);
   expect(overview.bindings).toEqual([]);
   return { project, team: team! };
+}
+
+async function createEvaluationRoom(
+  page: Page,
+  project: ProjectPayload,
+  participantIds: string[],
+  title: string,
+): Promise<{ id: string; title: string }> {
+  const response = await page.request.post(`${apiUrl}/v1/threads`, {
+    data: {
+      id: randomUUID(),
+      kind: "room",
+      projectId: project.id,
+      title,
+      participantIds,
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      createdAt: new Date().toISOString(),
+    },
+  });
+  const room = await json<{ id: string; title: string }>(response);
+  expect(room.title).toBe(title);
+  return room;
+}
+
+async function openEvaluationRoom(page: Page, title: string): Promise<void> {
+  await navigate(page, "通讯");
+  const room = page.getByText(title, { exact: true }).first();
+  await expect(room).toBeVisible();
+  await room.click();
+  await expect(page.getByTestId("communications-composer")).toBeVisible();
 }
 
 async function enableBlockerAutomation(
@@ -829,6 +1273,7 @@ async function reportCheckpoint(
     helpRequest?: string;
     requestedFrom?: string;
     targetPrincipalId?: string;
+    sharedBoundaries?: SharedBoundaryInput[];
   },
 ): Promise<CloudCheckpointResult> {
   const args = [
@@ -864,6 +1309,9 @@ async function reportCheckpoint(
       "--target-principal-id",
       input.targetPrincipalId!,
     );
+  }
+  for (const boundary of input.sharedBoundaries ?? []) {
+    args.push("--shared-boundary", JSON.stringify(boundary));
   }
   const result = await runCloudClient(args, cloudDataDir);
   expect(result.accepted).toBe(true);
@@ -937,6 +1385,26 @@ async function waitForCoordination(
     .toBe(1);
   return (await getOverview(page, projectId)).coordination.find(
     (thread) => thread.workStateId === workStateId,
+  )!;
+}
+
+async function waitForBoundaryCoordination(
+  page: Page,
+  projectId: string,
+  boundaryKey: string,
+  timeout: number,
+): Promise<CoordinationThread> {
+  await expect
+    .poll(
+      async () =>
+        (await getOverview(page, projectId)).coordination.filter(
+          (thread) => thread.boundaryKey === boundaryKey,
+        ).length,
+      { timeout },
+    )
+    .toBe(1);
+  return (await getOverview(page, projectId)).coordination.find(
+    (thread) => thread.boundaryKey === boundaryKey,
   )!;
 }
 
@@ -1029,6 +1497,18 @@ async function getOverview(
 ): Promise<OverviewPayload> {
   return await json<OverviewPayload>(
     await page.request.get(`${apiUrl}/v1/pilot/projects/${projectId}/overview`),
+  );
+}
+
+async function getThread(page: Page, threadId: string): Promise<ThreadPayload> {
+  return await json<ThreadPayload>(
+    await page.request.get(`${apiUrl}/v1/threads/${threadId}`),
+  );
+}
+
+async function getActionInbox(page: Page): Promise<ActionInboxPayload> {
+  return await json<ActionInboxPayload>(
+    await page.request.get(`${apiUrl}/v1/action-inbox?includeDismissed=true`),
   );
 }
 

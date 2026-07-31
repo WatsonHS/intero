@@ -723,6 +723,18 @@ async function runCloudCommand() {
         "routed collaboration requires --target-principal-id for a verified member of the bound Project.",
       );
     }
+    const sharedBoundaries = argumentValues("--shared-boundary").map(
+      (value, index) => {
+        try {
+          return PilotSharedBoundaryInput.parse(JSON.parse(value));
+        } catch (error) {
+          throw new Error(
+            `cloud checkpoint --shared-boundary ${index + 1} must be valid JSON matching the shared-boundary contract.`,
+            { cause: error },
+          );
+        }
+      },
+    );
     const response = await client.reportCheckpoint({
       eventType,
       narrative: {
@@ -753,6 +765,7 @@ async function runCloudCommand() {
       ...(argumentValue("--phase")
         ? { phase: WorkstreamPhase.parse(argumentValue("--phase")) }
         : {}),
+      ...(sharedBoundaries.length > 0 ? { sharedBoundaries } : {}),
     });
     process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
     return;

@@ -1,7 +1,7 @@
 ---
 title: "feat: prove the R1/R2 coordination kernel"
 type: feat
-status: implemented-awaiting-canary
+status: validated-awaiting-real-provider-canary
 date: 2026-07-31
 roadmap: docs/PRODUCT_ROADMAP.md
 ---
@@ -32,7 +32,7 @@ cross-Project scope routing, the ambiguous-scope branch, and the complete
 human-readable browser flow. Those requirements are not implied by the local
 R1/R2 implementation evidence alone.
 
-## Implementation status — 2026-07-31
+## Implementation status — 2026-08-01
 
 The production-shaped R1/R2 path is implemented in the current change set:
 
@@ -74,14 +74,38 @@ Local evidence completed:
 - repository TypeScript, Prettier, unit/API tests, production builds, and all
   locally runnable PostgreSQL/worker integration suites passed.
 
-The roadmap gates remain evidence-gated rather than marked proven. Still
-required before calling R1/R2 exited:
+Release-shaped evidence completed on 2026-08-01:
 
-- browser acceptance for the control, conflict, relevance, and confirmation
-  experience;
-- a separately recorded real-provider canary through the durable deployed
-  worker path;
-- target-environment migration and release validation.
+- `pnpm test:e2e:r1-r2` drives two authenticated users and two actual Agent
+  connections through the CLI, durable Worker, API, and browser. It proves the
+  compatible control stays completely quiet, the breaking change creates
+  exactly one contextual relevance surface and one canonical Coordination
+  branch, the confirmation action appears only after an explicit proposal,
+  and the responsible participant closes the branch while the same Room
+  summary is revised in place;
+- four reviewed browser captures preserve the compatible, conflict,
+  human-confirmed, and revised-source-Room states under
+  `output/playwright/r1-r2-coordination/`;
+- production-like run `intero-r0-20260731t210720z-67540` built immutable images
+  from the combined R0/R1/R2 branch, migrated a fresh PostgreSQL database
+  through `0037`, ran two API and two Worker replicas, passed API, Worker,
+  Centrifugo, and PostgreSQL failure recovery, and delivered 9,999 of 10,000
+  realtime clients with p95 170 ms and p99 175 ms;
+- the development stack now starts its configured deterministic Provider
+  together with the API and Web processes, so the acceptance path reaches the
+  durable Worker instead of failing with `MODEL_GATEWAY_UNAVAILABLE`.
+
+The roadmap gates remain evidence-gated rather than marked proven. One gate is
+still required before calling R1/R2 exited: a separately recorded external
+Provider canary through the durable Worker path. The restored pre-reset
+configuration snapshot contains no Provider record, no supported external
+Provider credential is present in the environment, and the deterministic
+Provider is intentionally rejected by the existing real-provider canary.
+Deterministic end-to-end evidence is complete; it is not being relabeled as
+external-provider evidence.
+
+The complete validation record and exact evidence boundary are in
+[`R1_R2_RELEASE_GATE_2026-08-01.md`](../validation/R1_R2_RELEASE_GATE_2026-08-01.md).
 
 ## Starting code reality
 

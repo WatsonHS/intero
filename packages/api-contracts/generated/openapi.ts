@@ -611,7 +611,11 @@ export interface components {
         senderId: string;
         sequence: number;
         /** @enum {string} */
-        kind: "message" | "system_access_change" | "coordination_action";
+        kind:
+          | "message"
+          | "system_access_change"
+          | "coordination_action"
+          | "coordination_summary";
         body: string;
         /** Format: date-time */
         createdAt: string;
@@ -619,6 +623,21 @@ export interface components {
         encryptedBody?: string;
         /** Format: uuid */
         operationId?: string;
+        coordinationSummary?: {
+          /** Format: uuid */
+          coordinationThreadId: string;
+          /** @enum {string} */
+          status: "open" | "waiting" | "needs_action" | "resolved";
+          situation: string;
+          boundaryKey: string;
+          affectedPrincipalIds: string[];
+          conclusion: string;
+          unresolvedQuestion: string;
+          actionRequired: boolean;
+          /** Format: date-time */
+          freshnessAt: string;
+          sourceCount: number;
+        };
         mentionedPrincipalIds?: string[];
         /** Format: uuid */
         replyToMessageId?: string;

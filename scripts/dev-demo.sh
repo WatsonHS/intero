@@ -24,4 +24,42 @@ export INTERO_STAND_IN_NAME="${INTERO_STAND_IN_NAME:-Intero Stand-in}"
 export VITE_INTERO_API_URL="${VITE_INTERO_API_URL:-}"
 
 pnpm demo:seed
-exec pnpm dev:pilot
+
+provider_pid=""
+pilot_pid=""
+cleanup() {
+  if [[ -n "$pilot_pid" ]]; then
+    kill "$pilot_pid" 2>/dev/null || true
+    wait "$pilot_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$provider_pid" ]]; then
+    kill "$provider_pid" 2>/dev/null || true
+    wait "$provider_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+pnpm --filter @intero/server-api dev:pilot-provider &
+provider_pid=$!
+provider_ready=false
+for _attempt in $(seq 1 30); do
+  if curl --silent --output /dev/null http://127.0.0.1:4312/; then
+    provider_ready=true
+    break
+  fi
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    wait "$provider_pid"
+    exit 1
+  fi
+  sleep 0.2
+done
+if [[ "$provider_ready" != "true" ]]; then
+  echo "dev:demo deterministic provider did not become ready." >&2
+  exit 1
+fi
+
+pnpm dev:pilot &
+pilot_pid=$!
+wait "$pilot_pid"
