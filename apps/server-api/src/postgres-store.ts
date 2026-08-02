@@ -48,6 +48,7 @@ import {
   type KanbanCardUpdate,
   type MutationResult,
   normalizeMentionIds,
+  sameCoordinationSummaryIdentity,
   sameThreadCreation,
   type StandInQuestionInput,
   type ThreadMessagePage,
@@ -603,6 +604,79 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async ensureRoomServicePrincipal(
+    threadId: ThreadId,
+    principal: PrincipalSummary,
+  ): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!current || current.thread.kind !== "room") {
+        throw new Error("Source Room was not found.");
+      }
+      if (current.thread.accessMode !== "agent_readable") {
+        throw new Error(
+          "Intero is unavailable in a human-only encrypted Room.",
+        );
+      }
+      if (principal.kind !== "service") {
+        throw new Error("Room Agent principal must be a service identity.");
+      }
+      await client.query(
+        `INSERT INTO principals (id, display_name, kind)
+         VALUES ($1, $2, 'service')
+         ON CONFLICT (id) DO UPDATE SET
+           display_name = EXCLUDED.display_name,
+           kind = 'service',
+           updated_at = now()`,
+        [principal.id, principal.displayName],
+      );
+      if (current.thread.participantIds.includes(principal.id)) {
+        return current.thread;
+      }
+      await client.query(
+        `INSERT INTO thread_participants
+          (organization_id, thread_id, principal_id, stand_in,
+           visible_from_sequence)
+         VALUES ($1, $2, $3, false, 1)
+         ON CONFLICT (thread_id, principal_id) DO UPDATE SET
+           stand_in = false,
+           visible_from_sequence = 1,
+           revoked_at = NULL,
+           updated_at = now()`,
+        [this.organizationId, threadId, principal.id],
+      );
+      await client.query(
+        `UPDATE threads
+         SET access_version = access_version + 1,
+             updated_at = now()
+         WHERE id = $1`,
+        [threadId],
+      );
+      const stored = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!stored) throw new Error("Source Room was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: stored.thread,
+        actorId: principal.id,
+        reason: "access_changed",
+      });
+      return stored.thread;
+    });
+  }
+
   async updateThread(
     threadId: ThreadId,
     input: {
@@ -998,8 +1072,10 @@ export class PostgresPlatformStore implements PlatformStore {
         if (
           existing.kind !== "coordination_summary" ||
           existing.senderId !== input.senderId ||
-          existing.coordinationSummary?.coordinationThreadId !==
-            input.summary.coordinationThreadId
+          !sameCoordinationSummaryIdentity(
+            existing.coordinationSummary,
+            input.summary,
+          )
         ) {
           throw new Error("Coordination summary message ID was already used.");
         }
@@ -1920,6 +1996,53 @@ export class PostgresPlatformStore implements PlatformStore {
         ],
       );
       return decision;
+    });
+  }
+
+  async createDecisionOnce(
+    input: Omit<DecisionRecord, "id" | "createdAt">,
+  ): Promise<DecisionRecord> {
+    if (!input.sourceThreadId) return this.createDecision(input);
+    return this.write(async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`${this.organizationId}:${input.sourceThreadId}`],
+      );
+      const existing = await client.query(
+        `SELECT * FROM decisions
+         WHERE organization_id = $1 AND source_thread_id = $2
+         LIMIT 1`,
+        [this.organizationId, input.sourceThreadId],
+      );
+      if (existing.rows[0]) return decisionFromRow(existing.rows[0]);
+      const decision: DecisionRecord = {
+        ...input,
+        id: uuidv7() as DecisionRecord["id"],
+        createdAt: new Date().toISOString(),
+      };
+      for (const principalId of decision.decidedBy) {
+        await this.ensurePrincipal(client, principalId);
+      }
+      const inserted = await client.query(
+        `INSERT INTO decisions
+          (id, organization_id, title, outcome, source_spec_revision_id,
+           source_thread_id, affected_scopes, decided_by, supersedes, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          decision.id,
+          this.organizationId,
+          decision.title,
+          decision.outcome,
+          decision.sourceSpecRevisionId ?? null,
+          decision.sourceThreadId,
+          json(decision.affectedScopes),
+          json(decision.decidedBy),
+          decision.supersedes ?? null,
+          decision.createdAt,
+        ],
+      );
+      return decisionFromRow(inserted.rows[0]);
     });
   }
 

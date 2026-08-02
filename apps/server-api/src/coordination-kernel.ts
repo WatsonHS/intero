@@ -1,4 +1,6 @@
 import {
+  interoResponseMessageId,
+  roomInteroPrincipalId,
   type PilotAgentBinding,
   type PilotCheckpointInput,
   type PilotCoordinationThread,
@@ -8,6 +10,7 @@ import {
   type ThreadId,
   type ThreadMessage,
 } from "@intero/domain";
+import { evaluateAuthorizedSharedBoundaryClaims } from "@intero/stand-in-core";
 import { createHash } from "node:crypto";
 
 import type { PilotStore } from "./pilot-store.js";
@@ -29,7 +32,104 @@ export class CoordinationKernel {
     const result = await this.pilotStore.reconcileSharedBoundaries(input);
     const materialized: PilotCoordinationThread[] = [];
     for (const thread of result.coordinationThreads) {
-      materialized.push(await this.materialize(thread, input.now));
+      materialized.push(
+        thread.status === "resolved"
+          ? await this.refresh(thread, input.now, input.binding.ownerId)
+          : await this.materialize(thread, input.now),
+      );
+    }
+    for (const thread of await this.reconcileTeamBoundaryConflicts(input)) {
+      if (!materialized.some((candidate) => candidate.id === thread.id)) {
+        materialized.push(thread);
+      }
+    }
+    return materialized;
+  }
+
+  private async reconcileTeamBoundaryConflicts(input: {
+    project: PilotProject;
+    binding: PilotAgentBinding;
+    workStateId: string;
+    checkpoint: PilotCheckpointInput;
+    now: string;
+  }): Promise<PilotCoordinationThread[]> {
+    const visibleProjects = await this.pilotStore.listProjects(
+      input.binding.ownerId,
+    );
+    const visibleRooms = await this.conversations.listThreads(
+      "room",
+      input.binding.ownerId,
+    );
+    const materialized: PilotCoordinationThread[] = [];
+    for (const teamId of input.project.participatingTeamIds) {
+      const scopedProjects = visibleProjects.filter((project) =>
+        project.participatingTeamIds.includes(teamId),
+      );
+      if (scopedProjects.length < 2) continue;
+      const projectIds = scopedProjects.map((project) => project.id);
+      const claims = await this.pilotStore.listSharedBoundaryClaims(
+        projectIds,
+        input.binding.ownerId,
+      );
+      const matches = evaluateAuthorizedSharedBoundaryClaims(
+        claims,
+        projectIds,
+        input.now,
+      ).filter((match) => {
+        if (match.classification !== "potential_conflict") return false;
+        const producer = claims.find(
+          (claim) => claim.id === match.producerClaimId,
+        );
+        const consumer = claims.find(
+          (claim) => claim.id === match.consumerClaimId,
+        );
+        return (
+          producer?.workStateId === input.workStateId ||
+          consumer?.workStateId === input.workStateId
+        );
+      });
+      for (const match of matches) {
+        const sources = claims.filter((claim) =>
+          [match.producerClaimId, match.consumerClaimId].includes(claim.id),
+        );
+        const sourceProjectIds = [
+          ...new Set(sources.map((claim) => claim.projectId)),
+        ].toSorted();
+        if (sourceProjectIds.length < 2) continue;
+        const sourceOwnerIds = new Set(sources.map((claim) => claim.ownerId));
+        const sourceRoom = visibleRooms
+          .map((payload) => payload.thread)
+          .filter(
+            (thread) =>
+              thread.teamId === teamId &&
+              thread.accessMode === "agent_readable" &&
+              [...sourceOwnerIds].every((ownerId) =>
+                thread.participantIds.includes(ownerId),
+              ),
+          )
+          .toSorted((left, right) => left.id.localeCompare(right.id))[0];
+        if (!sourceRoom) continue;
+        const interoPrincipalId = roomInteroPrincipalId(sourceRoom.id);
+        await this.conversations.ensureRoomServicePrincipal(sourceRoom.id, {
+          id: interoPrincipalId,
+          displayName: "Intero",
+          kind: "service",
+        });
+        const thread = await this.pilotStore.openScopedCoordination({
+          teamId,
+          scopeKind: "cross_project",
+          projectIds: sourceProjectIds,
+          sourceRoomThreadId: sourceRoom.id,
+          requestedByPrincipalId: input.binding.ownerId,
+          interoPrincipalId,
+          match,
+          sourceClaims: claims,
+          now: input.now,
+        });
+        if (!materialized.some((candidate) => candidate.id === thread.id)) {
+          materialized.push(await this.materialize(thread, input.now));
+        }
+      }
     }
     return materialized;
   }
@@ -87,24 +187,32 @@ export class CoordinationKernel {
     const conversationThreadId = deterministicUuid(
       `coordination-thread:${thread.id}`,
     ) as ThreadId;
-    const summaryMessageId = deterministicUuid(
-      `coordination-summary:${thread.id}`,
-    ) as ThreadMessage["id"];
+    const summaryMessageId = thread.sourceMessageId
+      ? interoResponseMessageId(thread.sourceMessageId as ThreadMessage["id"])
+      : (deterministicUuid(
+          `coordination-summary:${thread.id}`,
+        ) as ThreadMessage["id"]);
     const contextMessageId = deterministicUuid(
       `coordination-context:${thread.id}`,
     ) as ThreadMessage["id"];
-    const senderId = thread.participantIds[0]!;
+    const senderId = thread.interoPrincipalId ?? thread.participantIds[0]!;
+    const conversationParticipantIds = [
+      ...new Set([...thread.participantIds, senderId]),
+    ];
     await this.conversations.createThread(
       {
         id: conversationThreadId,
         kind: "coordination",
         title: `Coordination · ${thread.boundaryKey ?? thread.trigger}`,
-        participantIds: thread.participantIds,
+        participantIds: conversationParticipantIds,
         standInIds: [],
         accessMode: "agent_readable",
         priorHistoryGranted: false,
         sequence: 0,
-        projectId: thread.projectId,
+        ...(thread.projectIds?.length === 1 || !thread.projectIds
+          ? { projectId: thread.projectId }
+          : {}),
+        ...(thread.teamId ? { teamId: thread.teamId } : {}),
         parentThreadId: sourceRoom.id,
         createdAt: thread.createdAt,
       },
@@ -137,6 +245,13 @@ export class CoordinationKernel {
     thread: PilotCoordinationThread,
   ): Promise<ConversationThread | undefined> {
     const viewerId = thread.participantIds[0]!;
+    if (thread.sourceRoomThreadId) {
+      const direct = await this.conversations.getThread(
+        thread.sourceRoomThreadId as ThreadId,
+        viewerId,
+      );
+      return direct?.thread.kind === "room" ? direct.thread : undefined;
+    }
     const rooms = await this.conversations.listThreads("room", viewerId);
     return rooms
       .map((item) => item.thread)
@@ -178,11 +293,14 @@ export class CoordinationKernel {
     return this.conversations.upsertCoordinationSummary({
       roomThreadId: thread.sourceRoomThreadId as ThreadId,
       messageId: thread.summaryMessageId as ThreadMessage["id"],
-      senderId: thread.participantIds[0]!,
+      senderId: thread.interoPrincipalId ?? thread.participantIds[0]!,
       body,
       summary: {
         coordinationThreadId: (thread.conversationThreadId ??
           thread.id) as ThreadId,
+        ...(thread.interoRequestId
+          ? { interoRequestId: thread.interoRequestId }
+          : {}),
         status,
         situation: thread.safeContext,
         boundaryKey: thread.boundaryKey ?? `coordination:${thread.id}`,
@@ -192,6 +310,15 @@ export class CoordinationKernel {
         actionRequired: thread.status === "needs_confirmation",
         freshnessAt: now,
         sourceCount: thread.sourceClaimIds?.length ?? 1,
+        ...(thread.scopeKind && thread.projectIds
+          ? {
+              scope: {
+                kind: thread.scopeKind,
+                projectIds: thread.projectIds,
+              },
+            }
+          : {}),
+        ...(thread.brief ? { brief: thread.brief } : {}),
       },
       at: thread.createdAt,
     });

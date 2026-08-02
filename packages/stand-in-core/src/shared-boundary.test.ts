@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeSharedBoundaryClaims,
+  evaluateAuthorizedSharedBoundaryClaims,
   evaluateSharedBoundaryClaims,
   matchSharedBoundaryClaims,
   normalizeSharedBoundaryKey,
@@ -76,6 +77,39 @@ describe("shared boundary matcher", () => {
       }),
     );
     expect(match).toMatchObject({ classification: "insufficient_evidence" });
+  });
+
+  it("compares different Projects only through an explicit authorized scope", () => {
+    const otherProject = ProjectId.parse(uuidv7());
+    const producer = claim(ALEX, {
+      relation: "changing",
+      change: "breaking",
+      assumption: "replace retry delay",
+    });
+    const consumer = {
+      ...claim(PRIYA, {
+        relation: "depending_on",
+        change: "unknown",
+        assumption: "retryDelayMs",
+      }),
+      projectId: otherProject,
+    };
+
+    expect(matchSharedBoundaryClaims(producer, consumer)).toBeUndefined();
+    expect(
+      evaluateAuthorizedSharedBoundaryClaims(
+        [producer, consumer],
+        [PROJECT, otherProject],
+        NOW,
+      ),
+    ).toMatchObject([{ classification: "potential_conflict" }]);
+    expect(
+      evaluateAuthorizedSharedBoundaryClaims(
+        [producer, consumer],
+        [PROJECT],
+        NOW,
+      ),
+    ).toEqual([]);
   });
 
   it("excludes same-owner, superseded, withdrawn, stale, and future claims", () => {

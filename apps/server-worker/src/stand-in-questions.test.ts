@@ -255,6 +255,7 @@ describe("StandInQuestionHandler", () => {
           phase: "implementing",
         },
       ]),
+      listCoordination: vi.fn(async () => []),
       recordStandInExchange: vi.fn(async () => {
         order.push("exchange");
         return exchange;

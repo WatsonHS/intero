@@ -80,6 +80,17 @@ export interface ThreadMessagePage {
   hasMore: boolean;
 }
 
+export function sameCoordinationSummaryIdentity(
+  left: ThreadMessage["coordinationSummary"],
+  right: ThreadMessage["coordinationSummary"],
+): boolean {
+  if (!left || !right) return false;
+  if (left.interoRequestId && right.interoRequestId) {
+    return left.interoRequestId === right.interoRequestId;
+  }
+  return left.coordinationThreadId === right.coordinationThreadId;
+}
+
 export interface StandInQuestionInput {
   jobId: OperationId;
   /** Optional retrieval scope; Stand-in conversation does not require it. */
@@ -368,6 +379,38 @@ export class InMemoryPlatformStore {
       );
     }
     return stored;
+  }
+
+  ensureRoomServicePrincipal(
+    threadId: ThreadId,
+    principal: PrincipalSummary,
+  ): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (!current || current.kind !== "room") {
+      throw new Error("Source Room was not found.");
+    }
+    if (current.accessMode !== "agent_readable") {
+      throw new Error("Intero is unavailable in a human-only encrypted Room.");
+    }
+    if (principal.kind !== "service") {
+      throw new Error("Room Agent principal must be a service identity.");
+    }
+    this.upsertPrincipal(principal);
+    if (current.participantIds.includes(principal.id)) return current;
+    const updated: ConversationThread = {
+      ...current,
+      participantIds: [...current.participantIds, principal.id],
+      accessVersion: (current.accessVersion ?? 1) + 1,
+    };
+    this.threads.set(threadId, updated);
+    this.threadVisibility.set(`${threadId}:${principal.id}`, 1);
+    this.recordConversationChange(
+      updated,
+      principal.id,
+      "access_changed",
+      uuidv7(),
+    );
+    return updated;
   }
 
   updateThread(
@@ -677,8 +720,10 @@ export class InMemoryPlatformStore {
       if (
         existing.kind !== "coordination_summary" ||
         existing.senderId !== input.senderId ||
-        existing.coordinationSummary?.coordinationThreadId !==
-          input.summary.coordinationThreadId
+        !sameCoordinationSummaryIdentity(
+          existing.coordinationSummary,
+          input.summary,
+        )
       ) {
         throw new Error("Coordination summary message ID was already used.");
       }
@@ -1084,6 +1129,18 @@ export class InMemoryPlatformStore {
     };
     this.decisions.set(decision.id, decision);
     return decision;
+  }
+
+  createDecisionOnce(
+    input: Omit<DecisionRecord, "id" | "createdAt">,
+  ): DecisionRecord {
+    if (input.sourceThreadId) {
+      const existing = [...this.decisions.values()].find(
+        (decision) => decision.sourceThreadId === input.sourceThreadId,
+      );
+      if (existing) return existing;
+    }
+    return this.createDecision(input);
   }
 
   cursor(after: number, limit: number) {

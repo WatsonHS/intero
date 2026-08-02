@@ -1913,6 +1913,10 @@ export const pilotCoordinationThreads = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id),
+    teamId: uuid("team_id"),
+    scopeKind: text("scope_kind", {
+      enum: ["single_project", "cross_project", "team"],
+    }),
     workStateId: uuid("work_state_id").references(() => pilotWorkStates.id),
     sourceBindingId: uuid("source_binding_id").references(
       () => pilotAgentBindings.id,
@@ -1926,7 +1930,13 @@ export const pilotCoordinationThreads = pgTable(
     sourceRoomThreadId: uuid("source_room_thread_id").references(
       () => threads.id,
     ),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id),
     summaryMessageId: uuid("summary_message_id").references(() => messages.id),
+    interoPrincipalId: uuid("intero_principal_id").references(
+      () => principals.id,
+    ),
+    brief: jsonb("brief"),
+    decisionId: uuid("decision_id").references(() => decisions.id),
     status: text("status", {
       enum: ["open", "needs_confirmation", "resolved"],
     }).notNull(),
@@ -1945,6 +1955,76 @@ export const pilotCoordinationThreads = pgTable(
     uniqueIndex("pilot_coordination_dedupe_unique_idx")
       .on(table.organizationId, table.projectId, table.dedupeKey)
       .where(sql`${table.dedupeKey} is not null`),
+  ],
+);
+
+export const pilotInteroRequests = pgTable(
+  "pilot_intero_requests",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id").notNull(),
+    sourceRoomThreadId: uuid("source_room_thread_id")
+      .notNull()
+      .references(() => threads.id),
+    sourceMessageId: uuid("source_message_id")
+      .notNull()
+      .references(() => messages.id),
+    requestedByPrincipalId: uuid("requested_by_principal_id")
+      .notNull()
+      .references(() => principals.id),
+    interoPrincipalId: uuid("intero_principal_id")
+      .notNull()
+      .references(() => principals.id),
+    status: text("status", {
+      enum: ["pending", "needs_scope", "coordinating", "answered", "failed"],
+    }).notNull(),
+    scopeRevision: integer("scope_revision").notNull().default(1),
+    responseMessageId: uuid("response_message_id").references(
+      () => messages.id,
+    ),
+    coordinationThreadId: uuid("coordination_thread_id").references(
+      () => pilotCoordinationThreads.id,
+    ),
+    lastErrorCode: text("last_error_code"),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_intero_requests_source_message_idx").on(
+      table.organizationId,
+      table.sourceMessageId,
+    ),
+    index("pilot_intero_requests_pending_idx").on(
+      table.organizationId,
+      table.status,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const pilotCoordinationProjects = pgTable(
+  "pilot_coordination_projects",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotCoordinationThreads.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.projectId] }),
+    index("pilot_coordination_projects_project_idx").on(
+      table.organizationId,
+      table.projectId,
+    ),
   ],
 );
 

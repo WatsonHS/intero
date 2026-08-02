@@ -16,7 +16,10 @@ import type {
 } from "../../server-api/src/pilot-ports.js";
 import type { PilotStore } from "../../server-api/src/pilot-store.js";
 import type { PlatformStore } from "../../server-api/src/platform-store.js";
-import { normalizeStandInQuestion } from "../../server-api/src/stand-in-question-context.js";
+import {
+  confirmedCoordinationContext,
+  normalizeStandInQuestion,
+} from "../../server-api/src/stand-in-question-context.js";
 
 export const PILOT_STAND_IN_QUESTION_TASK = "pilot_stand_in_question";
 export const PILOT_STAND_IN_QUESTION_DISPATCH_TASK =
@@ -375,6 +378,15 @@ export class StandInQuestionHandler {
             )
           ).filter((entry) => entry.ownerId === job.standInOwnerId)
         : [];
+      const confirmedCoordination = project
+        ? confirmedCoordinationContext(
+            await this.pilotStore.listCoordination(
+              project.id,
+              job.askedByPrincipalId,
+            ),
+            job.standInOwnerId,
+          )
+        : [];
       if (typeof this.conversations.updateMessageStream === "function") {
         try {
           await this.conversations.updateMessageStream({
@@ -417,6 +429,7 @@ export class StandInQuestionHandler {
           preferredLanguage: job.preferredLanguage,
         }),
         sources: pulse,
+        confirmedCoordination,
       };
       const answer = this.model.streamStandInQuestion
         ? await this.model.streamStandInQuestion(

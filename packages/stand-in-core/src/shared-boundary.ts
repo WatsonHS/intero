@@ -45,7 +45,37 @@ export function matchSharedBoundaryClaims(
   ) {
     return undefined;
   }
+  return matchEligibleSharedBoundaryClaims(left, right);
+}
 
+/**
+ * Cross-Project matching is a separate entry point: callers must provide the
+ * complete, already-authorized Project set. The legacy matcher above remains
+ * strictly single-Project.
+ */
+export function matchAuthorizedSharedBoundaryClaims(
+  left: PilotSharedBoundaryClaim,
+  right: PilotSharedBoundaryClaim,
+  allowedProjectIds: readonly string[],
+): PilotBoundaryMatch | undefined {
+  const allowed = new Set(allowedProjectIds);
+  if (
+    !allowed.has(left.projectId) ||
+    !allowed.has(right.projectId) ||
+    normalizeSharedBoundaryKey(left.key) !==
+      normalizeSharedBoundaryKey(right.key) ||
+    left.ownerId === right.ownerId
+  ) {
+    return undefined;
+  }
+
+  return matchEligibleSharedBoundaryClaims(left, right);
+}
+
+function matchEligibleSharedBoundaryClaims(
+  left: PilotSharedBoundaryClaim,
+  right: PilotSharedBoundaryClaim,
+): PilotBoundaryMatch {
   const producer =
     left.relation === "changing"
       ? left
@@ -115,6 +145,31 @@ export function evaluateSharedBoundaryClaims(
       const match = matchSharedBoundaryClaims(
         active[leftIndex]!,
         active[rightIndex]!,
+      );
+      if (match) matches.push(match);
+    }
+  }
+  return matches;
+}
+
+export function evaluateAuthorizedSharedBoundaryClaims(
+  claims: readonly PilotSharedBoundaryClaim[],
+  allowedProjectIds: readonly string[],
+  now: string,
+  staleAfterMs = SHARED_BOUNDARY_STALE_AFTER_MS,
+): PilotBoundaryMatch[] {
+  const active = activeSharedBoundaryClaims(claims, now, staleAfterMs);
+  const matches: PilotBoundaryMatch[] = [];
+  for (let leftIndex = 0; leftIndex < active.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < active.length;
+      rightIndex += 1
+    ) {
+      const match = matchAuthorizedSharedBoundaryClaims(
+        active[leftIndex]!,
+        active[rightIndex]!,
+        allowedProjectIds,
       );
       if (match) matches.push(match);
     }

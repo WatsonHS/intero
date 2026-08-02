@@ -38,6 +38,7 @@ export interface PlatformStore {
   putGrant: StoreMethod<"putGrant">;
   coordinate: StoreMethod<"coordinate">;
   createThread: StoreMethod<"createThread">;
+  ensureRoomServicePrincipal: StoreMethod<"ensureRoomServicePrincipal">;
   updateThread: StoreMethod<"updateThread">;
   appendMessage: StoreMethod<"appendMessage">;
   enqueueStandInQuestion(
@@ -57,6 +58,7 @@ export interface PlatformStore {
   addSpecRevision: StoreMethod<"addSpecRevision">;
   addReview: StoreMethod<"addReview">;
   createDecision: StoreMethod<"createDecision">;
+  createDecisionOnce: StoreMethod<"createDecisionOnce">;
   cursor: StoreMethod<"cursor">;
   listProjections(): Awaitable<PublicWorkProjection[]>;
   listInbox(principalId?: PrincipalId): Awaitable<ActionInboxItem[]>;

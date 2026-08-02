@@ -281,6 +281,20 @@ function createPilotMcpServer(
         (await options.store.findAgentBindingById(initialBinding.id)) ??
         initialBinding;
       const state = agentConnectionState(binding);
+      const confirmedCoordination = (
+        await options.store.listCoordination(binding.projectId, binding.ownerId)
+      )
+        .filter((thread) => thread.status === "resolved" && thread.decisionId)
+        .map((thread) => ({
+          coordinationThreadId: thread.id,
+          decisionId: thread.decisionId,
+          scopeKind: thread.scopeKind ?? "single_project",
+          projectIds: thread.projectIds ?? [thread.projectId],
+          boundaryKey: thread.boundaryKey,
+          conclusion: thread.conclusion,
+          confirmedAt: thread.confirmedAt,
+          humanDecision: thread.brief?.humanDecision,
+        }));
       return toolResult({
         ...state,
         mcpConnected: Boolean(binding.validatedAt),
@@ -300,6 +314,7 @@ function createPilotMcpServer(
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
         lastSeenAt: binding.lastSeenAt,
+        confirmedCoordination,
       });
     },
   );

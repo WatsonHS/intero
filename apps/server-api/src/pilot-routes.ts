@@ -41,14 +41,21 @@ import type {
 import type { PostgresAutomationStore } from "./automation-store.js";
 import type { CoordinationKernel } from "./coordination-kernel.js";
 import { ACTIVATION_BOOTSTRAP_HEADER } from "./auth.js";
-import type { CoordinationTransport, ModelGateway } from "./pilot-ports.js";
+import type {
+  ConfirmedCoordinationContext,
+  CoordinationTransport,
+  ModelGateway,
+} from "./pilot-ports.js";
 import type { PostgresInformationStore } from "./information-store.js";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
 import type { PlatformStore } from "./platform-store.js";
 import type { ProviderSecretCipher } from "./provider-secrets.js";
-import { normalizeStandInQuestion } from "./stand-in-question-context.js";
+import {
+  confirmedCoordinationContext,
+  normalizeStandInQuestion,
+} from "./stand-in-question-context.js";
 
 export interface PilotRoutesOptions {
   store: PilotStore;
@@ -1552,13 +1559,21 @@ export async function registerPilotRoutes(
         .min(8)
         .max(200)
         .parse(request.headers["idempotency-key"]);
-      return options.store.withdrawPulseEntry(
+      const result = await options.store.withdrawPulseEntry(
         ProjectId.parse(request.params.projectId),
         request.params.workStateId,
         principal.id,
         clientMutationId,
         new Date().toISOString(),
       );
+      for (const thread of result.coordinationThreads) {
+        await options.coordinationKernel?.refresh(
+          thread,
+          thread.updatedAt,
+          principal.id,
+        );
+      }
+      return { entry: result.entry, duplicate: result.duplicate };
     },
   );
 
@@ -1600,11 +1615,33 @@ export async function registerPilotRoutes(
     async (request) => {
       const principal = await requireIdentity(request, options.requestAuth);
       const now = new Date().toISOString();
-      const thread = await options.coordination.confirm(
+      let thread = await options.coordination.confirm(
         request.params.threadId,
         principal.id,
         now,
       );
+      const sourceThreadId =
+        thread.conversationThreadId ?? thread.sourceRoomThreadId;
+      if (!thread.decisionId && thread.conclusion && sourceThreadId) {
+        const affectedScopes = [
+          ...(thread.projectIds ?? [thread.projectId]),
+          ...(thread.boundaryKey ? [`boundary:${thread.boundaryKey}`] : []),
+        ].filter((value, index, values) => values.indexOf(value) === index);
+        const decision = await options.conversations.createDecisionOnce({
+          title: `Coordination decision · ${thread.trigger}`,
+          outcome: thread.conclusion,
+          sourceThreadId: sourceThreadId as ThreadId,
+          affectedScopes,
+          decidedBy: [principal.id],
+        });
+        thread = await options.store.recordCoordinationDecision({
+          threadId: thread.id,
+          decisionId: decision.id,
+          principalId: principal.id,
+          outcome: decision.outcome,
+          now,
+        });
+      }
       const automationSignal =
         await options.automationStore?.findSignalByCoordinationThread(
           thread.id,
@@ -1816,6 +1853,15 @@ async function generateStandInAnswer(
     pulse: PilotPulseEntry[];
   },
 ): Promise<{ answer: PilotStandInAnswer; sources: PilotStandInSource[] }> {
+  const confirmedCoordination: ConfirmedCoordinationContext[] = input.project
+    ? confirmedCoordinationContext(
+        await options.store.listCoordination(
+          input.project.id,
+          input.askedByPrincipalId,
+        ),
+        input.standInOwnerId,
+      )
+    : [];
   const answer = await options.modelGateway.answerStandInQuestion({
     organizationId: input.organizationId,
     ...(input.project
@@ -1833,6 +1879,7 @@ async function generateStandInAnswer(
     preferredLanguage: input.preferredLanguage,
     question: input.question,
     sources: input.pulse,
+    confirmedCoordination,
   });
   const byWorkStateId = new Map(
     input.pulse.map((source) => [source.workStateId, source]),

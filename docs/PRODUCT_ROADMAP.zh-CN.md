@@ -233,6 +233,8 @@ Intero 不应该优化摘要、Thread、任务或通知的数量。应该衡量�
 
 - [Golden Case：从 Team 群聊到跨项目协调](GOLDEN_CASE.zh-CN.md)
   是权威的端到端产品与验收场景。
+- [Golden Case 交付计划](plans/2026-08-01-001-golden-case-delivery-plan.md)
+  将这个场景拆成以证据推进的纵向交付阶段。
 - [核心产品闭环与试点体验](plans/2026-07-29-001-product-closure-and-ux-plan.md)
   对应 R0。
 - [由对话驱动的 AI 原生协作](plans/2026-07-29-002-conversation-driven-collaboration-todo.md)

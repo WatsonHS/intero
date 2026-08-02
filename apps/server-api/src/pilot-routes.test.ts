@@ -5,6 +5,7 @@ import {
   type OrganizationId,
   personalStandInId,
   type PrincipalId,
+  roomInteroPrincipalId,
   type ThreadId,
   uuidv7,
 } from "@intero/domain";
@@ -16,7 +17,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildTestApp } from "./test-app.js";
-import type { ModelGateway } from "./pilot-ports.js";
+import type { ModelGateway, StandInQuestionInput } from "./pilot-ports.js";
 import { ModelGatewayUnavailableError } from "./pilot-ports.js";
 import { teamConversationThreadId } from "./pilot-routes.js";
 import { InMemoryPilotStore, PilotStoreError } from "./pilot-store.js";
@@ -29,6 +30,7 @@ const C = "019b5ac0-7600-7000-8000-0000000000c3" as PrincipalId;
 const identity = (id: PrincipalId) => ({
   "x-intero-dev-principal-id": id,
 });
+let lastStandInQuestionInput: StandInQuestionInput | undefined;
 const modelGateway: ModelGateway = {
   async generateStandInOutput({ checkpoint }) {
     if (checkpoint.narrative.currentFocus.includes("provider unavailable")) {
@@ -57,7 +59,9 @@ const modelGateway: ModelGateway = {
       },
     };
   },
-  async answerStandInQuestion({ sources }) {
+  async answerStandInQuestion(input) {
+    lastStandInQuestionInput = input;
+    const { sources } = input;
     const source = sources[0];
     if (!source) {
       return {
@@ -90,6 +94,7 @@ describe("pilot cloud-first vertical slice", () => {
   let conversationStore: InMemoryPlatformStore;
 
   beforeEach(async () => {
+    lastStandInQuestionInput = undefined;
     pilotStore = new InMemoryPilotStore();
     conversationStore = new InMemoryPlatformStore();
     app = await buildTestApp({
@@ -782,7 +787,11 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(added.statusCode).toBe(201);
     const newMemberView = conversationStore.getThread(threadId as ThreadId, B);
-    expect(newMemberView?.thread.participantIds).toEqual([A, B]);
+    expect(newMemberView?.thread.participantIds).toEqual([
+      A,
+      roomInteroPrincipalId(threadId as ThreadId),
+      B,
+    ]);
     expect(newMemberView?.messages).toEqual([
       expect.objectContaining({
         kind: "system_access_change",
@@ -2022,6 +2031,16 @@ describe("pilot cloud-first vertical slice", () => {
       "managed_coordination_requires_confirmation",
     );
 
+    const wrongConfirmation = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/coordination/${coordination.id}/confirm`,
+      headers: identity(A),
+    });
+    expect(wrongConfirmation.statusCode).toBe(403);
+    expect(wrongConfirmation.json().code).toBe(
+      "COORDINATION_CONFIRMATION_REQUIRED",
+    );
+
     const confirmed = await app.inject({
       method: "POST",
       url: `/v1/pilot/coordination/${coordination.id}/confirm`,
@@ -2034,6 +2053,50 @@ describe("pilot cloud-first vertical slice", () => {
       headers: identity(B),
     });
     expect(confirmedAgain.statusCode).toBe(200);
+    expect(confirmed.json().thread.decisionId).toBeDefined();
+    expect(confirmedAgain.json().thread.decisionId).toBe(
+      confirmed.json().thread.decisionId,
+    );
+    expect(conversationStore.listDecisions()).toEqual([
+      expect.objectContaining({
+        id: confirmed.json().thread.decisionId,
+        outcome: "Keep account_id through the compatibility window.",
+        sourceThreadId: canonicalThreadId,
+        decidedBy: [B],
+      }),
+    ]);
+    const standInRead = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/stand-in`,
+      headers: identity(A),
+      payload: {
+        question: "What did we decide for the accounts boundary?",
+        standInOwnerId: B,
+      },
+    });
+    expect(standInRead.statusCode).toBe(201);
+    expect(lastStandInQuestionInput?.confirmedCoordination).toEqual([
+      expect.objectContaining({
+        coordinationThreadId: coordination.id,
+        decisionId: confirmed.json().thread.decisionId,
+        projectIds: [fixture.project.id],
+        boundaryKey: "api/accounts.v1",
+        outcome: "Keep account_id through the compatibility window.",
+        decidedBy: [B],
+      }),
+    ]);
+    await expect(
+      callMcpTool(app, alex.credential, "stand_in.current_context", {}),
+    ).resolves.toMatchObject({
+      confirmedCoordination: [
+        expect.objectContaining({
+          coordinationThreadId: coordination.id,
+          decisionId: confirmed.json().thread.decisionId,
+          boundaryKey: "api/accounts.v1",
+          conclusion: "Keep account_id through the compatibility window.",
+        }),
+      ],
+    });
     const roomAfterConfirmation = conversationStore.getThread(roomThreadId, A)!;
     expect(roomAfterConfirmation.thread.sequence).toBe(
       roomBeforeConclusion.thread.sequence,

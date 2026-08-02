@@ -626,6 +626,8 @@ export interface components {
         coordinationSummary?: {
           /** Format: uuid */
           coordinationThreadId: string;
+          /** Format: uuid */
+          interoRequestId?: string;
           /** @enum {string} */
           status: "open" | "waiting" | "needs_action" | "resolved";
           situation: string;
@@ -637,6 +639,57 @@ export interface components {
           /** Format: date-time */
           freshnessAt: string;
           sourceCount: number;
+          scope?:
+            | {
+                /** @enum {string} */
+                kind: "single_project" | "cross_project" | "team";
+                projectIds: string[];
+              }
+            | {
+                /** @enum {string} */
+                kind: "ambiguous";
+                candidates: {
+                  /** Format: uuid */
+                  projectId: string;
+                  name: string;
+                }[];
+              };
+          brief?: {
+            headline: string;
+            whatChanged: string;
+            whyItMatters: string;
+            needsFromYou: string;
+            scope: {
+              /** @enum {string} */
+              kind: "single_project" | "cross_project" | "team";
+              projectIds: string[];
+            };
+            facts: {
+              label: string;
+              value: string;
+              sourceRef: string;
+            }[];
+            interpretations: {
+              statement: string;
+              /** @enum {string} */
+              confidence: "low" | "medium" | "high";
+            }[];
+            /** @enum {string} */
+            proseSource?: "provider" | "deterministic_fallback";
+            options: {
+              id: string;
+              label: string;
+              tradeoff: string;
+            }[];
+            humanDecision?: {
+              outcome: string;
+              decidedBy: string[];
+              /** Format: date-time */
+              confirmedAt: string;
+            };
+            /** Format: date-time */
+            freshnessAt: string;
+          };
         };
         mentionedPrincipalIds?: string[];
         /** Format: uuid */

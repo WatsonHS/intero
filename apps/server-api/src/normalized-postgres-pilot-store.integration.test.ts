@@ -1,5 +1,7 @@
 import {
+  interoRequestIdFromMessage,
   OrganizationId,
+  type MessageId,
   type PilotAgentBinding,
   type PilotAgentTicket,
   type PilotCheckpointInput,
@@ -7,6 +9,8 @@ import {
   type PilotProject,
   PrincipalId,
   ProjectId,
+  roomInteroPrincipalId,
+  type ThreadId,
   uuidv7,
 } from "@intero/domain";
 import { createHash } from "node:crypto";
@@ -15,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { migrateDatabase } from "./database/migrate.js";
 import { NormalizedPostgresPilotStore } from "./normalized-postgres-pilot-store.js";
+import { PostgresPlatformStore } from "./postgres-store.js";
 import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -431,6 +436,35 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
       sourceWorkStateIds: [expect.any(String), expect.any(String)],
       sourceClaimIds: [expect.any(String), expect.any(String)],
     });
+    const corrected = checkpointWithBoundary(
+      "postgres-corrected-producer-0001",
+      "changing",
+      "compatible",
+      [assumption],
+    );
+    const correctedState = await store.ingestCheckpoint(
+      activeBinding,
+      corrected,
+      "2026-07-31T08:03:00.000Z",
+    );
+    expect(correctedState.workState.id).toBe(breakingState.workState.id);
+    const cleared = await store.reconcileSharedBoundaries({
+      project,
+      binding: activeBinding,
+      workStateId: correctedState.workState.id,
+      checkpoint: corrected,
+      now: "2026-07-31T08:03:00.000Z",
+    });
+    expect(cleared.coordinationThreads).toEqual([
+      expect.objectContaining({
+        id: conflict.coordinationThreads[0]!.id,
+        status: "resolved",
+        conclusion: expect.stringContaining(
+          "Current authorized evidence no longer supports",
+        ),
+      }),
+    ]);
+    expect(cleared.coordinationThreads[0]).not.toHaveProperty("decisionId");
 
     const restarted = new NormalizedPostgresPilotStore(
       new Pool({ connectionString: databaseAppUrl }),
@@ -438,13 +472,28 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     );
     await expect(
       restarted.listCoordination(projectId, adminId),
-    ).resolves.toHaveLength(1);
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: conflict.coordinationThreads[0]!.id,
+        status: "resolved",
+      }),
+    ]);
     await expect(
       restarted.listCoordinationRelevance(projectId, adminId),
-    ).resolves.toHaveLength(1);
+    ).resolves.toEqual([
+      expect.objectContaining({
+        coordinationThreadId: conflict.coordinationThreads[0]!.id,
+        dismissedAt: "2026-07-31T08:03:00.000Z",
+      }),
+    ]);
     await expect(
       restarted.listCoordinationRelevance(projectId, memberId),
-    ).resolves.toHaveLength(1);
+    ).resolves.toEqual([
+      expect.objectContaining({
+        coordinationThreadId: conflict.coordinationThreads[0]!.id,
+        dismissedAt: "2026-07-31T08:03:00.000Z",
+      }),
+    ]);
     await restarted.close();
     const sources = await admin.query<{ count: string }>(
       `SELECT count(*)
@@ -452,14 +501,109 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
        WHERE organization_id = $1`,
       [organizationId],
     );
-    expect(sources.rows[0]?.count).toBe("2");
-    const signals = await admin.query<{ count: string }>(
-      `SELECT count(*)
+    expect(sources.rows[0]?.count).toBe("3");
+    const signals = await admin.query<{ status: string }>(
+      `SELECT status
        FROM project_automation_signals
        WHERE organization_id = $1 AND kind = 'work_state_conflict'`,
       [organizationId],
     );
-    expect(signals.rows[0]?.count).toBe("1");
+    expect(signals.rows).toEqual([{ status: "dismissed" }]);
+    const projectMemberships = await admin.query<{ count: string }>(
+      `SELECT count(*)
+       FROM pilot_coordination_projects
+       WHERE organization_id = $1`,
+      [organizationId],
+    );
+    expect(projectMemberships.rows[0]?.count).toBe("1");
+  });
+
+  it("persists one durable Intero request with an ID-only outbox payload", async () => {
+    const platform = new PostgresPlatformStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    const roomId = uuidv7() as ThreadId;
+    const interoId = roomInteroPrincipalId(roomId);
+    await platform.upsertPrincipal({
+      id: interoId,
+      displayName: "Intero",
+      kind: "service",
+    });
+    await platform.createThread({
+      id: roomId,
+      kind: "room",
+      title: "Golden durable request",
+      participantIds: [adminId, memberId, interoId],
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      sequence: 0,
+      teamId,
+      createdAt: "2026-07-31T09:00:00.000Z",
+    });
+    const sourceMessage = await platform.appendMessage(roomId, {
+      id: uuidv7() as MessageId,
+      senderId: adminId,
+      body: "@Intero check Billing Operations.",
+      mentionedPrincipalIds: [interoId],
+      createdAt: "2026-07-31T09:00:01.000Z",
+    });
+    const requestId = interoRequestIdFromMessage(sourceMessage.id);
+    const created = await store.createInteroRequest({
+      id: requestId,
+      organizationId,
+      teamId,
+      sourceRoomThreadId: roomId,
+      sourceMessageId: sourceMessage.id,
+      requestedByPrincipalId: adminId,
+      interoPrincipalId: interoId,
+      status: "pending",
+      scopeRevision: 1,
+      createdAt: "2026-07-31T09:00:01.000Z",
+      updatedAt: "2026-07-31T09:00:01.000Z",
+    });
+    expect(created.duplicate).toBe(false);
+
+    const outbox = await admin.query<{
+      payload: Record<string, unknown>;
+      completed_at: Date | null;
+    }>(
+      `SELECT payload, completed_at
+       FROM outbox
+       WHERE organization_id = $1 AND topic = 'pilot.intero.enqueue'`,
+      [organizationId],
+    );
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0]).toMatchObject({
+      payload: {
+        schemaVersion: 1,
+        organizationId,
+        requestId,
+        scopeRevision: 1,
+      },
+      completed_at: null,
+    });
+    expect(JSON.stringify(outbox.rows[0]!.payload)).not.toContain(
+      "check Billing",
+    );
+
+    await store.updateInteroRequest({
+      requestId,
+      status: "answered",
+      now: "2026-07-31T09:00:02.000Z",
+    });
+    const restarted = new NormalizedPostgresPilotStore(
+      new Pool({ connectionString: databaseAppUrl }),
+      organizationId,
+    );
+    await expect(restarted.getInteroRequest(requestId)).resolves.toMatchObject({
+      status: "answered",
+      sourceRoomThreadId: roomId,
+      sourceMessageId: sourceMessage.id,
+    });
+    await restarted.close();
+    await platform.close();
   });
 
   it("enforces cross-Organization RLS on every normalized table", async () => {
@@ -521,9 +665,11 @@ const normalizedPilotTables = [
   "pilot_agent_tickets",
   "pilot_checkpoint_idempotency",
   "pilot_coordination_participants",
+  "pilot_coordination_projects",
   "pilot_coordination_relevance",
   "pilot_coordination_sources",
   "pilot_coordination_threads",
+  "pilot_intero_requests",
   "pilot_deployment_settings",
   "pilot_dm_messages",
   "pilot_dm_threads",
@@ -691,8 +837,10 @@ async function deleteOrganizationFixture(
   const tables = [
     "outbox",
     "activity_events",
+    "pilot_intero_requests",
     "pilot_checkpoint_idempotency",
     "pilot_coordination_participants",
+    "pilot_coordination_projects",
     "pilot_coordination_relevance",
     "pilot_coordination_sources",
     "pilot_coordination_threads",
@@ -708,6 +856,10 @@ async function deleteOrganizationFixture(
     "pilot_stand_in_exchanges",
     "pilot_project_teams",
     "pilot_project_settings",
+    "messages",
+    "thread_reads",
+    "thread_participants",
+    "threads",
     "pilot_team_join_links",
     "pilot_team_invitations",
     "pilot_team_memberships",

@@ -123,6 +123,7 @@ describe("cloud MCP client", () => {
           );
           return;
         }
+        const toolName = (body.params as { name?: string } | undefined)?.name;
         response.end(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -132,9 +133,24 @@ describe("cloud MCP client", () => {
                 {
                   type: "text",
                   text: JSON.stringify({
-                    status: "lifecycle_pending",
-                    mcpConnected: true,
-                    configurationCurrent: true,
+                    ...(toolName === "stand_in.current_context"
+                      ? {
+                          projectId: "project-1",
+                          confirmedCoordination: [
+                            {
+                              coordinationThreadId:
+                                "019f9b01-3333-7333-8333-333333333333",
+                              decisionId:
+                                "019f9b01-4444-7444-8444-444444444444",
+                              conclusion: "Keep the compatibility window.",
+                            },
+                          ],
+                        }
+                      : {
+                          status: "lifecycle_pending",
+                          mcpConnected: true,
+                          configurationCurrent: true,
+                        }),
                   }),
                 },
               ],
@@ -166,6 +182,7 @@ describe("cloud MCP client", () => {
 
       await client.validateConnection();
       await client.reportConnectionCheck();
+      const currentContext = await client.currentContext();
 
       expect(client.context().preferredLanguage).toBe("zh-CN");
       expect(validations).toEqual([
@@ -198,7 +215,28 @@ describe("cloud MCP client", () => {
             },
           }),
         },
+        {
+          authorization: "Bearer agent-credential",
+          body: expect.objectContaining({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              name: "stand_in.current_context",
+              arguments: {},
+            },
+          }),
+        },
       ]);
+      expect(currentContext).toEqual({
+        projectId: "project-1",
+        confirmedCoordination: [
+          {
+            coordinationThreadId: "019f9b01-3333-7333-8333-333333333333",
+            decisionId: "019f9b01-4444-7444-8444-444444444444",
+            conclusion: "Keep the compatibility window.",
+          },
+        ],
+      });
       expect(checkpoints).toHaveLength(1);
       expect(checkpoints[0]).toMatchObject({
         schemaVersion: 2,

@@ -1,6 +1,6 @@
 const LATENCY_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000];
 
-type ModelOperation = "summary" | "answer";
+type ModelOperation = "summary" | "answer" | "intero_prose";
 type ModelOutcome = "success" | "unavailable" | "error";
 type WorkerOutcome = "success" | "retry" | "failure";
 

@@ -71,10 +71,11 @@ async function runCloudMcpServer(
   server.registerTool(
     "stand_in.current_context",
     {
-      description: "Show the Project-scoped direct cloud MCP Agent connection.",
+      description:
+        "Show the authenticated Project-scoped connection and human-confirmed coordination available to this Coding Agent.",
       inputSchema: {},
     },
-    async () => result(client.context()),
+    async () => result(await client.currentContext()),
   );
   server.registerTool(
     "stand_in.report_checkpoint",
@@ -696,6 +697,12 @@ async function runCloudCommand() {
   });
   if (action === "status") {
     process.stdout.write(`${JSON.stringify(client.diagnostics(), null, 2)}\n`);
+    return;
+  }
+  if (action === "context") {
+    process.stdout.write(
+      `${JSON.stringify(await client.currentContext(), null, 2)}\n`,
+    );
     return;
   }
   if (action === "checkpoint") {

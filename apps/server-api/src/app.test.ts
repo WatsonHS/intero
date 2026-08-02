@@ -7,12 +7,20 @@ import type {
   MessageId,
   PrincipalId,
   SpecId,
+  ThreadId,
   Workstream,
 } from "@intero/domain";
-import { personalStandInId, uuidv7 } from "@intero/domain";
+import {
+  OrganizationId,
+  personalStandInId,
+  ProjectId,
+  roomInteroPrincipalId,
+  uuidv7,
+} from "@intero/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildTestApp } from "./test-app.js";
+import { InMemoryPilotStore } from "./pilot-store.js";
 import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
 
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
@@ -201,6 +209,154 @@ describe("Intero API vertical slice", () => {
     expect(stored.json().thread.participantIds).toEqual([ALEX]);
   });
 
+  it("provisions one Room-local Intero and answers an exact mention idempotently", async () => {
+    await app.close();
+    const pilotStore = new InMemoryPilotStore();
+    const organizationId = OrganizationId.parse(uuidv7());
+    const teamId = uuidv7();
+    const projectId = ProjectId.parse(uuidv7());
+    const now = new Date().toISOString();
+    await pilotStore.setupOrganization({
+      organization: {
+        id: organizationId,
+        name: "Intero Lab",
+        deploymentBaseUrl: "http://127.0.0.1:4310",
+        deploymentValidatedAt: now,
+        provider: { configured: false },
+      },
+      administratorId: ALEX,
+      initialTeam: {
+        id: teamId,
+        organizationId,
+        name: "Engineering",
+        createdAt: now,
+      },
+    });
+    await pilotStore.createProject({
+      id: projectId,
+      organizationId,
+      name: "Auth Platform",
+      ownerId: ALEX,
+      primaryTeamId: teamId,
+      participatingTeamIds: [teamId],
+      posture: "collaborative",
+      createdAt: now,
+      updatedAt: now,
+    });
+    store = new InMemoryPlatformStore();
+    app = await buildTestApp({
+      store,
+      pilotStore,
+      logger: false,
+      pilotIdentities: [
+        { id: ALEX, displayName: "Alex Rivera", kind: "human" },
+        { id: PRIYA, displayName: "Priya Shah", kind: "human" },
+      ],
+    });
+
+    const roomId = uuidv7() as import("@intero/domain").ThreadId;
+    const interoId = roomInteroPrincipalId(roomId);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: roomId,
+        kind: "room",
+        title: "#engineering",
+        participantIds: [ALEX],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        projectId,
+        teamId,
+        createdAt: now,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().participantIds).toEqual([ALEX, interoId]);
+
+    const sourceMessageId = uuidv7();
+    const payload = {
+      clientMessageId: sourceMessageId,
+      body: "@Intero check Auth Platform.",
+      mentionedPrincipalIds: [interoId],
+    };
+    const sent = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${roomId}/messages`,
+      headers: auth(ALEX),
+      payload,
+    });
+    expect(sent.statusCode).toBe(201);
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${roomId}/messages`,
+      headers: auth(ALEX),
+      payload,
+    });
+    expect(replay.statusCode).toBe(201);
+
+    const room = await app.inject({
+      method: "GET",
+      url: `/v1/threads/${roomId}`,
+      headers: auth(ALEX),
+    });
+    expect(room.json().principals).toContainEqual({
+      id: interoId,
+      displayName: "Intero",
+      kind: "service",
+    });
+    expect(
+      room
+        .json()
+        .messages.filter(
+          (message: { senderId: string }) => message.senderId === interoId,
+        ),
+    ).toHaveLength(1);
+    expect(
+      await pilotStore.getInteroRequestBySourceMessage(sourceMessageId),
+    ).toMatchObject({
+      status: "answered",
+      scopeRevision: 1,
+      scopeResolution: { kind: "single_project", projectIds: [projectId] },
+    });
+
+    const encryptedRoomId = uuidv7() as import("@intero/domain").ThreadId;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/threads",
+          headers: auth(ALEX),
+          payload: {
+            id: encryptedRoomId,
+            kind: "room",
+            title: "Private",
+            participantIds: [ALEX],
+            standInIds: [],
+            accessMode: "human_only_e2ee",
+            priorHistoryGranted: false,
+            teamId,
+            createdAt: now,
+          },
+        })
+      ).json().participantIds,
+    ).toEqual([ALEX]);
+    const unsupported = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${encryptedRoomId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: uuidv7(),
+        encryptedBody: "ciphertext",
+        mentionedPrincipalIds: [roomInteroPrincipalId(encryptedRoomId)],
+      },
+    });
+    expect(unsupported.statusCode).toBe(409);
+    expect(unsupported.json().code).toBe("INTERO_ROOM_ACCESS_UNSUPPORTED");
+  });
+
   it("lets a group member rename the chat and add a member without exposing earlier history", async () => {
     const threadId = uuidv7();
     await app.inject({
@@ -248,7 +404,11 @@ describe("Intero API vertical slice", () => {
     expect(updated.json()).toMatchObject({
       thread: {
         title: "Launch room",
-        participantIds: [ALEX, PRIYA],
+        participantIds: [
+          ALEX,
+          roomInteroPrincipalId(threadId as ThreadId),
+          PRIYA,
+        ],
         sequence: 2,
         accessVersion: 2,
       },
@@ -280,7 +440,7 @@ describe("Intero API vertical slice", () => {
     expect(removed.statusCode).toBe(200);
     expect(removed.json()).toMatchObject({
       thread: {
-        participantIds: [ALEX],
+        participantIds: [ALEX, roomInteroPrincipalId(threadId as ThreadId)],
         sequence: 3,
         accessVersion: 3,
       },

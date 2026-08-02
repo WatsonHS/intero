@@ -90,6 +90,7 @@ databaseSuite("PostgreSQL platform store", () => {
       "spec_reviews",
       "spec_revisions",
       "specs",
+      "decisions",
       "attachments",
       "messages",
       "thread_participants",
@@ -446,6 +447,46 @@ databaseSuite("PostgreSQL platform store", () => {
       }),
     ]);
     await secondStore.close();
+  });
+
+  it("records one Decision per source Thread under concurrent confirmation replay", async () => {
+    const sourceThreadId = uuidv7() as ActionEnvelope["threadId"];
+    await store.createThread(
+      {
+        id: sourceThreadId,
+        kind: "coordination",
+        projectId,
+        title: "Decision replay",
+        participantIds: [ownerId],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        sequence: 0,
+        createdAt: "2026-07-31T08:20:00.000Z",
+      },
+      ownerId,
+    );
+    const input = {
+      title: "Coordination decision · retryDelayMs",
+      outcome: "Keep retryDelayMs for one compatibility window.",
+      sourceThreadId,
+      affectedScopes: [projectId!],
+      decidedBy: [ownerId],
+    };
+
+    const [first, replay] = await Promise.all([
+      store.createDecisionOnce(input),
+      store.createDecisionOnce(input),
+    ]);
+
+    expect(replay.id).toBe(first.id);
+    expect(
+      (await store.listDecisions()).filter(
+        (decision) => decision.sourceThreadId === sourceThreadId,
+      ),
+    ).toEqual([
+      expect.objectContaining({ id: first.id, outcome: input.outcome }),
+    ]);
   });
 
   it("persists a Stand-in placeholder and revises the same message while streaming", async () => {

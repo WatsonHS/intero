@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { roomInteroPrincipalId, type ThreadId } from "@intero/domain";
 import {
   expect,
   test,
@@ -97,6 +98,8 @@ interface PulseEntry {
 interface CoordinationThread {
   id: string;
   projectId: string;
+  scopeKind?: "single_project" | "cross_project" | "team";
+  projectIds?: string[];
   workStateId?: string;
   trigger: string;
   boundaryKey?: string;
@@ -111,6 +114,21 @@ interface CoordinationThread {
   status: "open" | "needs_confirmation" | "resolved";
   responsibleParticipantId?: string;
   conclusion?: string;
+  decisionId?: string;
+  confirmedAt?: string;
+  brief?: {
+    headline: string;
+    proseSource?: "provider" | "deterministic_fallback";
+    scope: {
+      kind: "single_project" | "cross_project" | "team";
+      projectIds: string[];
+    };
+    humanDecision?: {
+      outcome: string;
+      decidedBy: string[];
+      confirmedAt: string;
+    };
+  };
 }
 
 interface OverviewPayload {
@@ -354,6 +372,246 @@ test.describe("real provider collaboration chain", () => {
       await disconnectBinding(resources.pages[0]!, bindingId);
       await resources.close();
       await rm(cloudDataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Golden Case canary keeps deterministic scope while provider prose upgrades the same coordination", async ({
+    browser,
+  }) => {
+    test.setTimeout(240_000);
+    const resources = await createRolePages(browser, [
+      principals.alex,
+      principals.priya,
+    ]);
+    const alexCloudDataDir = await mkdtemp(
+      resolve(tmpdir(), "intero-golden-provider-alex-"),
+    );
+    const priyaCloudDataDir = await mkdtemp(
+      resolve(tmpdir(), "intero-golden-provider-priya-"),
+    );
+    const connectedBindings: Array<{ page: Page; bindingId: string }> = [];
+
+    try {
+      const [alex, priya] = resources.pages as [Page, Page];
+      await assertExternalProviderConfigured(alex);
+      const suffix = runSuffix();
+      const { project: authProject, team } = await createCleanProject(
+        alex,
+        [principals.alex.id, principals.priya.id],
+        `Golden Auth Platform ${suffix}`,
+      );
+      const mobileProject = await createProjectInTeam(
+        alex,
+        team.id,
+        `Golden Mobile App ${suffix}`,
+      );
+      const room = await createTeamEvaluationRoom(
+        alex,
+        team.id,
+        [principals.alex.id, principals.priya.id],
+        `Golden engineering room ${suffix}`,
+      );
+
+      await scopePages([alex], authProject.id, team.id);
+      const alexConnection = await connectThroughSettings(
+        alex,
+        alexCloudDataDir,
+      );
+      connectedBindings.push({
+        page: alex,
+        bindingId: alexConnection.bindingId,
+      });
+      await scopePages([priya], mobileProject.id, team.id);
+      const priyaConnection = await connectThroughSettings(
+        priya,
+        priyaCloudDataDir,
+      );
+      connectedBindings.push({
+        page: priya,
+        bindingId: priyaConnection.bindingId,
+      });
+
+      const boundaryKey = `api:retry-config/${suffix}`;
+      const producerEvent = `golden-provider-producer-${suffix}`;
+      const consumerEvent = `golden-provider-consumer-${suffix}`;
+      await reportCheckpoint(alexConnection.client, alexCloudDataDir, {
+        eventType: "validation_completed",
+        clientEventId: producerEvent,
+        workstreamKey: `golden-auth-${suffix}`,
+        workstreamTitle: "Auth retry contract",
+        phase: "validating",
+        currentFocus: "Validate the breaking retry contract.",
+        completedOutcome: "Auth replaces retryDelayMs with retryAfterMs.",
+        evidence: "The producer contract reports a breaking change.",
+        nextStep: "Coordinate the consumer migration window.",
+        sharedBoundaries: [
+          {
+            key: boundaryKey,
+            kind: "api",
+            relation: "changing",
+            assumption: "Replace retryDelayMs with retryAfterMs.",
+            change: "breaking",
+            preserves: ["retryAfterMs"],
+          },
+        ],
+      });
+      await reportCheckpoint(priyaConnection.client, priyaCloudDataDir, {
+        eventType: "validation_completed",
+        clientEventId: consumerEvent,
+        workstreamKey: `golden-mobile-${suffix}`,
+        workstreamTitle: "Mobile retry consumer",
+        phase: "validating",
+        currentFocus: "Validate the current retry dependency.",
+        completedOutcome: "Mobile still consumes retryDelayMs.",
+        evidence: "The consumer contract names retryDelayMs.",
+        nextStep: "Wait for a compatibility decision.",
+        sharedBoundaries: [
+          {
+            key: boundaryKey,
+            kind: "api",
+            relation: "depending_on",
+            assumption: "retryDelayMs",
+            change: "unknown",
+            preserves: [],
+          },
+        ],
+      });
+      await waitForPulse(alex, authProject.id, producerEvent, 120_000);
+      await waitForPulse(priya, mobileProject.id, consumerEvent, 120_000);
+
+      const interoPrincipalId = roomInteroPrincipalId(room.id as ThreadId);
+      const sourceMessageId = randomUUID();
+      const requested = await alex.request.post(
+        `${apiUrl}/v1/threads/${room.id}/messages`,
+        {
+          data: {
+            clientMessageId: sourceMessageId,
+            body: `@Intero coordinate ${authProject.name} and ${mobileProject.name} on retryDelayMs.`,
+            mentionedPrincipalIds: [interoPrincipalId],
+            attachmentIds: [],
+          },
+        },
+      );
+      expect(requested.ok()).toBe(true);
+
+      await expect
+        .poll(
+          async () => {
+            const overview = await getOverview(alex, authProject.id);
+            return overview.coordination.find(
+              (thread) => thread.boundaryKey === boundaryKey,
+            )?.brief?.proseSource;
+          },
+          { timeout: 120_000 },
+        )
+        .toBe("provider");
+      const coordination = (
+        await getOverview(alex, authProject.id)
+      ).coordination.find((thread) => thread.boundaryKey === boundaryKey)!;
+      expect(coordination).toMatchObject({
+        scopeKind: "cross_project",
+        projectIds: [authProject.id, mobileProject.id].toSorted(),
+        brief: {
+          proseSource: "provider",
+          scope: {
+            kind: "cross_project",
+            projectIds: [authProject.id, mobileProject.id].toSorted(),
+          },
+        },
+      });
+      expect(coordination.brief!.headline.length).toBeGreaterThan(0);
+
+      const conclusion = `Keep retryDelayMs through the compatibility window (${suffix}).`;
+      await resolveCoordinationThroughUi(
+        priya,
+        coordination,
+        principals.priya,
+        conclusion,
+      );
+      const resolved = (
+        await getOverview(priya, mobileProject.id)
+      ).coordination.find((thread) => thread.id === coordination.id)!;
+      expect(resolved).toMatchObject({
+        status: "resolved",
+        conclusion,
+        decisionId: expect.any(String),
+        brief: {
+          proseSource: "provider",
+          humanDecision: {
+            outcome: conclusion,
+            decidedBy: [principals.priya.id],
+            confirmedAt: expect.any(String),
+          },
+        },
+      });
+
+      const agentContext = await runCloudClient(
+        ["context", "--mcp-source", alexConnection.client],
+        alexCloudDataDir,
+      );
+      expect(agentContext).toMatchObject({
+        projectId: authProject.id,
+        confirmedCoordination: expect.arrayContaining([
+          expect.objectContaining({
+            coordinationThreadId: coordination.id,
+            decisionId: resolved.decisionId,
+            conclusion,
+          }),
+        ]),
+      });
+
+      const standInExchange = await askStandInThroughUi(
+        priya,
+        mobileProject,
+        principals.alex,
+        "What compatibility-window decision was confirmed? Include its parenthesized canary token.",
+      );
+      expect(standInExchange.answer).toContain(suffix);
+      expect(standInExchange.sources).toEqual([]);
+      await priya.screenshot({
+        path: resolve(evidenceRoot, "01-golden-provider-confirmed.png"),
+        fullPage: true,
+      });
+
+      const roomAfter = await getThread(alex, room.id);
+      const summaries = roomAfter.messages.filter(
+        (message) =>
+          message.kind === "coordination_summary" &&
+          message.coordinationSummary?.coordinationThreadId ===
+            coordination.conversationThreadId,
+      );
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({
+        coordinationSummary: {
+          status: "resolved",
+          conclusion,
+        },
+      });
+
+      emitSafeResult({
+        kind: "golden-provider-canary",
+        sourceMessageId,
+        projectIds: coordination.projectIds,
+        coordinationThreadId: coordination.id,
+        decisionId: resolved.decisionId,
+        agentContextDecisionCount: (
+          agentContext.confirmedCoordination as unknown[]
+        ).length,
+        standInExchangeId: standInExchange.id,
+        proseSource: coordination.brief!.proseSource,
+        result: "PASS",
+      });
+    } finally {
+      await Promise.all(
+        connectedBindings.map(({ page, bindingId }) =>
+          disconnectBinding(page, bindingId),
+        ),
+      );
+      await resources.close();
+      await Promise.all([
+        rm(alexCloudDataDir, { recursive: true, force: true }),
+        rm(priyaCloudDataDir, { recursive: true, force: true }),
+      ]);
     }
   });
 
@@ -1163,6 +1421,47 @@ async function createEvaluationRoom(
   return room;
 }
 
+async function createProjectInTeam(
+  page: Page,
+  teamId: string,
+  name: string,
+): Promise<ProjectPayload> {
+  const created = await page.request.post(`${apiUrl}/v1/pilot/projects`, {
+    data: {
+      name,
+      primaryTeamId: teamId,
+      participatingTeamIds: [teamId],
+      posture: "collaborative",
+    },
+  });
+  const { project } = await json<{ project: ProjectPayload }>(created);
+  return project;
+}
+
+async function createTeamEvaluationRoom(
+  page: Page,
+  teamId: string,
+  participantIds: string[],
+  title: string,
+): Promise<{ id: string; title: string }> {
+  const response = await page.request.post(`${apiUrl}/v1/threads`, {
+    data: {
+      id: randomUUID(),
+      kind: "room",
+      teamId,
+      title,
+      participantIds,
+      standInIds: [],
+      accessMode: "agent_readable",
+      priorHistoryGranted: false,
+      createdAt: new Date().toISOString(),
+    },
+  });
+  const room = await json<{ id: string; title: string }>(response);
+  expect(room.title).toBe(title);
+  return room;
+}
+
 async function openEvaluationRoom(page: Page, title: string): Promise<void> {
   await navigate(page, "通讯");
   const room = page.getByText(title, { exact: true }).first();
@@ -1415,7 +1714,7 @@ async function askStandInThroughUi(
   project: ProjectPayload,
   standInOwner: Principal,
   question: string,
-  workStateId: string,
+  workStateId?: string,
 ): Promise<StandInExchange> {
   await navigate(page, "通讯");
   const personalStandInConversation = page.getByTestId(
@@ -1451,10 +1750,12 @@ async function askStandInThroughUi(
     `pilot-stand-in-answer-${exchange.answerMessageId}`,
   );
   await expect(answer).toBeVisible();
-  await answer.locator("..").getByRole("button").click();
-  await expect(
-    page.getByTestId(`pilot-stand-in-source-${workStateId}`).last(),
-  ).toBeVisible();
+  if (workStateId) {
+    await answer.locator("..").getByRole("button").click();
+    await expect(
+      page.getByTestId(`pilot-stand-in-source-${workStateId}`).last(),
+    ).toBeVisible();
+  }
   return exchange;
 }
 

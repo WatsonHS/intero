@@ -304,6 +304,8 @@ of the longer-term platform ambition.
 
 - [Golden Case: Team-room conversation to cross-project coordination](GOLDEN_CASE.md)
   is the canonical end-to-end product and acceptance scenario.
+- [Golden Case delivery plan](plans/2026-08-01-001-golden-case-delivery-plan.md)
+  turns that scenario into evidence-gated vertical slices.
 - [Core product closure and pilot UX](plans/2026-07-29-001-product-closure-and-ux-plan.md)
   supplies R0.
 - [Conversation-driven AI-native collaboration](plans/2026-07-29-002-conversation-driven-collaboration-todo.md)

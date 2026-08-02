@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { OrganizationId, PrincipalId, ProjectId } from "./ids.js";
+import {
+  MessageId,
+  OrganizationId,
+  PrincipalId,
+  ProjectId,
+  ThreadId,
+} from "./ids.js";
 import { PreferredLanguage } from "./platform.js";
 import { WorkstreamPhase } from "./work-state.js";
 
@@ -146,6 +152,195 @@ export function personalStandInId(ownerId: PrincipalId): PrincipalId {
   return PrincipalId.parse(`${ownerId.slice(0, 14)}5${ownerId.slice(15)}`);
 }
 
+/**
+ * Shared Rooms get one deterministic, Room-local Intero identity. Replacing
+ * the UUID version nibble keeps the mapping stable without introducing an
+ * organization-wide service principal that could accidentally span Rooms.
+ */
+export function roomInteroPrincipalId(roomId: ThreadId): PrincipalId {
+  return PrincipalId.parse(`${roomId.slice(0, 14)}6${roomId.slice(15)}`);
+}
+
+export function interoRequestIdFromMessage(sourceMessageId: MessageId): string {
+  return `${sourceMessageId.slice(0, 14)}3${sourceMessageId.slice(15)}`;
+}
+
+export function interoResponseMessageId(sourceMessageId: MessageId): MessageId {
+  return MessageId.parse(
+    `${sourceMessageId.slice(0, 14)}5${sourceMessageId.slice(15)}`,
+  );
+}
+
+export const PilotInteroScopeKind = z.enum([
+  "single_project",
+  "cross_project",
+  "team",
+  "ambiguous",
+]);
+export type PilotInteroScopeKind = z.infer<typeof PilotInteroScopeKind>;
+
+export const PilotInteroScopeEvidence = z
+  .object({
+    kind: z.enum([
+      "room_project",
+      "team_membership",
+      "exact_project",
+      "exact_boundary",
+      "participant_work_state",
+      "team_explicit",
+      "human_correction",
+    ]),
+    projectId: ProjectId.optional(),
+    detail: z.string().min(1).max(240),
+  })
+  .strict();
+export type PilotInteroScopeEvidence = z.infer<typeof PilotInteroScopeEvidence>;
+
+export const PilotInteroScopeCandidate = z
+  .object({
+    projectId: ProjectId,
+    name: z.string().min(1).max(160),
+    evidence: z.array(PilotInteroScopeEvidence).min(1).max(20),
+  })
+  .strict();
+export type PilotInteroScopeCandidate = z.infer<
+  typeof PilotInteroScopeCandidate
+>;
+
+export const PilotInteroScopeResolution = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("single_project"),
+      teamId: z.uuid(),
+      projectIds: z.array(ProjectId).length(1),
+      evidence: z.array(PilotInteroScopeEvidence).min(1).max(40),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cross_project"),
+      teamId: z.uuid(),
+      projectIds: z.array(ProjectId).min(2).max(20),
+      evidence: z.array(PilotInteroScopeEvidence).min(1).max(40),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("team"),
+      teamId: z.uuid(),
+      projectIds: z.array(ProjectId).max(20),
+      evidence: z.array(PilotInteroScopeEvidence).min(1).max(40),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("ambiguous"),
+      teamId: z.uuid(),
+      candidates: z.array(PilotInteroScopeCandidate).max(20),
+      question: z.string().min(1).max(300),
+    })
+    .strict(),
+]);
+export type PilotInteroScopeResolution = z.infer<
+  typeof PilotInteroScopeResolution
+>;
+
+export const PilotInteroProse = z
+  .object({
+    headline: z.string().min(1).max(240),
+    scopeExplanation: z.string().min(1).max(600),
+    whatChanged: z.string().min(1).max(600),
+    whyItMatters: z.string().min(1).max(600),
+    needsFromYou: z.string().max(600),
+  })
+  .strict();
+export type PilotInteroProse = z.infer<typeof PilotInteroProse>;
+
+export const PilotCoordinationBrief = z
+  .object({
+    headline: z.string().min(1).max(240),
+    whatChanged: z.string().min(1).max(600),
+    whyItMatters: z.string().min(1).max(600),
+    needsFromYou: z.string().max(600),
+    scope: z
+      .object({
+        kind: z.enum(["single_project", "cross_project", "team"]),
+        projectIds: z.array(ProjectId).min(1).max(20),
+      })
+      .strict(),
+    facts: z
+      .array(
+        z
+          .object({
+            label: z.string().min(1).max(120),
+            value: z.string().min(1).max(600),
+            sourceRef: z.string().min(1).max(300),
+          })
+          .strict(),
+      )
+      .max(20),
+    interpretations: z
+      .array(
+        z
+          .object({
+            statement: z.string().min(1).max(600),
+            confidence: z.enum(["low", "medium", "high"]),
+          })
+          .strict(),
+      )
+      .max(10),
+    proseSource: z.enum(["provider", "deterministic_fallback"]).optional(),
+    options: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(120),
+            label: z.string().min(1).max(240),
+            tradeoff: z.string().max(600),
+          })
+          .strict(),
+      )
+      .max(10),
+    humanDecision: z
+      .object({
+        outcome: z.string().min(1).max(600),
+        decidedBy: z.array(PrincipalId).min(1).max(20),
+        confirmedAt: z.iso.datetime(),
+      })
+      .strict()
+      .optional(),
+    freshnessAt: z.iso.datetime(),
+  })
+  .strict();
+export type PilotCoordinationBrief = z.infer<typeof PilotCoordinationBrief>;
+
+export const PilotInteroRequest = z
+  .object({
+    id: z.uuid(),
+    organizationId: OrganizationId,
+    teamId: z.uuid(),
+    sourceRoomThreadId: ThreadId,
+    sourceMessageId: MessageId,
+    requestedByPrincipalId: PrincipalId,
+    interoPrincipalId: PrincipalId,
+    status: z.enum([
+      "pending",
+      "needs_scope",
+      "coordinating",
+      "answered",
+      "failed",
+    ]),
+    scopeRevision: z.number().int().positive(),
+    scopeResolution: PilotInteroScopeResolution.optional(),
+    responseMessageId: MessageId.optional(),
+    coordinationThreadId: z.uuid().optional(),
+    lastErrorCode: z.string().min(1).max(120).optional(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export type PilotInteroRequest = z.infer<typeof PilotInteroRequest>;
+
 export const PilotDirectMessageThread = z
   .object({
     id: z.uuid(),
@@ -182,6 +377,9 @@ export const PilotCoordinationThread = z
   .object({
     id: z.uuid(),
     projectId: ProjectId,
+    teamId: z.uuid().optional(),
+    scopeKind: z.enum(["single_project", "cross_project", "team"]).optional(),
+    projectIds: z.array(ProjectId).min(1).max(20).optional(),
     workStateId: z.uuid().optional(),
     trigger: z.enum([
       "dependency_declared",
@@ -208,13 +406,18 @@ export const PilotCoordinationThread = z
     sourceClaimIds: z.array(z.uuid()).min(2).max(20).optional(),
     conversationThreadId: z.uuid().optional(),
     sourceRoomThreadId: z.uuid().optional(),
+    sourceMessageId: z.uuid().optional(),
+    interoRequestId: z.uuid().optional(),
     summaryMessageId: z.uuid().optional(),
+    interoPrincipalId: PrincipalId.optional(),
     participantIds: z.array(PrincipalId).min(1).max(20),
     safeContext: z.string().min(1).max(600),
     candidateNextSteps: z.array(z.string().min(1).max(300)).max(5),
     status: PilotCoordinationStatus,
     conclusion: z.string().min(1).max(600).optional(),
     responsibleParticipantId: PrincipalId.optional(),
+    brief: PilotCoordinationBrief.optional(),
+    decisionId: z.uuid().optional(),
     confirmedAt: z.iso.datetime().optional(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),

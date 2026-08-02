@@ -15,6 +15,9 @@ Agent behavior, domain contracts, browser acceptance, and provider canaries
 should tell this same story. It is not a claim that every team works this way;
 it is the first repeatable case used to test whether the product thesis works.
 
+The staged implementation and evidence gates are defined in the
+[Golden Case delivery plan](plans/2026-08-01-001-golden-case-delivery-plan.md).
+
 The case must prove that a team can talk naturally in a Team Room containing
 several Projects, mention only `@Intero`, and resolve a real cross-Project
 conflict without manually routing context or exposing private Agent activity.

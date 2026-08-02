@@ -667,6 +667,15 @@ export async function sendThreadMessage(input: {
   });
 }
 
+export async function correctInteroScope(input: {
+  requestId: string;
+  projectIds: string[];
+}): Promise<void> {
+  await postJson(`/v1/intero-requests/${input.requestId}/scope`, {
+    projectIds: input.projectIds,
+  });
+}
+
 export async function addStandInToThread(input: {
   threadId: string;
 }): Promise<void> {
