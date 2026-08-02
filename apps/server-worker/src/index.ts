@@ -16,6 +16,8 @@ import {
   type PortfolioSummaryJobReference,
   PostgresAutomationStore,
 } from "../../server-api/src/automation-store.js";
+import { CoordinationKernel } from "../../server-api/src/coordination-kernel.js";
+import { PilotInteroRequestProcessor } from "../../server-api/src/intero-request-service.js";
 import { assertDatabaseMigrationReadiness } from "../../server-api/src/database/migration-readiness.js";
 import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
@@ -43,6 +45,13 @@ import {
   PortfolioSummaryOutboxDispatcher,
   type AutomationJobReference,
 } from "./automation-jobs.js";
+import {
+  GraphileInteroJobRunner,
+  InteroJobOutboxDispatcher,
+  PILOT_INTERO_DISPATCH_TASK,
+  PILOT_INTERO_TASK,
+  PostgresInteroJobRepository,
+} from "./intero-jobs.js";
 import {
   CentrifugoRealtime,
   OutboxDispatcher,
@@ -124,11 +133,24 @@ const model = new InstrumentedModelGateway(
   ),
   metrics,
 );
+const conversationPool = new Pool({ connectionString });
+const conversations = new PostgresPlatformStore(
+  conversationPool,
+  organizationId,
+);
+const coordinationKernel = new CoordinationKernel(pilotStore, conversations);
 const standInHandler = new PilotStandInJobHandler(
   pilotStore,
   authorization,
   model,
   coordination,
+  coordinationKernel,
+);
+const interoRequestProcessor = new PilotInteroRequestProcessor(
+  pilotStore,
+  conversations,
+  coordinationKernel,
+  model,
 );
 const pilotJobRepository = new PostgresPilotJobRepository(
   new Pool({ connectionString }),
@@ -137,11 +159,6 @@ const pilotJobRepository = new PostgresPilotJobRepository(
 const workerUtils = await makeWorkerUtils({
   connectionString: queueConnectionString,
 });
-const conversationPool = new Pool({ connectionString });
-const conversations = new PostgresPlatformStore(
-  conversationPool,
-  organizationId,
-);
 const standInQuestionRepository = new PostgresStandInQuestionRepository(
   new Pool({ connectionString }),
   organizationId,
@@ -162,6 +179,14 @@ const graphileJobs = new GraphileJobRunner(workerUtils, organizationId);
 const pilotOutbox = new PilotJobOutboxDispatcher(
   pilotJobRepository,
   graphileJobs,
+);
+const interoJobRepository = new PostgresInteroJobRepository(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const interoOutbox = new InteroJobOutboxDispatcher(
+  interoJobRepository,
+  new GraphileInteroJobRunner(workerUtils, organizationId),
 );
 const automationStore = new PostgresAutomationStore(
   new Pool({ connectionString }),
@@ -185,6 +210,24 @@ const portfolioSummaryOutbox = new PortfolioSummaryOutboxDispatcher(
 );
 
 const tasks: TaskList = {
+  [PILOT_INTERO_TASK]: async (payload: unknown) => {
+    await interoRequestProcessor.handle(
+      payload as import("../../server-api/src/intero-request-service.js").PilotInteroJobReference,
+    );
+  },
+  [PILOT_INTERO_DISPATCH_TASK]: async (_payload, helpers) => {
+    await interoOutbox.dispatch();
+    await helpers.addJob(
+      PILOT_INTERO_DISPATCH_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 1_000),
+        maxAttempts: 25,
+        jobKey: "intero-pilot-request-dispatch-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
   [PILOT_STAND_IN_QUESTION_TASK]: async (payload, helpers) => {
     await standInQuestionHandler.handle(payload as StandInQuestionReference, {
       workerId,
@@ -375,6 +418,15 @@ await pilotJobRepository.heartbeat({
 });
 await Promise.all([
   workerUtils.addJob(
+    PILOT_INTERO_DISPATCH_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-pilot-request-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  workerUtils.addJob(
     PILOT_STAND_IN_QUESTION_DISPATCH_TASK,
     {},
     {
@@ -543,6 +595,7 @@ try {
     metricsServer.close((error) => (error ? reject(error) : resolve())),
   );
   await publicRepository?.close();
+  await interoJobRepository.close();
   await realtimeOutboxRepository.close();
   await standInQuestionRepository.close();
   await conversationPool.end();

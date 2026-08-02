@@ -3,6 +3,8 @@ import type {
   PilotAgentBinding,
   PilotCheckpointInput,
   PilotCoordinationThread,
+  PilotInteroProse,
+  PilotInteroScopeEvidence,
   PilotProject,
   PilotPulseEntry,
   PilotStandInAnswer,
@@ -33,6 +35,7 @@ export interface StandInModelInput {
 
 export interface ModelGateway {
   generateStandInOutput(input: StandInModelInput): Promise<PilotStandInOutput>;
+  generateInteroProse?(input: InteroProseInput): Promise<PilotInteroProse>;
   answerStandInQuestion(
     input: StandInQuestionInput,
   ): Promise<PilotStandInAnswer>;
@@ -40,6 +43,29 @@ export interface ModelGateway {
     input: StandInQuestionInput,
     onPartialAnswer: (answer: string) => Promise<void>,
   ): Promise<PilotStandInAnswer>;
+}
+
+export interface InteroProseInput {
+  organizationId: OrganizationId;
+  preferredLanguage: PilotAgentBinding["preferredLanguage"];
+  scope: {
+    kind: "single_project" | "cross_project" | "team";
+    projects: Array<Pick<PilotProject, "id" | "name">>;
+    evidence: PilotInteroScopeEvidence[];
+  };
+  evaluation: {
+    classification:
+      "compatible" | "potential_conflict" | "insufficient_evidence";
+    boundaryKey: string;
+    reason: string;
+    facts: Array<{
+      projectId: ProjectId;
+      relation: "changing" | "depending_on" | "validating";
+      assumption: string;
+      change: "additive" | "compatible" | "breaking" | "unknown";
+      revision: number;
+    }>;
+  };
 }
 
 export interface StandInQuestionInput {
@@ -52,6 +78,17 @@ export interface StandInQuestionInput {
   preferredLanguage: PilotAgentBinding["preferredLanguage"];
   question: string;
   sources: PilotPulseEntry[];
+  confirmedCoordination?: ConfirmedCoordinationContext[];
+}
+
+export interface ConfirmedCoordinationContext {
+  coordinationThreadId: string;
+  decisionId: string;
+  projectIds: ProjectId[];
+  boundaryKey?: string;
+  outcome: string;
+  decidedBy: PrincipalId[];
+  confirmedAt: string;
 }
 
 export class ModelGatewayUnavailableError extends Error {
@@ -69,6 +106,20 @@ export class InstrumentedModelGateway implements ModelGateway {
   ): Promise<PilotStandInOutput> {
     return this.observe("summary", () =>
       this.inner.generateStandInOutput(input),
+    );
+  }
+
+  async generateInteroProse(
+    input: InteroProseInput,
+  ): Promise<PilotInteroProse> {
+    return this.observe("intero_prose", () =>
+      this.inner.generateInteroProse
+        ? this.inner.generateInteroProse(input)
+        : Promise.reject(
+            new ModelGatewayUnavailableError(
+              "The configured model gateway cannot generate Intero prose.",
+            ),
+          ),
     );
   }
 
@@ -92,7 +143,7 @@ export class InstrumentedModelGateway implements ModelGateway {
   }
 
   private async observe<T>(
-    operation: "summary" | "answer",
+    operation: "summary" | "answer" | "intero_prose",
     call: () => Promise<T>,
   ): Promise<T> {
     const startedAt = performance.now();

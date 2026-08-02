@@ -195,19 +195,28 @@ describe("Communications personal Stand-in routing", () => {
 
   it("builds one mention list from people and Stand-ins in the conversation", () => {
     const standInId = PrincipalId.parse("019f9f20-0000-5000-8000-000000000001");
+    const interoId = PrincipalId.parse("019f9f20-0000-6000-8000-000000000002");
     const candidates = conversationMentionCandidates({
-      participantIds: [SESSION_PRINCIPAL_ID, DEV_PRINCIPAL_ID, standInId],
+      participantIds: [
+        SESSION_PRINCIPAL_ID,
+        DEV_PRINCIPAL_ID,
+        standInId,
+        interoId,
+      ],
       standInIds: [standInId],
       principalNames: new Map([
         [SESSION_PRINCIPAL_ID, "Session Member"],
         [DEV_PRINCIPAL_ID, "Development Member"],
         [standInId, "Session Member 的替身"],
+        [interoId, "Intero"],
       ]),
+      principalKinds: new Map([[interoId, "service"]]),
     });
 
     expect(
       candidates.map(({ displayName, kind }) => ({ displayName, kind })),
     ).toEqual([
+      { displayName: "Intero", kind: "service" },
       { displayName: "Development Member", kind: "human" },
       { displayName: "Session Member", kind: "human" },
       { displayName: "Session Member 的替身", kind: "stand_in" },
@@ -217,6 +226,9 @@ describe("Communications personal Stand-in routing", () => {
         principalId: standInId,
         kind: "stand_in",
       }),
+    ]);
+    expect(filterConversationMentionCandidates(candidates, "Intero")).toEqual([
+      expect.objectContaining({ principalId: interoId, kind: "service" }),
     ]);
   });
 

@@ -38,12 +38,14 @@ export interface PlatformStore {
   putGrant: StoreMethod<"putGrant">;
   coordinate: StoreMethod<"coordinate">;
   createThread: StoreMethod<"createThread">;
+  ensureRoomServicePrincipal: StoreMethod<"ensureRoomServicePrincipal">;
   updateThread: StoreMethod<"updateThread">;
   appendMessage: StoreMethod<"appendMessage">;
   enqueueStandInQuestion(
     input: StandInQuestionInput,
   ): Awaitable<import("@intero/domain").ThreadMessage>;
   updateMessageStream: StoreMethod<"updateMessageStream">;
+  upsertCoordinationSummary: StoreMethod<"upsertCoordinationSummary">;
   setMessageReaction: StoreMethod<"setMessageReaction">;
   addStandInToThread: StoreMethod<"addStandInToThread">;
   markThreadRead: StoreMethod<"markThreadRead">;
@@ -51,10 +53,12 @@ export interface PlatformStore {
   listThreadMessages: StoreMethod<"listThreadMessages">;
   getThreadMessage: StoreMethod<"getThreadMessage">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
+  concludeCoordinationThread: StoreMethod<"concludeCoordinationThread">;
   createSpec: StoreMethod<"createSpec">;
   addSpecRevision: StoreMethod<"addSpecRevision">;
   addReview: StoreMethod<"addReview">;
   createDecision: StoreMethod<"createDecision">;
+  createDecisionOnce: StoreMethod<"createDecisionOnce">;
   cursor: StoreMethod<"cursor">;
   listProjections(): Awaitable<PublicWorkProjection[]>;
   listInbox(principalId?: PrincipalId): Awaitable<ActionInboxItem[]>;

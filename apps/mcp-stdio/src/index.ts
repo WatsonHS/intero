@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   PilotAgentClient,
   PilotCheckpointEventType,
+  PilotSharedBoundaryInput,
   PilotWorkNarrative,
   PrincipalId,
   WorkstreamPhase,
@@ -70,18 +71,19 @@ async function runCloudMcpServer(
   server.registerTool(
     "stand_in.current_context",
     {
-      description: "Show the Project-scoped direct cloud MCP Agent connection.",
+      description:
+        "Show the authenticated Project-scoped connection and human-confirmed coordination available to this Coding Agent.",
       inputSchema: {},
     },
-    async () => result(client.context()),
+    async () => result(await client.currentContext()),
   );
   server.registerTool(
     "stand_in.report_checkpoint",
     {
       description:
         preferredLanguage === "zh-CN"
-          ? "向私有 Work State（策略允许时也向 Team Pulse）上报人类可读的结构化工作动态。所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN。dependency_declared 或需要定向协作时，必须提供当前项目成员的 collaboration.targetPrincipalId；requestedFrom 仅用于展示。"
-          : "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse. Write all narrative fields, collaboration requests, and human-readable evidence in the owner's preferred language, en-US. For dependency_declared or routed collaboration, provide the current Project member's collaboration.targetPrincipalId; requestedFrom is display text only.",
+          ? "向私有 Work State（策略允许时也向 Team Pulse）上报人类可读的结构化工作动态。sharedBoundaries 是显式的项目可见边界声明，只能使用短语义标识，不得包含 prompt、文件、diff、日志或秘密。所有 narrative 字段、协作请求和人类可读 evidence 必须使用所有者首选语言 zh-CN。dependency_declared 或需要定向协作时，必须提供当前项目成员的 collaboration.targetPrincipalId；requestedFrom 仅用于展示。"
+          : "Report a human-readable structured work update to private Work State and, when policy permits, Team Pulse. sharedBoundaries are explicit Project-visible boundary claims and must use short semantic identifiers without prompts, files, diffs, logs, or secrets. Write all narrative fields, collaboration requests, and human-readable evidence in the owner's preferred language, en-US. For dependency_declared or routed collaboration, provide the current Project member's collaboration.targetPrincipalId; requestedFrom is display text only.",
       inputSchema: {
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
@@ -90,6 +92,7 @@ async function runCloudMcpServer(
         workstreamKey: z.string().min(1).max(160).optional(),
         workstreamTitle: z.string().min(1).max(160).optional(),
         phase: WorkstreamPhase.optional(),
+        sharedBoundaries: z.array(PilotSharedBoundaryInput).max(12).optional(),
       },
     },
     async (input) => result(await client.reportCheckpoint(input)),
@@ -696,6 +699,12 @@ async function runCloudCommand() {
     process.stdout.write(`${JSON.stringify(client.diagnostics(), null, 2)}\n`);
     return;
   }
+  if (action === "context") {
+    process.stdout.write(
+      `${JSON.stringify(await client.currentContext(), null, 2)}\n`,
+    );
+    return;
+  }
   if (action === "checkpoint") {
     const eventType = PilotCheckpointEventType.parse(
       argumentValue("--event-type"),
@@ -721,6 +730,18 @@ async function runCloudCommand() {
         "routed collaboration requires --target-principal-id for a verified member of the bound Project.",
       );
     }
+    const sharedBoundaries = argumentValues("--shared-boundary").map(
+      (value, index) => {
+        try {
+          return PilotSharedBoundaryInput.parse(JSON.parse(value));
+        } catch (error) {
+          throw new Error(
+            `cloud checkpoint --shared-boundary ${index + 1} must be valid JSON matching the shared-boundary contract.`,
+            { cause: error },
+          );
+        }
+      },
+    );
     const response = await client.reportCheckpoint({
       eventType,
       narrative: {
@@ -751,6 +772,7 @@ async function runCloudCommand() {
       ...(argumentValue("--phase")
         ? { phase: WorkstreamPhase.parse(argumentValue("--phase")) }
         : {}),
+      ...(sharedBoundaries.length > 0 ? { sharedBoundaries } : {}),
     });
     process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
     return;

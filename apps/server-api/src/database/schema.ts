@@ -338,6 +338,7 @@ export const messages = pgTable(
       .notNull()
       .default(sql`'{}'::uuid[]`),
     attachments: jsonb("attachments").notNull().default([]),
+    metadata: jsonb("metadata").notNull().default({}),
     streamState: text("stream_state", {
       enum: ["pending", "streaming", "complete", "failed"],
     })
@@ -1824,6 +1825,53 @@ export const pilotPrivateClaims = pgTable(
   ],
 );
 
+export const pilotSharedBoundaryClaims = pgTable(
+  "pilot_shared_boundary_claims",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => pilotAgentBindings.id),
+    checkpointClientEventId: text("checkpoint_client_event_id").notNull(),
+    boundaryKey: text("boundary_key").notNull(),
+    revision: integer("revision").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
+    withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_shared_boundary_claim_revision_idx").on(
+      table.workStateId,
+      table.boundaryKey,
+      table.revision,
+    ),
+    uniqueIndex("pilot_shared_boundary_claim_event_idx").on(
+      table.organizationId,
+      table.checkpointClientEventId,
+      table.boundaryKey,
+    ),
+    index("pilot_shared_boundary_claim_match_idx").on(
+      table.projectId,
+      table.boundaryKey,
+      table.observedAt,
+    ),
+  ],
+);
+
 export const pilotPulseEntries = pgTable(
   "pilot_pulse_entries",
   {
@@ -1865,11 +1913,30 @@ export const pilotCoordinationThreads = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id),
+    teamId: uuid("team_id"),
+    scopeKind: text("scope_kind", {
+      enum: ["single_project", "cross_project", "team"],
+    }),
     workStateId: uuid("work_state_id").references(() => pilotWorkStates.id),
     sourceBindingId: uuid("source_binding_id").references(
       () => pilotAgentBindings.id,
     ),
     automationSignalId: uuid("automation_signal_id"),
+    boundaryKey: text("boundary_key"),
+    dedupeKey: text("dedupe_key"),
+    conversationThreadId: uuid("conversation_thread_id").references(
+      () => threads.id,
+    ),
+    sourceRoomThreadId: uuid("source_room_thread_id").references(
+      () => threads.id,
+    ),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id),
+    summaryMessageId: uuid("summary_message_id").references(() => messages.id),
+    interoPrincipalId: uuid("intero_principal_id").references(
+      () => principals.id,
+    ),
+    brief: jsonb("brief"),
+    decisionId: uuid("decision_id").references(() => decisions.id),
     status: text("status", {
       enum: ["open", "needs_confirmation", "resolved"],
     }).notNull(),
@@ -1885,6 +1952,79 @@ export const pilotCoordinationThreads = pgTable(
     uniqueIndex("pilot_coordination_work_state_unique_idx")
       .on(table.workStateId)
       .where(sql`${table.workStateId} is not null`),
+    uniqueIndex("pilot_coordination_dedupe_unique_idx")
+      .on(table.organizationId, table.projectId, table.dedupeKey)
+      .where(sql`${table.dedupeKey} is not null`),
+  ],
+);
+
+export const pilotInteroRequests = pgTable(
+  "pilot_intero_requests",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    teamId: uuid("team_id").notNull(),
+    sourceRoomThreadId: uuid("source_room_thread_id")
+      .notNull()
+      .references(() => threads.id),
+    sourceMessageId: uuid("source_message_id")
+      .notNull()
+      .references(() => messages.id),
+    requestedByPrincipalId: uuid("requested_by_principal_id")
+      .notNull()
+      .references(() => principals.id),
+    interoPrincipalId: uuid("intero_principal_id")
+      .notNull()
+      .references(() => principals.id),
+    status: text("status", {
+      enum: ["pending", "needs_scope", "coordinating", "answered", "failed"],
+    }).notNull(),
+    scopeRevision: integer("scope_revision").notNull().default(1),
+    responseMessageId: uuid("response_message_id").references(
+      () => messages.id,
+    ),
+    coordinationThreadId: uuid("coordination_thread_id").references(
+      () => pilotCoordinationThreads.id,
+    ),
+    lastErrorCode: text("last_error_code"),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("pilot_intero_requests_source_message_idx").on(
+      table.organizationId,
+      table.sourceMessageId,
+    ),
+    index("pilot_intero_requests_pending_idx").on(
+      table.organizationId,
+      table.status,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const pilotCoordinationProjects = pgTable(
+  "pilot_coordination_projects",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotCoordinationThreads.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.projectId] }),
+    index("pilot_coordination_projects_project_idx").on(
+      table.organizationId,
+      table.projectId,
+    ),
   ],
 );
 
@@ -1999,7 +2139,7 @@ export const pilotCoordinationParticipants = pgTable(
       .references(() => organizations.id),
     threadId: uuid("thread_id")
       .notNull()
-      .references(() => pilotCoordinationThreads.id),
+      .references(() => pilotCoordinationThreads.id, { onDelete: "cascade" }),
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id),
@@ -2008,6 +2148,66 @@ export const pilotCoordinationParticipants = pgTable(
   (table) => [
     primaryKey({ columns: [table.threadId, table.principalId] }),
     index("pilot_coordination_participants_principal_idx").on(
+      table.principalId,
+    ),
+  ],
+);
+
+export const pilotCoordinationSources = pgTable(
+  "pilot_coordination_sources",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotCoordinationThreads.id, { onDelete: "cascade" }),
+    workStateId: uuid("work_state_id")
+      .notNull()
+      .references(() => pilotWorkStates.id),
+    claimId: uuid("claim_id")
+      .notNull()
+      .references(() => pilotSharedBoundaryClaims.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => principals.id),
+    claimRevision: integer("claim_revision").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.claimId] }),
+    index("pilot_coordination_sources_work_state_idx").on(table.workStateId),
+  ],
+);
+
+export const pilotCoordinationRelevance = pgTable(
+  "pilot_coordination_relevance",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => pilotCoordinationThreads.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    sourceRoomThreadId: uuid("source_room_thread_id").references(
+      () => threads.id,
+    ),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    reason: text("reason").notNull(),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    mutedAt: timestamp("muted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.principalId] }),
+    index("pilot_coordination_relevance_principal_idx").on(
+      table.projectId,
       table.principalId,
     ),
   ],

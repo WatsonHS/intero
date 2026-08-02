@@ -1,7 +1,7 @@
 ---
 title: "feat: prove the R1/R2 coordination kernel"
 type: feat
-status: planned
+status: validated-awaiting-real-provider-canary
 date: 2026-07-31
 roadmap: docs/PRODUCT_ROADMAP.md
 ---
@@ -25,9 +25,91 @@ This plan implements R1 and R2 from the
 [product roadmap](../PRODUCT_ROADMAP.md). It does not implement Capability
 Health, generic semantic work discovery, or an adaptive workflow-mode engine.
 
-## Current code reality
+It proves the Work State conflict and low-noise coordination slice of the
+[Intero Golden Case](../GOLDEN_CASE.md). The full Golden Case additionally
+requires Team-room `@Intero` behavior, automatic single-Project and
+cross-Project scope routing, the ambiguous-scope branch, and the complete
+human-readable browser flow. Those requirements are not implied by the local
+R1/R2 implementation evidence alone.
 
-Intero already has useful parts of the loop:
+## Implementation status — 2026-08-01
+
+The production-shaped R1/R2 path is implemented in the current change set:
+
+- `stand_in.report_checkpoint` accepts tightly bounded, explicitly
+  project-visible `sharedBoundaries`;
+- distinct `PilotSharedBoundaryClaim` records retain owner, binding, Work
+  State, checkpoint, freshness, revision, supersession, and withdrawal
+  provenance;
+- a deterministic matcher classifies compatible, potential-conflict, and
+  insufficient-evidence pairs without allowing model output to create a
+  conflict;
+- PostgreSQL migration `0037_r1_r2_coordination_kernel.sql` persists Claims,
+  multi-source case provenance, contextual relevance, canonical Thread links,
+  and the `work_state_conflict` signal under tenant RLS;
+- one `CoordinationKernel` materializes a canonical child Thread and one
+  structured `coordination_summary` message in the authorized source Room;
+- Room summary refresh updates the same message revision without advancing the
+  Room sequence;
+- passive relevance is locally contextual, dismissible, mutable, and
+  revisit-able without creating Action Inbox work;
+- proposing a conclusion creates the explicit confirmation action, while only
+  the responsible participant may confirm and close the specialized child
+  branch;
+- generic parent-message conclusion is rejected for managed coordination
+  branches, preserving the single Room summary.
+
+Local evidence completed:
+
+- matcher coverage for normalization, compatible control, conflict, unknown,
+  same-owner, superseded, withdrawn, and stale Claims;
+- an MCP evaluation pair with two validated Agent bindings proves zero control
+  noise, one conflict case, replay safety, one canonical Thread, one Room
+  summary, in-place refresh, responsible-participant confirmation, and
+  relevance dismissal/revisit;
+- a clean disposable PostgreSQL database migrated from `0000` through `0037`;
+- normalized PostgreSQL persistence, multi-source provenance, signal
+  uniqueness, RLS, structured message metadata, in-place summary revision, and
+  idempotent child-branch closure passed integration tests;
+- repository TypeScript, Prettier, unit/API tests, production builds, and all
+  locally runnable PostgreSQL/worker integration suites passed.
+
+Release-shaped evidence completed on 2026-08-01:
+
+- `pnpm test:e2e:r1-r2` drives two authenticated users and two actual Agent
+  connections through the CLI, durable Worker, API, and browser. It proves the
+  compatible control stays completely quiet, the breaking change creates
+  exactly one contextual relevance surface and one canonical Coordination
+  branch, the confirmation action appears only after an explicit proposal,
+  and the responsible participant closes the branch while the same Room
+  summary is revised in place;
+- four reviewed browser captures preserve the compatible, conflict,
+  human-confirmed, and revised-source-Room states under
+  `output/playwright/r1-r2-coordination/`;
+- production-like run `intero-r0-20260731t210720z-67540` built immutable images
+  from the combined R0/R1/R2 branch, migrated a fresh PostgreSQL database
+  through `0037`, ran two API and two Worker replicas, passed API, Worker,
+  Centrifugo, and PostgreSQL failure recovery, and delivered 9,999 of 10,000
+  realtime clients with p95 170 ms and p99 175 ms;
+- the development stack now starts its configured deterministic Provider
+  together with the API and Web processes, so the acceptance path reaches the
+  durable Worker instead of failing with `MODEL_GATEWAY_UNAVAILABLE`.
+
+The roadmap gates remain evidence-gated rather than marked proven. One gate is
+still required before calling R1/R2 exited: a separately recorded external
+Provider canary through the durable Worker path. The restored pre-reset
+configuration snapshot contains no Provider record, no supported external
+Provider credential is present in the environment, and the deterministic
+Provider is intentionally rejected by the existing real-provider canary.
+Deterministic end-to-end evidence is complete; it is not being relabeled as
+external-provider evidence.
+
+The complete validation record and exact evidence boundary are in
+[`R1_R2_RELEASE_GATE_2026-08-01.md`](../validation/R1_R2_RELEASE_GATE_2026-08-01.md).
+
+## Starting code reality
+
+At plan creation, Intero already had useful parts of the loop:
 
 - `stand_in.report_checkpoint` accepts structured semantic Work State through
   the real MCP path.
@@ -42,7 +124,7 @@ Intero already has useful parts of the loop:
 - Action Inbox already supports deduplication, resolution, preferences, and
   browser delivery.
 
-The current path does **not** yet prove R1 or R2:
+The starting path did **not** yet prove R1 or R2:
 
 - Stand-in evaluation sees one checkpoint at a time and cannot compare two
   active Work States.

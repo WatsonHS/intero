@@ -4,8 +4,11 @@ import {
   type PilotAgentBinding,
   type PilotAgentTicket,
   type PilotCoordinationThread,
+  type PilotCoordinationRelevance,
+  type PilotCoordinationSource,
   type PilotDirectMessage,
   type PilotDirectMessageThread,
+  type PilotInteroRequest,
   type PilotJoinLink,
   type PilotOrganization,
   type PilotOrganizationMembership,
@@ -13,13 +16,16 @@ import {
   type PilotPrivateWorkState,
   type PilotProject,
   type PilotPulseEntry,
+  type PilotSharedBoundaryClaim,
   type PilotStandInExchange,
   type PilotTeam,
   type PilotTeamInvitation,
   type PilotTeamMembership,
   type PrincipalId,
+  type ProjectId,
   uuidv7,
 } from "@intero/domain";
+import { createHash } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 
 import {
@@ -27,6 +33,7 @@ import {
   type PilotMutationContext,
   type PilotSnapshot,
   type PilotStoredStandInJob,
+  type PilotWorkStateConflictSignal,
   SnapshotPilotStore,
   type PilotStoredProvider,
 } from "./pilot-store.js";
@@ -298,10 +305,21 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         .filter((claim) => claim.work_state_id === state.id)
         .map((claim) => claim.data),
     }));
+    snapshot.sharedBoundaryClaims =
+      await this.readDataRows<PilotSharedBoundaryClaim>(
+        client,
+        "pilot_shared_boundary_claims",
+        "observed_at, revision, id",
+      );
     snapshot.pulseEntries = await this.readDataRows<PilotPulseEntry>(
       client,
       "pilot_pulse_entries",
       "published_at, id",
+    );
+    snapshot.interoRequests = await this.readDataRows<PilotInteroRequest>(
+      client,
+      "pilot_intero_requests",
+      "created_at, id",
     );
 
     const coordination = await this.readDataRows<PilotCoordinationThread>(
@@ -319,12 +337,30 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
        ORDER BY thread_id, principal_id`,
       [this.organizationId],
     );
+    const coordinationProjects = await client.query<{
+      thread_id: string;
+      project_id: ProjectId;
+    }>(
+      `SELECT thread_id, project_id
+       FROM pilot_coordination_projects
+       WHERE organization_id = $1
+       ORDER BY thread_id, project_id`,
+      [this.organizationId],
+    );
     snapshot.coordinationThreads = coordination.map((thread) => ({
       ...thread,
+      projectIds: coordinationProjects.rows
+        .filter((project) => project.thread_id === thread.id)
+        .map((project) => project.project_id),
       participantIds: coordinationParticipants.rows
         .filter((participant) => participant.thread_id === thread.id)
         .map((participant) => participant.principal_id),
     }));
+    snapshot.coordinationSources = await this.readCoordinationSources(client);
+    snapshot.coordinationRelevance =
+      await this.readCoordinationRelevance(client);
+    snapshot.coordinationSignals =
+      await this.readWorkStateConflictSignals(client);
     snapshot.standInExchanges = await this.readDataRows<PilotStandInExchange>(
       client,
       "pilot_stand_in_exchanges",
@@ -359,6 +395,118 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
       [this.organizationId],
     );
     return result.rows.map((row) => row.data);
+  }
+
+  private async readCoordinationSources(
+    client: PoolClient,
+  ): Promise<PilotCoordinationSource[]> {
+    const result = await client.query<{
+      thread_id: string;
+      work_state_id: string;
+      claim_id: string;
+      owner_id: PrincipalId;
+      claim_revision: number;
+      observed_at: Date;
+    }>(
+      `SELECT thread_id, work_state_id, claim_id, owner_id, claim_revision,
+              observed_at
+       FROM pilot_coordination_sources
+       WHERE organization_id = $1
+       ORDER BY thread_id, claim_revision, claim_id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      coordinationThreadId: row.thread_id,
+      workStateId: row.work_state_id,
+      claimId: row.claim_id,
+      ownerId: row.owner_id,
+      claimRevision: row.claim_revision,
+      observedAt: row.observed_at.toISOString(),
+    }));
+  }
+
+  private async readCoordinationRelevance(
+    client: PoolClient,
+  ): Promise<PilotCoordinationRelevance[]> {
+    const result = await client.query<{
+      thread_id: string;
+      project_id: ProjectId;
+      source_room_thread_id: string | null;
+      principal_id: PrincipalId;
+      reason: string;
+      dismissed_at: Date | null;
+      muted_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT thread_id, project_id, source_room_thread_id, principal_id,
+              reason, dismissed_at, muted_at, created_at, updated_at
+       FROM pilot_coordination_relevance
+       WHERE organization_id = $1
+       ORDER BY created_at, thread_id, principal_id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      coordinationThreadId: row.thread_id,
+      projectId: row.project_id,
+      ...(row.source_room_thread_id
+        ? { sourceRoomThreadId: row.source_room_thread_id }
+        : {}),
+      principalId: row.principal_id,
+      reason: row.reason,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      ...(row.dismissed_at
+        ? { dismissedAt: row.dismissed_at.toISOString() }
+        : {}),
+      ...(row.muted_at ? { mutedAt: row.muted_at.toISOString() } : {}),
+    }));
+  }
+
+  private async readWorkStateConflictSignals(
+    client: PoolClient,
+  ): Promise<PilotWorkStateConflictSignal[]> {
+    const result = await client.query<{
+      id: string;
+      project_id: ProjectId;
+      status: PilotWorkStateConflictSignal["status"];
+      fingerprint: string;
+      source_ref: string;
+      safe_context: string;
+      candidate_next_steps: string[];
+      participant_ids: PrincipalId[];
+      coordination_thread_id: string | null;
+      detected_at: Date;
+      processed_at: Date | null;
+      updated_at: Date;
+    }>(
+      `SELECT id, project_id, status, fingerprint, source_ref, safe_context,
+              candidate_next_steps, participant_ids, coordination_thread_id,
+              detected_at, processed_at, updated_at
+       FROM project_automation_signals
+       WHERE organization_id = $1 AND kind = 'work_state_conflict'
+       ORDER BY detected_at, id`,
+      [this.organizationId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      kind: "work_state_conflict",
+      status: row.status,
+      fingerprint: row.fingerprint,
+      sourceRef: row.source_ref,
+      safeContext: row.safe_context,
+      candidateNextSteps: row.candidate_next_steps,
+      participantIds: row.participant_ids,
+      ...(row.coordination_thread_id
+        ? { coordinationThreadId: row.coordination_thread_id }
+        : {}),
+      detectedAt: row.detected_at.toISOString(),
+      ...(row.processed_at
+        ? { processedAt: row.processed_at.toISOString() }
+        : {}),
+      updatedAt: row.updated_at.toISOString(),
+    }));
   }
 
   private async persistSnapshot(
@@ -545,6 +693,7 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
     await this.persistAgents(client, snapshot);
     await this.persistWorkState(client, snapshot);
     await this.persistStandInJobs(client, snapshot);
+    await this.persistInteroRequests(client, snapshot);
     await this.persistCoordination(client, snapshot);
     await this.persistStandInExchanges(client, snapshot);
 
@@ -803,6 +952,40 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
         ],
       );
     }
+    for (const claim of snapshot.sharedBoundaryClaims) {
+      await client.query(
+        `INSERT INTO pilot_shared_boundary_claims
+          (id, organization_id, project_id, work_state_id, owner_id,
+           binding_id, checkpoint_client_event_id, boundary_key, revision,
+           observed_at, superseded_at, withdrawn_at, data, created_at,
+           updated_at)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+           $14, $15)
+         ON CONFLICT (id) DO UPDATE SET
+           superseded_at = EXCLUDED.superseded_at,
+           withdrawn_at = EXCLUDED.withdrawn_at,
+           data = EXCLUDED.data,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          claim.id,
+          this.organizationId,
+          claim.projectId,
+          claim.workStateId,
+          claim.ownerId,
+          claim.bindingId,
+          claim.checkpointClientEventId,
+          claim.key,
+          claim.revision,
+          claim.observedAt,
+          claim.supersededAt ?? null,
+          claim.withdrawnAt ?? null,
+          json(claim),
+          claim.createdAt,
+          claim.supersededAt ?? claim.withdrawnAt ?? claim.createdAt,
+        ],
+      );
+    }
     const expiryByState = new Map(
       snapshot.workStates.map((state) => [state.id, state.expiresAt]),
     );
@@ -908,10 +1091,23 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
     for (const thread of snapshot.coordinationThreads) {
       await client.query(
         `INSERT INTO pilot_coordination_threads
-          (id, organization_id, project_id, work_state_id, source_binding_id,
-           automation_signal_id, status, data, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          (id, organization_id, project_id, team_id, scope_kind, work_state_id,
+           source_binding_id, automation_signal_id, boundary_key, dedupe_key,
+           conversation_thread_id, source_room_thread_id, source_message_id,
+           summary_message_id, intero_principal_id, brief, decision_id, status,
+           data, created_at, updated_at)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+           $15, $16, $17, $18, $19, $20, $21)
          ON CONFLICT (id) DO UPDATE SET
+           team_id = COALESCE(
+             pilot_coordination_threads.team_id,
+             EXCLUDED.team_id
+           ),
+           scope_kind = COALESCE(
+             pilot_coordination_threads.scope_kind,
+             EXCLUDED.scope_kind
+           ),
            work_state_id = COALESCE(
              pilot_coordination_threads.work_state_id,
              EXCLUDED.work_state_id
@@ -924,6 +1120,39 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
              pilot_coordination_threads.automation_signal_id,
              EXCLUDED.automation_signal_id
            ),
+           boundary_key = COALESCE(
+             pilot_coordination_threads.boundary_key,
+             EXCLUDED.boundary_key
+           ),
+           dedupe_key = COALESCE(
+             pilot_coordination_threads.dedupe_key,
+             EXCLUDED.dedupe_key
+           ),
+           conversation_thread_id = COALESCE(
+             pilot_coordination_threads.conversation_thread_id,
+             EXCLUDED.conversation_thread_id
+           ),
+           source_room_thread_id = COALESCE(
+             pilot_coordination_threads.source_room_thread_id,
+             EXCLUDED.source_room_thread_id
+           ),
+           source_message_id = COALESCE(
+             pilot_coordination_threads.source_message_id,
+             EXCLUDED.source_message_id
+           ),
+           summary_message_id = COALESCE(
+             pilot_coordination_threads.summary_message_id,
+             EXCLUDED.summary_message_id
+           ),
+           intero_principal_id = COALESCE(
+             pilot_coordination_threads.intero_principal_id,
+             EXCLUDED.intero_principal_id
+           ),
+           brief = EXCLUDED.brief,
+           decision_id = COALESCE(
+             pilot_coordination_threads.decision_id,
+             EXCLUDED.decision_id
+           ),
            status = EXCLUDED.status,
            data = EXCLUDED.data,
            updated_at = EXCLUDED.updated_at`,
@@ -931,9 +1160,20 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
           thread.id,
           this.organizationId,
           thread.projectId,
+          thread.teamId ?? null,
+          thread.scopeKind ?? null,
           thread.workStateId ?? null,
           thread.sourceBindingId ?? null,
-          thread.automationSignalId ?? null,
+          null,
+          thread.boundaryKey ?? null,
+          thread.dedupeKey ?? null,
+          thread.conversationThreadId ?? null,
+          thread.sourceRoomThreadId ?? null,
+          thread.sourceMessageId ?? null,
+          thread.summaryMessageId ?? null,
+          thread.interoPrincipalId ?? null,
+          thread.brief ? json(thread.brief) : null,
+          thread.decisionId ?? null,
           thread.status,
           json(thread),
           thread.createdAt,
@@ -947,6 +1187,208 @@ export class NormalizedPostgresPilotStore extends SnapshotPilotStore {
            VALUES ($1, $2, $3)
            ON CONFLICT (thread_id, principal_id) DO NOTHING`,
           [this.organizationId, thread.id, principalId],
+        );
+      }
+      for (const projectId of thread.projectIds ?? [thread.projectId]) {
+        await client.query(
+          `INSERT INTO pilot_coordination_projects
+            (organization_id, thread_id, project_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (thread_id, project_id) DO NOTHING`,
+          [this.organizationId, thread.id, projectId],
+        );
+      }
+    }
+    for (const source of snapshot.coordinationSources) {
+      await client.query(
+        `INSERT INTO pilot_coordination_sources
+          (organization_id, thread_id, work_state_id, claim_id, owner_id,
+           claim_revision, observed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (thread_id, claim_id) DO NOTHING`,
+        [
+          this.organizationId,
+          source.coordinationThreadId,
+          source.workStateId,
+          source.claimId,
+          source.ownerId,
+          source.claimRevision,
+          source.observedAt,
+        ],
+      );
+    }
+    for (const relevance of snapshot.coordinationRelevance) {
+      await client.query(
+        `INSERT INTO pilot_coordination_relevance
+          (organization_id, thread_id, project_id, source_room_thread_id,
+           principal_id, reason, dismissed_at, muted_at, created_at,
+           updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (thread_id, principal_id) DO UPDATE SET
+           source_room_thread_id = EXCLUDED.source_room_thread_id,
+           reason = EXCLUDED.reason,
+           dismissed_at = EXCLUDED.dismissed_at,
+           muted_at = EXCLUDED.muted_at,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          this.organizationId,
+          relevance.coordinationThreadId,
+          relevance.projectId,
+          relevance.sourceRoomThreadId ?? null,
+          relevance.principalId,
+          relevance.reason,
+          relevance.dismissedAt ?? null,
+          relevance.mutedAt ?? null,
+          relevance.createdAt,
+          relevance.updatedAt,
+        ],
+      );
+    }
+    for (const signal of snapshot.coordinationSignals) {
+      await client.query(
+        `INSERT INTO project_automation_signals
+          (id, organization_id, project_id, kind, status, fingerprint,
+           source_ref, safe_context, candidate_next_steps, participant_ids,
+           target_ids, coordination_thread_id, detected_at, processed_at,
+           updated_at)
+         VALUES
+          ($1, $2, $3, 'work_state_conflict', $4, $5, $6, $7, $8, $9,
+           '{}'::uuid[], $10, $11, $12, $13)
+         ON CONFLICT (organization_id, project_id, fingerprint) DO UPDATE SET
+           status = EXCLUDED.status,
+           safe_context = EXCLUDED.safe_context,
+           candidate_next_steps = EXCLUDED.candidate_next_steps,
+           participant_ids = EXCLUDED.participant_ids,
+           coordination_thread_id = COALESCE(
+             project_automation_signals.coordination_thread_id,
+             EXCLUDED.coordination_thread_id
+           ),
+           processed_at = COALESCE(
+             project_automation_signals.processed_at,
+             EXCLUDED.processed_at
+           ),
+           updated_at = EXCLUDED.updated_at`,
+        [
+          signal.id,
+          this.organizationId,
+          signal.projectId,
+          signal.status,
+          signal.fingerprint,
+          signal.sourceRef,
+          signal.safeContext,
+          json(signal.candidateNextSteps),
+          signal.participantIds,
+          signal.coordinationThreadId ?? null,
+          signal.detectedAt,
+          signal.processedAt ?? null,
+          signal.updatedAt,
+        ],
+      );
+    }
+    for (const thread of snapshot.coordinationThreads) {
+      if (!thread.automationSignalId) continue;
+      await client.query(
+        `UPDATE pilot_coordination_threads
+         SET automation_signal_id = $3,
+             updated_at = $4
+         WHERE organization_id = $1 AND id = $2`,
+        [
+          this.organizationId,
+          thread.id,
+          thread.automationSignalId,
+          thread.updatedAt,
+        ],
+      );
+    }
+  }
+
+  private async persistInteroRequests(
+    client: PoolClient,
+    snapshot: PilotSnapshot,
+  ): Promise<void> {
+    for (const request of snapshot.interoRequests) {
+      await client.query(
+        `INSERT INTO pilot_intero_requests
+          (id, organization_id, team_id, source_room_thread_id,
+           source_message_id, requested_by_principal_id, intero_principal_id,
+           status, scope_revision, response_message_id,
+           coordination_thread_id, last_error_code, data, created_at,
+           updated_at)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+           $15)
+         ON CONFLICT (id) DO UPDATE SET
+           status = EXCLUDED.status,
+           scope_revision = EXCLUDED.scope_revision,
+           response_message_id = COALESCE(
+             pilot_intero_requests.response_message_id,
+             EXCLUDED.response_message_id
+           ),
+           coordination_thread_id = COALESCE(
+             pilot_intero_requests.coordination_thread_id,
+             EXCLUDED.coordination_thread_id
+           ),
+           last_error_code = EXCLUDED.last_error_code,
+           data = EXCLUDED.data,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          request.id,
+          this.organizationId,
+          request.teamId,
+          request.sourceRoomThreadId,
+          request.sourceMessageId,
+          request.requestedByPrincipalId,
+          request.interoPrincipalId,
+          request.status,
+          request.scopeRevision,
+          request.responseMessageId ?? null,
+          request.coordinationThreadId ?? null,
+          request.lastErrorCode ?? null,
+          json(request),
+          request.createdAt,
+          request.updatedAt,
+        ],
+      );
+
+      const operationId = interoRequestOperationId(
+        request.id,
+        request.scopeRevision,
+      );
+      if (request.status === "pending") {
+        await client.query(
+          `INSERT INTO outbox
+            (operation_id, organization_id, topic, payload, attempts,
+             available_at)
+           VALUES ($1, $2, 'pilot.intero.enqueue', $3, 0, $4)
+           ON CONFLICT (operation_id) DO UPDATE SET
+             completed_at = NULL,
+             available_at = LEAST(outbox.available_at, EXCLUDED.available_at),
+             last_error_code = NULL`,
+          [
+            operationId,
+            this.organizationId,
+            json({
+              schemaVersion: 1,
+              organizationId: this.organizationId,
+              requestId: request.id,
+              scopeRevision: request.scopeRevision,
+            }),
+            request.updatedAt,
+          ],
+        );
+      } else if (request.status === "answered" || request.status === "failed") {
+        await client.query(
+          `UPDATE outbox
+           SET completed_at = COALESCE(completed_at, now()),
+               last_error_code = $3
+           WHERE organization_id = $1
+             AND operation_id = $2
+             AND topic = 'pilot.intero.enqueue'`,
+          [
+            this.organizationId,
+            operationId,
+            request.status === "failed" ? request.lastErrorCode : null,
+          ],
         );
       }
     }
@@ -1106,12 +1548,19 @@ function collectPrincipalIds(snapshot: PilotSnapshot): Set<PrincipalId> {
   for (const ticket of snapshot.agentTickets) ids.add(ticket.ownerId);
   for (const binding of snapshot.agentBindings) ids.add(binding.ownerId);
   for (const state of snapshot.workStates) ids.add(state.ownerId);
+  for (const claim of snapshot.sharedBoundaryClaims) ids.add(claim.ownerId);
   for (const entry of snapshot.pulseEntries) ids.add(entry.ownerId);
   for (const thread of snapshot.coordinationThreads) {
     for (const participantId of thread.participantIds) ids.add(participantId);
     if (thread.responsibleParticipantId)
       ids.add(thread.responsibleParticipantId);
   }
+  for (const request of snapshot.interoRequests) {
+    ids.add(request.requestedByPrincipalId);
+    ids.add(request.interoPrincipalId);
+  }
+  for (const relevance of snapshot.coordinationRelevance)
+    ids.add(relevance.principalId);
   for (const exchange of snapshot.standInExchanges)
     ids.add(exchange.principalId);
   return ids;
@@ -1119,4 +1568,21 @@ function collectPrincipalIds(snapshot: PilotSnapshot): Set<PrincipalId> {
 
 function json(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function interoRequestOperationId(
+  requestId: string,
+  scopeRevision: number,
+): string {
+  const value = createHash("sha256")
+    .update(`pilot-intero-request:${requestId}:${scopeRevision}`)
+    .digest("hex")
+    .slice(0, 32);
+  return [
+    value.slice(0, 8),
+    value.slice(8, 12),
+    `5${value.slice(13, 16)}`,
+    `8${value.slice(17, 20)}`,
+    value.slice(20),
+  ].join("-");
 }

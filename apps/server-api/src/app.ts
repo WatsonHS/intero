@@ -11,6 +11,7 @@ import {
   CreateSpecRequest,
   CreateSpecRevisionRequest,
   ConcludeThreadRequest,
+  CorrectInteroScopeRequest,
   CreateThreadRequest,
   CreateWorkstreamRequest,
   CursorQuery,
@@ -30,6 +31,7 @@ import {
 } from "@intero/config";
 import {
   personalStandInId,
+  roomInteroPrincipalId,
   ThreadKind,
   type MessageId,
   type KanbanCard,
@@ -65,7 +67,15 @@ import {
 } from "./action-inbox-events.js";
 import { registerAutomationRoutes } from "./automation-routes.js";
 import { PostgresAutomationStore } from "./automation-store.js";
+import { CoordinationKernel } from "./coordination-kernel.js";
 import { PostgresInformationStore } from "./information-store.js";
+import {
+  type InteroRequestJobRunner,
+  InlineInteroRequestJobRunner,
+  PilotInteroRequestProcessor,
+  PilotInteroRequestService,
+  TransactionalInteroRequestJobRunner,
+} from "./intero-request-service.js";
 import {
   InMemoryPilotStore,
   type PilotStore,
@@ -170,6 +180,7 @@ export interface BuildAppOptions {
   pilotCoordination?: CoordinationTransport;
   pilotModelGateway?: ModelGateway;
   pilotJobs?: JobRunnerPort<PilotStandInJob>;
+  interoRequestJobs?: InteroRequestJobRunner;
   readinessDependencies?: ReadinessDependency[];
   metrics?: PrivacySafeMetrics | false;
   realtimeConfig?: {
@@ -307,11 +318,13 @@ export async function buildApp(
     metrics && !(rawPilotModelGateway instanceof InstrumentedModelGateway)
       ? new InstrumentedModelGateway(rawPilotModelGateway, metrics)
       : rawPilotModelGateway;
+  const coordinationKernel = new CoordinationKernel(pilotStore, store);
   const standInJobHandler = new PilotStandInJobHandler(
     pilotStore,
     pilotAuthorization,
     pilotModelGateway,
     pilotCoordination,
+    coordinationKernel,
   );
   const pilotJobs =
     options.pilotJobs ??
@@ -319,6 +332,24 @@ export async function buildApp(
   const pilotCheckpointService = new PilotCheckpointService(
     pilotStore,
     pilotJobs,
+  );
+  const interoRequestProcessor = new PilotInteroRequestProcessor(
+    pilotStore,
+    store,
+    coordinationKernel,
+    pilotModelGateway,
+  );
+  const interoRequestJobs =
+    options.interoRequestJobs ??
+    (pilotJobs instanceof TransactionalOutboxJobRunner
+      ? new TransactionalInteroRequestJobRunner()
+      : new InlineInteroRequestJobRunner((reference) =>
+          interoRequestProcessor.handle(reference),
+        ));
+  const interoRequests = new PilotInteroRequestService(
+    pilotStore,
+    store,
+    interoRequestJobs,
   );
   app.decorate("interoStore", store);
   await app.register(cors, {
@@ -435,6 +466,7 @@ export async function buildApp(
     providerSecretCipher,
     checkpointService: pilotCheckpointService,
     coordination: pilotCoordination,
+    coordinationKernel,
     modelGateway: pilotModelGateway,
     adapters: {
       ...(realtimeEnabled ? { realtime: "centrifugo" as const } : {}),
@@ -1024,9 +1056,21 @@ export async function buildApp(
       );
       if (!canAccessParent) return notFound(reply, "Parent Thread");
     }
+    const thread = { ...input, sequence: 0 };
+    if (thread.kind === "room" && thread.accessMode === "agent_readable") {
+      const interoPrincipalId = roomInteroPrincipalId(thread.id);
+      await store.upsertPrincipal({
+        id: interoPrincipalId,
+        displayName: "Intero",
+        kind: "service",
+      });
+      thread.participantIds = [
+        ...new Set([...thread.participantIds, interoPrincipalId]),
+      ];
+    }
     return reply
       .status(201)
-      .send(await store.createThread({ ...input, sequence: 0 }, principal!.id));
+      .send(await store.createThread(thread, principal!.id));
   });
 
   app.get("/v1/threads", async (request) => {
@@ -1037,7 +1081,17 @@ export async function buildApp(
       }),
       request.query,
     );
-    const items = await store.listThreads(query.kind, viewer!.id);
+    let items = await store.listThreads(query.kind, viewer!.id);
+    await Promise.all(
+      items
+        .filter(
+          (item) =>
+            item.thread.kind === "room" &&
+            item.thread.accessMode === "agent_readable",
+        )
+        .map((item) => ensureRoomIntero(store, item.thread.id)),
+    );
+    items = await store.listThreads(query.kind, viewer!.id);
     const reads = new Map(
       (await store.listThreadReads(viewer!.id)).map((entry) => [
         entry.threadId as string,
@@ -1096,6 +1150,19 @@ export async function buildApp(
         principal!.id,
       );
       if (!visible) return notFound(reply, "Thread");
+      const managedCoordination =
+        await pilotStore.findCoordinationByConversationThread(
+          request.params.threadId,
+        );
+      if (managedCoordination) {
+        return reply.status(409).send({
+          error: {
+            code: "managed_coordination_requires_confirmation",
+            message:
+              "This coordination branch must be concluded through its responsible-participant confirmation flow.",
+          },
+        });
+      }
       try {
         const result = await store.concludeThreadIntoParent({
           threadId: request.params.threadId as ThreadId,
@@ -1126,6 +1193,13 @@ export async function buildApp(
     async (request, reply) => {
       const principal = await requestAuth.resolve(request);
       const threadId = request.params.threadId as ThreadId;
+      const visible = await store.getThread(threadId, principal!.id);
+      if (
+        visible?.thread.kind === "room" &&
+        visible.thread.accessMode === "agent_readable"
+      ) {
+        await ensureRoomIntero(store, threadId);
+      }
       const result = await store.getThread(threadId, principal!.id);
       if (!result) return notFound(reply, "Thread");
       const reads = new Map(
@@ -1228,32 +1302,79 @@ export async function buildApp(
         principal!.id,
       );
       if (!visible) return notFound(reply, "Thread");
-      return reply.status(201).send(
-        await store.appendMessage(request.params.threadId as ThreadId, {
-          id: input.clientMessageId as Parameters<
-            PlatformStore["appendMessage"]
-          >[1]["id"],
-          senderId: principal!.id,
-          ...(input.body !== undefined ? { body: input.body } : {}),
-          ...(input.encryptedBody !== undefined
-            ? { encryptedBody: input.encryptedBody }
-            : {}),
-          mentionedPrincipalIds: input.mentionedPrincipalIds as PrincipalId[],
-          attachmentIds: input.attachmentIds as NonNullable<
-            Parameters<PlatformStore["appendMessage"]>[1]["attachmentIds"]
-          >,
-          ...(input.replyToMessageId
-            ? {
-                replyToMessageId: input.replyToMessageId as NonNullable<
-                  Parameters<
-                    PlatformStore["appendMessage"]
-                  >[1]["replyToMessageId"]
-                >,
-              }
-            : {}),
-          createdAt: new Date().toISOString(),
+      const threadId = request.params.threadId as ThreadId;
+      const thread = await store.getThread(threadId, principal!.id);
+      if (thread?.thread.kind === "room") {
+        const interoPrincipalId = roomInteroPrincipalId(threadId);
+        if (
+          thread.thread.accessMode === "human_only_e2ee" &&
+          input.mentionedPrincipalIds.includes(interoPrincipalId)
+        ) {
+          throw new PilotStoreError(
+            "INTERO_ROOM_ACCESS_UNSUPPORTED",
+            409,
+            "Intero is unavailable until this Room is changed to Agent-readable access.",
+          );
+        }
+        if (thread.thread.accessMode === "agent_readable") {
+          await ensureRoomIntero(store, threadId);
+        }
+      }
+      const message = await store.appendMessage(threadId, {
+        id: input.clientMessageId as Parameters<
+          PlatformStore["appendMessage"]
+        >[1]["id"],
+        senderId: principal!.id,
+        ...(input.body !== undefined ? { body: input.body } : {}),
+        ...(input.encryptedBody !== undefined
+          ? { encryptedBody: input.encryptedBody }
+          : {}),
+        mentionedPrincipalIds: input.mentionedPrincipalIds as PrincipalId[],
+        attachmentIds: input.attachmentIds as NonNullable<
+          Parameters<PlatformStore["appendMessage"]>[1]["attachmentIds"]
+        >,
+        ...(input.replyToMessageId
+          ? {
+              replyToMessageId: input.replyToMessageId as NonNullable<
+                Parameters<
+                  PlatformStore["appendMessage"]
+                >[1]["replyToMessageId"]
+              >,
+            }
+          : {}),
+        createdAt: new Date().toISOString(),
+      });
+      const interoPrincipalId = roomInteroPrincipalId(threadId);
+      if (
+        thread?.thread.kind === "room" &&
+        thread.thread.accessMode === "agent_readable" &&
+        message.mentionedPrincipalIds?.includes(interoPrincipalId)
+      ) {
+        await interoRequests.requestFromMessage({
+          roomThreadId: threadId,
+          sourceMessage: message,
+          requestedByPrincipalId: principal!.id,
+          interoPrincipalId,
+          now: new Date().toISOString(),
+        });
+      }
+      return reply.status(201).send(message);
+    },
+  );
+
+  app.post<{ Params: { requestId: string } }>(
+    "/v1/intero-requests/:requestId/scope",
+    async (request) => {
+      const principal = await requestAuth.resolve(request);
+      const input = CorrectInteroScopeRequest.parse(request.body);
+      return {
+        request: await interoRequests.correctScope({
+          requestId: request.params.requestId,
+          principalId: principal!.id,
+          projectIds: input.projectIds as ProjectId[],
+          now: new Date().toISOString(),
         }),
-      );
+      };
     },
   );
 
@@ -1446,6 +1567,18 @@ export async function buildApp(
   });
 
   return app;
+}
+
+async function ensureRoomIntero(
+  store: PlatformStore,
+  threadId: ThreadId,
+): Promise<void> {
+  const id = roomInteroPrincipalId(threadId);
+  await store.ensureRoomServicePrincipal(threadId, {
+    id,
+    displayName: "Intero",
+    kind: "service",
+  });
 }
 
 async function presentThread(

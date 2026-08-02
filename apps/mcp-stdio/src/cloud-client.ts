@@ -2,6 +2,7 @@ import {
   PILOT_AGENT_CONFIGURATION_VERSION,
   type PilotAgentClient,
   type PilotCheckpointEventType,
+  type PilotSharedBoundaryInput,
   type PilotWorkNarrative,
   type PreferredLanguage,
   type WorkstreamPhase,
@@ -77,6 +78,7 @@ export interface CloudCheckpointInput {
   workstreamKey?: string | undefined;
   workstreamTitle?: string | undefined;
   phase?: WorkstreamPhase | undefined;
+  sharedBoundaries?: PilotSharedBoundaryInput[] | undefined;
 }
 
 export class CloudPilotClient {
@@ -195,19 +197,11 @@ export class CloudPilotClient {
         },
       },
     });
-    const resultBody = body as {
-      result?: { content?: Array<{ type?: string; text?: string }> };
-    };
-    const text = resultBody.result?.content?.find(
-      (item) => item.type === "text",
-    )?.text;
-    const result = text
-      ? (JSON.parse(text) as {
-          status?: string;
-          mcpConnected?: boolean;
-          configurationCurrent?: boolean;
-        })
-      : undefined;
+    const result = parseMcpToolResult<{
+      status?: string;
+      mcpConnected?: boolean;
+      configurationCurrent?: boolean;
+    }>(body, "Connection validation");
     const validationComplete =
       result?.status === "connected" ||
       (result?.status === "lifecycle_pending" &&
@@ -218,6 +212,19 @@ export class CloudPilotClient {
     }
     this.verificationCode = undefined;
     return result;
+  }
+
+  async currentContext(): Promise<unknown> {
+    const body = await this.mcpRequest({
+      jsonrpc: "2.0",
+      id: `current-context-${randomUUID()}`,
+      method: "tools/call",
+      params: {
+        name: "stand_in.current_context",
+        arguments: {},
+      },
+    });
+    return parseMcpToolResult(body, "Current context");
   }
 
   private async mcpRequest(request: Record<string, unknown>): Promise<unknown> {
@@ -308,6 +315,7 @@ export class CloudPilotClient {
       },
       narrative: input.narrative,
       evidenceRefs: input.evidenceRefs ?? [],
+      sharedBoundaries: input.sharedBoundaries ?? [],
     };
 
     await this.flush();
@@ -402,6 +410,26 @@ export class CloudPilotClient {
       );
     }
     return body;
+  }
+}
+
+function parseMcpToolResult<T = unknown>(body: unknown, operation: string): T {
+  const resultBody = body as {
+    result?: {
+      isError?: boolean;
+      content?: Array<{ type?: string; text?: string }>;
+    };
+  };
+  const text = resultBody.result?.content?.find(
+    (item) => item.type === "text",
+  )?.text;
+  if (!text || resultBody.result?.isError) {
+    throw new Error(`${operation} did not return a valid MCP tool result.`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${operation} returned invalid JSON.`);
   }
 }
 

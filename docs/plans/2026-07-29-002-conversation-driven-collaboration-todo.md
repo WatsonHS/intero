@@ -10,6 +10,7 @@ date: 2026-07-29
 Roadmap placement and the code-level delivery design are maintained in:
 
 - [Intero product roadmap](../PRODUCT_ROADMAP.md)
+- [Golden Case: Team-room conversation to cross-project coordination](../GOLDEN_CASE.md)
 - [R1/R2 coordination-kernel implementation plan](2026-07-31-001-r1-r2-coordination-kernel-implementation-plan.md)
 
 ## Product hypothesis
@@ -18,6 +19,41 @@ Existing collaboration tools preserve messages, while project tools preserve
 tasks. People still have to notice when a conversation has become real work,
 find the affected participants, move context between tools, maintain a shared
 understanding, and carry the conclusion back to the team.
+
+Conversation is not only where coordination happens after a conflict. It is a
+first-class source of human intent, observed problems, disagreement, proposed
+decisions, and unresolved questions. Agent Work State is a second source that
+describes execution intent, affected boundaries, dependencies, and claimed
+validation. Intero should relate both to technical and validation evidence:
+
+```text
+authorized team conversation ─┐
+                              ├→ coordination and project reality
+structured Agent Work State ──┤
+repository, test, CI, runtime ─┘
+```
+
+These sources have different authority. Conversation can reveal a candidate
+Bug or decision, but does not prove implementation state. Agent Work State is a
+structured claim, not independent validation. Repository and test evidence can
+show what changed or passed, but not whether the team accepts a commitment.
+Consequential priority, ownership, approval, scheduling, and external promises
+remain human-confirmed.
+
+The user-facing Agent model is deliberately smaller than the internal scope
+model:
+
+- each person has a personal Stand-in for “me” and private context;
+- each shared Room has Intero for “us” and authorized shared reality;
+- external Coding Agents execute work;
+- Project contexts are routed behind Intero rather than exposed as separate
+  bots that a person must choose between.
+
+In a Team Room containing several Projects, people mention only `@Intero`.
+Intero infers whether a discussion concerns one Project, several Projects, the
+Team itself, or remains ambiguous. That inference cannot widen visibility. An
+ambiguous case asks for one lightweight clarification and creates no automatic
+coordination work until the scope is safe enough to use.
 
 In an AI-native collaboration model, Intero should help turn authorized
 conversation and Agent Work State into bounded coordination:
@@ -35,6 +71,30 @@ work becomes related or contradictory
 The goal is not to make chat noisier or let an Agent manage the team
 autonomously. The goal is to shorten coordination latency while keeping
 authority, attention, privacy, and final commitments with people.
+
+The longer-term product direction is not a chat application with AI features,
+nor a tracker that requires people to restate their work. It is an AI-native
+software-engineering and project-management platform where useful project
+reality can emerge from actual conversation, execution, decisions, and
+evidence. The bounded coordination loop is the first mechanism to prove.
+
+## Human-readable coordination contract
+
+AI output must reduce understanding cost, not merely message count. Every
+human-facing coordination brief should disclose detail progressively:
+
+1. **Understand in seconds:** what happened, why it matters, why it may be
+   relevant to this person, and whether any action is required.
+2. **Resolve the issue:** the conflicting work, unresolved question, available
+   choices, and current working conclusion.
+3. **Inspect the evidence:** exact APIs, fields, modules, revisions, sources,
+   freshness, confidence, tests, and remaining uncertainty.
+
+The first layer uses plain language while retaining exact technical names as
+anchors. The product must visually and semantically distinguish source facts,
+model interpretation, suggestions, and human-confirmed conclusions. Internal
+ontology such as Claim matching may power the result, but should not be the
+vocabulary a person must decode to understand it.
 
 ## Primary validation scenario: two people create a real conflict
 
@@ -54,8 +114,9 @@ and no seeded Coordination records.
 
 1. Both Coding Agents publish normal structured Work State through the
    canonical MCP path.
-2. The Stand-in detects that the two active efforts share an affected contract
-   and contain incompatible assumptions.
+2. Intero correlates the shareable Work State from the personal Stand-ins and
+   detects that the two active efforts share an affected contract and contain
+   incompatible assumptions.
 3. Intero creates or reuses exactly one Project-scoped temporary Coordination
    Thread. It explains the possible conflict, cites the safe source Work State,
    identifies the unresolved contract choice, and proposes next steps.
@@ -95,6 +156,14 @@ and no seeded Coordination records.
 
 ### Temporary discussion entry
 
+- [ ] Treat authorized Room conversation as a first-class signal source rather
+      than only a destination for generated coordination.
+- [ ] Let a person mention only `@Intero`; do not require knowledge of a
+      Project-specific Agent identity.
+- [ ] Infer single-Project, cross-Project, Team-level, or ambiguous scope and
+      show the inferred scope in a correctable form.
+- [ ] Ask for one lightweight clarification when scope is materially ambiguous;
+      do not create a Thread, Inbox item, or authoritative Project relation yet.
 - [ ] Detect explicit references to a Spec, Work Item, Bug, User Story,
       Decision, code boundary, or other supported Project object.
 - [ ] Detect semantic triggers such as a contradiction, blocker, dependency,
@@ -117,6 +186,11 @@ and no seeded Coordination records.
 - [ ] Show a subtle freshness indicator when the summary changes.
 - [ ] Summarize current conclusion, unresolved question, affected people, and
       whether anyone needs to act.
+- [ ] Lead with a plain-language account of the event and impact, with exact
+      technical details and evidence available through expansion rather than in
+      the default Room summary.
+- [ ] Distinguish facts, model interpretation, suggestions, and confirmed
+      conclusions instead of blending them into one narrative.
 - [ ] Publish a final structured result into the same entry when the discussion
       closes.
 - [ ] Keep full realtime summarization inside the temporary discussion rather
@@ -137,6 +211,9 @@ and no seeded Coordination records.
 
 ### Inside the temporary discussion
 
+- [ ] Keep a compact brief visible with `what happened`, `why it matters`,
+      `question to resolve`, and `action required`, before deeper technical
+      evidence.
 - [ ] Maintain a quiet working summary of facts, interpretations, decisions,
       action items, and unresolved questions.
 - [ ] Suggest participants but explain why each person may be relevant.
@@ -235,5 +312,11 @@ Continue that work in
       Room, and affected work context without contradictory state.
 - [ ] An evaluator can explain the conflict, resolution, responsible human
       actions, and remaining uncertainty without reading private Agent context.
+- [ ] An affected person can understand what happened, why it matters, and
+      whether they need to act from the compact brief without asking another
+      person to translate internal jargon.
+- [ ] Expanding the brief reveals the exact shared boundary, sources, evidence,
+      freshness, uncertainty, and human-confirmed outcome without changing the
+      plain-language account.
 - [ ] Authorization, privacy, provenance, idempotency, and human-authority
       failures remain hard failures regardless of usability score.

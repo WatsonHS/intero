@@ -1,4 +1,6 @@
-import type { PrincipalId } from "@intero/domain";
+import type { PilotCoordinationThread, PrincipalId } from "@intero/domain";
+
+import type { ConfirmedCoordinationContext } from "./pilot-ports.js";
 
 export function normalizeStandInQuestion(input: {
   question: string;
@@ -41,4 +43,39 @@ export function isStandInOwnerAsking(
   askedByPrincipalId: PrincipalId,
 ): boolean {
   return standInOwnerId === askedByPrincipalId;
+}
+
+export function confirmedCoordinationContext(
+  threads: PilotCoordinationThread[],
+  standInOwnerId: PrincipalId,
+): ConfirmedCoordinationContext[] {
+  return threads.flatMap((thread) => {
+    const decision = thread.brief?.humanDecision;
+    const decidedBy =
+      decision?.decidedBy ??
+      (thread.responsibleParticipantId
+        ? [thread.responsibleParticipantId]
+        : []);
+    if (
+      thread.status !== "resolved" ||
+      !thread.decisionId ||
+      !thread.conclusion ||
+      !thread.confirmedAt ||
+      decidedBy.length === 0 ||
+      !thread.participantIds.includes(standInOwnerId)
+    ) {
+      return [];
+    }
+    return [
+      {
+        coordinationThreadId: thread.id,
+        decisionId: thread.decisionId,
+        projectIds: thread.projectIds ?? [thread.projectId],
+        ...(thread.boundaryKey ? { boundaryKey: thread.boundaryKey } : {}),
+        outcome: thread.conclusion,
+        decidedBy,
+        confirmedAt: thread.confirmedAt,
+      },
+    ];
+  });
 }

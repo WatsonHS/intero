@@ -113,6 +113,16 @@ jobs:
         env:
           INTERO_E2E_RENDERER_URL: http://localhost:5173
           INTERO_E2E_API_URL: http://localhost:4310
+      - name: Browser acceptance — R1/R2 coordination
+        run: pnpm test:e2e:r1-r2
+        env:
+          INTERO_E2E_RENDERER_URL: http://localhost:5173
+          INTERO_E2E_API_URL: http://localhost:4310
+      - name: Browser acceptance — Golden Case
+        run: pnpm test:e2e:golden-case
+        env:
+          INTERO_E2E_RENDERER_URL: http://localhost:5173
+          INTERO_E2E_API_URL: http://localhost:4310
       - name: Browser acceptance — Agent connection
         run: pnpm test:e2e:agent-connection
         env:

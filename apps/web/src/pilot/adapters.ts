@@ -162,7 +162,8 @@ export function pilotCoordinationToThreadPayload(
   const suggestionSenderId =
     (standIn?.id as PrincipalId | undefined) ?? sourceId;
   const operationId = coordination.id as OperationId;
-  const threadId = coordination.id as ThreadId;
+  const threadId = (coordination.conversationThreadId ??
+    coordination.id) as ThreadId;
   const sourceMessageId =
     coordination.workStateId ??
     coordination.automationSignalId ??
@@ -259,6 +260,7 @@ export function pilotCoordinationToThreadPayload(
 export function pilotCoordinationTitle(
   trigger: PilotCoordinationThread["trigger"],
 ): string {
+  if (trigger === "work_state_conflict") return "共享边界冲突";
   if (trigger === "dependency_declared") return "依赖协助";
   if (trigger === "blocker_raised") return "工作阻塞";
   if (trigger === "review_requested") return "等待评审";
@@ -268,6 +270,7 @@ export function pilotCoordinationTitle(
 function pilotCoordinationAction(
   trigger: PilotCoordinationThread["trigger"],
 ): ThreadPayload["actions"][number]["envelope"]["action"] {
+  if (trigger === "work_state_conflict") return "conflict_notice";
   if (trigger === "dependency_declared") return "dependency_request";
   if (trigger === "blocker_raised") return "conflict_notice";
   return "coordination_request";

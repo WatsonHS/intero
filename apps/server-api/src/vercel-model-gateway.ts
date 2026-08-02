@@ -1,4 +1,5 @@
 import {
+  PilotInteroProse,
   PilotStandInAnswer,
   PilotStandInOutput,
   type PilotStandInAnswer as PilotStandInAnswerValue,
@@ -8,6 +9,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, Output, streamText } from "ai";
 
 import type {
+  InteroProseInput,
   ModelGateway,
   StandInModelInput,
   StandInQuestionInput,
@@ -36,6 +38,7 @@ const BASE_QUESTION_SYSTEM_INSTRUCTIONS = [
   "Work State is optional retrieval context, not a prerequisite for conversation.",
   "In both project and unscoped conversations, respond naturally to greetings, social conversation, and requests that do not require unsupported claims about the represented human.",
   "When conversationScope.mode is project, answer project-fact questions only from the supplied safe structured summaries.",
+  "Confirmed coordination decisions are separate human-approved shared context. You may use only entries in safeConfirmedCoordination and must not present proposals or unconfirmed conclusions as decisions.",
   "When conversationScope.mode is unscoped, converse naturally as the represented human's Stand-in, but never invent the represented human's facts, opinions, commitments, priorities, or work status. Ask for safe context when one of those is needed.",
   "Do not infer missing facts, secrets, raw prompts, file contents, diffs, terminal output, tool logs, personal data, priorities, or commitments.",
   "An empty safeStructuredSources array is valid. Continue the conversation without claiming unsupported facts. Explain that no relevant structured Work State is available only when the question requires project or represented-human facts, and return an empty sourceWorkStateIds array.",
@@ -45,6 +48,16 @@ const BASE_QUESTION_SYSTEM_INSTRUCTIONS = [
   "Return the workStateId of every summary that directly supports the answer and no unsupported source IDs.",
   "Keep every field concise and make uncertainty explicit.",
   'Return exactly one JSON object with all required fields at these exact paths: {"answer":"concise direct conclusion","currentStatus":"string","completedOutcome":"string or empty","evidence":["concrete safe evidence"],"nextStep":"string or empty","neededCollaboration":"string or empty","sourceWorkStateIds":["supplied-work-state-id"]}.',
+].join(" ");
+
+const BASE_INTERO_PROSE_SYSTEM_INSTRUCTIONS = [
+  "You write bounded, plain-language prose for Intero coordination.",
+  "The supplied scope, classification, boundary, evidence, and facts are already authorization-filtered and deterministic.",
+  "Explain them without changing scope, adding Projects, reclassifying the result, inventing facts, or making commitments.",
+  "Keep scope explanation separate from what changed, why it matters, and what a human needs to do.",
+  "Do not repeat opaque IDs, timestamps, revisions, provider details, prompts, or provenance metadata in human-facing prose.",
+  "If the evidence is insufficient, state that uncertainty directly. If it is compatible, do not imply that coordination work is required.",
+  'Return exactly one JSON object with all required fields at these exact paths: {"headline":"string","scopeExplanation":"string","whatChanged":"string","whyItMatters":"string","needsFromYou":"string"}.',
 ].join(" ");
 
 export function standInSystemInstructions(
@@ -65,6 +78,16 @@ export function standInQuestionSystemInstructions(
       ? "Answer every human-readable output field in Simplified Chinese (zh-CN), regardless of the language used in individual source records. Keep code identifiers and proper nouns unchanged when necessary."
       : "Answer every human-readable output field in English (en-US), regardless of the language used in individual source records.";
   return `${BASE_QUESTION_SYSTEM_INSTRUCTIONS} ${languageInstruction}`;
+}
+
+export function interoProseSystemInstructions(
+  preferredLanguage: "zh-CN" | "en-US",
+): string {
+  const languageInstruction =
+    preferredLanguage === "zh-CN"
+      ? "Write every field in Simplified Chinese (zh-CN). Keep code identifiers and proper nouns unchanged when needed."
+      : "Write every field in English (en-US).";
+  return `${BASE_INTERO_PROSE_SYSTEM_INSTRUCTIONS} ${languageInstruction}`;
 }
 
 function usePortableJsonObjectMode(
@@ -167,6 +190,42 @@ export class VercelAiModelGateway implements ModelGateway {
     } catch {
       throw new ModelGatewayUnavailableError(
         "The configured AI provider did not return a valid safe Stand-in output.",
+      );
+    }
+  }
+
+  async generateInteroProse(
+    input: InteroProseInput,
+  ): Promise<PilotInteroProse> {
+    const configuration = await this.loadConfiguration();
+    const provider = createOpenAICompatible({
+      name: "intero-admin-provider",
+      baseURL: configuration.endpoint,
+      apiKey: configuration.apiKey,
+      supportsStructuredOutputs: true,
+      transformRequestBody: usePortableJsonObjectMode,
+    });
+
+    try {
+      const result = await generateText({
+        model: provider.chatModel(configuration.defaultModel),
+        system: interoProseSystemInstructions(input.preferredLanguage),
+        prompt: interoProsePrompt(input),
+        output: Output.object({
+          schema: PilotInteroProse,
+          name: "intero_coordination_prose",
+          description:
+            "Authorization-bounded prose that explains one deterministic Intero evaluation.",
+        }),
+        maxOutputTokens: 500,
+        temperature: 0.1,
+        maxRetries: 1,
+        timeout: 10_000,
+      });
+      return PilotInteroProse.parse(result.output);
+    } catch {
+      throw new ModelGatewayUnavailableError(
+        "The configured AI provider did not return valid bounded Intero prose.",
       );
     }
   }
@@ -292,6 +351,29 @@ export class VercelAiModelGateway implements ModelGateway {
   }
 }
 
+function interoProsePrompt(input: InteroProseInput): string {
+  return JSON.stringify({
+    scope: {
+      kind: input.scope.kind,
+      projectNames: input.scope.projects.map((project) => project.name),
+      evidence: input.scope.evidence.map((evidence) => ({
+        kind: evidence.kind,
+        detail: evidence.detail,
+      })),
+    },
+    evaluation: {
+      classification: input.evaluation.classification,
+      boundaryKey: input.evaluation.boundaryKey,
+      reason: input.evaluation.reason,
+      facts: input.evaluation.facts.map((fact) => ({
+        relation: fact.relation,
+        assumption: fact.assumption,
+        change: fact.change,
+      })),
+    },
+  });
+}
+
 function greetingAnswer(
   input: StandInQuestionInput,
 ): PilotStandInAnswerValue | undefined {
@@ -363,6 +445,7 @@ function standInQuestionPrompt(input: StandInQuestionInput): string {
       freshnessAt: source.freshnessAt,
       provenance: source.provenance,
     })),
+    safeConfirmedCoordination: input.confirmedCoordination ?? [],
   });
 }
 

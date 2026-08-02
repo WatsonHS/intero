@@ -226,16 +226,25 @@ describe("pilot adapter contracts", () => {
         const responseOutput =
           requestCount === 1
             ? output
-            : {
-                answer: "The checkpoint is ready for team review.",
-                currentStatus: "The checkpoint is ready for review.",
-                completedOutcome: "The checkpoint contract is complete.",
-                evidence: ["The contract suite passed."],
-                nextStep: "Assign a responsible reviewer.",
-                neededCollaboration:
-                  "The project owner should confirm a reviewer.",
-                sourceWorkStateIds: [sourceWorkStateId],
-              };
+            : requestCount === 2
+              ? {
+                  answer: "The checkpoint is ready for team review.",
+                  currentStatus: "The checkpoint is ready for review.",
+                  completedOutcome: "The checkpoint contract is complete.",
+                  evidence: ["The contract suite passed."],
+                  nextStep: "Assign a responsible reviewer.",
+                  neededCollaboration:
+                    "The project owner should confirm a reviewer.",
+                  sourceWorkStateIds: [sourceWorkStateId],
+                }
+              : {
+                  headline: "重试契约存在潜在冲突",
+                  scopeExplanation:
+                    "授权范围包含 Auth Platform 和 Mobile App。",
+                  whatChanged: "生产方正在替换 retryDelayMs。",
+                  whyItMatters: "消费方仍依赖 retryDelayMs。",
+                  needsFromYou: "请确认兼容窗口。",
+                };
         response.end(
           JSON.stringify({
             id: "chatcmpl-intero-pilot",
@@ -345,7 +354,59 @@ describe("pilot adapter contracts", () => {
       neededCollaboration: "The project owner should confirm a reviewer.",
       sourceWorkStateIds: [sourceWorkStateId],
     });
-    expect(requestBodies).toHaveLength(2);
+
+    await expect(
+      gateway.generateInteroProse({
+        organizationId: ORGANIZATION_ID,
+        preferredLanguage: "zh-CN",
+        scope: {
+          kind: "cross_project",
+          projects: [
+            {
+              id: ProjectId.parse("019b5ac0-7600-7000-8000-000000000011"),
+              name: "Auth Platform",
+            },
+            {
+              id: ProjectId.parse("019b5ac0-7600-7000-8000-000000000012"),
+              name: "Mobile App",
+            },
+          ],
+          evidence: [
+            {
+              kind: "exact_project",
+              detail: "Auth Platform",
+              projectId: ProjectId.parse(
+                "019b5ac0-7600-7000-8000-000000000011",
+              ),
+            },
+          ],
+        },
+        evaluation: {
+          classification: "potential_conflict",
+          boundaryKey: "retrydelayms",
+          reason: "The producer removes a field the consumer depends on.",
+          facts: [
+            {
+              projectId: ProjectId.parse(
+                "019b5ac0-7600-7000-8000-000000000011",
+              ),
+              relation: "changing",
+              assumption: "Replace retryDelayMs with retryAfterMs.",
+              change: "breaking",
+              revision: 1,
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual({
+      headline: "重试契约存在潜在冲突",
+      scopeExplanation: "授权范围包含 Auth Platform 和 Mobile App。",
+      whatChanged: "生产方正在替换 retryDelayMs。",
+      whyItMatters: "消费方仍依赖 retryDelayMs。",
+      needsFromYou: "请确认兼容窗口。",
+    });
+
+    expect(requestBodies).toHaveLength(3);
     for (const body of requestBodies) {
       expect(body.response_format).toEqual({ type: "json_object" });
       const systemMessage = (
@@ -363,6 +424,18 @@ describe("pilot adapter contracts", () => {
       requestBodies[1]!.messages as Array<{ role: string; content: string }>
     ).find((message) => message.role === "system");
     expect(answerSystem?.content).toContain("English (en-US)");
+    const interoProseSystem = (
+      requestBodies[2]!.messages as Array<{ role: string; content: string }>
+    ).find((message) => message.role === "system");
+    expect(interoProseSystem?.content).toContain("authorization-filtered");
+    expect(interoProseSystem?.content).toContain("Simplified Chinese (zh-CN)");
+    const prosePrompt = (
+      requestBodies[2]!.messages as Array<{ role: string; content: string }>
+    ).find((message) => message.role === "user")?.content;
+    expect(prosePrompt).toContain("Auth Platform");
+    expect(prosePrompt).not.toContain("@Intero");
+    expect(prosePrompt).not.toContain("019b5ac0");
+    expect(prosePrompt).not.toContain('"revision"');
   });
 
   it("encrypts and decrypts provider credentials only through the server cipher", () => {

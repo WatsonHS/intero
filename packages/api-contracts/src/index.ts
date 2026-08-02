@@ -11,6 +11,7 @@ import {
   KanbanCard,
   KanbanColumn,
   KanbanWorkstreamLinks,
+  PilotInteroRequest,
   Project,
   PublicWorkProjection,
   ReactionEmoji,
@@ -160,6 +161,12 @@ export const SetMessageReactionRequest = z
   })
   .strict();
 export const AddStandInRequest = z.object({}).strict();
+export const CorrectInteroScopeRequest = z
+  .object({ projectIds: z.array(z.string().uuid()).min(1).max(20) })
+  .strict();
+export const CorrectInteroScopeResponse = z
+  .object({ request: PilotInteroRequest })
+  .strict();
 export const UpdateThreadRequest = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),

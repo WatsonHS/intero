@@ -80,6 +80,17 @@ export interface ThreadMessagePage {
   hasMore: boolean;
 }
 
+export function sameCoordinationSummaryIdentity(
+  left: ThreadMessage["coordinationSummary"],
+  right: ThreadMessage["coordinationSummary"],
+): boolean {
+  if (!left || !right) return false;
+  if (left.interoRequestId && right.interoRequestId) {
+    return left.interoRequestId === right.interoRequestId;
+  }
+  return left.coordinationThreadId === right.coordinationThreadId;
+}
+
 export interface StandInQuestionInput {
   jobId: OperationId;
   /** Optional retrieval scope; Stand-in conversation does not require it. */
@@ -370,6 +381,38 @@ export class InMemoryPlatformStore {
     return stored;
   }
 
+  ensureRoomServicePrincipal(
+    threadId: ThreadId,
+    principal: PrincipalSummary,
+  ): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (!current || current.kind !== "room") {
+      throw new Error("Source Room was not found.");
+    }
+    if (current.accessMode !== "agent_readable") {
+      throw new Error("Intero is unavailable in a human-only encrypted Room.");
+    }
+    if (principal.kind !== "service") {
+      throw new Error("Room Agent principal must be a service identity.");
+    }
+    this.upsertPrincipal(principal);
+    if (current.participantIds.includes(principal.id)) return current;
+    const updated: ConversationThread = {
+      ...current,
+      participantIds: [...current.participantIds, principal.id],
+      accessVersion: (current.accessVersion ?? 1) + 1,
+    };
+    this.threads.set(threadId, updated);
+    this.threadVisibility.set(`${threadId}:${principal.id}`, 1);
+    this.recordConversationChange(
+      updated,
+      principal.id,
+      "access_changed",
+      uuidv7(),
+    );
+    return updated;
+  }
+
   updateThread(
     threadId: ThreadId,
     input: {
@@ -653,6 +696,84 @@ export class InMemoryPlatformStore {
     return updated;
   }
 
+  upsertCoordinationSummary(input: {
+    roomThreadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    senderId: PrincipalId;
+    body: string;
+    summary: NonNullable<ThreadMessage["coordinationSummary"]>;
+    at: string;
+  }): ThreadMessage {
+    const thread = this.threads.get(input.roomThreadId);
+    if (!thread || thread.kind !== "room") {
+      throw new Error("Source Room was not found.");
+    }
+    if (!thread.participantIds.includes(input.senderId)) {
+      throw new Error("Summary sender is not a Room participant.");
+    }
+    const messages = this.messages.get(thread.id) ?? [];
+    const existingIndex = messages.findIndex(
+      (message) => message.id === input.messageId,
+    );
+    if (existingIndex >= 0) {
+      const existing = messages[existingIndex]!;
+      if (
+        existing.kind !== "coordination_summary" ||
+        existing.senderId !== input.senderId ||
+        !sameCoordinationSummaryIdentity(
+          existing.coordinationSummary,
+          input.summary,
+        )
+      ) {
+        throw new Error("Coordination summary message ID was already used.");
+      }
+      const updated: ThreadMessage = {
+        ...existing,
+        body: input.body,
+        coordinationSummary: input.summary,
+        revision: (existing.revision ?? 1) + 1,
+      };
+      const next = [...messages];
+      next[existingIndex] = updated;
+      this.messages.set(thread.id, next);
+      this.recordConversationChange(
+        thread,
+        input.senderId,
+        "message_updated",
+        updated.id,
+      );
+      return updated;
+    }
+    const message: ThreadMessage = {
+      id: input.messageId,
+      threadId: thread.id,
+      senderId: input.senderId,
+      sequence: thread.sequence + 1,
+      kind: "coordination_summary",
+      body: input.body,
+      createdAt: input.at,
+      serverReadable: true,
+      coordinationSummary: input.summary,
+      streamState: "complete",
+      revision: 1,
+    };
+    const updatedThread = {
+      ...thread,
+      sequence: message.sequence,
+      latestMessageAt: input.at,
+      accessVersion: thread.accessVersion ?? 1,
+    };
+    this.threads.set(thread.id, updatedThread);
+    this.messages.set(thread.id, [...messages, message]);
+    this.recordConversationChange(
+      updatedThread,
+      input.senderId,
+      "message_appended",
+      message.id,
+    );
+    return message;
+  }
+
   setMessageReaction(input: {
     threadId: ThreadId;
     messageId: ThreadMessage["id"];
@@ -862,6 +983,34 @@ export class InMemoryPlatformStore {
     return { thread: concluded, parentMessage };
   }
 
+  concludeCoordinationThread(input: {
+    threadId: ThreadId;
+    actorId: PrincipalId;
+    at: string;
+  }): ConversationThread {
+    const thread = this.threads.get(input.threadId);
+    if (!thread || thread.kind !== "coordination" || !thread.parentThreadId) {
+      throw new Error("Coordination Thread was not found.");
+    }
+    if (!thread.participantIds.includes(input.actorId)) {
+      throw new Error("Only a participant can conclude the Thread.");
+    }
+    if (thread.concludedAt) return thread;
+    const concluded: ConversationThread = {
+      ...thread,
+      concludedAt: input.at,
+      concludedBy: input.actorId,
+    };
+    this.threads.set(thread.id, concluded);
+    this.recordConversationChange(
+      concluded,
+      input.actorId,
+      "thread_concluded",
+      uuidv7(),
+    );
+    return concluded;
+  }
+
   addStandInToThread(
     threadId: ThreadId,
     actorId: PrincipalId,
@@ -980,6 +1129,18 @@ export class InMemoryPlatformStore {
     };
     this.decisions.set(decision.id, decision);
     return decision;
+  }
+
+  createDecisionOnce(
+    input: Omit<DecisionRecord, "id" | "createdAt">,
+  ): DecisionRecord {
+    if (input.sourceThreadId) {
+      const existing = [...this.decisions.values()].find(
+        (decision) => decision.sourceThreadId === input.sourceThreadId,
+      );
+      if (existing) return existing;
+    }
+    return this.createDecision(input);
   }
 
   cursor(after: number, limit: number) {

@@ -17,15 +17,17 @@ decisions, and capabilities.
 
 ### What changed
 
-The previous generation of software engineering was shaped by scarce individual
-capacity and relatively stable specialization. Frontend, backend, product,
-design, operations, and architecture work were divided among people, and many
-coordination practices grew around those handoffs.
+Many established software-engineering practices were shaped when individual
+capacity was more limited and specialization was relatively stable. Frontend,
+backend, product, design, operations, and architecture work were often divided
+among people, and many coordination practices grew around those handoffs.
 
 AI changes that premise. A person working with Coding Agents can cross several
 of those boundaries in one session. People can explore and implement more
 independently, and work that once required several specialists can now be
-completed by one person and their Agents.
+completed by one person and their Agents. This expands the range of work a
+person can attempt; it does not remove expertise, responsibility, or the need
+for different practices during exploration, stabilization, and maintenance.
 
 ### Problems we are experiencing
 
@@ -48,10 +50,22 @@ completed by one person and their Agents.
    unnecessary abstraction, indirect design, or simpler alternative. It also
    creates far more decisions per day. Under sustained decision fatigue, people
    are least able to find the problems that most need judgment.
+4. **Automation can leave people with more coordination chores.** Coding Agents
+   can take on rewarding implementation work while people still have to report
+   status, find affected teammates, move context between tools, organize
+   discussions, follow up on unresolved questions, and maintain project
+   records. AI should reduce this coordination plumbing rather than leave it as
+   the human part of the workflow.
+5. **AI-generated coordination can itself be hard to understand.** A summary
+   full of internal vocabulary, unexplained jargon, or unnecessary detail only
+   turns the cost of finding information into the cost of decoding it. People
+   need a short, plain-language account first, with exact technical details and
+   evidence available when they need to inspect them.
 
 These problems share one pattern: execution has accelerated beyond the team's
 ability to maintain shared understanding, reliable validation, and focused
-human attention.
+human attention. The product must reduce not only notification volume, but also
+the effort required to find, understand, route, and act on coordination context.
 
 We do not think the answer is to restore rigid role boundaries, require human
 approval for every change, or place another unbounded autonomous Agent above the
@@ -65,6 +79,10 @@ team. We want to explore harder questions:
   regression without collecting raw private activity or creating surveillance?
 - How can the right people enter a temporary, bounded discussion while everyone
   else receives only a quiet, useful summary?
+- How can authorized team conversation become useful project context without
+  treating an unfinished discussion as confirmed truth?
+- How can AI explain a coordination problem in plain language while preserving
+  the identifiers, uncertainty, and evidence needed for technical review?
 - How can human attention be reserved for decisions that genuinely require
   judgment instead of turning every Agent action into another approval?
 - How can a team know that its product remains coherent and usable while many
@@ -73,11 +91,13 @@ team. We want to explore harder questions:
   and verifiable even when no Feature, Spec, or ticket existed first?
 
 Our working thesis is that execution can become highly distributed, but
-coordination, validation, and responsibility must remain continuous. People and
-Agents should be able to work independently while a collaboration layer
-maintains authorized shared Work State, notices possible conflicts, routes
-attention, preserves evidence and uncertainty, and carries human-confirmed
-outcomes back into the work.
+coordination, validation, and responsibility must remain continuous. Authorized
+conversation carries human intent, questions, disagreement, and proposed
+decisions. Agent Work State carries execution intent, change, dependency, and
+validation claims. Repository, test, CI, and runtime evidence show what is
+actually supported. Intero should help keep these sources aligned, preserve
+their provenance and uncertainty, and carry human-confirmed outcomes back into
+the work.
 
 The larger purpose of Intero is not a particular stack, model, or list of AI
 features. It is to make these questions concrete enough to build against, test,
@@ -86,12 +106,61 @@ that Intero should own every task, test, Spec, decision, or Agent workflow. We
 will judge the exploration by whether a team can remain autonomous and fast
 without losing a shared, trustworthy reality.
 
-## Current product direction
+## Product direction
+
+Intero explores an AI-native software-engineering and project-management
+platform in which project reality grows from actual conversation, work,
+decisions, and evidence instead of depending on people to re-enter everything
+into a tracker.
+
+Automatic coordination between people and Coding Agents is a foundational
+product behavior. A team should be able to keep working normally while Intero
+stays quiet when work is compatible, catches evidence-backed collisions before
+they become regressions, prepares the context in plain language, and involves a
+person only when judgment or commitment is genuinely required.
+
+The recommended flow is:
+
+```text
+people discuss and people or Agents do real work
+→ authorized conversation and structured Work State become shared signals
+→ Intero relates them to current technical and validation evidence
+→ compatible work stays quiet
+→ a bounded coordination path opens when evidence shows a real need
+→ people confirm consequential decisions
+→ the outcome returns to the work and accumulates into project reality
+```
+
+Chat is therefore not an accessory to project management. It is where intent,
+problems, disagreement, and decisions often first appear. Conversation is an
+important signal, but not an authority by itself: Intero may derive candidate
+problems, actions, and decisions from it, while consequential conclusions still
+require supporting evidence or human confirmation.
+
+### Agent roles
+
+The user-facing model has two Intero Agent roles:
+
+- **A personal Stand-in represents “me.”** It helps one person understand and
+  prepare their work, protects private context, and shares only what that person
+  or policy authorizes.
+- **Intero in a shared Room represents “us.”** It understands authorized team
+  conversation, relates it to shareable work and evidence, routes project
+  context, coordinates when needed, and maintains human-confirmed shared state.
+
+External Coding Agents such as Codex, Claude Code, and OpenCode remain execution
+agents rather than a third Intero role. Projects are internal state,
+authorization, and evidence scopes used by Intero—not separate bots that people
+must remember to mention. In a Team Room containing several projects, a person
+mentions only `@Intero`; Intero infers whether the discussion belongs to one
+project, several projects, the Team, or needs one lightweight clarification.
+
+## Current product
 
 Intero is a coordination layer for software teams working with Coding Agents.
-It turns structured Agent checkpoints into durable, privacy-aware team context:
-current work, blockers, decisions, review state, and the next coordination
-action.
+It relates authorized team conversation and structured Agent checkpoints to
+durable, privacy-aware team context: current work, blockers, decisions, review
+state, and the next coordination action.
 
 Intero is not a transcript collector or a general autonomous Agent. It is
 designed to preserve human authority, provenance, and project boundaries while
@@ -103,18 +172,23 @@ making Agent-assisted work legible to the rest of the team.
 
 ## What Intero provides
 
+- **Authorized realtime conversations** across team chat, project Rooms,
+  bounded coordination, direct messages, and personal Stand-in interactions.
+  Conversation can produce reviewable candidate issues, decisions, relations,
+  and actions without making an unfinished discussion authoritative.
 - **Structured Agent reporting** through an authenticated MCP endpoint for
   Codex, Claude Code, OpenCode, and compatible clients.
 - **Private Work State** that records progress, evidence, blockers, decisions,
   and validation without ingesting raw prompts, diffs, files, or terminal logs.
 - **Team Pulse** for a concise view of what teammates are working on and where
   coordination is needed.
+- **Human-readable coordination** that leads with what happened, why it matters,
+  and whether a person needs to act, while keeping exact technical details,
+  sources, and uncertainty available on demand.
 - **Action Inbox** for review requests, blockers, commitments, and other
   human-owned decisions.
 - **Project work and Spec Review** with immutable revisions, comments,
   confirmations, provenance, and reversible Agent-authored changes.
-- **Realtime conversations** across direct messages, team chat, project
-  coordination, and personal Stand-in interactions.
 - **Bounded Stand-in automation** that may summarize authorized work or propose
   reversible coordination steps, but cannot change membership, ownership,
   access, or make final human commitments.
@@ -133,6 +207,13 @@ making Agent-assisted work legible to the rest of the team.
    alter access, or make irreversible decisions.
 5. **Authorization is enforced at every adapter boundary.** Organization,
    Team, Project, and private-user scopes are not inferred from UI state.
+6. **Conversation is a signal, not automatic truth.** AI may identify a
+   possible Bug, dependency, decision, or action in authorized chat, but it must
+   distinguish discussion, interpretation, evidence, and human confirmation.
+7. **Plain language first, technical evidence on demand.** Human-facing output
+   should make the event, impact, relevance, and required action clear within
+   seconds, then let people inspect exact identifiers and sources without
+   losing precision.
 
 The complete trust model and technical boundaries are documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -308,6 +389,7 @@ dedicated security policy and private reporting channel are published.
 ## Documentation
 
 - [Product roadmap](docs/PRODUCT_ROADMAP.md)
+- [Golden Case: Team-room conversation to cross-project coordination](docs/GOLDEN_CASE.md)
 - [Technical architecture](docs/ARCHITECTURE.md)
 - [Operations](docs/OPERATIONS.md)
 - [Pilot runbook](docs/PILOT_RUNBOOK.md)

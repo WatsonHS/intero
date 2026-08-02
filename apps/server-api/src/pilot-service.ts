@@ -29,6 +29,16 @@ export type PilotCheckpointResult = PilotIngestResult & {
   standIn: StandInProcessing;
 };
 
+export interface BoundaryCoordinationKernel {
+  reconcile(input: {
+    project: PilotProject;
+    binding: PilotAgentBinding;
+    workStateId: string;
+    checkpoint: PilotCheckpointInput;
+    now: string;
+  }): Promise<unknown>;
+}
+
 export class PilotCheckpointService {
   constructor(
     private readonly store: PilotStore,
@@ -84,6 +94,7 @@ export class PilotStandInJobHandler {
     private readonly authorization: AuthorizationPort,
     private readonly model: ModelGateway,
     private readonly coordination: CoordinationTransport,
+    private readonly boundaryCoordination?: BoundaryCoordinationKernel,
   ) {}
 
   async handle(
@@ -182,14 +193,31 @@ export class PilotStandInJobHandler {
         checkpoint,
       });
 
-      const suggestion = this.coordination.plan({
-        project,
-        binding,
-        workStateId,
-        checkpoint,
-        output,
-        now: receivedAt,
-      });
+      const suggestion =
+        (checkpoint.sharedBoundaries?.length ?? 0) > 0
+          ? undefined
+          : this.coordination.plan({
+              project,
+              binding,
+              workStateId,
+              checkpoint,
+              output,
+              now: receivedAt,
+            });
+      if ((checkpoint.sharedBoundaries?.length ?? 0) > 0) {
+        const boundaryInput = {
+          project,
+          binding,
+          workStateId,
+          checkpoint,
+          now: receivedAt,
+        };
+        if (this.boundaryCoordination) {
+          await this.boundaryCoordination.reconcile(boundaryInput);
+        } else {
+          await this.store.reconcileSharedBoundaries(boundaryInput);
+        }
+      }
       const completed = await this.store.completeStandInJob({
         jobKey,
         workerId: execution.workerId,

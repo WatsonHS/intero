@@ -2,6 +2,7 @@ import {
   containsForbiddenEventField,
   PILOT_AGENT_CONFIGURATION_VERSION,
   PilotCheckpointEventType,
+  PilotSharedBoundaryInput,
   PilotWorkNarrative,
   WorkstreamPhase,
   type PilotAgentBinding,
@@ -280,6 +281,20 @@ function createPilotMcpServer(
         (await options.store.findAgentBindingById(initialBinding.id)) ??
         initialBinding;
       const state = agentConnectionState(binding);
+      const confirmedCoordination = (
+        await options.store.listCoordination(binding.projectId, binding.ownerId)
+      )
+        .filter((thread) => thread.status === "resolved" && thread.decisionId)
+        .map((thread) => ({
+          coordinationThreadId: thread.id,
+          decisionId: thread.decisionId,
+          scopeKind: thread.scopeKind ?? "single_project",
+          projectIds: thread.projectIds ?? [thread.projectId],
+          boundaryKey: thread.boundaryKey,
+          conclusion: thread.conclusion,
+          confirmedAt: thread.confirmedAt,
+          humanDecision: thread.brief?.humanDecision,
+        }));
       return toolResult({
         ...state,
         mcpConnected: Boolean(binding.validatedAt),
@@ -299,6 +314,7 @@ function createPilotMcpServer(
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
         lastSeenAt: binding.lastSeenAt,
+        confirmedCoordination,
       });
     },
   );
@@ -308,8 +324,8 @@ function createPilotMcpServer(
     {
       description:
         initialBinding.preferredLanguage === "zh-CN"
-          ? "向当前项目的私有 Work State 上报结构化语义检查点；禁止包含原始 prompt、文件、diff、终端或工具日志。"
-          : "Report a structured semantic checkpoint to this Project's private Work State; never include raw prompts, files, diffs, terminal output, or tool logs.",
+          ? "向当前项目的私有 Work State 上报结构化语义检查点。sharedBoundaries 是显式的项目可见边界声明，只能使用短语义标识；禁止包含原始 prompt、文件、diff、终端、工具日志或秘密。"
+          : "Report a structured semantic checkpoint to this Project's private Work State. sharedBoundaries are explicit Project-visible boundary claims and must use short semantic identifiers; never include raw prompts, files, diffs, terminal output, tool logs, or secrets.",
       inputSchema: {
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
@@ -318,6 +334,7 @@ function createPilotMcpServer(
         workstreamKey: z.string().min(1).max(160).optional(),
         workstreamTitle: z.string().min(1).max(160).optional(),
         phase: WorkstreamPhase.optional(),
+        sharedBoundaries: z.array(PilotSharedBoundaryInput).max(12).optional(),
       },
     },
     async (input) => {
@@ -361,6 +378,7 @@ function createPilotMcpServer(
         },
         narrative: input.narrative,
         evidenceRefs: input.evidenceRefs ?? [],
+        sharedBoundaries: input.sharedBoundaries ?? [],
       };
       const result = await options.checkpointService.submit(
         binding,

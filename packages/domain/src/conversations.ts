@@ -8,6 +8,7 @@ import {
   ProjectId,
   ThreadId,
 } from "./ids.js";
+import { PilotCoordinationBrief } from "./pilot.js";
 
 export const ThreadKind = z.enum([
   "human_direct",
@@ -142,12 +143,59 @@ export const ThreadMessage = z
     threadId: ThreadId,
     senderId: PrincipalId,
     sequence: z.number().int().positive(),
-    kind: z.enum(["message", "system_access_change", "coordination_action"]),
+    kind: z.enum([
+      "message",
+      "system_access_change",
+      "coordination_action",
+      "coordination_summary",
+    ]),
     body: z.string().max(16_000),
     createdAt: z.iso.datetime(),
     serverReadable: z.boolean(),
     encryptedBody: z.string().max(100_000).optional(),
     operationId: OperationId.optional(),
+    coordinationSummary: z
+      .object({
+        coordinationThreadId: ThreadId,
+        interoRequestId: z.uuid().optional(),
+        status: z.enum(["open", "waiting", "needs_action", "resolved"]),
+        situation: z.string().min(1).max(600),
+        boundaryKey: z.string().min(3).max(160),
+        affectedPrincipalIds: z.array(PrincipalId).min(1).max(20),
+        conclusion: z.string().max(600),
+        unresolvedQuestion: z.string().max(600),
+        actionRequired: z.boolean(),
+        freshnessAt: z.iso.datetime(),
+        sourceCount: z.number().int().positive().max(20),
+        scope: z
+          .discriminatedUnion("kind", [
+            z
+              .object({
+                kind: z.enum(["single_project", "cross_project", "team"]),
+                projectIds: z.array(ProjectId).min(1).max(20),
+              })
+              .strict(),
+            z
+              .object({
+                kind: z.literal("ambiguous"),
+                candidates: z
+                  .array(
+                    z
+                      .object({
+                        projectId: ProjectId,
+                        name: z.string().min(1).max(160),
+                      })
+                      .strict(),
+                  )
+                  .max(20),
+              })
+              .strict(),
+          ])
+          .optional(),
+        brief: PilotCoordinationBrief.optional(),
+      })
+      .strict()
+      .optional(),
     /** Stable identities, separate from the human-readable Markdown body. */
     mentionedPrincipalIds: z.array(PrincipalId).max(20).optional(),
     /** Message quoted by this reply. The target must belong to the same thread. */

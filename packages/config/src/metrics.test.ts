@@ -12,6 +12,7 @@ describe("privacy-safe operational metrics", () => {
       durationMs: 17,
     });
     metrics.observeModel("summary", "success", 42);
+    metrics.observeModel("intero_prose", "unavailable", 84);
     metrics.observeWorkerJob("retry", 2);
     metrics.setQueueDepth("stand_in", 3);
     metrics.setRealtimeHealth("centrifugo", false);
@@ -19,6 +20,9 @@ describe("privacy-safe operational metrics", () => {
     const output = metrics.renderPrometheus();
     expect(output).toContain('route="/v1/projects/:id/pulse"');
     expect(output).toContain("intero_model_duration_ms_bucket");
+    expect(output).toContain(
+      'intero_model_calls_total{operation="intero_prose",outcome="unavailable"} 1',
+    );
     expect(output).toContain('intero_realtime_healthy{adapter="centrifugo"} 0');
     expect(output).not.toContain("019b5ac0");
     expect(output).not.toContain("prompt");

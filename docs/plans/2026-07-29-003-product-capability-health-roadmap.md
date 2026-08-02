@@ -47,6 +47,13 @@ evidence.
 Capability Health is a derived view of how strongly current evidence supports
 that outcome. It is not a manually advanced delivery stage.
 
+Authorized conversation may reveal a candidate capability, an observed
+problem, or the team's intent, but conversation alone does not prove that the
+outcome currently works. Agent Work State can add execution context; repository,
+test, CI, runtime, and human-confirmed evidence must carry their own provenance
+and authority. Capability Health should relate these sources rather than
+flatten them into one AI conclusion.
+
 For example:
 
 ```text
