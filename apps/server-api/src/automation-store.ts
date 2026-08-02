@@ -1113,6 +1113,11 @@ export class PostgresAutomationStore {
         detail:
           "Human reverted the automation effect. Source work and decisions were not changed.",
       });
+      await this.notifyWorkspaceChange(client, {
+        projectId: signal.projectId,
+        signalId: signal.id,
+        eventType: "project.automation.reverted",
+      });
       return signal;
     });
   }
@@ -1469,6 +1474,32 @@ export class PostgresAutomationStore {
         input.action,
         input.actorId ?? null,
         input.detail,
+      ],
+    );
+  }
+
+  private async notifyWorkspaceChange(
+    client: PoolClient,
+    input: {
+      projectId: ProjectId;
+      signalId: string;
+      eventType: string;
+    },
+  ): Promise<void> {
+    const operationId = uuidv7();
+    await client.query(
+      `INSERT INTO outbox (operation_id,organization_id,topic,payload)
+       VALUES ($1,$2,$3,$4)`,
+      [
+        operationId,
+        this.organizationId,
+        `project.${input.projectId}.phase7`,
+        JSON.stringify({
+          eventType: input.eventType,
+          aggregateType: "project_automation_signal",
+          aggregateId: input.signalId,
+          projectId: input.projectId,
+        }),
       ],
     );
   }

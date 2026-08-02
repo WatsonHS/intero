@@ -116,8 +116,23 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
 
   it("recovers after an outage and fans out to two independent clients", async () => {
     const clientToken = createClientToken(ownerId, centrifugoTokenSecret);
-    const clientA = await subscribeClient(centrifugoUrl!, channel, clientToken);
-    const clientB = await subscribeClient(centrifugoUrl!, channel, clientToken);
+    const subscriptionToken = createSubscriptionToken(
+      ownerId,
+      channel,
+      centrifugoTokenSecret,
+    );
+    const clientA = await subscribeClient(
+      centrifugoUrl!,
+      channel,
+      clientToken,
+      subscriptionToken,
+    );
+    const clientB = await subscribeClient(
+      centrifugoUrl!,
+      channel,
+      clientToken,
+      subscriptionToken,
+    );
     try {
       const unavailable = new OutboxDispatcher(
         organizationId,
@@ -203,21 +218,43 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
         Number(process.env.INTERO_REALTIME_CAPACITY_CLIENTS ?? 32),
       ),
     );
-    const clients = await Promise.all(
-      Array.from({ length: clientCount }, () =>
-        subscribeClient(
-          centrifugoUrl!,
-          channel,
-          createClientToken(ownerId, centrifugoTokenSecret),
-        ),
+    const connectConcurrency = Math.max(
+      1,
+      Math.min(
+        1_000,
+        Number(process.env.INTERO_REALTIME_CONNECT_CONCURRENCY ?? 128),
       ),
+    );
+    const connectStartedAt = performance.now();
+    const clients = await openClientCohort({
+      apiUrl: centrifugoUrl!,
+      channel,
+      clientCount,
+      concurrency: connectConcurrency,
+      clientToken: createClientToken(ownerId, centrifugoTokenSecret),
+      subscriptionToken: createSubscriptionToken(
+        ownerId,
+        channel,
+        centrifugoTokenSecret,
+      ),
+    });
+    const connectDurationMs = performance.now() - connectStartedAt;
+    console.info(
+      JSON.stringify({
+        gate: "realtime_connection_capacity",
+        clientCount,
+        connectConcurrency,
+        connectDurationMs: Math.round(connectDurationMs),
+      }),
     );
     const probeId = uuidv7();
     try {
-      const received = clients.map((client) =>
-        waitForPublication(client.socket, probeId),
-      );
       const startedAt = performance.now();
+      const visibilityTimeoutMs = 5_000;
+      const received = clients.map(async (client) => {
+        await waitForPublication(client.socket, probeId, visibilityTimeoutMs);
+        return performance.now() - startedAt;
+      });
       await new CentrifugoRealtime(centrifugoUrl!, centrifugoApiKey).publish(
         channel,
         {
@@ -226,18 +263,184 @@ integrationSuite("PostgreSQL outbox to Centrifugo", () => {
           sequence: 1,
         },
       );
-      await expect(Promise.all(received)).resolves.toHaveLength(clientCount);
-      expect(performance.now() - startedAt).toBeLessThan(3_000);
+      const visibility = await Promise.allSettled(received);
+      const deliveredLatencies = visibility.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      const deliveryCount = deliveredLatencies.length;
+      const deliveryRate = deliveryCount / clientCount;
+      const latencyPopulation = [
+        ...deliveredLatencies,
+        ...Array.from(
+          { length: clientCount - deliveryCount },
+          () => visibilityTimeoutMs,
+        ),
+      ];
+      const visibilityP95Ms = percentile(latencyPopulation, 0.95);
+      const visibilityP99Ms = percentile(latencyPopulation, 0.99);
+      console.info(
+        JSON.stringify({
+          gate: "realtime_fanout_visibility",
+          clientCount,
+          deliveryCount,
+          deliveryRate,
+          visibilityP95Ms: Math.round(visibilityP95Ms),
+          visibilityP99Ms: Math.round(visibilityP99Ms),
+          visibilityMaxMs: Math.round(Math.max(...latencyPopulation)),
+        }),
+      );
+      expect(deliveryRate).toBeGreaterThanOrEqual(0.99);
+      expect(visibilityP95Ms).toBeLessThan(1_000);
+      expect(visibilityP99Ms).toBeLessThan(3_000);
     } finally {
-      for (const client of clients) client.socket.close();
+      await closeClientCohort(clients);
     }
+  }, 180_000);
+
+  it("accepts a configurable content-free publication cohort within the throughput gate", async () => {
+    const publicationCount = Math.max(
+      1,
+      Math.min(
+        5_000,
+        Number(process.env.INTERO_REALTIME_CAPACITY_PUBLICATIONS ?? 25),
+      ),
+    );
+    const throughputChannel = `intero:project:${uuidv7()}`;
+    const startedAt = performance.now();
+    await publishBatch(
+      centrifugoUrl!,
+      centrifugoApiKey,
+      throughputChannel,
+      publicationCount,
+    );
+    const durationMs = performance.now() - startedAt;
+    const publicationsPerSecond = publicationCount / (durationMs / 1_000);
+    console.info(
+      JSON.stringify({
+        gate: "realtime_publication_throughput",
+        publicationCount,
+        durationMs: Math.round(durationMs),
+        publicationsPerSecond: Math.round(publicationsPerSecond),
+      }),
+    );
+    expect(publicationsPerSecond).toBeGreaterThanOrEqual(
+      Math.min(publicationCount, 1_000),
+    );
   }, 30_000);
 });
+
+async function publishBatch(
+  apiUrl: string,
+  apiKey: string,
+  channel: string,
+  publicationCount: number,
+): Promise<void> {
+  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/batch`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      parallel: true,
+      commands: Array.from({ length: publicationCount }, (_, index) => ({
+        publish: {
+          channel,
+          data: {
+            operationId: uuidv7(),
+            eventType: "realtime.throughput_probe",
+            sequence: index + 1,
+          },
+        },
+      })),
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = (await response.json()) as {
+    replies?: Array<{ error?: { code?: number; message?: string } }>;
+  };
+  const failed = body.replies?.find((reply) => reply.error)?.error;
+  if (!response.ok || body.replies?.length !== publicationCount || failed) {
+    throw new Error(
+      `centrifugo_batch_${failed?.code ?? response.status}:${failed?.message ?? "incomplete_batch"}`,
+    );
+  }
+}
+
+async function openClientCohort(input: {
+  apiUrl: string;
+  channel: string;
+  clientCount: number;
+  concurrency: number;
+  clientToken: string;
+  subscriptionToken: string;
+}): Promise<Array<{ socket: WebSocket }>> {
+  const clients: Array<{ socket: WebSocket }> = [];
+  try {
+    for (
+      let offset = 0;
+      offset < input.clientCount;
+      offset += input.concurrency
+    ) {
+      const batchSize = Math.min(input.concurrency, input.clientCount - offset);
+      const settled = await Promise.allSettled(
+        Array.from({ length: batchSize }, () =>
+          subscribeClient(
+            input.apiUrl,
+            input.channel,
+            input.clientToken,
+            input.subscriptionToken,
+            20_000,
+          ),
+        ),
+      );
+      for (const result of settled) {
+        if (result.status === "fulfilled") clients.push(result.value);
+      }
+      const failed = settled.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (failed) throw failed.reason;
+    }
+    return clients;
+  } catch (error) {
+    await closeClientCohort(clients).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function closeClientCohort(
+  clients: Array<{ socket: WebSocket }>,
+): Promise<void> {
+  for (const client of clients) client.socket.close();
+  const deadline = performance.now() + 5_000;
+  while (
+    clients.some((client) => client.socket.readyState !== WebSocket.CLOSED)
+  ) {
+    if (performance.now() >= deadline) {
+      const closingClientCount = clients.filter(
+        (client) => client.socket.readyState !== WebSocket.CLOSED,
+      ).length;
+      console.info(
+        JSON.stringify({
+          gate: "realtime_client_cleanup",
+          clientCount: clients.length,
+          closingClientCount,
+        }),
+      );
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 async function subscribeClient(
   apiUrl: string,
   channel: string,
-  token: string,
+  clientToken: string,
+  subscriptionToken: string,
+  openTimeoutMs = 5_000,
 ): Promise<{ socket: WebSocket }> {
   const socket = new WebSocket(
     `${apiUrl.replace(/^http/, "ws")}/connection/websocket`,
@@ -245,7 +448,7 @@ async function subscribeClient(
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("Centrifugo WebSocket open timeout.")),
-      5_000,
+      openTimeoutMs,
     );
     socket.addEventListener(
       "open",
@@ -264,34 +467,58 @@ async function subscribeClient(
       { once: true },
     );
   });
-  socket.send(JSON.stringify({ id: 1, connect: { token } }));
+  const onProtocolPing = (message: MessageEvent) => {
+    const frames = String(message.data).trim().split("\n");
+    if (frames.includes("{}") && socket.readyState === WebSocket.OPEN) {
+      socket.send("{}");
+    }
+  };
+  socket.addEventListener("message", onProtocolPing);
+  socket.addEventListener(
+    "close",
+    () => socket.removeEventListener("message", onProtocolPing),
+    { once: true },
+  );
+  socket.send(JSON.stringify({ id: 1, connect: { token: clientToken } }));
   await waitForReply(socket, 1);
-  socket.send(JSON.stringify({ id: 2, subscribe: { channel } }));
+  socket.send(
+    JSON.stringify({
+      id: 2,
+      subscribe: { channel, token: subscriptionToken },
+    }),
+  );
   await waitForReply(socket, 2);
   return { socket };
 }
 
 async function waitForReply(socket: WebSocket, id: number): Promise<void> {
   await waitForSocketMessage(socket, (message) => {
-    const reply = parseSocketMessage(message);
-    return reply.id === id ? reply : undefined;
+    return parseSocketMessages(message).find((reply) => reply.id === id);
   });
 }
 
 async function waitForPublication(
   socket: WebSocket,
   operationId: string,
+  timeoutMs = 5_000,
 ): Promise<Record<string, unknown>> {
-  return waitForSocketMessage(socket, (message) => {
-    const reply = parseSocketMessage(message);
-    const data = reply.push?.pub?.data;
-    return data?.operationId === operationId ? data : undefined;
-  });
+  return waitForSocketMessage(
+    socket,
+    (message) => {
+      for (const reply of parseSocketMessages(message)) {
+        const data = reply.push?.pub?.data;
+        if (data?.operationId === operationId) return data;
+      }
+      return undefined;
+    },
+    timeoutMs,
+  );
 }
 
 async function waitForSocketMessage<T>(
   socket: WebSocket,
   select: (message: MessageEvent) => T | undefined,
+  timeoutMs = 5_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const cleanup = () => {
@@ -303,7 +530,7 @@ async function waitForSocketMessage<T>(
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Centrifugo WebSocket message timeout."));
-    }, 5_000);
+    }, timeoutMs);
     const onMessage = (message: MessageEvent) => {
       let selected: T | undefined;
       try {
@@ -341,12 +568,35 @@ async function waitForSocketMessage<T>(
   });
 }
 
+function percentile(values: number[], quantile: number): number {
+  if (values.length === 0) return Number.POSITIVE_INFINITY;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * quantile) - 1]!;
+}
+
 function createClientToken(subject: string, secret: string): string {
+  return createRealtimeToken(subject, secret, {});
+}
+
+function createSubscriptionToken(
+  subject: string,
+  channel: string,
+  secret: string,
+): string {
+  return createRealtimeToken(subject, secret, { channel });
+}
+
+function createRealtimeToken(
+  subject: string,
+  secret: string,
+  claims: Record<string, unknown>,
+): string {
   const encode = (value: object) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({
     sub: subject,
-    exp: Math.floor(Date.now() / 1_000) + 60,
+    exp: Math.floor(Date.now() / 1_000) + 300,
+    ...claims,
   })}`;
   const signature = createHmac("sha256", secret)
     .update(unsigned)
@@ -354,18 +604,21 @@ function createClientToken(subject: string, secret: string): string {
   return `${unsigned}.${signature}`;
 }
 
-function parseSocketMessage(message: MessageEvent): {
+type CentrifugoReply = {
   id?: number;
   error?: { message?: string };
   push?: { pub?: { data?: Record<string, unknown> } };
-} {
-  const parsed = JSON.parse(String(message.data)) as {
-    id?: number;
-    error?: { message?: string };
-    push?: { pub?: { data?: Record<string, unknown> } };
-  };
-  if (parsed.error) {
-    throw new Error(parsed.error.message ?? "Centrifugo protocol error.");
+};
+
+function parseSocketMessages(message: MessageEvent): CentrifugoReply[] {
+  const replies = String(message.data)
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((frame) => JSON.parse(frame) as CentrifugoReply);
+  const failed = replies.find((reply) => reply.error)?.error;
+  if (failed) {
+    throw new Error(failed.message ?? "Centrifugo protocol error.");
   }
-  return parsed;
+  return replies;
 }

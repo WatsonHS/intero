@@ -185,7 +185,10 @@ export class PostgresPilotJobRepository {
         `INSERT INTO pilot_worker_heartbeats
           (organization_id, worker_id, status, started_at, last_heartbeat_at,
            stopped_at, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         SELECT $1, $2, $3, $4, $5, $6, $7
+         WHERE EXISTS (
+           SELECT 1 FROM organizations WHERE id = $1
+         )
          ON CONFLICT (organization_id, worker_id) DO UPDATE SET
            status = EXCLUDED.status,
            last_heartbeat_at = EXCLUDED.last_heartbeat_at,
