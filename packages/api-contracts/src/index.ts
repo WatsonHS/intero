@@ -161,9 +161,16 @@ export const SetMessageReactionRequest = z
   })
   .strict();
 export const AddStandInRequest = z.object({}).strict();
-export const CorrectInteroScopeRequest = z
-  .object({ projectIds: z.array(z.string().uuid()).min(1).max(20) })
-  .strict();
+/**
+ * Keep the original Project-list request valid while allowing a Room
+ * participant to explicitly retain a Team-level scope. A Team correction is
+ * resolved server-side from the intersection of the requester's and
+ * corrector's authorized Projects; clients never submit that Project list.
+ */
+export const CorrectInteroScopeRequest = z.union([
+  z.object({ projectIds: z.array(z.string().uuid()).min(1).max(20) }).strict(),
+  z.object({ scopeKind: z.literal("team") }).strict(),
+]);
 export const CorrectInteroScopeResponse = z
   .object({ request: PilotInteroRequest })
   .strict();

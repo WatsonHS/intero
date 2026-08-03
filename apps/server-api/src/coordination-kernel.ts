@@ -126,7 +126,10 @@ export class CoordinationKernel {
           sourceClaims: claims,
           now: input.now,
         });
-        if (!materialized.some((candidate) => candidate.id === thread.id)) {
+        if (
+          thread &&
+          !materialized.some((candidate) => candidate.id === thread.id)
+        ) {
           materialized.push(await this.materialize(thread, input.now));
         }
       }
@@ -138,13 +141,15 @@ export class CoordinationKernel {
     thread: PilotCoordinationThread,
     now: string,
     closeActorId?: PrincipalId,
+    canCommit: () => Promise<boolean> = async () => true,
   ): Promise<PilotCoordinationThread> {
+    if (!(await canCommit())) return thread;
     if (
       !thread.conversationThreadId ||
       !thread.sourceRoomThreadId ||
       !thread.summaryMessageId
     ) {
-      const materialized = await this.materialize(thread, now);
+      const materialized = await this.materialize(thread, now, canCommit);
       if (
         materialized.status === "resolved" &&
         materialized.conversationThreadId &&
@@ -158,7 +163,7 @@ export class CoordinationKernel {
       }
       return materialized;
     }
-    await this.writeSummary(thread, now);
+    await this.writeSummary(thread, now, canCommit);
     if (thread.status === "resolved" && closeActorId) {
       await this.conversations.concludeCoordinationThread({
         threadId: thread.conversationThreadId as ThreadId,
@@ -172,13 +177,14 @@ export class CoordinationKernel {
   private async materialize(
     thread: PilotCoordinationThread,
     now: string,
+    canCommit: () => Promise<boolean> = async () => true,
   ): Promise<PilotCoordinationThread> {
     if (
       thread.conversationThreadId &&
       thread.sourceRoomThreadId &&
       thread.summaryMessageId
     ) {
-      await this.writeSummary(thread, now);
+      await this.writeSummary(thread, now, canCommit);
       return thread;
     }
     const sourceRoom = await this.resolveSourceRoom(thread);
@@ -199,6 +205,7 @@ export class CoordinationKernel {
     const conversationParticipantIds = [
       ...new Set([...thread.participantIds, senderId]),
     ];
+    if (!(await canCommit())) return thread;
     await this.conversations.createThread(
       {
         id: conversationThreadId,
@@ -218,6 +225,7 @@ export class CoordinationKernel {
       },
       senderId,
     );
+    if (!(await canCommit())) return thread;
     await this.conversations.appendMessage(conversationThreadId, {
       id: contextMessageId,
       senderId,
@@ -231,7 +239,8 @@ export class CoordinationKernel {
       summaryMessageId,
       updatedAt: now,
     };
-    await this.writeSummary(pendingLink, now);
+    await this.writeSummary(pendingLink, now, canCommit);
+    if (!(await canCommit())) return thread;
     return this.pilotStore.linkCoordinationArtifacts({
       coordinationThreadId: thread.id,
       conversationThreadId,
@@ -272,10 +281,12 @@ export class CoordinationKernel {
   private async writeSummary(
     thread: PilotCoordinationThread,
     now: string,
-  ): Promise<ThreadMessage> {
+    canCommit: () => Promise<boolean> = async () => true,
+  ): Promise<ThreadMessage | undefined> {
     if (!thread.sourceRoomThreadId || !thread.summaryMessageId) {
       throw new Error("Coordination summary is not linked to a source Room.");
     }
+    if (!(await canCommit())) return undefined;
     const status =
       thread.status === "resolved"
         ? ("resolved" as const)

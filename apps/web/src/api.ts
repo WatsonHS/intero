@@ -667,13 +667,13 @@ export async function sendThreadMessage(input: {
   });
 }
 
-export async function correctInteroScope(input: {
-  requestId: string;
-  projectIds: string[];
-}): Promise<void> {
-  await postJson(`/v1/intero-requests/${input.requestId}/scope`, {
-    projectIds: input.projectIds,
-  });
+export async function correctInteroScope(
+  input:
+    | { requestId: string; projectIds: string[] }
+    | { requestId: string; scopeKind: "team" },
+): Promise<void> {
+  const { requestId, ...body } = input;
+  await postJson(`/v1/intero-requests/${requestId}/scope`, body);
 }
 
 export async function addStandInToThread(input: {

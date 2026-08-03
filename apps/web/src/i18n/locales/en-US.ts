@@ -934,6 +934,7 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.coordination.humanDecision": "Human decision",
   "chat.coordination.evidence": "Facts, interpretations, and sources",
   "chat.coordination.correctScope": "Select the intended Project scope",
+  "chat.coordination.teamScope": "Use Team scope",
   "chat.coordination.applyScope": "Apply scope",
   "chat.coordination.correctingScope": "Applying…",
   "chat.coordination.scopeCorrectionFailed": "Scope could not be updated.",

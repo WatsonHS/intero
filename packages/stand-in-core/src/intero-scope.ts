@@ -18,6 +18,7 @@ export interface ResolveInteroScopeInput {
   mentionedPrincipalIds?: PrincipalId[];
   roomProjectId?: ProjectId;
   correctedProjectIds?: ProjectId[];
+  correctedScopeKind?: "team";
 }
 
 /**
@@ -35,6 +36,29 @@ export function resolveInteroScope(
   const claims = (input.authorizedClaims ?? []).filter((claim) =>
     eligibleIds.has(claim.projectId),
   );
+
+  if (input.correctedScopeKind === "team") {
+    if (projects.length === 0) {
+      return {
+        kind: "ambiguous",
+        teamId: input.teamId,
+        candidates: [],
+        question: scopeQuestion(input.preferredLanguage, false),
+      };
+    }
+    return {
+      kind: "team",
+      teamId: input.teamId,
+      projectIds: projects.map((project) => project.id),
+      evidence: [
+        {
+          kind: "human_correction",
+          detail:
+            "A Room participant explicitly corrected this request to the authorized Team scope.",
+        },
+      ],
+    };
+  }
 
   if (input.correctedProjectIds) {
     const corrected = [...new Set(input.correctedProjectIds)].filter((id) =>

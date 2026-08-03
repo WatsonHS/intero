@@ -1371,7 +1371,9 @@ export async function buildApp(
         request: await interoRequests.correctScope({
           requestId: request.params.requestId,
           principalId: principal!.id,
-          projectIds: input.projectIds as ProjectId[],
+          ...("scopeKind" in input
+            ? { scopeKind: input.scopeKind }
+            : { projectIds: input.projectIds as ProjectId[] }),
           now: new Date().toISOString(),
         }),
       };

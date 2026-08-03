@@ -121,6 +121,45 @@ describe("Intero Team-Room scope resolver", () => {
     ).toThrow("ineligible Project");
   });
 
+  it("resolves an explicit Team correction across every eligible Team Project", () => {
+    expect(
+      resolveInteroScope({
+        teamId: TEAM_ID,
+        messageBody: "unused after correction",
+        eligibleProjects: [
+          ...projects,
+          {
+            ...project(RESTRICTED, "Restricted Research"),
+            participatingTeamIds: [],
+          },
+        ],
+        correctedScopeKind: "team",
+      }),
+    ).toMatchObject({
+      kind: "team",
+      projectIds: [AUTH, MOBILE],
+      evidence: [
+        {
+          kind: "human_correction",
+        },
+      ],
+    });
+  });
+
+  it("keeps an explicit Team correction unresolved when authorization leaves no Projects", () => {
+    expect(
+      resolveInteroScope({
+        teamId: TEAM_ID,
+        messageBody: "unused after correction",
+        eligibleProjects: [],
+        correctedScopeKind: "team",
+      }),
+    ).toMatchObject({
+      kind: "ambiguous",
+      candidates: [],
+    });
+  });
+
   it("never exposes candidates that were removed by authorization", () => {
     const result = resolveInteroScope({
       teamId: TEAM_ID,

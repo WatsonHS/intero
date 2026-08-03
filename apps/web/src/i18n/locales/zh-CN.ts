@@ -887,6 +887,7 @@ export const zhCN = {
   "chat.coordination.humanDecision": "人的最终决定",
   "chat.coordination.evidence": "事实、判断与来源",
   "chat.coordination.correctScope": "选择本次请求的项目范围",
+  "chat.coordination.teamScope": "使用团队范围",
   "chat.coordination.applyScope": "应用范围",
   "chat.coordination.correctingScope": "正在应用…",
   "chat.coordination.scopeCorrectionFailed": "无法更新范围。",

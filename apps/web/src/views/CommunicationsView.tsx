@@ -2851,9 +2851,12 @@ function InteroScopeCorrection({
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [teamScopeSelected, setTeamScopeSelected] = useState(false);
   const mutation = useMutation({
     mutationFn: () =>
-      correctInteroScope({ requestId, projectIds: selectedProjectIds }),
+      teamScopeSelected
+        ? correctInteroScope({ requestId, scopeKind: "team" })
+        : correctInteroScope({ requestId, projectIds: selectedProjectIds }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
@@ -2875,13 +2878,14 @@ function InteroScopeCorrection({
               type="button"
               key={candidate.projectId}
               aria-pressed={selected}
-              onClick={() =>
+              onClick={() => {
+                setTeamScopeSelected(false);
                 setSelectedProjectIds((current) =>
                   current.includes(candidate.projectId)
                     ? current.filter((id) => id !== candidate.projectId)
                     : [...current, candidate.projectId],
-                )
-              }
+                );
+              }}
               className={cn(
                 "cursor-pointer rounded-pill border px-2.5 py-1.5 text-[10.5px]",
                 selected
@@ -2893,10 +2897,30 @@ function InteroScopeCorrection({
             </button>
           );
         })}
+        <button
+          type="button"
+          data-testid="intero-scope-team"
+          aria-pressed={teamScopeSelected}
+          onClick={() => {
+            setTeamScopeSelected((selected) => !selected);
+            setSelectedProjectIds([]);
+          }}
+          className={cn(
+            "cursor-pointer rounded-pill border px-2.5 py-1.5 text-[10.5px]",
+            teamScopeSelected
+              ? "border-accent bg-accent-soft text-accent-strong"
+              : "border-line bg-canvas text-ink-muted hover:text-ink",
+          )}
+        >
+          {t("chat.coordination.teamScope")}
+        </button>
       </div>
       <button
         type="button"
-        disabled={selectedProjectIds.length === 0 || mutation.isPending}
+        disabled={
+          (!teamScopeSelected && selectedProjectIds.length === 0) ||
+          mutation.isPending
+        }
         onClick={() => mutation.mutate()}
         className="mt-2.5 inline-flex h-8 cursor-pointer items-center rounded-btn border-0 bg-ink px-3 text-[11px] text-canvas disabled:cursor-not-allowed disabled:opacity-45"
       >

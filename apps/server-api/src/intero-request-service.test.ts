@@ -255,6 +255,224 @@ describe("Golden Case Intero request", () => {
     ).toHaveLength(1);
   });
 
+  it("lets a Room participant explicitly correct an ambiguous request to the shared Team scope", async () => {
+    const fixture = await createGoldenCaseFixture();
+    await fixture.sendSourceMessage("@Intero can you check this?");
+    const ambiguous = await fixture.pilotStore.getInteroRequestBySourceMessage(
+      GOLDEN_CASE_IDS.sourceMessage,
+    );
+    const before = fixture.conversations
+      .getThread(GOLDEN_CASE_IDS.room, GOLDEN_CASE_IDS.alex)!
+      .messages.find((message) => message.kind === "coordination_summary")!;
+
+    await fixture.service.correctScope({
+      requestId: ambiguous!.id,
+      principalId: GOLDEN_CASE_IDS.priya,
+      scopeKind: "team",
+      now: "2026-08-01T08:05:00.000Z",
+    });
+
+    const corrected = await fixture.pilotStore.getInteroRequest(ambiguous!.id);
+    expect(corrected).toMatchObject({
+      status: "answered",
+      scopeRevision: 2,
+      scopeResolution: {
+        kind: "team",
+        projectIds: [
+          GOLDEN_CASE_IDS.authProject,
+          GOLDEN_CASE_IDS.mobileProject,
+        ],
+      },
+    });
+    const summaries = fixture.conversations
+      .getThread(GOLDEN_CASE_IDS.room, GOLDEN_CASE_IDS.alex)!
+      .messages.filter((message) => message.kind === "coordination_summary");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ id: before.id, revision: 2 });
+    const coordination = await fixture.pilotStore.listCoordination(
+      GOLDEN_CASE_IDS.authProject,
+      GOLDEN_CASE_IDS.priya,
+    );
+    expect(coordination).toMatchObject([
+      {
+        scopeKind: "team",
+        projectIds: [
+          GOLDEN_CASE_IDS.authProject,
+          GOLDEN_CASE_IDS.mobileProject,
+        ],
+      },
+    ]);
+    expect(
+      fixture.conversations.listThreads("coordination", GOLDEN_CASE_IDS.priya),
+    ).toHaveLength(1);
+  });
+
+  it("treats a replayed Team scope correction as idempotent", async () => {
+    const fixture = await createGoldenCaseFixture();
+    await fixture.sendSourceMessage("@Intero can you check this?");
+    const request = await fixture.pilotStore.getInteroRequestBySourceMessage(
+      GOLDEN_CASE_IDS.sourceMessage,
+    );
+
+    await fixture.service.correctScope({
+      requestId: request!.id,
+      principalId: GOLDEN_CASE_IDS.priya,
+      scopeKind: "team",
+      now: "2026-08-01T08:05:00.000Z",
+    });
+    await fixture.service.correctScope({
+      requestId: request!.id,
+      principalId: GOLDEN_CASE_IDS.priya,
+      scopeKind: "team",
+      now: "2026-08-01T08:05:01.000Z",
+    });
+
+    expect(
+      await fixture.pilotStore.getInteroRequest(request!.id),
+    ).toMatchObject({
+      status: "answered",
+      scopeRevision: 2,
+      scopeResolution: { kind: "team" },
+    });
+    const before = fixture.conversations
+      .getThread(GOLDEN_CASE_IDS.room, GOLDEN_CASE_IDS.alex)!
+      .messages.find((message) => message.kind === "coordination_summary")!;
+    await fixture.processor.handle({
+      schemaVersion: 1,
+      organizationId: GOLDEN_CASE_IDS.organization,
+      requestId: request!.id,
+      scopeRevision: 2,
+    });
+    const after = fixture.conversations
+      .getThread(GOLDEN_CASE_IDS.room, GOLDEN_CASE_IDS.alex)!
+      .messages.find((message) => message.kind === "coordination_summary")!;
+    expect(after).toMatchObject({ id: before.id, revision: before.revision });
+  });
+
+  it("does not let an older queued scope revision materialize", async () => {
+    const fixture = await createGoldenCaseFixture();
+    await fixture.sendSourceMessage("@Intero can you check this?");
+    const request = await fixture.pilotStore.getInteroRequestBySourceMessage(
+      GOLDEN_CASE_IDS.sourceMessage,
+    );
+    const first = await fixture.pilotStore.reviseInteroRequestScope({
+      requestId: request!.id,
+      principalId: GOLDEN_CASE_IDS.alex,
+      scopeResolution: {
+        kind: "cross_project",
+        teamId: GOLDEN_CASE_IDS.team,
+        projectIds: [
+          GOLDEN_CASE_IDS.authProject,
+          GOLDEN_CASE_IDS.mobileProject,
+        ],
+        evidence: [{ kind: "human_correction", detail: "first correction" }],
+      },
+      now: "2026-08-01T08:05:00.000Z",
+    });
+    const newer = await fixture.pilotStore.reviseInteroRequestScope({
+      requestId: request!.id,
+      principalId: GOLDEN_CASE_IDS.priya,
+      scopeResolution: {
+        kind: "team",
+        teamId: GOLDEN_CASE_IDS.team,
+        projectIds: [
+          GOLDEN_CASE_IDS.authProject,
+          GOLDEN_CASE_IDS.mobileProject,
+        ],
+        evidence: [{ kind: "human_correction", detail: "newer correction" }],
+      },
+      now: "2026-08-01T08:05:01.000Z",
+    });
+    expect(first).toMatchObject({
+      changed: true,
+      request: { scopeRevision: 2 },
+    });
+    expect(newer).toMatchObject({
+      changed: true,
+      request: { scopeRevision: 3 },
+    });
+
+    await fixture.processor.handle({
+      schemaVersion: 1,
+      organizationId: GOLDEN_CASE_IDS.organization,
+      requestId: request!.id,
+      scopeRevision: 2,
+    });
+
+    expect(
+      await fixture.pilotStore.getInteroRequest(request!.id),
+    ).toMatchObject({
+      status: "pending",
+      scopeRevision: 3,
+      scopeResolution: { kind: "team" },
+    });
+    expect(
+      await fixture.pilotStore.listCoordination(
+        GOLDEN_CASE_IDS.authProject,
+        GOLDEN_CASE_IDS.alex,
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects a different scope correction once its worker owns processing", async () => {
+    let resolveProse!: () => void;
+    let startedProse!: () => void;
+    const proseStarted = new Promise<void>((resolve) => {
+      startedProse = resolve;
+    });
+    const proseReleased = new Promise<void>((resolve) => {
+      resolveProse = resolve;
+    });
+    const fixture = await createGoldenCaseFixture({
+      proseGateway: {
+        generateInteroProse: vi.fn(async (_input: InteroProseInput) => {
+          startedProse();
+          await proseReleased;
+          return {
+            headline: "Delayed conflict",
+            scopeExplanation: "Both authorized Projects are affected.",
+            whatChanged: "The retry contract changed.",
+            whyItMatters: "The consumer still uses the old field.",
+            needsFromYou: "Confirm the migration window.",
+          };
+        }),
+      },
+    });
+    await fixture.sendSourceMessage("@Intero can you check this?");
+    const request = await fixture.pilotStore.getInteroRequestBySourceMessage(
+      GOLDEN_CASE_IDS.sourceMessage,
+    );
+    const firstCorrection = fixture.service.correctScope({
+      requestId: request!.id,
+      principalId: GOLDEN_CASE_IDS.alex,
+      projectIds: [GOLDEN_CASE_IDS.authProject, GOLDEN_CASE_IDS.mobileProject],
+      now: "2026-08-01T08:05:00.000Z",
+    });
+    await proseStarted;
+
+    await expect(
+      fixture.service.correctScope({
+        requestId: request!.id,
+        principalId: GOLDEN_CASE_IDS.priya,
+        scopeKind: "team",
+        now: "2026-08-01T08:05:01.000Z",
+      }),
+    ).rejects.toMatchObject({
+      code: "INTERO_SCOPE_CORRECTION_CONFLICT",
+      statusCode: 409,
+    });
+
+    resolveProse();
+    await firstCorrection;
+    expect(
+      await fixture.pilotStore.getInteroRequest(request!.id),
+    ).toMatchObject({
+      status: "answered",
+      scopeRevision: 2,
+      scopeResolution: { kind: "cross_project" },
+    });
+  });
+
   it("opens one proactive Team-Room conflict and upgrades the same brief with later provider prose", async () => {
     const generateInteroProse = vi.fn(async (_input: InteroProseInput) => ({
       headline: "Provider-upgraded retry conflict",

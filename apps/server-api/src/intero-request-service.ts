@@ -128,12 +128,21 @@ export class PilotInteroRequestService {
     return stored;
   }
 
-  async correctScope(input: {
-    requestId: string;
-    principalId: PrincipalId;
-    projectIds: ProjectId[];
-    now: string;
-  }): Promise<PilotInteroRequest> {
+  async correctScope(
+    input:
+      | {
+          requestId: string;
+          principalId: PrincipalId;
+          projectIds: ProjectId[];
+          now: string;
+        }
+      | {
+          requestId: string;
+          principalId: PrincipalId;
+          scopeKind: "team";
+          now: string;
+        },
+  ): Promise<PilotInteroRequest> {
     const request = await this.pilotStore.getInteroRequest(input.requestId);
     if (!request)
       throw new PilotStoreError(
@@ -152,16 +161,27 @@ export class PilotInteroRequestService {
         "Only an authorized Room participant can correct this scope.",
       );
     }
+    const requesterProjectIds = new Set(
+      (await this.pilotStore.listProjects(request.requestedByPrincipalId))
+        .filter((project) =>
+          project.participatingTeamIds.includes(request.teamId),
+        )
+        .map((project) => project.id),
+    );
     const eligibleProjects = (
       await this.pilotStore.listProjects(input.principalId)
-    ).filter((project) =>
-      project.participatingTeamIds.includes(request.teamId),
+    ).filter(
+      (project) =>
+        project.participatingTeamIds.includes(request.teamId) &&
+        requesterProjectIds.has(project.id),
     );
     const resolution = resolveInteroScope({
       teamId: request.teamId,
       messageBody: "",
       eligibleProjects,
-      correctedProjectIds: input.projectIds,
+      ...("scopeKind" in input
+        ? { correctedScopeKind: input.scopeKind }
+        : { correctedProjectIds: input.projectIds }),
     });
     if (resolution.kind === "ambiguous") {
       throw new PilotStoreError(
@@ -176,8 +196,10 @@ export class PilotInteroRequestService {
       scopeResolution: resolution,
       now: input.now,
     });
-    await this.jobs.dispatch(toJobReference(revised));
-    return revised;
+    if (revised.changed) {
+      await this.jobs.dispatch(toJobReference(revised.request));
+    }
+    return revised.request;
   }
 }
 
@@ -196,8 +218,7 @@ export class PilotInteroRequestProcessor {
       !request ||
       request.organizationId !== reference.organizationId ||
       request.scopeRevision !== reference.scopeRevision ||
-      request.status === "answered" ||
-      request.status === "needs_scope"
+      (request.status !== "pending" && request.status !== "failed")
     ) {
       return;
     }
@@ -252,16 +273,24 @@ export class PilotInteroRequestProcessor {
             : {}),
         });
       if (resolution.kind === "ambiguous") {
-        await this.writeScopeQuestion(request, resolution, now);
+        await this.writeScopeQuestion(
+          request,
+          reference.scopeRevision,
+          resolution,
+          now,
+        );
         return;
       }
 
-      await this.pilotStore.updateInteroRequest({
+      const current = await this.pilotStore.updateInteroRequestIfCurrent({
         requestId: request.id,
+        expectedScopeRevision: reference.scopeRevision,
+        expectedStatuses: ["pending", "failed"],
         status: "coordinating",
         scopeResolution: resolution,
         now,
       });
+      if (!current) return;
       const scopedClaims = claims.filter((claim) =>
         resolution.projectIds.includes(claim.projectId),
       );
@@ -289,6 +318,7 @@ export class PilotInteroRequestProcessor {
           reason: conflict.reason,
           preferredLanguage: messageLanguage(sourceMessage.body),
         });
+        if (!(await this.isCurrent(reference))) return;
         const coordination = await this.pilotStore.openScopedCoordination({
           teamId: request.teamId,
           scopeKind: resolution.kind,
@@ -302,14 +332,23 @@ export class PilotInteroRequestProcessor {
           sourceClaims: conflictClaims,
           briefProse: preparedProse.prose,
           briefProseSource: preparedProse.source,
+          expectedInteroRequest: {
+            requestId: request.id,
+            scopeRevision: reference.scopeRevision,
+          },
           now,
         });
+        if (!coordination || !(await this.isCurrent(reference))) return;
         const materialized = await this.coordinationKernel.refresh(
           coordination,
           now,
+          undefined,
+          () => this.isCurrent(reference),
         );
-        await this.pilotStore.updateInteroRequest({
+        await this.pilotStore.updateInteroRequestIfCurrent({
           requestId: request.id,
+          expectedScopeRevision: reference.scopeRevision,
+          expectedStatuses: ["coordinating"],
           status: "answered",
           scopeResolution: resolution,
           responseMessageId:
@@ -350,8 +389,10 @@ export class PilotInteroRequestProcessor {
             : "The current evidence is insufficient to assert a conflict."),
         preferredLanguage: messageLanguage(sourceMessage.body),
       });
+      if (!(await this.isCurrent(reference))) return;
       await this.writeBoundedAnswer(
         request,
+        reference.scopeRevision,
         resolution,
         renderInteroProse(preparedProse.prose),
         boundaryKey,
@@ -359,8 +400,10 @@ export class PilotInteroRequestProcessor {
         now,
       );
     } catch (error) {
-      await this.pilotStore.updateInteroRequest({
+      await this.pilotStore.updateInteroRequestIfCurrent({
         requestId: request.id,
+        expectedScopeRevision: reference.scopeRevision,
+        expectedStatuses: ["pending", "coordinating"],
         status: "failed",
         lastErrorCode:
           error instanceof PilotStoreError
@@ -370,6 +413,13 @@ export class PilotInteroRequestProcessor {
       });
       throw error;
     }
+  }
+
+  private isCurrent(reference: PilotInteroJobReference): Promise<boolean> {
+    return this.pilotStore.isInteroRequestScopeCurrent(
+      reference.requestId,
+      reference.scopeRevision,
+    );
   }
 
   private async prepareProse(input: {
@@ -436,9 +486,27 @@ export class PilotInteroRequestProcessor {
 
   private async writeScopeQuestion(
     request: PilotInteroRequest,
+    expectedScopeRevision: number,
     resolution: Extract<PilotInteroScopeResolution, { kind: "ambiguous" }>,
     now: string,
   ): Promise<void> {
+    const marked = await this.pilotStore.updateInteroRequestIfCurrent({
+      requestId: request.id,
+      expectedScopeRevision,
+      expectedStatuses: ["pending", "failed"],
+      status: "needs_scope",
+      scopeResolution: resolution,
+      responseMessageId: interoResponseMessageId(request.sourceMessageId),
+      now,
+    });
+    if (!marked) return;
+    if (
+      !(await this.pilotStore.isInteroRequestScopeCurrent(
+        request.id,
+        expectedScopeRevision,
+      ))
+    )
+      return;
     const responseMessageId = interoResponseMessageId(request.sourceMessageId);
     await this.conversations.upsertCoordinationSummary({
       roomThreadId: request.sourceRoomThreadId,
@@ -467,23 +535,25 @@ export class PilotInteroRequestProcessor {
       },
       at: request.createdAt,
     });
-    await this.pilotStore.updateInteroRequest({
-      requestId: request.id,
-      status: "needs_scope",
-      scopeResolution: resolution,
-      responseMessageId,
-      now,
-    });
   }
 
   private async writeBoundedAnswer(
     request: PilotInteroRequest,
+    expectedScopeRevision: number,
     resolution: Exclude<PilotInteroScopeResolution, { kind: "ambiguous" }>,
     body: string,
     boundaryKey: string,
     sourceCount: number,
     now: string,
   ): Promise<void> {
+    if (
+      !(await this.pilotStore.isInteroRequestScopeCurrent(
+        request.id,
+        expectedScopeRevision,
+      ))
+    ) {
+      return;
+    }
     const responseMessageId = interoResponseMessageId(request.sourceMessageId);
     await this.conversations.upsertCoordinationSummary({
       roomThreadId: request.sourceRoomThreadId,
@@ -509,8 +579,10 @@ export class PilotInteroRequestProcessor {
       },
       at: request.createdAt,
     });
-    await this.pilotStore.updateInteroRequest({
+    await this.pilotStore.updateInteroRequestIfCurrent({
       requestId: request.id,
+      expectedScopeRevision,
+      expectedStatuses: ["coordinating"],
       status: "answered",
       scopeResolution: resolution,
       responseMessageId,

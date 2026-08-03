@@ -90,7 +90,7 @@ test.describe("Golden Case acceptance matrix", () => {
       );
       await expect(summary).toHaveCount(1);
       await expect(correction).toBeVisible();
-      await expect(correction.getByRole("button")).toHaveCount(3);
+      await expect(correction.getByRole("button")).toHaveCount(4);
       await expect(correction).toContainText("Auth Platform");
       await expect(correction).toContainText("Mobile App");
       await expect(correction).not.toContainText("Secret Phoenix");
@@ -101,8 +101,9 @@ test.describe("Golden Case acceptance matrix", () => {
         ),
       ).toEqual([]);
 
-      await correction.getByRole("button", { name: "Auth Platform" }).click();
-      await correction.getByRole("button", { name: "Mobile App" }).click();
+      const teamScope = correction.getByTestId("intero-scope-team");
+      await teamScope.click();
+      await expect(teamScope).toHaveAttribute("aria-pressed", "true");
       await correction
         .getByRole("button", { name: /应用范围|Apply scope/ })
         .click();
@@ -118,6 +119,38 @@ test.describe("Golden Case acceptance matrix", () => {
       expect(
         room.messages.filter(
           (message) => message.kind === "coordination_summary",
+        ),
+      ).toHaveLength(1);
+      const sourceMessage = room.messages.find(
+        (message) =>
+          message.kind === "message" &&
+          message.senderId === GOLDEN_CASE_IDS.priya,
+      )!;
+      const request =
+        await harness.fixture.pilotStore.getInteroRequestBySourceMessage(
+          sourceMessage.id,
+        );
+      expect(request).toMatchObject({
+        status: "answered",
+        scopeRevision: 2,
+        scopeResolution: {
+          kind: "team",
+          projectIds: [
+            GOLDEN_CASE_IDS.authProject,
+            GOLDEN_CASE_IDS.mobileProject,
+          ],
+        },
+      });
+      expect(
+        await harness.fixture.pilotStore.listCoordination(
+          GOLDEN_CASE_IDS.authProject,
+          GOLDEN_CASE_IDS.priya,
+        ),
+      ).toHaveLength(1);
+      expect(
+        harness.fixture.conversations.listThreads(
+          "coordination",
+          GOLDEN_CASE_IDS.priya,
         ),
       ).toHaveLength(1);
       await page.screenshot({

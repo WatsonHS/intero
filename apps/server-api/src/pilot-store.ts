@@ -433,12 +433,27 @@ export interface PilotStore {
     coordinationThreadId?: string;
     lastErrorCode?: string;
   }): Promise<PilotInteroRequest>;
+  updateInteroRequestIfCurrent(input: {
+    requestId: string;
+    expectedScopeRevision: number;
+    expectedStatuses?: PilotInteroRequest["status"][];
+    status: PilotInteroRequest["status"];
+    now: string;
+    scopeResolution?: PilotInteroScopeResolution;
+    responseMessageId?: NonNullable<PilotInteroRequest["responseMessageId"]>;
+    coordinationThreadId?: string;
+    lastErrorCode?: string;
+  }): Promise<PilotInteroRequest | undefined>;
+  isInteroRequestScopeCurrent(
+    requestId: string,
+    scopeRevision: number,
+  ): Promise<boolean>;
   reviseInteroRequestScope(input: {
     requestId: string;
     principalId: PrincipalId;
     scopeResolution: PilotInteroScopeResolution;
     now: string;
-  }): Promise<PilotInteroRequest>;
+  }): Promise<{ request: PilotInteroRequest; changed: boolean }>;
   listSharedBoundaryClaims(
     projectIds: ProjectId[],
     principalId: PrincipalId,
@@ -456,8 +471,9 @@ export interface PilotStore {
     sourceClaims: PilotSharedBoundaryClaim[];
     briefProse?: PilotInteroProse;
     briefProseSource?: "provider" | "deterministic_fallback";
+    expectedInteroRequest?: { requestId: string; scopeRevision: number };
     now: string;
-  }): Promise<PilotCoordinationThread>;
+  }): Promise<PilotCoordinationThread | undefined>;
   linkCoordinationArtifacts(input: {
     coordinationThreadId: string;
     conversationThreadId: string;
@@ -2707,6 +2723,14 @@ export abstract class SnapshotPilotStore implements PilotStore {
     );
   }
 
+  async isInteroRequestScopeCurrent(
+    requestId: string,
+    scopeRevision: number,
+  ): Promise<boolean> {
+    const request = await this.getInteroRequest(requestId);
+    return request?.scopeRevision === scopeRevision;
+  }
+
   async updateInteroRequest(input: {
     requestId: string;
     status: PilotInteroRequest["status"];
@@ -2741,12 +2765,55 @@ export abstract class SnapshotPilotStore implements PilotStore {
     });
   }
 
+  async updateInteroRequestIfCurrent(input: {
+    requestId: string;
+    expectedScopeRevision: number;
+    expectedStatuses?: PilotInteroRequest["status"][];
+    status: PilotInteroRequest["status"];
+    now: string;
+    scopeResolution?: PilotInteroScopeResolution;
+    responseMessageId?: NonNullable<PilotInteroRequest["responseMessageId"]>;
+    coordinationThreadId?: string;
+    lastErrorCode?: string;
+  }): Promise<PilotInteroRequest | undefined> {
+    return this.updateSnapshot((snapshot) => {
+      const request = snapshot.interoRequests.find(
+        (candidate) => candidate.id === input.requestId,
+      );
+      if (
+        !request ||
+        request.scopeRevision !== input.expectedScopeRevision ||
+        (input.expectedStatuses &&
+          !input.expectedStatuses.includes(request.status))
+      ) {
+        return undefined;
+      }
+      if (request.status === "answered" && input.status !== "answered") {
+        return undefined;
+      }
+      request.status = input.status;
+      request.updatedAt = input.now;
+      if (input.scopeResolution) {
+        request.scopeResolution = input.scopeResolution;
+      }
+      if (input.responseMessageId) {
+        request.responseMessageId = input.responseMessageId;
+      }
+      if (input.coordinationThreadId) {
+        request.coordinationThreadId = input.coordinationThreadId;
+      }
+      if (input.lastErrorCode) request.lastErrorCode = input.lastErrorCode;
+      else delete request.lastErrorCode;
+      return request;
+    });
+  }
+
   async reviseInteroRequestScope(input: {
     requestId: string;
     principalId: PrincipalId;
     scopeResolution: PilotInteroScopeResolution;
     now: string;
-  }): Promise<PilotInteroRequest> {
+  }): Promise<{ request: PilotInteroRequest; changed: boolean }> {
     return this.updateSnapshot(
       (snapshot) => {
         const request = snapshot.interoRequests.find(
@@ -2754,12 +2821,27 @@ export abstract class SnapshotPilotStore implements PilotStore {
         );
         if (!request) throw notFound("Intero request");
         requireTeamMember(snapshot, request.teamId, input.principalId);
+        if (
+          sameInteroScopeResolution(
+            request.scopeResolution,
+            input.scopeResolution,
+          )
+        ) {
+          return { request, changed: false };
+        }
+        if (request.status !== "needs_scope" && request.status !== "pending") {
+          throw new PilotStoreError(
+            "INTERO_SCOPE_CORRECTION_CONFLICT",
+            409,
+            "Intero is already processing or has answered this request; wait for the current result before changing scope.",
+          );
+        }
         request.scopeRevision += 1;
         request.scopeResolution = input.scopeResolution;
         request.status = "pending";
         request.updatedAt = input.now;
         delete request.lastErrorCode;
-        return request;
+        return { request, changed: true };
       },
       {
         eventType: "pilot.intero.scope_corrected",
@@ -2802,10 +2884,23 @@ export abstract class SnapshotPilotStore implements PilotStore {
     sourceClaims: PilotSharedBoundaryClaim[];
     briefProse?: PilotInteroProse;
     briefProseSource?: "provider" | "deterministic_fallback";
+    expectedInteroRequest?: { requestId: string; scopeRevision: number };
     now: string;
-  }): Promise<PilotCoordinationThread> {
+  }): Promise<PilotCoordinationThread | undefined> {
     return this.updateSnapshot(
       (snapshot) => {
+        if (input.expectedInteroRequest) {
+          const request = snapshot.interoRequests.find(
+            (candidate) =>
+              candidate.id === input.expectedInteroRequest!.requestId,
+          );
+          if (
+            !request ||
+            request.scopeRevision !== input.expectedInteroRequest.scopeRevision
+          ) {
+            return undefined;
+          }
+        }
         if (input.match.classification !== "potential_conflict") {
           throw new PilotStoreError(
             "INTERO_COORDINATION_CONFLICT_REQUIRED",
@@ -4142,6 +4237,30 @@ function requireStandInJob(
   const job = snapshot.standInJobs.find((item) => item.jobKey === jobKey);
   if (!job) throw notFound("Stand-in job");
   return job;
+}
+
+function sameInteroScopeResolution(
+  current: PilotInteroScopeResolution | undefined,
+  next: PilotInteroScopeResolution,
+): boolean {
+  if (
+    !current ||
+    current.kind !== next.kind ||
+    current.teamId !== next.teamId
+  ) {
+    return false;
+  }
+  if (current.kind === "ambiguous" || next.kind === "ambiguous") {
+    return false;
+  }
+  const currentProjectIds = [...current.projectIds].toSorted();
+  const nextProjectIds = [...next.projectIds].toSorted();
+  return (
+    currentProjectIds.length === nextProjectIds.length &&
+    currentProjectIds.every(
+      (projectId, index) => projectId === nextProjectIds[index],
+    )
+  );
 }
 
 function canParticipate(
