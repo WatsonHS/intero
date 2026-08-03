@@ -21,12 +21,41 @@ if [[ ! -f "$env_file" ]]; then
   echo "Missing production environment file: $env_file" >&2
   exit 1
 fi
+public_url="$(
+  awk -F= '$1 == "INTERO_PUBLIC_URL" { sub(/^[^=]*=/, ""); print; exit }' \
+    "$env_file" |
+    tr -d "\"'"
+)"
+if [[ "$public_url" != https://* ]]; then
+  echo "INTERO_PUBLIC_URL must use HTTPS in product mode." >&2
+  exit 1
+fi
 
 compose=(
   docker compose
   --env-file "$env_file"
   -f "$repo_root/compose.production.yaml"
 )
+
+require_ready() {
+  local service="$1"
+  local ready_url="$2"
+  "${compose[@]}" exec -T "$service" node -e '
+    const url = process.argv[1];
+    fetch(url, { signal: AbortSignal.timeout(10_000) })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok || body?.status !== "ready") {
+          throw new Error(`expected ready, got HTTP ${response.status} ${body?.status ?? "invalid"}`);
+        }
+      })
+      .catch((error) => {
+        console.error(`Readiness check failed: ${error.message}`);
+        process.exit(1);
+      });
+  ' "$ready_url"
+}
+
 export INTERO_IMAGE_TAG="$image_tag"
 export INTERO_MIGRATOR_IMAGE_TAG
 if [[ -f "$state_dir/current-schema-tag" ]]; then
@@ -59,5 +88,23 @@ fi
 # schema during application rollback.
 "${compose[@]}" up -d --no-build worker api gateway
 "${compose[@]}" up -d --wait --wait-timeout 120 worker api
+require_ready worker "http://127.0.0.1:9464/ready"
+require_ready api "http://127.0.0.1:4310/ready"
+
+healthy=false
+for _attempt in {1..30}; do
+  if curl --fail --silent --show-error --max-time 3 "$public_url/health" >/dev/null; then
+    healthy=true
+    break
+  fi
+  sleep 2
+done
+if [[ "$healthy" != "true" ]]; then
+  echo "Rollback started but the public health endpoint did not recover." >&2
+  echo "Inspect: scripts/ops/production-compose.sh ps" >&2
+  echo "Logs:    scripts/ops/production-compose.sh logs --tail=200 api worker gateway" >&2
+  exit 1
+fi
+
 printf '%s\n' "$image_tag" >"$state_dir/current-tag"
-echo "Intero application images rolled back to $image_tag."
+echo "Intero application images rolled back to $image_tag and passed public health."

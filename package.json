@@ -36,6 +36,8 @@
     "test:realtime:capacity": "vitest run apps/server-worker/src/outbox.integration.test.ts",
     "test:realtime:release": "INTERO_REALTIME_CAPACITY_CLIENTS=10000 INTERO_REALTIME_CONNECT_CONCURRENCY=128 INTERO_REALTIME_CAPACITY_PUBLICATIONS=1000 vitest run apps/server-worker/src/outbox.integration.test.ts",
     "test:r0:production-like": "scripts/validation/r0-production-like-gate.sh",
+    "test:g7:golden-case": "scripts/validation/golden-case-release-canary.sh",
+    "test:g7:target-readiness": "scripts/validation/golden-case-target-readiness.sh",
     "check": "pnpm lint && pnpm test && pnpm build && pnpm bundle:report",
     "format:check": "prettier --check .",
     "demo:seed": "pnpm --filter @intero/server-api demo:seed",

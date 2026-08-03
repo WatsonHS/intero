@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,7 @@ const r1R2EvidenceRoot = resolve(
   "output/playwright/r1-r2-coordination",
 );
 const evaluationEnabled = process.env.INTERO_REAL_PROVIDER_CANARY === "1";
+const g7EvidenceDir = process.env.INTERO_G7_EVIDENCE_DIR;
 const demoPassword = process.env.INTERO_E2E_PASSWORD ?? "Intero-demo-2026!";
 const projectStorageKey = "intero.pilot.project.v1";
 const teamStorageKey = "intero.pilot.team.v1";
@@ -508,18 +509,16 @@ test.describe("real provider collaboration chain", () => {
       const coordination = (
         await getOverview(alex, authProject.id)
       ).coordination.find((thread) => thread.boundaryKey === boundaryKey)!;
-      expect(coordination).toMatchObject({
-        scopeKind: "cross_project",
-        projectIds: [authProject.id, mobileProject.id].toSorted(),
-        brief: {
-          proseSource: "provider",
-          scope: {
-            kind: "cross_project",
-            projectIds: [authProject.id, mobileProject.id].toSorted(),
-          },
-        },
-      });
-      expect(coordination.brief!.headline.length).toBeGreaterThan(0);
+      expect(coordination.scopeKind).toBe("cross_project");
+      expect(coordination.projectIds).toEqual(
+        [authProject.id, mobileProject.id].toSorted(),
+      );
+      expect(coordination.brief?.proseSource).toBe("provider");
+      expect(coordination.brief?.scope.kind).toBe("cross_project");
+      expect(coordination.brief?.scope.projectIds).toEqual(
+        [authProject.id, mobileProject.id].toSorted(),
+      );
+      expect(coordination.brief?.headline.length ?? 0).toBeGreaterThan(0);
 
       const conclusion = `Keep retryDelayMs through the compatibility window (${suffix}).`;
       await resolveCoordinationThroughUi(
@@ -531,34 +530,32 @@ test.describe("real provider collaboration chain", () => {
       const resolved = (
         await getOverview(priya, mobileProject.id)
       ).coordination.find((thread) => thread.id === coordination.id)!;
-      expect(resolved).toMatchObject({
-        status: "resolved",
-        conclusion,
-        decisionId: expect.any(String),
-        brief: {
-          proseSource: "provider",
-          humanDecision: {
-            outcome: conclusion,
-            decidedBy: [principals.priya.id],
-            confirmedAt: expect.any(String),
-          },
-        },
-      });
+      expect(resolved.status).toBe("resolved");
+      expect(resolved.conclusion).toBe(conclusion);
+      expect(typeof resolved.decisionId).toBe("string");
+      expect(resolved.brief?.proseSource).toBe("provider");
+      expect(resolved.brief?.humanDecision?.outcome).toBe(conclusion);
+      expect(resolved.brief?.humanDecision?.decidedBy).toEqual([
+        principals.priya.id,
+      ]);
+      expect(typeof resolved.brief?.humanDecision?.confirmedAt).toBe("string");
 
       const agentContext = await runCloudClient(
         ["context", "--mcp-source", alexConnection.client],
         alexCloudDataDir,
       );
-      expect(agentContext).toMatchObject({
-        projectId: authProject.id,
-        confirmedCoordination: expect.arrayContaining([
-          expect.objectContaining({
-            coordinationThreadId: coordination.id,
-            decisionId: resolved.decisionId,
-            conclusion,
-          }),
-        ]),
-      });
+      expect(agentContext.projectId).toBe(authProject.id);
+      const agentContextDecisions = agentContext.confirmedCoordination as Array<
+        Record<string, unknown>
+      >;
+      expect(
+        agentContextDecisions.some(
+          (decision) =>
+            decision.coordinationThreadId === coordination.id &&
+            decision.decisionId === resolved.decisionId &&
+            decision.conclusion === conclusion,
+        ),
+      ).toBe(true);
 
       const standInExchange = await askStandInThroughUi(
         priya,
@@ -566,13 +563,8 @@ test.describe("real provider collaboration chain", () => {
         principals.alex,
         "What compatibility-window decision was confirmed? Include its parenthesized canary token.",
       );
-      expect(standInExchange.answer).toContain(suffix);
-      expect(standInExchange.sources).toEqual([]);
-      await priya.screenshot({
-        path: resolve(evidenceRoot, "01-golden-provider-confirmed.png"),
-        fullPage: true,
-      });
-
+      expect(standInExchange.answer.includes(suffix)).toBe(true);
+      expect(standInExchange.sources.length).toBe(0);
       const roomAfter = await getThread(alex, room.id);
       const summaries = roomAfter.messages.filter(
         (message) =>
@@ -580,12 +572,22 @@ test.describe("real provider collaboration chain", () => {
           message.coordinationSummary?.coordinationThreadId ===
             coordination.conversationThreadId,
       );
-      expect(summaries).toHaveLength(1);
-      expect(summaries[0]).toMatchObject({
-        coordinationSummary: {
-          status: "resolved",
-          conclusion,
-        },
+      expect(summaries.length).toBe(1);
+      expect(summaries[0]?.coordinationSummary?.status).toBe("resolved");
+      expect(summaries[0]?.coordinationSummary?.conclusion).toBe(conclusion);
+
+      await writeGoldenCaseCanaryManifest({
+        sourceMessageId,
+        projectCount: coordination.projectIds.length,
+        coordinationThreadId: coordination.id,
+        decisionId: resolved.decisionId,
+        agentContextDecisionCount: (
+          agentContext.confirmedCoordination as unknown[]
+        ).length,
+        standInExchangeId: standInExchange.id,
+        scopeKind: coordination.scopeKind,
+        proseSource: coordination.brief!.proseSource,
+        result: "PASS",
       });
 
       emitSafeResult({
@@ -1903,6 +1905,55 @@ function scoreScenario(input: {
 
 function emitSafeResult(result: Record<string, unknown>): void {
   process.stdout.write(`COLLABORATION_RESULT ${JSON.stringify(result)}\n`);
+}
+
+async function writeGoldenCaseCanaryManifest(input: {
+  sourceMessageId: string;
+  projectCount: number;
+  coordinationThreadId: string;
+  decisionId: string | undefined;
+  agentContextDecisionCount: number;
+  standInExchangeId: string;
+  scopeKind: string;
+  proseSource: string;
+  result: "PASS";
+}): Promise<void> {
+  if (!g7EvidenceDir) {
+    throw new Error(
+      "INTERO_G7_EVIDENCE_DIR is required for the Golden Case provider canary.",
+    );
+  }
+  await mkdir(g7EvidenceDir, { recursive: true, mode: 0o700 });
+  const manifestPath = resolve(
+    g7EvidenceDir,
+    "golden-case-provider-canary.json",
+  );
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        kind: "golden_case_provider_canary",
+        artifacts: {
+          sourceMessageId: input.sourceMessageId,
+          coordinationThreadId: input.coordinationThreadId,
+          decisionId: input.decisionId ?? null,
+          standInExchangeId: input.standInExchangeId,
+        },
+        counts: {
+          projects: input.projectCount,
+          agentContextDecisions: input.agentContextDecisionCount,
+        },
+        scopeKind: input.scopeKind,
+        proseSource: input.proseSource,
+        result: input.result,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+  await chmod(manifestPath, 0o600);
 }
 
 function runSuffix(): string {
