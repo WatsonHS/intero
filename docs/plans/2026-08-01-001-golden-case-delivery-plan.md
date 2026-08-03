@@ -1,7 +1,7 @@
 ---
 title: "feat: deliver the Intero Golden Case"
 type: feat
-status: planned
+status: implemented-awaiting-external-canaries
 date: 2026-08-01
 roadmap: docs/PRODUCT_ROADMAP.md
 golden_case: docs/GOLDEN_CASE.md
@@ -31,6 +31,27 @@ Team-room product experience. It deliberately delivers vertical slices: every
 stage must produce something a user can see, understand, and test before the
 next layer is justified.
 
+## Implementation status — 2026-08-03
+
+G0–G6 are implemented on the real application surfaces and have repeatable
+local/API/browser evidence. The main Golden implementation landed in
+`04d7b8a`, was merged to `main` in `ba6ae4c`, and that exact `main` revision
+passed the repository CI gate. The forward-only migration is `0038`; shared
+migration `0037` remains immutable.
+
+The 2026-08-03 closure audit also added the missing explicit Team-scope
+correction path. A Room participant can now correct an ambiguous request to
+the intersection of the requester's and corrector's authorized Team Projects,
+without creating a second request, summary, discussion, or Inbox item.
+
+G7 remains an external evidence gate. The repository now provides separate,
+privacy-safe commands for the configured-provider clean-to-confirmed canary
+and target Worker/API/migration/RLS readiness, and application rollback must
+recover the public health endpoint before it is recorded as successful. The
+gate must not be marked complete until those commands pass against an isolated
+real-provider target and the rollback exercise is recorded. See the
+[Golden Case release gate](../validation/GOLDEN_CASE_RELEASE_GATE_2026-08-01.md).
+
 ## What this plan does not do
 
 This plan does not introduce:
@@ -46,11 +67,12 @@ This plan does not introduce:
 Projects remain internal state, evidence, and authorization scopes. People in
 a shared Room interact with one Agent named `Intero`.
 
-## Current implementation reality
+## Initial implementation baseline — 2026-08-01
 
-The current R1/R2 change set is an enabling slice, not proof of the Golden
-Case. Treat the following as working-tree evidence until it is committed,
-deployed, and canaried.
+The table below is the pre-Golden implementation baseline that shaped this
+plan. It is retained as design history; the listed G0–G6 gaps have since been
+closed as recorded above and in the release gate. Deployment and canary claims
+still require current target evidence.
 
 | Capability                    | Current reality                                                                                         | Golden Case gap                                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |

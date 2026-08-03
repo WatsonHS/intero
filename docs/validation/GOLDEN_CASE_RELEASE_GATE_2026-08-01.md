@@ -24,8 +24,44 @@ case against a real external Provider, a deployed durable Worker, or the target
 environment's migration and rollback path. A deterministic local Provider is
 not release evidence for those gates.
 
-The validation was run from `codex/r1-r2-closure` at base commit `bc859ec` with
-the Golden Case implementation present as working-tree changes.
+The original validation was run from `codex/r1-r2-closure`; the implementation
+subsequently landed as `04d7b8a` and was merged to `main` in `ba6ae4c`.
+
+## Closure refresh — 2026-08-03
+
+The exact merged revision `ba6ae4c` passed the repository
+[CI gate](https://github.com/WatsonHS/intero/actions/runs/30760528960). A fresh
+audit then found and closed one G2 interaction gap: an ambiguous request could
+resolve to Team scope from the original message, but the correction surface
+only accepted Project selections. The API remains compatible with the original
+`{ projectIds }` request and now also accepts `{ scopeKind: "team" }`. The
+server derives that Team scope from the requester's and corrector's shared
+authorized Team Projects; clients cannot submit a wider Team Project list.
+
+The current delivery delta passed:
+
+- OpenAPI generation, TypeScript, Prettier, shell syntax, and diff checks;
+- 402/402 default TypeScript tests, with the same 63 environment-gated tests
+  exercised separately;
+- 64/64 clean disposable PostgreSQL, Better Auth, RLS, authorization, Worker,
+  realtime, and object-storage integration tests;
+- all 14 package builds and the existing Web bundle budget;
+- Golden Case browser acceptance 5/5, including the Team-scope correction;
+- the isolated real PostgreSQL/Graphile Worker R1/R2 compatibility browser
+  path 1/1.
+
+The first disposable integration attempt omitted the production-equivalent
+default table grants for `intero_app`, so three Better Auth tests correctly
+failed with database permission errors. The database was discarded, recreated
+with the same default grants as the deployment bootstrap, and the complete
+integration set then passed 64/64. No shared development database was migrated
+or used as the test target.
+
+G7 is still not complete. This host has no `.env.production`, deployed Intero
+LaunchAgent, configured Provider, or isolated external canary credentials. The
+repository now provides privacy-safe canary and target-readiness receipts, and
+rollback requires the public health endpoint to recover before success is
+recorded, but those checks still need to run on the real target.
 
 ## G0–G7 audit
 
@@ -33,7 +69,7 @@ the Golden Case implementation present as working-tree changes.
 | ---- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | G0   | complete locally   | Fixed clean-state Alex/Priya fixture; migration `0037` left immutable; forward-only `0038`; disposable database runs                                                          |
 | G1   | complete locally   | Room-local Intero identity, exact mention dispatch, durable ID-only request/outbox, replay-safe single response, access tests                                                 |
-| G2   | complete locally   | Single/cross-Project/Team/ambiguous resolver, explicit and participant Work State evidence, correction in place, restricted-candidate isolation                               |
+| G2   | complete locally   | Single/cross-Project/Team/ambiguous resolver, explicit and participant Work State evidence, Project or Team correction in place, restricted-candidate isolation               |
 | G3   | complete locally   | Authorized cross-Project matching; compatible/conflict/insufficient/stale/correction/withdrawal/replay branches; prompted/proactive dedupe; no eligible Team Room stays quiet |
 | G4   | complete locally   | Layered brief, deterministic locale fallback, bounded provider prose, Alex/Priya first-layer browser assertions, dismiss/mute/revisit                                         |
 | G5   | complete locally   | Responsible-human confirmation, wrong-principal rejection, one Decision, one summary/child closure, personal Stand-in and Coding Agent context backflow                       |
@@ -213,11 +249,10 @@ the actual Coding Agent installation path.
 G7 remains open until all of the following are recorded without prompts,
 responses, secrets, or raw logs:
 
-The final local audit found the real-provider canary flag and target database,
-worker, API, renderer, and provider-encryption configuration unset; the local
-API, renderer, and deterministic provider ports were closed. No external
-canary was attempted or claimed. The open draft PR's last successful CI result
-is for base commit `bc859ec`, not for the current uncommitted Golden Case delta.
+The 2026-08-03 audit found the real-provider canary flag and target database,
+worker, API, renderer, production environment, and Provider configuration
+unavailable. No external canary, deployment, rollback, or target mutation was
+attempted or claimed.
 
 1. a configured real external Provider produces the bounded scope explanation
    and human-readable prose while deterministic evidence still controls the
@@ -229,3 +264,33 @@ is for base commit `bc859ec`, not for the current uncommitted Golden Case delta.
    recorded;
 5. the target clean-to-confirmed Golden Case has artifact references and no
    privacy leak or semantic duplicate.
+
+Run the external gates from an isolated target and a privacy-safe evidence
+directory:
+
+```bash
+INTERO_G7_EVIDENCE_DIR=/absolute/path/to/evidence \
+INTERO_E2E_API_URL=https://api.example.com \
+INTERO_E2E_RENDERER_URL=https://app.example.com \
+INTERO_E2E_PASSWORD='<isolated canary credential>' \
+INTERO_G7_TARGET_ID=intero-staging \
+INTERO_G7_EXPECTED_RELEASE_SHA='<deployed Git SHA>' \
+pnpm test:g7:golden-case
+
+INTERO_G7_EVIDENCE_DIR=/absolute/path/to/evidence \
+INTERO_PRODUCTION_ENV_FILE=/absolute/path/to/.env.production \
+INTERO_G7_TARGET_ID=intero-staging \
+INTERO_G7_EXPECTED_RELEASE_SHA='<deployed application Git SHA>' \
+INTERO_G7_EXPECTED_SCHEMA_SHA='<deployed schema Git SHA>' \
+pnpm test:g7:target-readiness
+```
+
+`INTERO_G7_EXPECTED_SCHEMA_SHA` defaults to the expected application SHA; set
+it separately after a forward-only schema migration followed by an application
+rollback. The first command writes an opaque-ID runtime manifest plus
+`golden-case-release-canary.json`; the second writes `target-readiness.json`.
+The receipts bind the same target and expected release identities and contain
+origins, timing, assertion names, hashes, and pass/fail state only. They do not
+contain Provider keys, passwords, prompts, responses, file contents, or raw
+logs. Privacy mode disables Playwright screenshots and traces and removes its
+temporary output directory after the canary.

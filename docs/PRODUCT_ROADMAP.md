@@ -156,11 +156,12 @@ Exit evidence:
 
 ### R1 — Prove the coordination kernel
 
-Implementation status (2026-07-31): the explicit shared-Claim contract,
+Implementation status (2026-08-03): the explicit shared-Claim contract,
 deterministic matcher, multi-source persistence, MCP evaluation pair, and
 canonical conflict materialization are implemented and locally validated.
-Browser acceptance, a deployed durable-worker canary, and target-environment
-release evidence are still required before this gate is marked proven.
+The isolated PostgreSQL/Graphile Worker browser acceptance passes. A deployed
+target Worker canary and target-environment release/rollback evidence are still
+required before this gate is marked proven.
 
 Run one controlled pair through real authorized Work State:
 
@@ -183,11 +184,12 @@ Exit evidence:
 
 ### R2 — Prove low-noise collaboration
 
-Implementation status (2026-07-31): the canonical child Thread, one
+Implementation status (2026-08-03): the canonical child Thread, one
 in-place-updated Room summary, contextual dismiss/mute/revisit controls,
 confirmation-only Action Inbox routing, and specialized idempotent closure are
-implemented and locally validated. The user-visible browser evaluation and
-real-provider canary remain open evidence.
+implemented and locally validated through the user-visible browser evaluation.
+The configured real-provider and target clean-to-confirmed canaries remain open
+evidence.
 
 Turn the detected conflict into a complete user interaction:
 
