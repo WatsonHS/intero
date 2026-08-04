@@ -969,25 +969,47 @@ export async function previewCodingAgentIntegration(input: {
   adapter: CodingAgentAdapter;
   action: CodingAgentIntegrationAction;
   locale: "zh-CN" | "en-US";
+  projectId?: string;
+  repositorySelectionToken?: string;
 }): Promise<CodingAgentIntegrationPreview | null> {
   if (typeof window === "undefined" || !window.interoDesktop) {
     throw new Error("Integration management requires Intero Desktop.");
   }
-  return window.interoDesktop.previewIntegration(
-    input.adapter,
-    input.action,
-    input.locale,
-  );
+  return window.interoDesktop.previewIntegration(input);
 }
 
 export async function manageCodingAgentIntegration(input: {
   adapter: CodingAgentAdapter;
   token: string;
-}): Promise<CodingAgentIntegrationStatus[]> {
+}): Promise<{
+  integrations: CodingAgentIntegrationStatus[];
+  workspaceId?: string;
+}> {
   if (typeof window === "undefined" || !window.interoDesktop) {
     throw new Error("Integration management requires Intero Desktop.");
   }
   return window.interoDesktop.manageIntegration(input.token);
+}
+
+export async function previewWorkspaceConnectionCleanup(input: {
+  adapter: CodingAgentAdapter;
+  locale: "zh-CN" | "en-US";
+  projectId: string;
+  bindingId: string;
+  workspaceId: string;
+  repositorySelectionToken: string;
+}): Promise<WorkspaceCleanupPreview | null> {
+  if (typeof window === "undefined" || !window.interoDesktop) {
+    throw new Error("Workspace cleanup requires Intero Desktop.");
+  }
+  return window.interoDesktop.previewWorkspaceCleanup(input);
+}
+
+export async function cleanupWorkspaceConnection(token: string) {
+  if (typeof window === "undefined" || !window.interoDesktop) {
+    throw new Error("Workspace cleanup requires Intero Desktop.");
+  }
+  return window.interoDesktop.cleanupWorkspaceConnection(token);
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {

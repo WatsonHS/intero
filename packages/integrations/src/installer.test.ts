@@ -14,7 +14,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { claudeCodeAdapter, codexAdapter, openCodeAdapter } from "./index";
+import {
+  claudeCodeAdapter,
+  codexAdapter,
+  cursorAdapter,
+  grokBuildAdapter,
+  openCodeAdapter,
+} from "./index";
 import {
   applyManagedInstall,
   diagnoseManagedInstall,
@@ -61,6 +67,48 @@ describe("managed integration installer", () => {
 
     await uninstallManagedIntegration("opencode", home);
     expect(await readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("uses GROK_HOME for a managed Grok Build MCP configuration", async () => {
+    const home = await mkdtemp(join(tmpdir(), "intero-grok-home-"));
+    const grokHome = await mkdtemp(join(tmpdir(), "intero-grok-config-"));
+    const previous = process.env.GROK_HOME;
+    process.env.GROK_HOME = grokHome;
+    try {
+      const plan = grokBuildAdapter.installPlan(home, "/opt/intero/mcp-stdio");
+      await applyManagedInstall(plan, home);
+      const config = await readFile(join(grokHome, "config.toml"), "utf8");
+      expect(config).toContain("[mcp_servers.intero]");
+      expect(config).toContain('"grok-build"');
+      expect(config).not.toContain("hook");
+      await uninstallManagedIntegration("grok-build", home);
+    } finally {
+      if (previous === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = previous;
+    }
+  });
+
+  it("uses Cursor's global MCP configuration without adding Hooks", async () => {
+    const home = await mkdtemp(join(tmpdir(), "intero-cursor-home-"));
+    const plan = cursorAdapter.installPlan(home, "/opt/intero/mcp-stdio");
+
+    await applyManagedInstall(plan, home);
+    const config = JSON.parse(
+      await readFile(join(home, ".cursor", "mcp.json"), "utf8"),
+    );
+    expect(config).toEqual({
+      mcpServers: {
+        intero: {
+          command: "/opt/intero/mcp-stdio",
+          args: ["--mcp-source", "cursor", "--cloud"],
+          env: {},
+        },
+      },
+    });
+    expect(plan.diagnostics).toContain(
+      "Run cursor-agent mcp list to verify the configured server",
+    );
+    await uninstallManagedIntegration("cursor", home);
   });
 
   it("rejects managed paths that escape through a symlink", async () => {

@@ -264,6 +264,7 @@ export interface PilotStore {
     teamId: string;
     memberId: PrincipalId;
     principalId: PrincipalId;
+    now: string;
   }): Promise<void>;
   updateOrganizationRole(input: {
     memberId: PrincipalId;
@@ -1259,6 +1260,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
     teamId: string;
     memberId: PrincipalId;
     principalId: PrincipalId;
+    now: string;
   }): Promise<void> {
     return this.updateSnapshot(
       (snapshot) => {
@@ -1269,6 +1271,28 @@ export abstract class SnapshotPilotStore implements PilotStore {
         );
         if (index === -1) throw notFound("Team membership");
         snapshot.memberships.splice(index, 1);
+        for (const binding of snapshot.agentBindings) {
+          if (
+            binding.ownerId === input.memberId &&
+            !binding.disconnectedAt &&
+            !isBindingParticipant(snapshot, binding)
+          ) {
+            // Membership loss is a real credential revocation, not a
+            // temporary visibility filter. Re-adding the member must require
+            // a fresh, explicitly confirmed attachment.
+            binding.disconnectedAt = input.now;
+          }
+        }
+        for (const ticket of snapshot.agentTickets) {
+          if (
+            ticket.ownerId === input.memberId &&
+            !ticket.usedAt &&
+            !ticket.revokedAt &&
+            !isTicketParticipant(snapshot, ticket)
+          ) {
+            ticket.revokedAt = input.now;
+          }
+        }
       },
       {
         eventType: "pilot.team_member.removed",
@@ -1563,6 +1587,10 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "The project owner must be a member of the primary team.",
           );
         }
+        const scopeChanged =
+          primaryTeamId !== project.primaryTeamId ||
+          participatingTeamIds.join(",") !==
+            project.participatingTeamIds.join(",");
         if (input.name !== undefined && input.name !== project.name) {
           changed.from = project.name;
           changed.to = input.name;
@@ -1582,6 +1610,29 @@ export abstract class SnapshotPilotStore implements PilotStore {
         ) {
           changed.teams = String(participatingTeamIds.length);
           project.participatingTeamIds = participatingTeamIds;
+        }
+        if (scopeChanged) {
+          for (const binding of snapshot.agentBindings) {
+            if (
+              binding.projectId === project.id &&
+              !binding.disconnectedAt &&
+              !isBindingParticipant(snapshot, binding)
+            ) {
+              // Project scope reduction permanently revokes an Agent
+              // credential. Restoring a Team later requires a new attachment.
+              binding.disconnectedAt = input.now;
+            }
+          }
+          for (const ticket of snapshot.agentTickets) {
+            if (
+              ticket.projectId === project.id &&
+              !ticket.usedAt &&
+              !ticket.revokedAt &&
+              !isTicketParticipant(snapshot, ticket)
+            ) {
+              ticket.revokedAt = input.now;
+            }
+          }
         }
         if (input.posture !== undefined && input.posture !== project.posture) {
           changed.posture = input.posture;
@@ -1739,6 +1790,28 @@ export abstract class SnapshotPilotStore implements PilotStore {
         requireProvider(snapshot);
         const project = requireProject(snapshot, ticket.projectId);
         requireParticipant(snapshot, project, ticket.ownerId);
+        if (ticket.clientMutationId) {
+          const existing = snapshot.agentTickets.find(
+            (item) =>
+              item.projectId === ticket.projectId &&
+              item.ownerId === ticket.ownerId &&
+              item.client === ticket.client &&
+              item.clientMutationId === ticket.clientMutationId,
+          );
+          if (existing) {
+            if (
+              existing.expectedBindingId !== ticket.expectedBindingId ||
+              existing.expectedWorkspaceId !== ticket.expectedWorkspaceId
+            ) {
+              throw new PilotStoreError(
+                "AGENT_CONNECTION_OPERATION_CONFLICT",
+                409,
+                "The client mutation ID is already bound to a different Agent connection operation.",
+              );
+            }
+            return existing;
+          }
+        }
         snapshot.agentTickets.push(ticket);
         return ticket;
       },
@@ -1761,7 +1834,12 @@ export abstract class SnapshotPilotStore implements PilotStore {
     const ticket = snapshot.agentTickets.find(
       (item) => item.ticketHash === ticketHash,
     );
-    if (!ticket || ticket.usedAt || ticket.expiresAt <= now) {
+    if (
+      !ticket ||
+      ticket.usedAt ||
+      ticket.revokedAt ||
+      ticket.expiresAt <= now
+    ) {
       throw new PilotStoreError(
         "AGENT_TICKET_INVALID",
         401,
@@ -1785,11 +1863,14 @@ export abstract class SnapshotPilotStore implements PilotStore {
         if (
           !ticket ||
           ticket.usedAt ||
+          ticket.revokedAt ||
           ticket.expiresAt <= now ||
-          ticket.id !== binding.id ||
+          (ticket.expectedBindingId ?? ticket.id) !== binding.id ||
           ticket.projectId !== binding.projectId ||
           ticket.ownerId !== binding.ownerId ||
-          ticket.client !== binding.client
+          ticket.client !== binding.client ||
+          (ticket.expectedWorkspaceId !== undefined &&
+            ticket.expectedWorkspaceId !== binding.workspaceId)
         ) {
           throw new PilotStoreError(
             "AGENT_TICKET_INVALID",
@@ -1797,17 +1878,45 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection ticket is invalid, expired, or already used.",
           );
         }
+        requireBindingParticipant(snapshot, binding);
         const existingIndex = snapshot.agentBindings.findIndex(
-          (item) => item.id === ticket.id,
+          (item) => item.id === binding.id,
         );
         if (existingIndex >= 0) {
           const existing = snapshot.agentBindings[existingIndex]!;
-          if (existing.validatedAt || existing.disconnectedAt) {
+          if (existing.disconnectedAt) {
             throw new PilotStoreError(
               "AGENT_TICKET_INVALID",
               401,
               "Agent connection ticket is invalid, expired, or already used.",
             );
+          }
+          if (
+            existing.projectId !== binding.projectId ||
+            existing.ownerId !== binding.ownerId ||
+            existing.client !== binding.client ||
+            existing.workspaceId !== binding.workspaceId ||
+            existing.name !== binding.name
+          ) {
+            throw new PilotStoreError(
+              "AGENT_TICKET_SCOPE_MISMATCH",
+              409,
+              "Agent ticket retries must use the original client and opaque workspace/name scope.",
+            );
+          }
+          if (existing.credentialSeedHash === binding.credentialSeedHash) {
+            return existing;
+          }
+          if (ticket.expectedBindingId && !existing.credentialSeedHash) {
+            const replacement: PilotAgentBinding = {
+              ...existing,
+              credentialHash: binding.credentialHash,
+              credentialSeedHash: binding.credentialSeedHash,
+              verificationCodeHash: binding.verificationCodeHash,
+              verificationExpiresAt: binding.verificationExpiresAt,
+            };
+            snapshot.agentBindings[existingIndex] = replacement;
+            return replacement;
           }
           const replacement: PilotAgentBinding = {
             ...binding,
@@ -1896,6 +2005,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection is not active.",
           );
         }
+        requireBindingParticipant(snapshot, binding);
         binding.mcpInitializedAt ??= now;
         binding.lastSeenAt = now;
         if (client.name) binding.mcpClientName = client.name;
@@ -1934,6 +2044,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection is not active.",
           );
         }
+        requireBindingParticipant(snapshot, binding);
         if (!binding.mcpInitializedAt) {
           throw new PilotStoreError(
             "AGENT_MCP_INITIALIZATION_REQUIRED",
@@ -1959,23 +2070,40 @@ export abstract class SnapshotPilotStore implements PilotStore {
           }
           binding.verificationUsedAt ??= now;
           binding.validatedAt = now;
-          const ticket = snapshot.agentTickets.find(
-            (item) => item.id === binding.id,
-          );
-          if (ticket) ticket.usedAt ??= now;
         }
+        const pendingTickets = snapshot.agentTickets.filter(
+          (item) =>
+            !item.usedAt &&
+            (item.id === binding.id || item.expectedBindingId === binding.id),
+        );
+        const hasCompetingBinding = snapshot.agentBindings.some(
+          (existing) =>
+            existing.id !== binding.id &&
+            !existing.disconnectedAt &&
+            agentBindingsCompete(existing, binding),
+        );
+        const configurationChanged =
+          configurationVersion !== undefined &&
+          binding.configurationVersion !== configurationVersion;
+        if (
+          binding.validatedAt &&
+          pendingTickets.length === 0 &&
+          !hasCompetingBinding &&
+          !configurationChanged
+        ) {
+          return binding;
+        }
+        for (const ticket of pendingTickets) ticket.usedAt = now;
         for (const existing of snapshot.agentBindings) {
           if (
             existing.id !== binding.id &&
             !existing.disconnectedAt &&
-            existing.projectId === binding.projectId &&
-            existing.ownerId === binding.ownerId &&
-            existing.client === binding.client
+            agentBindingsCompete(existing, binding)
           ) {
             existing.disconnectedAt = now;
           }
         }
-        if (configurationVersion !== undefined) {
+        if (configurationChanged) {
           binding.configurationVersion = configurationVersion;
           binding.configurationUpdatedAt = now;
         }
@@ -2010,6 +2138,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Only the connection owner can disconnect it.",
           );
         }
+        requireBindingParticipant(snapshot, binding);
         binding.disconnectedAt = now;
         return binding;
       },
@@ -2044,6 +2173,7 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection is not active.",
           );
         }
+        requireBindingParticipant(snapshot, binding);
         binding.lastSeenAt = input.receivedAt;
         if (
           !binding.activityUpdatedAt ||
@@ -2068,17 +2198,24 @@ export abstract class SnapshotPilotStore implements PilotStore {
   async findBindingByCredentialHash(
     credentialHash: string,
   ): Promise<PilotAgentBinding | undefined> {
-    return (await this.readSnapshot()).agentBindings.find(
+    const snapshot = await this.readSnapshot();
+    return snapshot.agentBindings.find(
       (binding) =>
-        binding.credentialHash === credentialHash && !binding.disconnectedAt,
+        binding.credentialHash === credentialHash &&
+        !binding.disconnectedAt &&
+        isBindingParticipant(snapshot, binding),
     );
   }
 
   async findAgentBindingById(
     bindingId: string,
   ): Promise<PilotAgentBinding | undefined> {
-    return (await this.readSnapshot()).agentBindings.find(
-      (binding) => binding.id === bindingId && !binding.disconnectedAt,
+    const snapshot = await this.readSnapshot();
+    return snapshot.agentBindings.find(
+      (binding) =>
+        binding.id === bindingId &&
+        !binding.disconnectedAt &&
+        isBindingParticipant(snapshot, binding),
     );
   }
 
@@ -2107,6 +2244,17 @@ export abstract class SnapshotPilotStore implements PilotStore {
             "Agent connection is not active.",
           );
         }
+        if (
+          activeBinding.projectId !== binding.projectId ||
+          activeBinding.ownerId !== binding.ownerId
+        ) {
+          throw new PilotStoreError(
+            "AGENT_CONNECTION_INACTIVE",
+            401,
+            "Agent connection is not active.",
+          );
+        }
+        requireBindingParticipant(snapshot, activeBinding);
         const duplicateStateId = snapshot.idempotency[input.clientEventId];
         if (duplicateStateId) {
           const workState = snapshot.workStates.find(
@@ -4272,6 +4420,49 @@ function canParticipate(
     (membership) =>
       membership.principalId === principalId &&
       project.participatingTeamIds.includes(membership.teamId),
+  );
+}
+
+function isBindingParticipant(
+  snapshot: PilotSnapshot,
+  binding: PilotAgentBinding,
+): boolean {
+  const project = snapshot.projects.find(
+    (item) => item.id === binding.projectId,
+  );
+  return Boolean(project && canParticipate(snapshot, project, binding.ownerId));
+}
+
+function agentBindingsCompete(
+  existing: PilotAgentBinding,
+  binding: PilotAgentBinding,
+): boolean {
+  return (
+    existing.ownerId === binding.ownerId &&
+    existing.client === binding.client &&
+    (existing.projectId === binding.projectId ||
+      existing.workspaceId === binding.workspaceId)
+  );
+}
+
+function isTicketParticipant(
+  snapshot: PilotSnapshot,
+  ticket: PilotAgentTicket,
+): boolean {
+  const project = snapshot.projects.find(
+    (item) => item.id === ticket.projectId,
+  );
+  return Boolean(project && canParticipate(snapshot, project, ticket.ownerId));
+}
+
+function requireBindingParticipant(
+  snapshot: PilotSnapshot,
+  binding: PilotAgentBinding,
+): void {
+  requireParticipant(
+    snapshot,
+    requireProject(snapshot, binding.projectId),
+    binding.ownerId,
   );
 }
 

@@ -74,4 +74,30 @@ describe("deriveFirstUseProgress", () => {
       completedSpecReview: true,
     });
   });
+
+  it.each(["grok-build", "cursor"] as const)(
+    "counts a current %s binding without inventing a lifecycle hook",
+    (client) => {
+      const progress = deriveFirstUseProgress({
+        teams: [],
+        overviews: [
+          {
+            bindings: [
+              {
+                id: "binding",
+                client,
+                configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+                validatedAt: "2026-08-05T00:01:00.000Z",
+              },
+            ],
+            privateWorkState: [],
+            pulse: [],
+          } as never,
+        ],
+        specs: [],
+      });
+
+      expect(progress.connectedAgent).toBe(true);
+    },
+  );
 });

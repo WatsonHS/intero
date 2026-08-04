@@ -22,7 +22,10 @@ import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
 import { NotificationSettings } from "./settings/NotificationSettings.js";
 import { AccountSecuritySettings } from "./settings/AccountSecuritySettings.js";
 import { ProjectAutomationSettings } from "./settings/ProjectAutomationSettings.js";
-import { GitAwarenessSettings } from "./settings/GitAwarenessSettings.js";
+import {
+  GitAwarenessSettings,
+  type GitClient,
+} from "./settings/GitAwarenessSettings.js";
 import { FirstUseGuide } from "./settings/FirstUseGuide.js";
 import { ServiceDiagnosticsSettings } from "./settings/ServiceDiagnosticsSettings.js";
 
@@ -66,6 +69,12 @@ export function shouldShowDesktopGitAwareness(
   desktopBridge: Window["interoDesktop"] | undefined,
 ): boolean {
   return Boolean(desktopBridge);
+}
+
+function supportsDesktopGitAwareness(
+  client: PilotAgentClient,
+): client is GitClient {
+  return client !== "grok-build" && client !== "cursor";
 }
 
 export function SettingsView({
@@ -397,7 +406,9 @@ export function SettingsView({
               {...(pilotProject?.name
                 ? { projectName: pilotProject.name }
                 : {})}
-              connectedClients={connectedAgentClients}
+              connectedClients={connectedAgentClients.filter(
+                supportsDesktopGitAwareness,
+              )}
               onBindAgent={() =>
                 document
                   .getElementById("agent-connections")

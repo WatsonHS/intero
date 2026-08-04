@@ -2,10 +2,37 @@ import type { WorkspaceId } from "@intero/domain";
 import { uuidv7 } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
-import { integrationAdapters, integrationVersionIsSupported } from "./index.js";
+import {
+  cloudWorkspaceClientFiles,
+  integrationAdapters,
+  integrationVersionIsSupported,
+} from "./index.js";
 
 describe("IntegrationAdapter conformance", () => {
   const workspaceId = uuidv7() as WorkspaceId;
+
+  it("isolates encrypted client state by repository without exposing its path", () => {
+    const first = cloudWorkspaceClientFiles(
+      "/Users/alex",
+      "/workspaces/project-a",
+      "cursor",
+    );
+    const repeated = cloudWorkspaceClientFiles(
+      "/Users/alex",
+      "/workspaces/project-a",
+      "cursor",
+    );
+    const second = cloudWorkspaceClientFiles(
+      "/Users/alex",
+      "/workspaces/project-b",
+      "cursor",
+    );
+
+    expect(first).toEqual(repeated);
+    expect(first.directory).not.toBe(second.directory);
+    expect(first.directory).not.toContain("project-a");
+    expect(second.directory).not.toContain("project-b");
+  });
 
   it.each(integrationAdapters)(
     "$kind exposes MCP and strips unknown metadata",
@@ -18,7 +45,12 @@ describe("IntegrationAdapter conformance", () => {
         metadata: { summary: "Session began", rawNoise: "must be dropped" },
       });
       expect(adapter.capabilities.mcp).toBe(true);
-      expect(normalized.success).toBe(true);
+      expect(normalized.success).toBe(
+        adapter.kind !== "grok-build" && adapter.kind !== "cursor",
+      );
+      if (adapter.kind === "grok-build" || adapter.kind === "cursor") {
+        expect(adapter.capabilities.lifecycleHooks).toBe(false);
+      }
       if (normalized.success)
         expect(normalized.data.payload).toEqual({ summary: "Session began" });
     },
@@ -86,15 +118,37 @@ describe("IntegrationAdapter conformance", () => {
       ),
     ).toBe(true);
     expect(
-      plans.every((plan) =>
-        plan.files.some((file) =>
-          file.content.includes(
-            "After understanding the first user request in each new conversation",
+      plans
+        .filter(
+          (plan) => plan.adapter !== "grok-build" && plan.adapter !== "cursor",
+        )
+        .every((plan) =>
+          plan.files.some((file) =>
+            file.content.includes(
+              "After understanding the first user request in each new conversation",
+            ),
           ),
         ),
-      ),
     ).toBe(true);
     expect(plans[2]!.files.at(-1)?.content).toContain("event_id: randomUUID()");
+    const grokPlan = plans.find((plan) => plan.adapter === "grok-build")!;
+    expect(grokPlan.files).toHaveLength(1);
+    expect(grokPlan.files[0]!.path).toBe("/Users/example/.grok/config.toml");
+    expect(grokPlan.files[0]!.content).toContain("[mcp_servers.intero]");
+    expect(grokPlan.files[0]!.content).toContain('"grok-build"');
+    expect(grokPlan.files[0]!.content).not.toContain("hook");
+    const cursorPlan = plans.find((plan) => plan.adapter === "cursor")!;
+    expect(cursorPlan.files).toHaveLength(1);
+    expect(cursorPlan.files[0]!.path).toBe("/Users/example/.cursor/mcp.json");
+    expect(JSON.parse(cursorPlan.files[0]!.content)).toEqual({
+      mcpServers: {
+        intero: {
+          command: "/opt/intero-mcp",
+          args: ["--mcp-source", "cursor", "--cloud"],
+          env: {},
+        },
+      },
+    });
   });
 
   it("distinguishes repeated OpenCode idle transitions", () => {
@@ -152,5 +206,7 @@ describe("IntegrationAdapter conformance", () => {
     expect(integrationVersionIsSupported("claude-code", "2.1.139")).toBe(false);
     expect(integrationVersionIsSupported("claude-code", "2.1.140")).toBe(true);
     expect(integrationVersionIsSupported("opencode", "1.4.10")).toBe(false);
+    expect(integrationVersionIsSupported("grok-build", "0.1.0")).toBe(true);
+    expect(integrationVersionIsSupported("cursor", "0.0.1")).toBe(true);
   });
 });

@@ -4,14 +4,25 @@ contextBridge.exposeInMainWorld("interoDesktop", {
   platform: process.platform,
   runtimeVersion: process.versions.electron,
   getIntegrationStatus: () => ipcRenderer.invoke("intero:integration-status"),
-  previewIntegration: (
-    adapter: "codex" | "claude-code" | "opencode",
-    action: "install" | "repair" | "uninstall",
-    locale: "zh-CN" | "en-US",
-  ) =>
-    ipcRenderer.invoke("intero:integration-preview", adapter, action, locale),
+  previewIntegration: (input: {
+    adapter: "codex" | "claude-code" | "opencode" | "grok-build" | "cursor";
+    action: "install" | "repair" | "uninstall";
+    locale: "zh-CN" | "en-US";
+    projectId?: string;
+    repositorySelectionToken?: string;
+  }) => ipcRenderer.invoke("intero:integration-preview", input),
   manageIntegration: (token: string) =>
     ipcRenderer.invoke("intero:integration-action", token),
+  previewWorkspaceCleanup: (input: {
+    adapter: "codex" | "claude-code" | "opencode" | "grok-build" | "cursor";
+    locale: "zh-CN" | "en-US";
+    projectId: string;
+    bindingId: string;
+    workspaceId: string;
+    repositorySelectionToken: string;
+  }) => ipcRenderer.invoke("intero:workspace-cleanup-preview", input),
+  cleanupWorkspaceConnection: (token: string) =>
+    ipcRenderer.invoke("intero:workspace-cleanup-action", token),
   getGitAwarenessStatus: () =>
     ipcRenderer.invoke("intero:git-awareness-status"),
   getGitAwarenessClients: () =>

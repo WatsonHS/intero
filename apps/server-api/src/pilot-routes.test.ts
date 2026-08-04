@@ -289,7 +289,7 @@ describe("pilot cloud-first vertical slice", () => {
       payload: {
         ticket: chineseRawTicket,
         client: "codex",
-        name: "Codex 中文连接重试",
+        name: "Codex 中文连接",
         workspaceId: chineseWorkspaceId,
       },
     });
@@ -297,8 +297,11 @@ describe("pilot cloud-first vertical slice", () => {
     expect(chineseRetry.json().binding.id).toBe(
       chineseBinding.json().binding.id,
     );
-    expect(chineseRetry.json().credential).not.toBe(
+    expect(chineseRetry.json().credential).toBe(
       chineseBinding.json().credential,
+    );
+    expect(chineseRetry.json().verification).toEqual(
+      chineseBinding.json().verification,
     );
     expect(
       (await overview(app, project.id, A)).bindings.filter(
@@ -333,7 +336,7 @@ describe("pilot cloud-first vertical slice", () => {
     );
     expect(englishTicket.json().connectPrompt).toContain("CLAUDE.md");
     expect(englishTicket.json().connectPrompt).toContain(
-      "The same ticket is retryable until connected or expiresAt",
+      "The same ticket is retryable only with the same client, repository label, and workspaceId",
     );
     expect(englishTicket.json().connectPrompt).toContain(
       "exactly four JSON keys: ticket, client, name, workspaceId",
@@ -356,6 +359,164 @@ describe("pilot cloud-first vertical slice", () => {
     );
     expect(openCodeTicket.json().connectPrompt).toContain("AGENTS.md");
     expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
+
+    const grokTicket = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "grok-build" },
+    });
+    expect(grokTicket.statusCode).toBe(201);
+    const grokPrompt = grokTicket.json().connectPrompt as string;
+    expect(grokPrompt).toContain("Grok Build");
+    expect(grokPrompt).toContain("$GROK_HOME/config.toml");
+    expect(grokPrompt).toContain("grok mcp doctor intero --json");
+    expect(grokPrompt).toContain("grok inspect");
+    expect(grokPrompt).toContain("AGENTS.md");
+    expect(grokPrompt).toContain('"lifecycleHooks":false');
+    expect(grokPrompt).not.toContain("Grok Build Hook");
+    expect(grokPrompt).toContain("connected=true, ready=true");
+    expect(grokPrompt).toContain("must not claim a Hook ran");
+
+    const cursorTicket = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-tickets`,
+      headers: identity(A),
+      payload: { client: "cursor" },
+    });
+    expect(cursorTicket.statusCode).toBe(201);
+    const cursorPrompt = cursorTicket.json().connectPrompt as string;
+    expect(cursorPrompt).toContain("Cursor");
+    expect(cursorPrompt).toContain("~/.cursor/mcp.json");
+    expect(cursorPrompt).toContain(".cursor/mcp.json");
+    expect(cursorPrompt).toContain("AGENTS.md (repository root)");
+    expect(cursorPrompt).toContain("cursor-agent mcp list");
+    expect(cursorPrompt).toContain('"lifecycleHooks":false');
+    expect(cursorPrompt).toContain("connected=true, ready=true");
+    expect(cursorPrompt).toContain("must not claim a Hook ran");
+
+    const desktopCursor = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: {
+        client: "cursor",
+        clientMutationId: "desktop-cursor-project-attachment",
+        deliveryMode: "desktop_bridge",
+        expectedWorkspaceId: uuidv7(),
+      },
+    });
+    expect(desktopCursor.statusCode).toBe(201);
+    const desktopPrompt = desktopCursor.json().connectPrompt as string;
+    expect(desktopPrompt).toContain('"deliveryMode":"desktop_bridge"');
+    expect(desktopPrompt).toContain(
+      '"connectArguments":["cloud","connect","--client","cursor"',
+    );
+    expect(desktopPrompt).toContain(
+      "repository-isolated encrypted local state without uploading the absolute path",
+    );
+    expect(desktopPrompt).toContain(
+      "never place a bearer credential in client-global configuration",
+    );
+    expect(desktopPrompt).not.toContain("~/.cursor/mcp.json");
+  });
+
+  it.each(["grok-build", "cursor"] as const)(
+    "treats %s MCP validation as ready without inventing a Hook",
+    async (client) => {
+      const { project } = await readyProject(app);
+      const connection = await connectAgent(app, project.id, A, client);
+
+      await expect(
+        callMcpTool(app, connection.credential, "intero.connection_status", {}),
+      ).resolves.toMatchObject({
+        status: "connected",
+        connected: true,
+        ready: true,
+        lifecycleHooks: false,
+        lifecycleReady: true,
+        configurationCurrent: true,
+        action: "Use Project-scoped Intero tools.",
+      });
+    },
+  );
+
+  it("keeps one client's repository workspace bound to exactly one Project", async () => {
+    const fixture = await readyProject(app);
+    const secondProject = await createProject(
+      app,
+      fixture.teamId,
+      "Second repository scope",
+    );
+    const workspaceId = uuidv7();
+    const first = await connectAgent(app, fixture.project.id, A, "cursor", {
+      workspaceId,
+    });
+    const second = await connectAgent(app, secondProject.id, A, "cursor", {
+      workspaceId,
+    });
+
+    expect(
+      (await overview(app, fixture.project.id, A)).bindings.find(
+        (binding: { id: string }) => binding.id === first.binding.id,
+      ),
+    ).toMatchObject({ disconnectedAt: expect.any(String) });
+    expect(
+      (await overview(app, secondProject.id, A)).bindings.find(
+        (binding: { id: string }) => binding.id === second.binding.id,
+      ),
+    ).toMatchObject({ id: second.binding.id });
+  });
+
+  it("rejects a Desktop ticket before issuing a credential from another repository workspace", async () => {
+    const { project } = await readyProject(app);
+    const approvedWorkspaceId = uuidv7();
+    const ticketResponse = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: {
+        client: "cursor",
+        deliveryMode: "desktop_bridge",
+        expectedWorkspaceId: approvedWorkspaceId,
+      },
+    });
+
+    expect(ticketResponse.statusCode).toBe(201);
+    expect(ticketResponse.json().connectPrompt).toContain(
+      `"--workspace-id","${approvedWorkspaceId}"`,
+    );
+    const ticket = (ticketResponse.json().connectPrompt as string).match(
+      /"ticket":"(ticket_[A-Za-z0-9_-]+)"/,
+    )?.[1];
+    expect(ticket).toBeDefined();
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket,
+        client: "cursor",
+        name: "Cursor · repository-b",
+        workspaceId: uuidv7(),
+      },
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json()).toMatchObject({
+      code: "AGENT_TICKET_WORKSPACE_MISMATCH",
+    });
+
+    const connected = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket,
+        client: "cursor",
+        name: "Cursor · repository-a",
+        workspaceId: approvedWorkspaceId,
+      },
+    });
+    expect(connected.statusCode).toBe(201);
   });
 
   it("creates a project-scoped retryable Bearer connection task", async () => {
@@ -403,6 +564,145 @@ describe("pilot cloud-first vertical slice", () => {
     expect(response.json().connectPrompt).not.toMatch(
       /不要|不得|禁止|never|do not/i,
     );
+  });
+
+  it("keeps Attach and Repair operations idempotent and constrains ticket exchanges", async () => {
+    const { project } = await readyProject(app);
+    const clientMutationId = "attach-operation-001";
+    const attach = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: { client: "codex", clientMutationId },
+    });
+    const attachRetry = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: { client: "codex", clientMutationId },
+    });
+    expect(attach.statusCode).toBe(201);
+    expect(attachRetry.statusCode).toBe(201);
+    expect(attachRetry.json().ticket.id).toBe(attach.json().ticket.id);
+    const ticket = (attach.json().connectPrompt as string).match(
+      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+    )?.[1];
+    const retriedTicket = (attachRetry.json().connectPrompt as string).match(
+      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+    )?.[1];
+    expect(ticket).toBeDefined();
+    expect(retriedTicket).toBe(ticket);
+
+    const workspaceId = uuidv7();
+    const scope = {
+      ticket,
+      client: "codex",
+      name: "Codex · opaque-repository-label",
+      workspaceId,
+    };
+    const connected = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: scope,
+    });
+    const connectedRetry = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: scope,
+    });
+    expect(connected.statusCode).toBe(201);
+    expect(connectedRetry.statusCode).toBe(201);
+    expect(connectedRetry.json()).toMatchObject({
+      credential: connected.json().credential,
+      verification: connected.json().verification,
+      binding: { id: connected.json().binding.id },
+    });
+
+    const differentName = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, name: "Codex · another-repository-label" },
+    });
+    expect(differentName.statusCode).toBe(409);
+    expect(differentName.json().code).toBe("AGENT_TICKET_SCOPE_MISMATCH");
+
+    const differentWorkspace = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, workspaceId: uuidv7() },
+    });
+    expect(differentWorkspace.statusCode).toBe(409);
+    expect(differentWorkspace.json().code).toBe("AGENT_TICKET_SCOPE_MISMATCH");
+
+    const differentClient = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, client: "claude-code" },
+    });
+    expect(differentClient.statusCode).toBe(401);
+    expect(differentClient.json().code).toBe("AGENT_TICKET_INVALID");
+
+    const repairMutationId = "repair-operation-001";
+    const repair = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: {
+        client: "codex",
+        bindingId: connected.json().binding.id,
+        clientMutationId: repairMutationId,
+      },
+    });
+    const repairRetry = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${project.id}/agent-connections`,
+      headers: identity(A),
+      payload: {
+        client: "codex",
+        bindingId: connected.json().binding.id,
+        clientMutationId: repairMutationId,
+      },
+    });
+    expect(repair.statusCode).toBe(201);
+    expect(repairRetry.json().ticket.id).toBe(repair.json().ticket.id);
+    const repairTicket = (repair.json().connectPrompt as string).match(
+      /"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/,
+    )?.[1];
+    expect(repairTicket).toBeDefined();
+    const repaired = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, ticket: repairTicket },
+    });
+    expect(repaired.statusCode).toBe(201);
+    expect(repaired.json()).toMatchObject({
+      credential: connected.json().credential,
+      binding: { id: connected.json().binding.id },
+    });
+    const repairedRetry = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, ticket: repairTicket },
+    });
+    expect(repairedRetry.statusCode).toBe(201);
+    expect(repairedRetry.json()).toMatchObject({
+      credential: repaired.json().credential,
+      verification: repaired.json().verification,
+      binding: { id: connected.json().binding.id },
+    });
+
+    const repairScopeMismatch = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: { ...scope, ticket: repairTicket, name: "Codex · wrong-repo" },
+    });
+    expect(repairScopeMismatch.statusCode).toBe(409);
+    expect(repairScopeMismatch.json().code).toBe("AGENT_TICKET_SCOPE_MISMATCH");
+    expect(
+      (await overview(app, project.id, A)).bindings.filter(
+        (binding: { disconnectedAt?: string }) => !binding.disconnectedAt,
+      ),
+    ).toHaveLength(1);
   });
 
   it("uses one configured public origin for bootstrap, invitations, and MCP links", async () => {
@@ -1129,6 +1429,186 @@ describe("pilot cloud-first vertical slice", () => {
     });
   });
 
+  it("permanently revokes only bindings that lose Project scope during a re-scope", async () => {
+    const fixture = await readyProject(app);
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/teams",
+      headers: identity(A),
+      payload: { name: "Project Scope Retained Team" },
+    });
+    expect(second.statusCode).toBe(201);
+    const retainedTeamId = second.json().team.id as string;
+
+    const cJoin = await createJoinLink(app, fixture.teamId);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/pilot/join/${cJoin.code}`,
+          headers: identity(C),
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/pilot/teams/${retainedTeamId}/members`,
+          headers: identity(A),
+          payload: { memberId: B, role: "member" },
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/v1/pilot/projects/${fixture.project.id}`,
+          headers: identity(A),
+          payload: { participatingTeamIds: [fixture.teamId, retainedTeamId] },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const pendingTicketResponse = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/projects/${fixture.project.id}/agent-connections`,
+      headers: identity(C),
+      payload: {
+        client: "cursor",
+        clientMutationId: "scope-revocation-pending-ticket",
+      },
+    });
+    expect(pendingTicketResponse.statusCode).toBe(201);
+    const pendingTicket = (
+      pendingTicketResponse.json().connectPrompt as string
+    ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
+    expect(pendingTicket).toBeDefined();
+
+    const retained = await connectAgent(app, fixture.project.id, B);
+    const revoked = await connectAgent(app, fixture.project.id, C);
+    const rescoped = await app.inject({
+      method: "PATCH",
+      url: `/v1/pilot/projects/${fixture.project.id}`,
+      headers: identity(A),
+      payload: {
+        primaryTeamId: retainedTeamId,
+        participatingTeamIds: [retainedTeamId],
+      },
+    });
+    expect(rescoped.statusCode).toBe(200);
+
+    const rescopedOverview = await overview(app, fixture.project.id, A);
+    const retainedBinding = rescopedOverview.bindings.find(
+      (binding: { id: string }) => binding.id === retained.binding.id,
+    ) as { id: string; disconnectedAt?: string } | undefined;
+    expect(retainedBinding).toMatchObject({ id: retained.binding.id });
+    expect(retainedBinding?.disconnectedAt).toBeUndefined();
+    expect(
+      rescopedOverview.bindings.find(
+        (binding: { id: string }) => binding.id === revoked.binding.id,
+      ),
+    ).toMatchObject({
+      id: revoked.binding.id,
+      disconnectedAt: expect.any(String),
+    });
+    await expect(
+      pilotStore.findBindingByCredentialHash(
+        createHash("sha256").update(retained.credential).digest("hex"),
+      ),
+    ).resolves.toMatchObject({ id: retained.binding.id });
+    await expect(
+      pilotStore.findBindingByCredentialHash(
+        createHash("sha256").update(revoked.credential).digest("hex"),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(
+      (
+        await sendCheckpoint(
+          app,
+          retained.credential,
+          checkpoint(fixture.project.id, {
+            clientEventId: "checkpoint-through-retained-project-team",
+          }),
+        )
+      ).statusCode,
+    ).toBe(202);
+    const rejectedCheckpoint = await sendCheckpoint(
+      app,
+      revoked.credential,
+      checkpoint(fixture.project.id, {
+        clientEventId: "checkpoint-after-project-scope-revocation",
+      }),
+    );
+    expect(rejectedCheckpoint.statusCode).toBe(401);
+    expect(rejectedCheckpoint.json().code).toBe(
+      "AGENT_AUTHENTICATION_REQUIRED",
+    );
+
+    const rejectedMcp = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/mcp",
+      headers: {
+        authorization: `Bearer ${revoked.credential}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: "mcp-after-project-scope-revocation",
+        method: "tools/list",
+        params: {},
+      },
+    });
+    expect(rejectedMcp.statusCode).toBe(200);
+    expect(
+      rejectedMcp
+        .json()
+        .result.tools.map((tool: { name: string }) => tool.name),
+    ).toEqual(["intero.connection_status"]);
+
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/v1/pilot/projects/${fixture.project.id}`,
+          headers: identity(A),
+          payload: { participatingTeamIds: [fixture.teamId, retainedTeamId] },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await expect(
+      pilotStore.findBindingByCredentialHash(
+        createHash("sha256").update(revoked.credential).digest("hex"),
+      ),
+    ).resolves.toBeUndefined();
+    expect(
+      (
+        await sendCheckpoint(
+          app,
+          revoked.credential,
+          checkpoint(fixture.project.id, {
+            clientEventId: "checkpoint-after-project-scope-restoration",
+          }),
+        )
+      ).statusCode,
+    ).toBe(401);
+    const staleTicketExchange = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/connect",
+      payload: {
+        ticket: pendingTicket,
+        client: "cursor",
+        name: "Cursor · restored-project-scope",
+        workspaceId: uuidv7(),
+      },
+    });
+    expect(staleTicketExchange.statusCode).toBe(401);
+    expect(staleTicketExchange.json().code).toBe("AGENT_TICKET_INVALID");
+  });
+
   it("serves the organization directory and org-wide roles to administrators only", async () => {
     const { teamId, project } = await readyProject(app);
 
@@ -1627,6 +2107,98 @@ describe("pilot cloud-first vertical slice", () => {
       }),
     );
     expect(rejectedCheckpointAfterDisconnect.statusCode).toBe(401);
+  });
+
+  it("revokes an Agent credential when its owner leaves the current Project", async () => {
+    const fixture = await readyProject(app);
+    const connection = await connectAgent(app, fixture.project.id, B);
+
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/v1/pilot/teams/${fixture.teamId}/members/${B}`,
+      headers: identity(A),
+    });
+    expect(removed.statusCode).toBe(204);
+    const overviewAfterRemoval = await app.inject({
+      method: "GET",
+      url: `/v1/pilot/projects/${fixture.project.id}/overview`,
+      headers: identity(A),
+    });
+    expect(overviewAfterRemoval.statusCode).toBe(200);
+    expect(
+      overviewAfterRemoval
+        .json()
+        .bindings.find(
+          (binding: { id: string }) => binding.id === connection.binding.id,
+        ).disconnectedAt,
+    ).toBeTruthy();
+    await expect(
+      pilotStore.findBindingByCredentialHash(
+        createHash("sha256").update(connection.credential).digest("hex"),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      pilotStore.findAgentBindingById(connection.binding.id),
+    ).resolves.toBeUndefined();
+
+    const rejectedCheckpoint = await sendCheckpoint(
+      app,
+      connection.credential,
+      checkpoint(fixture.project.id, {
+        clientEventId: "checkpoint-after-membership-revocation",
+      }),
+    );
+    expect(rejectedCheckpoint.statusCode).toBe(401);
+    expect(rejectedCheckpoint.json().code).toBe(
+      "AGENT_AUTHENTICATION_REQUIRED",
+    );
+
+    const rejectedHook = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/agent/hooks",
+      headers: { authorization: `Bearer ${connection.credential}` },
+      payload: {
+        clientEventId: "hook-after-membership-revocation",
+        lifecycle: "session_started",
+        workstreamKey: "revoked-agent",
+        workstreamTitle: "Revoked Agent",
+      },
+    });
+    expect(rejectedHook.statusCode).toBe(401);
+    expect(rejectedHook.json().code).toBe("AGENT_AUTHENTICATION_REQUIRED");
+
+    const mcp = await app.inject({
+      method: "POST",
+      url: "/v1/pilot/mcp",
+      headers: {
+        authorization: `Bearer ${connection.credential}`,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: "mcp-after-membership-revocation",
+        method: "tools/list",
+        params: {},
+      },
+    });
+    expect(mcp.statusCode).toBe(200);
+    expect(
+      mcp.json().result.tools.map((tool: { name: string }) => tool.name),
+    ).toEqual(["intero.connection_status"]);
+
+    const readded = await app.inject({
+      method: "POST",
+      url: `/v1/pilot/teams/${fixture.teamId}/members`,
+      headers: identity(A),
+      payload: { memberId: B, role: "member" },
+    });
+    expect(readded.statusCode).toBe(201);
+    await expect(
+      pilotStore.findBindingByCredentialHash(
+        createHash("sha256").update(connection.credential).digest("hex"),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("repairs an outdated Project configuration on the existing binding and credential", async () => {
@@ -2827,8 +3399,12 @@ async function connectAgent(
   app: FastifyInstance,
   projectId: string,
   owner: PrincipalId = A,
-  client: "codex" | "claude-code" | "opencode" = "codex",
-  options: { configurationVersion?: number | false } = {},
+  client:
+    "codex" | "claude-code" | "opencode" | "grok-build" | "cursor" = "codex",
+  options: {
+    configurationVersion?: number | false;
+    workspaceId?: string;
+  } = {},
 ) {
   const ticketResponse = await app.inject({
     method: "POST",
@@ -2844,7 +3420,7 @@ async function connectAgent(
     ticket,
     client,
     name: client === "codex" ? "Codex Pilot" : `${client} Pilot`,
-    workspaceId: uuidv7(),
+    workspaceId: options.workspaceId ?? uuidv7(),
   };
   const connected = await app.inject({
     method: "POST",
@@ -2903,14 +3479,30 @@ async function connectAgent(
     },
   });
   expect(validation.statusCode).toBe(200);
-  expect(JSON.parse(validation.json().result.content[0].text)).toMatchObject({
-    status: "lifecycle_pending",
-    connected: false,
-    mcpConnected: true,
-    lifecycleReady: false,
-    ready: false,
-    configurationCurrent: options.configurationVersion !== false,
-  });
+  expect(JSON.parse(validation.json().result.content[0].text)).toMatchObject(
+    client === "grok-build" || client === "cursor"
+      ? {
+          status:
+            options.configurationVersion === false
+              ? "configuration_outdated"
+              : "connected",
+          connected: true,
+          mcpConnected: true,
+          lifecycleHooks: false,
+          lifecycleReady: true,
+          ready: options.configurationVersion !== false,
+          configurationCurrent: options.configurationVersion !== false,
+        }
+      : {
+          status: "lifecycle_pending",
+          connected: false,
+          mcpConnected: true,
+          lifecycleHooks: true,
+          lifecycleReady: false,
+          ready: false,
+          configurationCurrent: options.configurationVersion !== false,
+        },
+  );
   const connectReuse = await app.inject({
     method: "POST",
     url: "/v1/pilot/agent/connect",

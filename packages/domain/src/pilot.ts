@@ -425,19 +425,44 @@ export const PilotCoordinationThread = z
   .strict();
 export type PilotCoordinationThread = z.infer<typeof PilotCoordinationThread>;
 
-export const PilotAgentClient = z.enum(["codex", "claude-code", "opencode"]);
+export const PilotAgentClient = z.enum([
+  "codex",
+  "claude-code",
+  "opencode",
+  "grok-build",
+  "cursor",
+]);
 export type PilotAgentClient = z.infer<typeof PilotAgentClient>;
 
 export const PilotAgentTicket = z
   .object({
     id: z.uuid(),
+    /**
+     * Server-generated operation identity for a client-mutation retry. It is
+     * deliberately not presented outside the server: it lets the server
+     * reproduce the opaque ticket for the same operation without persisting a
+     * bearer secret in plaintext.
+     */
+    operationId: z.uuid().optional(),
     projectId: ProjectId,
     ownerId: PrincipalId,
     client: PilotAgentClient,
+    clientMutationId: z.string().min(8).max(200).optional(),
+    /** A repair ticket may only be exchanged against this existing binding. */
+    expectedBindingId: z.uuid().optional(),
+    /**
+     * Desktop issues a ticket only after its native repository confirmation.
+     * The bridge must prove that it is running from that exact local workspace
+     * identity before it can receive a credential.
+     */
+    expectedWorkspaceId: z.uuid().optional(),
+    /** Private seed used to keep an exchanged credential stable on retry. */
+    credentialSeedHash: z.string().length(64).optional(),
     preferredLanguage: PreferredLanguage,
     ticketHash: z.string().length(64),
     expiresAt: z.iso.datetime(),
     usedAt: z.iso.datetime().optional(),
+    revokedAt: z.iso.datetime().optional(),
     createdAt: z.iso.datetime(),
   })
   .strict();
@@ -456,6 +481,8 @@ export const PilotAgentBinding = z
     preferredLanguage: PreferredLanguage,
     authMode: z.enum(["project_bearer", "legacy_bearer", "oauth"]).optional(),
     credentialHash: z.string().length(64),
+    /** Private seed; omitted from every user- and agent-facing representation. */
+    credentialSeedHash: z.string().length(64).optional(),
     verificationCodeHash: z.string().length(64).optional(),
     verificationExpiresAt: z.iso.datetime().optional(),
     verificationUsedAt: z.iso.datetime().optional(),

@@ -1,7 +1,8 @@
 # Intero Technical Architecture
 
-Status: implemented through Phase 5 on `main`; production deployment validation
-remains environment-specific
+Status: implemented through Phase 5 on `main`; ADR-0010's Desktop-first entry
+target remains to be product-validated; production deployment validation is
+environment-specific
 
 Date: 2026-07-25
 
@@ -19,9 +20,13 @@ Intero separates technical execution from team coordination.
   context.
 - One cloud-deployed Stand-in maintains Claims and Work State,
   communicates, and coordinates within bounded authority.
-- The Web application is the primary human client.
-- The Desktop App is optional context-enhancement infrastructure, not a product
-  runtime dependency.
+- The Desktop App is the recommended daily product entry for people working
+  with Coding Agents.
+- `apps/web` remains the canonical renderer for Desktop and browser clients;
+  the browser remains the administration, remote-access, and compatibility
+  surface.
+- The Desktop App controls local Agent attachment and optional context
+  enhancements, but it is not a product runtime dependency.
 - The cloud service owns durable private and shared state, messaging,
   authorization, realtime delivery, review, audit, and Stand-in jobs.
 
@@ -30,7 +35,10 @@ hold current state, while immutable Activity Events record meaningful changes
 and their provenance.
 
 The architecture follows
-[ADR-0006](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md).
+[ADR-0006](adr/0006-cloud-first-web-first-runtime-and-private-by-default-data.md)
+for cloud runtime and data boundaries, as amended by
+[ADR-0010](adr/0010-desktop-first-product-entry-and-controlled-agent-attachment.md)
+for product entry and Agent attachment.
 
 ### 1.1 Thin vertical slice with durable ports
 
@@ -68,12 +76,14 @@ flowchart LR
         Codex["Codex"]
         Claude["Claude Code"]
         OpenCode["OpenCode"]
+        Cursor["Cursor"]
+        Grok["Grok Build"]
         Hooks["Optional Git and lifecycle hooks"]
     end
 
     subgraph Clients["Human clients"]
-        Web["Web application"]
-        Desktop["Optional Desktop App"]
+        Web["Web administration and fallback"]
+        Desktop["Primary Desktop product entry"]
     end
 
     subgraph Cloud["Selected Intero team deployment"]
@@ -93,6 +103,8 @@ flowchart LR
     Codex <--> MCP
     Claude <--> MCP
     OpenCode <--> MCP
+    Cursor <--> MCP
+    Grok <--> MCP
     Hooks --> EventIngress
     Web <--> API
     Desktop <--> API
@@ -402,10 +414,16 @@ not require the Desktop App to connect, interpret Work State, or coordinate.
 Its canonical React implementation, design system integration, browser entry,
 and frontend tests live in `apps/web`.
 
-### 4.2 Optional Desktop App
+### 4.2 Desktop-first product entry
 
-While open and after explicit opt-in, the Desktop App may
-provide:
+The Desktop App is the recommended daily entry for a developer using Intero.
+It loads the canonical `apps/web` renderer and owns only the local authority
+needed to make Coding Agent attachment visible, confirmable, repairable, and
+reversible. The browser remains fully usable for invitations, administration,
+remote access, and environments where Desktop cannot reach the Agent's
+filesystem.
+
+While open and after explicit opt-in, Desktop may also provide:
 
 - an optional local Git-awareness enhancement for user-selected repositories;
 - future native/external notifications after the in-app Phase 6 scope;
@@ -413,8 +431,8 @@ provide:
 
 The Electron shell loads the canonical `apps/web` application directly. The
 desktop package owns only Electron main/preload code, packaging/resources,
-integration configuration, and optional local Git-awareness; it does not own or
-fork the product renderer.
+native integration configuration, repository selection, attachment controls,
+and optional local Git-awareness; it does not own or fork the product renderer.
 
 Desktop absence, shutdown, or update failure must not interrupt the Web product,
 cloud Stand-in, collection, management, access, or direct cloud MCP path.
@@ -425,6 +443,17 @@ staging index changed. It never polls the worktree, reads file names or diffs,
 or stores Work State. Checkpoints use the selected connected Coding Agent and
 the existing direct-cloud MCP outbox. The watcher exists only inside the
 Desktop App process.
+
+The Desktop-managed native `intero` registration is a credential-free,
+tool-level launcher shared by repositories. It is not the Project attachment.
+The direct-cloud bridge derives a local opaque bucket from the selected
+repository and keeps the client's credential, binding metadata, workspace
+identity, and outbox encrypted inside that bucket. Repository A and repository
+B therefore resolve different connection state even when both use the same
+Codex, Claude Code, OpenCode, Cursor, or Grok Build installation. Desktop
+persists the selected bucket's opaque workspace identity before ticket
+issuance; the ticket is bound to that identity, and bridge exchange fails
+before credential issuance when run from a different repository bucket.
 
 ### 4.3 Client security
 
@@ -450,16 +479,24 @@ stand_in.check_scope
 stand_in.report_checkpoint
 ```
 
-Codex, Claude Code, and OpenCode connect directly to the authenticated MCP
-endpoint inherited from the member's selected deployment. From a bound
-project page, the user copies a **Connect Agent** prompt tailored to the
-selected Agent and pastes it there. The task exchanges a Better Auth one-time
-token for an opaque Project-scoped Bearer credential, merges the credential into
-the Agent's native project configuration, and launches a fresh GUI task for
-native validation.
+Codex, Claude Code, OpenCode, Cursor, and Grok Build connect directly to the
+authenticated MCP endpoint inherited from the member's selected deployment. The recommended
+Desktop flow detects the selected Agent and applies its confirmed managed
+launcher configuration, then creates encrypted connection state scoped to the
+selected repository, Project, client, and binding. The Project credential is
+never stored in client-global configuration. A Desktop-issued ticket also
+contains the expected opaque workspace identity; the bridge requires that
+identity to exist in the current repository bucket before it contacts the
+exchange endpoint. In the browser or a
+remote-development environment, the user
+instead copies a **Connect Agent** prompt tailored to that Agent and pastes it
+there. Both paths use an Intero one-time connection ticket to bootstrap an opaque
+Project-scoped Bearer credential, merge the managed entry into the Agent's
+native project configuration, and launch a fresh GUI task for native validation
+when the client supports it.
 
-Better Auth owns the signed-in identity and one-time token lifecycle: hashed
-storage, ten-minute expiry, and single consumption. Intero owns the
+Better Auth owns the signed-in identity. Intero owns the connection-ticket
+lifecycle (hashed storage, ten-minute expiry, and scoped single consumption) and the
 product-specific binding between member, Project, Agent client, and local
 workspace. It persists only the credential hash and checks active membership on
 every Project operation. The UI presents ticket-issued, native-MCP-loaded, and
@@ -469,10 +506,15 @@ unavailable immediately while the stable MCP endpoint continues to initialize
 as an unprivileged server exposing only `intero.connection_status`. This keeps a
 disconnected optional integration from blocking unrelated coding work.
 
-The optional Desktop App may perform one-click MCP configuration for the same
-three clients using the same single-use connection task. This is an
-acceleration path only: Web prompts remain universal for the supported clients,
-and no Desktop process or daemon joins the runtime path.
+The Desktop App is the recommended control surface for attaching these five
+clients using the same single-use connection task. It detects the client,
+previews exact managed configuration targets, applies only the confirmed entry,
+and distinguishes launcher configuration, repository-scoped encrypted state,
+and native MCP validation. Detach revokes the cloud binding first, then removes
+only local files whose Project, binding, client, and workspace metadata match;
+the shared launcher remains available to other repositories. Web prompts
+and explicit CLI remain universal fallbacks, and no Desktop process or daemon
+joins the runtime path.
 
 MCP and event-ingress permissions are separate scopes. Public MCP schemas do not
 expose internal Workspace or Workstream UUIDs. The service minimizes remote and
@@ -1099,9 +1141,10 @@ docs/
   plans/
 ```
 
-`apps/web` is the canonical product frontend. `apps/desktop` is the optional
-Electron shell and loads that same frontend without a renderer fork. Superseded
-runtime experiments are available in Git history.
+`apps/web` is the canonical product frontend. `apps/desktop` is the primary
+Electron product entry and loads that same frontend without a renderer fork. It
+owns local Agent-attachment control but not the direct-cloud MCP runtime.
+Superseded runtime experiments are available in Git history.
 
 ## 16. Verification strategy
 
@@ -1123,12 +1166,14 @@ runtime experiments are available in Git history.
   conversation/collaboration between A and B, safe shared Team Pulse visibility
   with AI configured, and privacy/pause/withdrawal propagation to the other
   client. API-only and single-client evidence do not pass.
-- Real Codex, Claude Code, and OpenCode Connect Agent prompts, MCP
+- Real Codex, Claude Code, OpenCode, Cursor, and Grok Build Connect Agent prompts, MCP
   authentication, project binding, success reporting, disconnect, reconnect,
   and revocation.
-- Optional Desktop one-click configuration acceptance for all three clients,
-  using the same endpoint/ticket and proving Web setup and team operation remain
-  complete with Desktop absent.
+- Desktop Attach acceptance for all five clients, covering repository and
+  Project selection, target preview, managed configuration, native MCP
+  validation, retry safety, Repair, Reconnect, and Detach. The same tests prove
+  Web setup, cloud operation, and direct-cloud MCP remain functional with
+  Desktop absent.
 - Content-safe fixtures for any optional event adapters.
 - Tenant-isolation and object-visibility tests.
 - Tests proving upload, model processing, reuse, and publication are independent.
@@ -1164,15 +1209,18 @@ runtime experiments are available in Git history.
   decision or final human commitment. Browser evidence must use the existing
   Project activity, Coordination, Action Inbox, search, notification, and
   Stand-in surfaces rather than a new dashboard.
-- Optional Desktop tests proving its absence does not break core product paths.
+- Desktop-first entry tests plus fallback tests proving its absence does not
+  break cloud authority, direct-cloud MCP, or browser compatibility paths.
 - Service-unavailable, stale-state, non-blocking ingress, 10,000-event/50-MiB
   capacity, seven-day TTL, encryption boundary, secure discard, gap marker,
   stable-ID idempotency, FIFO three-retry flush, and realtime-gap tests.
 
-All active acceptance uses the cloud API/MCP and canonical `apps/web` browser
-path. Electron build and Desktop Git-awareness tests additionally cover the same
-frontend inside the optional shell, explicit authorization, metadata-event
-debouncing, bounded snapshots, direct-cloud delivery, and shutdown cleanup.
+All active acceptance uses the cloud API/MCP and canonical `apps/web` renderer.
+Electron acceptance additionally covers the recommended Desktop entry, Agent
+Attach lifecycle, explicit local authorization, and the same renderer inside
+the shell. Browser acceptance remains the compatibility proof. Desktop
+Git-awareness tests separately cover metadata-event debouncing, bounded
+snapshots, direct-cloud delivery, and shutdown cleanup.
 
 ## 17. Decision records
 
@@ -1182,6 +1230,7 @@ debouncing, bounded snapshots, direct-cloud delivery, and shutdown cleanup.
 - [ADR-0007: Post-Pilot product model and delivery sequence](adr/0007-post-pilot-product-model-and-delivery-sequence.md)
 - [ADR-0008: Phase 7 bounded Stand-in and Agent automation](adr/0008-phase-7-bounded-stand-in-and-agent-automation.md)
 - [ADR-0009: Durable, authorized realtime conversations](adr/0009-durable-authorized-realtime-conversations.md)
+- [ADR-0010: Desktop-first product entry and controlled Coding Agent attachment](adr/0010-desktop-first-product-entry-and-controlled-agent-attachment.md)
 
 ADR-0001, ADR-0002, and ADR-0003 are retained as superseded historical
 implementation decisions.

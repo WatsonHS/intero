@@ -6,6 +6,10 @@ Date: 2026-07-26
 
 Builds on: ADR-0004, ADR-0005, ADR-0006
 
+Updated by: ADR-0010 for Desktop-first product entry and controlled Coding
+Agent attachment. The product/domain model and delivery authority boundaries
+in this decision remain in force.
+
 ## Context
 
 Phase 3 completed the infrastructure foundation and thin cloud-first vertical

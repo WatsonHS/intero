@@ -830,6 +830,7 @@ export async function registerPilotRoutes(
       teamId: request.params.teamId,
       memberId: request.params.memberId as PrincipalId,
       principalId: principal.id,
+      now: new Date().toISOString(),
     });
     return reply.status(204).send();
   });
@@ -1379,9 +1380,24 @@ export async function registerPilotRoutes(
         .object({
           client: PilotAgentClient,
           bindingId: z.uuid().optional(),
+          clientMutationId: z.string().min(8).max(200).optional(),
+          expectedWorkspaceId: z.uuid().optional(),
+          deliveryMode: z
+            .enum(["desktop_bridge", "web_cli"])
+            .default("web_cli"),
         })
         .strict()
         .parse(request.body);
+      if (
+        input.deliveryMode === "desktop_bridge" &&
+        !input.expectedWorkspaceId
+      ) {
+        throw new PilotStoreError(
+          "AGENT_WORKSPACE_REQUIRED",
+          400,
+          "Desktop Agent connections require the confirmed repository workspace identity.",
+        );
+      }
       const projectId = ProjectId.parse(request.params.projectId);
       const repairBinding = input.bindingId
         ? (await options.store.listAgentBindings(projectId, principal.id)).find(
@@ -1404,6 +1420,18 @@ export async function registerPilotRoutes(
         principal,
         projectId,
         input.client,
+        {
+          ...(input.clientMutationId
+            ? { clientMutationId: input.clientMutationId }
+            : {}),
+          ...(repairBinding ? { expectedBindingId: repairBinding.id } : {}),
+          ...(repairBinding?.credentialSeedHash
+            ? { credentialSeedHash: repairBinding.credentialSeedHash }
+            : {}),
+          ...(input.expectedWorkspaceId
+            ? { expectedWorkspaceId: input.expectedWorkspaceId }
+            : {}),
+        },
       );
       return reply.status(201).send({
         ticket: presentAgentTicket(issued.ticket),
@@ -1417,6 +1445,8 @@ export async function registerPilotRoutes(
           issued.project,
           issued.ticket.preferredLanguage,
           repairBinding?.id,
+          input.deliveryMode,
+          input.expectedWorkspaceId,
         ),
       });
     },
@@ -1461,30 +1491,22 @@ export async function registerPilotRoutes(
       .strict()
       .parse(request.body);
     const now = new Date().toISOString();
-    const credential = `agent_${randomBytes(32).toString("base64url")}`;
-    const verificationCode = `verify_${randomBytes(24).toString("base64url")}`;
-    const verificationExpiresAt = new Date(
-      Date.parse(now) + 10 * 60_000,
-    ).toISOString();
     const pending = await findTicketContext(
       options.store,
       input.ticket,
       input.client,
       input.name,
       input.workspaceId,
-      credential,
-      verificationCode,
-      verificationExpiresAt,
       now,
     );
     return reply.status(201).send({
-      credential,
+      credential: pending.credential,
       verification: {
-        code: verificationCode,
-        expiresAt: verificationExpiresAt,
+        code: pending.verificationCode,
+        expiresAt: pending.verificationExpiresAt,
       },
-      binding: presentBinding(pending),
-      projectId: pending.projectId,
+      binding: presentBinding(pending.binding),
+      projectId: pending.binding.projectId,
     });
   });
 
@@ -1917,15 +1939,33 @@ async function findTicketContext(
   client: PilotAgentBinding["client"],
   name: string,
   workspaceId: string,
-  credential: string,
-  verificationCode: string,
-  verificationExpiresAt: string,
   now: string,
-): Promise<PilotAgentBinding> {
+): Promise<{
+  binding: PilotAgentBinding;
+  credential: string;
+  verificationCode: string;
+  verificationExpiresAt: string;
+}> {
   const ticketHash = sha256(rawTicket);
   const ticket = await store.resolveAgentTicket(ticketHash, now);
+  if (
+    ticket.expectedWorkspaceId &&
+    ticket.expectedWorkspaceId !== workspaceId
+  ) {
+    throw new PilotStoreError(
+      "AGENT_TICKET_WORKSPACE_MISMATCH",
+      409,
+      "This Agent connection ticket belongs to a different Desktop-confirmed repository workspace.",
+    );
+  }
+  const credentialSeedHash = ticket.credentialSeedHash ?? ticketHash;
+  const credential = `agent_${sha256(`credential:${credentialSeedHash}`)}`;
+  const verificationCode = `verify_${sha256(`verification:${credentialSeedHash}`)}`;
+  const verificationExpiresAt = new Date(
+    Date.parse(ticket.createdAt) + 10 * 60_000,
+  ).toISOString();
   const binding: PilotAgentBinding = {
-    id: ticket.id,
+    id: ticket.expectedBindingId ?? ticket.id,
     projectId: ticket.projectId,
     ownerId: ticket.ownerId,
     client,
@@ -1934,11 +1974,17 @@ async function findTicketContext(
     preferredLanguage: ticket.preferredLanguage,
     authMode: "project_bearer",
     credentialHash: sha256(credential),
+    credentialSeedHash,
     verificationCodeHash: sha256(verificationCode),
     verificationExpiresAt,
     createdAt: now,
   };
-  return store.exchangeAgentTicket(ticketHash, binding, now);
+  return {
+    binding: await store.exchangeAgentTicket(ticketHash, binding, now),
+    credential,
+    verificationCode,
+    verificationExpiresAt,
+  };
 }
 
 async function issueAgentTicket(
@@ -1946,6 +1992,12 @@ async function issueAgentTicket(
   principal: AuthenticatedPrincipal,
   projectId: ProjectId,
   client: PilotAgentBinding["client"],
+  operation: {
+    clientMutationId?: string;
+    expectedBindingId?: string;
+    credentialSeedHash?: string;
+    expectedWorkspaceId?: string;
+  } = {},
 ): Promise<{
   ticket: PilotAgentTicket;
   rawTicket: string;
@@ -1972,22 +2024,41 @@ async function issueAgentTicket(
       "Project was not found.",
     );
   }
-  const rawTicket = `ticket_${randomBytes(24).toString("base64url")}`;
+  const operationId = operation.clientMutationId ? uuidv7() : undefined;
+  const rawTicket = operationId
+    ? `ticket_${sha256(`operation:${operationId}`)}`
+    : `ticket_${randomBytes(24).toString("base64url")}`;
   const now = new Date();
-  const ticket: PilotAgentTicket = {
+  const created: PilotAgentTicket = {
     id: uuidv7(),
+    ...(operationId ? { operationId } : {}),
     projectId,
     ownerId: principal.id,
     client,
+    ...(operation.clientMutationId
+      ? { clientMutationId: operation.clientMutationId }
+      : {}),
+    ...(operation.expectedBindingId
+      ? { expectedBindingId: operation.expectedBindingId }
+      : {}),
+    ...(operation.credentialSeedHash
+      ? { credentialSeedHash: operation.credentialSeedHash }
+      : {}),
+    ...(operation.expectedWorkspaceId
+      ? { expectedWorkspaceId: operation.expectedWorkspaceId }
+      : {}),
     preferredLanguage: principal.preferredLanguage ?? "en-US",
     ticketHash: sha256(rawTicket),
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
   };
-  await options.store.createAgentTicket(ticket);
+  const ticket = await options.store.createAgentTicket(created);
+  const stableRawTicket = ticket.operationId
+    ? `ticket_${sha256(`operation:${ticket.operationId}`)}`
+    : rawTicket;
   return {
     ticket,
-    rawTicket,
+    rawTicket: stableRawTicket,
     project,
     baseUrl: effectiveDeploymentBaseUrl(options, organization),
   };
@@ -2496,6 +2567,7 @@ function presentInvitation(invitation: PilotTeamInvitation, now: string) {
 function presentBinding(binding: PilotAgentBinding) {
   const {
     credentialHash: _credentialHash,
+    credentialSeedHash: _credentialSeedHash,
     verificationCodeHash: _verificationCodeHash,
     ...safe
   } = binding;
@@ -2518,6 +2590,8 @@ function buildConnectPrompt(
   project: Pick<PilotProject, "id" | "name">,
   preferredLanguage: PilotAgentBinding["preferredLanguage"],
   repairBindingId?: string,
+  deliveryMode: "desktop_bridge" | "web_cli" = "web_cli",
+  expectedWorkspaceId?: string,
 ): string {
   const baseUrl = deploymentBaseUrl.replace(/\/+$/, "");
   const clientLabel =
@@ -2525,7 +2599,12 @@ function buildConnectPrompt(
       ? "Claude Code"
       : client === "opencode"
         ? "OpenCode"
-        : "Codex";
+        : client === "grok-build"
+          ? "Grok Build"
+          : client === "cursor"
+            ? "Cursor"
+            : "Codex";
+  const lifecycleHooks = client !== "grok-build" && client !== "cursor";
   const artifacts =
     client === "codex"
       ? {
@@ -2549,12 +2628,25 @@ function buildConnectPrompt(
             instructions: "CLAUDE.md",
             hookImplementation: ".intero/hook.mjs",
           }
-        : {
-            mcp: "opencode.json",
-            hooks: ".opencode/plugins/intero.ts",
-            instructions: "AGENTS.md",
-            hookImplementation: ".opencode/plugins/intero.ts",
-          };
+        : client === "opencode"
+          ? {
+              mcp: "opencode.json",
+              hooks: ".opencode/plugins/intero.ts",
+              instructions: "AGENTS.md",
+              hookImplementation: ".opencode/plugins/intero.ts",
+            }
+          : client === "cursor"
+            ? {
+                mcp: "~/.cursor/mcp.json",
+                projectMcp: ".cursor/mcp.json",
+                instructions: "AGENTS.md (repository root)",
+                diagnostics: ["cursor-agent mcp list"],
+              }
+            : {
+                mcp: "$GROK_HOME/config.toml (or ~/.grok/config.toml)",
+                instructions: "AGENTS.md",
+                diagnostics: ["grok mcp doctor intero --json", "grok inspect"],
+              };
   const nativeConfiguration =
     client === "codex"
       ? {
@@ -2571,10 +2663,28 @@ function buildConnectPrompt(
             mcp: "Merge remote HTTP mcpServers.intero with Authorization.",
             hooks: "Merge privacy-filtered SessionStart/SessionEnd hooks.",
           }
-        : {
-            mcp: "Merge enabled remote mcp.intero with url and Authorization.",
-            hooks: "Merge the privacy-filtered session lifecycle plugin.",
-          };
+        : client === "opencode"
+          ? {
+              mcp: "Merge enabled remote mcp.intero with url and Authorization.",
+              hooks: "Merge the privacy-filtered session lifecycle plugin.",
+            }
+          : client === "cursor"
+            ? {
+                mcp: "Register Intero in ~/.cursor/mcp.json under mcpServers.intero with command, args, and env; a Project may instead use .cursor/mcp.json.",
+                instructions:
+                  "Cursor reads Project instructions from the repository-root AGENTS.md; minimally preserve or merge the intero-managed instructions there.",
+                diagnostics:
+                  "Run cursor-agent mcp list after writing configuration.",
+                lifecycleHooks: false,
+              }
+            : {
+                mcp: "Merge remote [mcp_servers.intero] url, headers.Authorization, and enabled = true; preserve unrelated Grok settings.",
+                instructions:
+                  "Grok Build reads AGENTS.md from the current directory to the Git root; minimally preserve or merge the intero-managed Project instructions there.",
+                diagnostics:
+                  "Run grok mcp doctor intero --json and grok inspect after writing configuration.",
+                lifecycleHooks: false,
+              };
   const setup = {
     protocol: "intero-agent-setup/v1",
     project: { id: project.id, name: project.name },
@@ -2586,6 +2696,7 @@ function buildConnectPrompt(
       expiresAt,
       retryableUntil: "connected_or_expired",
       ...(repairBindingId ? { expectedBindingId: repairBindingId } : {}),
+      ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
       exchangeRequest: {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2616,8 +2727,10 @@ function buildConnectPrompt(
     },
     hooks: {
       endpoint: `${baseUrl}/v1/pilot/agent/hooks`,
-      events:
-        client === "opencode"
+      lifecycleHooks,
+      events: !lifecycleHooks
+        ? []
+        : client === "opencode"
           ? ["session.created", "session.idle", "session.deleted"]
           : ["SessionStart", "SessionEnd"],
       allowedPayload: [
@@ -2628,7 +2741,9 @@ function buildConnectPrompt(
         "workstreamTitle",
         "evidenceRefs",
       ],
-      readinessSignal: "intero.connection_status.lifecycleReady",
+      readinessSignal: !lifecycleHooks
+        ? "not_applicable_without_a_stable_lifecycle_hook_contract"
+        : "intero.connection_status.lifecycleReady",
     },
     projectInstructions: {
       preferredLanguage,
@@ -2655,6 +2770,20 @@ function buildConnectPrompt(
     },
     nativeConfiguration,
   };
+  if (deliveryMode === "desktop_bridge") {
+    return buildDesktopBridgeConnectPrompt({
+      client,
+      clientLabel,
+      baseUrl,
+      ticket,
+      expiresAt,
+      project,
+      preferredLanguage,
+      lifecycleHooks,
+      ...(repairBindingId ? { repairBindingId } : {}),
+      ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
+    });
+  }
   const serializedSetup = JSON.stringify(setup);
   return preferredLanguage === "zh-CN"
     ? [
@@ -2668,14 +2797,20 @@ function buildConnectPrompt(
         "按顺序执行：",
         "1. 定位仓库根目录并保留现有非 Intero 配置；从 .intero/connection.json 读取候选 credential 与稳定 workspaceId。",
         "2. 用候选 credential 请求 authorization.reuseProbeUrl；HTTP 200 且 projectId、client、workspaceId 以及可选 authorization.expectedBindingId 匹配时复用，否则进入兑换。",
-        "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前可重试；每次 HTTP 201 以最新 credential、verification 为准。把 configuration.version 与凭据原子写入 artifacts.localCredential 并设置 0600。",
-        `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 Hook；Authorization 使用已保存 credential。SessionStart Hook 发送 hooks.allowedPayload，以原生 session ID 的本地哈希生成 clientEventId 并上报 active 状态；Hook 采用 fail-open。${client === "codex" ? " Hook 命令从 git rev-parse --show-toplevel 定位实现，并把 artifacts.worktreePatterns 合并到仓库根目录 .worktreeinclude。" : ""}`,
+        "3. 按 authorization.exchangeRequest 发送请求，JSON body 精确使用 ticket、client、name、workspaceId 四个键，依次取 authorization.ticket、client.id、仓库标识、稳定 UUID。同一 ticket 在 connected 或 expiresAt 前仅可用同一 client、仓库标识和 workspaceId 重试，并返回相同 credential、verification。把 configuration.version 与凭据原子写入 artifacts.localCredential 并设置 0600。",
+        !lifecycleHooks
+          ? `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 AGENTS.md 项目 instructions；Authorization 使用已保存 credential。不要配置、调用或宣称 lifecycle Hook：hooks.lifecycleHooks=false，MCP 验证不等同于 Hook 就绪。`
+          : `4. 按 nativeConfiguration 最小合并 ${clientLabel} 原生 MCP 与 Hook；Authorization 使用已保存 credential。SessionStart Hook 发送 hooks.allowedPayload，以原生 session ID 的本地哈希生成 clientEventId 并上报 active 状态；Hook 采用 fail-open。${client === "codex" ? " Hook 命令从 git rev-parse --show-toplevel 定位实现，并把 artifacts.worktreePatterns 合并到仓库根目录 .worktreeinclude。" : ""}`,
         "5. 在项目 instructions 维护 intero-managed 规则：每个新对话理解首条用户请求后、开始实质工作前，按 projectInstructions.initialIntent 调用 stand_in.report_checkpoint，用安全摘要上报正在做的工作；保存返回的 workStateId，并按 statusTool 查询直到 projectInstructions.checkpointTerminalStatuses 之一，依据 action 处理重试或失败。后续 semanticBranchPoints 继续上报，定向协作填写当前项目成员 ID。",
         `6. 校验配置语法与 ${clientLabel} 原生 MCP 注册状态。`,
         client === "codex"
           ? "7. 凭据与 configuration.version 落盘后，直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话并跟进结果。按 Codex GUI 的 Hook 审核提示确认当前仓库的 Intero Hook；确认后新建任务。验证任务依次调用 intero.connection_status、用本地 verification.code（已有已验证连接可省略）和 configuration.version 调用 intero.validate_connection、再次调用 intero.connection_status；以 ready=true、configurationCurrent=true 且 lifecycleReady=true 为完成信号，随后移除本地 verification 字段。若状态为 lifecycle_pending，再新建一次任务并回读。本配置任务报告 pending_gui_validation，新对话报告 MCP、配置版本与 Hook 验证结果。"
-          : `7. 配置变化时在 ${clientLabel} GUI 启动新验证会话：读取状态、用本地 verification.code 调用 intero.validate_connection、回读 connected 并移除 verification。本任务报告 pending_gui_validation。`,
-        "8. 报告 changed、unchanged、preserved、conflicts、verification、connected project/agent，以及 MCP/Hook 两项 readiness；凭证脱敏。验证前状态为 pending_gui_validation。",
+          : !lifecycleHooks
+            ? `7. 在当前仓库启动 ${clientLabel} 会话，先运行 ${client === "cursor" ? "cursor-agent mcp list" : "grok mcp doctor intero --json 与 grok inspect"}，再调用 intero.connection_status、用本地 verification.code（已有已验证连接可省略）和 configuration.version 调用 intero.validate_connection。确认 connected=true、ready=true、mcpConnected=true 且 configurationCurrent=true 后移除本地 verification 字段；lifecycleReady=true 仅表示 lifecycleHooks=false 时无需 Hook，不得表示 Hook 已运行。报告 MCP、配置版本与 AGENTS.md 指令验证。`
+            : `7. 配置变化时在 ${clientLabel} GUI 启动新验证会话：读取状态、用本地 verification.code 调用 intero.validate_connection、回读 connected 并移除 verification。本任务报告 pending_gui_validation。`,
+        !lifecycleHooks
+          ? "8. 报告 changed、unchanged、preserved、conflicts、verification、connected project/agent，以及 MCP readiness 与 lifecycleHooks=false；凭证脱敏。验证前状态为 pending_gui_validation。"
+          : "8. 报告 changed、unchanged、preserved、conflicts、verification、connected project/agent，以及 MCP/Hook 两项 readiness；凭证脱敏。验证前状态为 pending_gui_validation。",
       ].join("\n")
     : [
         `Complete the Project-scoped native ${clientLabel} connection from this repository to the Intero Project "${project.name}".`,
@@ -2688,13 +2823,130 @@ function buildConnectPrompt(
         "Execute in order:",
         "1. Locate the repository root and preserve non-Intero settings. Read the candidate credential and stable workspaceId from .intero/connection.json.",
         "2. Probe authorization.reuseProbeUrl with the candidate credential. Reuse an HTTP 200 binding matching projectId, client, workspaceId, and optional authorization.expectedBindingId; otherwise exchange.",
-        "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable until connected or expiresAt; each HTTP 201 makes its latest credential and verification authoritative. Atomically save configuration.version with them in artifacts.localCredential using mode 0600.",
-        `4. Minimally merge native ${clientLabel} MCP and hooks per nativeConfiguration. Use the saved credential for Authorization. The SessionStart hook sends hooks.allowedPayload, hashes the native session ID into clientEventId, reports active status, and fails open.${client === "codex" ? " Resolve the hook implementation from git rev-parse --show-toplevel and merge artifacts.worktreePatterns into the repository-root .worktreeinclude." : ""}`,
+        "3. Send authorization.exchangeRequest with exactly four JSON keys: ticket, client, name, workspaceId, sourced from authorization.ticket, client.id, the repository label, and a stable UUID. The same ticket is retryable only with the same client, repository label, and workspaceId until connected or expiresAt, and returns the same credential and verification. Atomically save configuration.version with them in artifacts.localCredential using mode 0600.",
+        !lifecycleHooks
+          ? `4. Minimally merge native ${clientLabel} MCP and AGENTS.md Project instructions per nativeConfiguration. Use the saved credential for Authorization. Do not configure, call, or claim a lifecycle hook: hooks.lifecycleHooks=false and MCP validation is not Hook readiness.`
+          : `4. Minimally merge native ${clientLabel} MCP and hooks per nativeConfiguration. Use the saved credential for Authorization. The SessionStart hook sends hooks.allowedPayload, hashes the native session ID into clientEventId, reports active status, and fails open.${client === "codex" ? " Resolve the hook implementation from git rev-parse --show-toplevel and merge artifacts.worktreePatterns into the repository-root .worktreeinclude." : ""}`,
         "5. Maintain intero-managed Project instructions: after understanding the first user request in every new conversation and before substantive work, follow projectInstructions.initialIntent and call stand_in.report_checkpoint with a safe summary of the current work. Save the returned workStateId and use statusTool until reaching a projectInstructions.checkpointTerminalStatuses value, following action for retries or failures. Continue reporting later semanticBranchPoints and route collaboration to a current Project member.",
         `6. Validate syntax and ${clientLabel} native MCP registration.`,
         client === "codex"
           ? "7. Once the credential and configuration.version are persisted, use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository and follow its result. Confirm the repository Intero Hook in the Codex GUI review flow, then start a fresh task. The validation task calls intero.connection_status, intero.validate_connection with local verification.code (optional for an already validated connection) plus configuration.version, then intero.connection_status again; ready=true, configurationCurrent=true, and lifecycleReady=true are the completion signal, after which it removes the local verification field. If status is lifecycle_pending, start one more task and read status again. This setup task reports pending_gui_validation, and the new conversation reports MCP, configuration-version, and Hook verification."
-          : `7. After a config change, start a fresh ${clientLabel} GUI validation session: read status, call intero.validate_connection with local verification.code, read connected, then remove verification. This task reports pending_gui_validation.`,
-        "8. Report changed, unchanged, preserved, conflicts, verification, connected Project/Agent, and both MCP/Hook readiness with redacted credentials; validation starts as pending_gui_validation.",
+          : !lifecycleHooks
+            ? `7. Start a ${clientLabel} session in this repository, run ${client === "cursor" ? "cursor-agent mcp list" : "grok mcp doctor intero --json and grok inspect"}, then call intero.connection_status and intero.validate_connection with local verification.code (optional for an already validated connection) plus configuration.version. After connected=true, ready=true, mcpConnected=true, and configurationCurrent=true, remove the local verification field; lifecycleReady=true only means no Hook is required while lifecycleHooks=false and must not claim a Hook ran. Report MCP, configuration-version, and AGENTS.md instruction verification.`
+            : `7. After a config change, start a fresh ${clientLabel} GUI validation session: read status, call intero.validate_connection with local verification.code, read connected, then remove verification. This task reports pending_gui_validation.`,
+        !lifecycleHooks
+          ? "8. Report changed, unchanged, preserved, conflicts, verification, connected Project/Agent, MCP readiness, and lifecycleHooks=false with redacted credentials; validation starts as pending_gui_validation."
+          : "8. Report changed, unchanged, preserved, conflicts, verification, connected Project/Agent, and both MCP/Hook readiness with redacted credentials; validation starts as pending_gui_validation.",
       ].join("\n");
+}
+
+function buildDesktopBridgeConnectPrompt(input: {
+  client: PilotAgentBinding["client"];
+  clientLabel: string;
+  baseUrl: string;
+  ticket: string;
+  expiresAt: string;
+  project: Pick<PilotProject, "id" | "name">;
+  preferredLanguage: PilotAgentBinding["preferredLanguage"];
+  lifecycleHooks: boolean;
+  repairBindingId?: string;
+  expectedWorkspaceId?: string;
+}): string {
+  const setup = {
+    protocol: "intero-agent-setup/v1",
+    deliveryMode: "desktop_bridge",
+    project: input.project,
+    client: { id: input.client, label: input.clientLabel },
+    authorization: {
+      ticket: input.ticket,
+      expiresAt: input.expiresAt,
+      ...(input.repairBindingId
+        ? { expectedBindingId: input.repairBindingId }
+        : {}),
+      ...(input.expectedWorkspaceId
+        ? { expectedWorkspaceId: input.expectedWorkspaceId }
+        : {}),
+    },
+    bridge: {
+      source: "confirmed_intero_managed_native_mcp_entry",
+      workingDirectory: "selected_repository_root",
+      connectArguments: [
+        "cloud",
+        "connect",
+        "--client",
+        input.client,
+        "--cloud-url",
+        input.baseUrl,
+        "--connect-ticket",
+        input.ticket,
+        ...(input.expectedWorkspaceId
+          ? ["--workspace-id", input.expectedWorkspaceId]
+          : []),
+      ],
+      runtimeArguments: ["--mcp-source", input.client, "--cloud"],
+      localState:
+        "encrypted workspace state keyed by the selected local repository; no path is uploaded",
+      retryIdentity:
+        "require the Desktop-confirmed opaque workspace identity before exchange and reuse it on retry",
+    },
+    configuration: { version: PILOT_AGENT_CONFIGURATION_VERSION },
+    hooks: {
+      lifecycleHooks: input.lifecycleHooks,
+      readinessSignal: input.lifecycleHooks
+        ? "intero.connection_status.lifecycleReady"
+        : "not_applicable_without_a_stable_lifecycle_hook_contract",
+    },
+    projectInstructions: {
+      preferredLanguage: input.preferredLanguage,
+      initialIntent: "stand_in.report_checkpoint before substantive work",
+      semanticBranchPoints: [
+        "intent",
+        "decision",
+        "blocker",
+        "dependency",
+        "scope_change",
+        "artifact",
+        "validation",
+        "pause",
+        "completion",
+      ],
+    },
+  };
+  const serialized = JSON.stringify(setup);
+  if (input.preferredLanguage === "zh-CN") {
+    return [
+      `请在当前仓库中完成 ${input.clientLabel} 到 Intero 项目“${input.project.name}”的 Desktop 托管连接。`,
+      "",
+      "连接参数：",
+      "```json",
+      serialized,
+      "```",
+      "",
+      "按顺序执行：",
+      "1. 确认当前工作目录是 Desktop 选定的仓库根目录；保留所有非 Intero 配置。",
+      "2. 从该客户端已确认的原生 MCP 配置中读取 Intero 公共 bridge 的精确 launcher 命令。保留 launcher 或包装器，只把运行参数替换为 bridge.connectArguments；不要把 bearer credential 写入工具级全局配置。",
+      "3. 在仓库根目录执行 bridge connect。它只接受 Desktop 已确认并在该仓库存储的 opaque workspace identity，才会兑换 ticket；响应丢失时用相同命令重试，workspace identity、credential 与 verification 必须保持稳定。",
+      "4. bridge 将 credential、binding metadata 与 outbox 保存到按仓库隔离的本地加密状态；绝对路径不会上传。确认返回的 Project、client 与 workspace 正确。",
+      `5. 保留工具级公共 bridge，并最小合并当前仓库的 intero-managed instructions${input.lifecycleHooks ? " 与隐私过滤 lifecycle Hook" : "；不要配置未声明的 lifecycle Hook"}。`,
+      `6. 新建 ${input.clientLabel} 会话，调用 intero.connection_status，确认 connected=true、ready=true、configurationCurrent=true${input.lifecycleHooks ? " 且 lifecycleReady=true" : "；lifecycleHooks=false"}。`,
+      "7. 报告 changed、unchanged、preserved、conflicts、Project、binding、workspace 与验证结果；凭证脱敏。",
+    ].join("\n");
+  }
+  return [
+    `Complete the Desktop-managed ${input.clientLabel} connection from this repository to the Intero Project "${input.project.name}".`,
+    "",
+    "Connection parameters:",
+    "```json",
+    serialized,
+    "```",
+    "",
+    "Execute in order:",
+    "1. Confirm the working directory is the repository selected in Desktop and preserve every non-Intero setting.",
+    "2. Read the exact Intero shared-bridge launcher from the client's confirmed native MCP configuration. Preserve the launcher or wrapper and replace only its runtime arguments with bridge.connectArguments; never place a bearer credential in client-global configuration.",
+    "3. Run bridge connect from the repository root. It exchanges the ticket only after the Desktop-confirmed opaque workspace identity is already stored for this repository; retry the same command after an uncertain response and require stable workspace, credential, and verification identities.",
+    "4. The bridge stores credential, binding metadata, and outbox in repository-isolated encrypted local state without uploading the absolute path. Verify the returned Project, client, and workspace.",
+    `5. Keep the shared client bridge and minimally merge repository intero-managed instructions${input.lifecycleHooks ? " plus the privacy-filtered lifecycle Hook" : "; do not configure an undeclared lifecycle Hook"}.`,
+    `6. Start a fresh ${input.clientLabel} session and call intero.connection_status. Require connected=true, ready=true, configurationCurrent=true${input.lifecycleHooks ? ", and lifecycleReady=true" : " with lifecycleHooks=false"}.`,
+    "7. Report changed, unchanged, preserved, conflicts, Project, binding, workspace, and validation results with credentials redacted.",
+  ].join("\n");
 }

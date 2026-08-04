@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,7 +8,11 @@ import { join } from "node:path";
 import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CloudPilotClient, EncryptedOutbox } from "./cloud-client.js";
+import {
+  CloudPilotClient,
+  EncryptedOutbox,
+  defaultCloudDirectoryForWorkspace,
+} from "./cloud-client.js";
 
 describe("cloud MCP client", () => {
   afterEach(() => {
@@ -29,6 +33,132 @@ describe("cloud MCP client", () => {
     expect(stored).not.toContain("Sensitive safe summary");
     expect(stored).not.toContain("event-secure-0001");
     expect(outbox.size()).toBe(1);
+  });
+
+  it("isolates default encrypted state by local workspace without storing its path", () => {
+    const home = "/Users/alex";
+    const first = defaultCloudDirectoryForWorkspace(
+      "/workspaces/project-a",
+      home,
+    );
+    const repeated = defaultCloudDirectoryForWorkspace(
+      "/workspaces/project-a",
+      home,
+    );
+    const second = defaultCloudDirectoryForWorkspace(
+      "/workspaces/project-b",
+      home,
+    );
+
+    expect(first).toBe(repeated);
+    expect(first).not.toBe(second);
+    expect(first).not.toContain("project-a");
+    expect(second).not.toContain("project-b");
+  });
+
+  it("persists the workspace identity before exchange and reuses it on retry", async () => {
+    vi.stubEnv("INTERO_OUTBOX_KEY", "stable-workspace-test-key");
+    const workspaceIds: string[] = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        workspaceId: string;
+      };
+      workspaceIds.push(body.workspaceId);
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          credential: "stable-workspace-credential",
+          projectId: "project-1",
+          binding: {
+            id: "019f9b01-1111-7111-8111-111111111111",
+            client: "cursor",
+            name: "Cursor · project-a",
+            workspaceId: body.workspaceId,
+            preferredLanguage: "en-US",
+          },
+          verification: { code: "verification-code-stable-workspace" },
+        }),
+      );
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    try {
+      const address = server.address() as AddressInfo;
+      const configDirectory = mkdtempSync(
+        join(tmpdir(), "intero-stable-workspace-"),
+      );
+      for (const ticket of ["ticket-first", "ticket-retry"]) {
+        await CloudPilotClient.connect({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          ticket,
+          client: "cursor",
+          cwd: "/workspaces/project-a",
+          configDirectory,
+        });
+      }
+
+      expect(workspaceIds).toHaveLength(2);
+      expect(workspaceIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(workspaceIds[1]).toBe(workspaceIds[0]);
+      expect(
+        CloudPilotClient.load({
+          client: "cursor",
+          configDirectory,
+          cwd: "/workspaces/project-a",
+        }).context(),
+      ).toMatchObject({
+        projectId: "project-1",
+        client: "cursor",
+        workspaceId: workspaceIds[0],
+      });
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+
+  it("refuses a Desktop-approved ticket in a different local workspace before credential exchange", async () => {
+    vi.stubEnv("INTERO_OUTBOX_KEY", "desktop-workspace-test-key");
+    let exchanges = 0;
+    const server = createServer((_request, response) => {
+      exchanges += 1;
+      response.end(JSON.stringify({ credential: "must-not-be-issued" }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const directory = mkdtempSync(
+        join(tmpdir(), "intero-desktop-workspace-"),
+      );
+      const approvedWorkspaceId = "019fcdb4-a6da-7332-8e7e-d907b98d02f1";
+      const repositoryBWorkspaceId = "019fcdb4-a6da-7332-8e7e-d907b98d02f2";
+      writeFileSync(
+        join(directory, "workspace-id"),
+        `${repositoryBWorkspaceId}\n`,
+      );
+      const address = server.address() as AddressInfo;
+
+      await expect(
+        CloudPilotClient.connect({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          ticket: "desktop-ticket-for-repository-a",
+          client: "cursor",
+          cwd: "/workspaces/repository-b",
+          configDirectory: directory,
+          expectedWorkspaceId: approvedWorkspaceId,
+        }),
+      ).rejects.toThrow("different local repository workspace");
+      expect(exchanges).toBe(0);
+      expect(readFileSync(join(directory, "workspace-id"), "utf8")).toBe(
+        `${repositoryBWorkspaceId}\n`,
+      );
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
   });
 
   it("bounds count/bytes and records overflow gaps", () => {
@@ -94,7 +224,7 @@ describe("cloud MCP client", () => {
               id: "019f9b01-1111-7111-8111-111111111111",
               client: "codex",
               name: "Codex · pilot",
-              workspaceId: "019f9b01-2222-7222-8222-222222222222",
+              workspaceId: body.workspaceId,
               preferredLanguage: "zh-CN",
             },
             verification: {
@@ -290,7 +420,7 @@ describe("cloud MCP client", () => {
               id: "019f9b01-1111-7111-8111-111111111111",
               client: "codex",
               name: "Codex · delivery",
-              workspaceId: "019f9b01-2222-7222-8222-222222222222",
+              workspaceId: body.workspaceId,
               preferredLanguage: "en-US",
             },
             verification: {

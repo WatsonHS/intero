@@ -61,6 +61,8 @@ export function FirstUseGuide() {
     [overviews, pilot.teams.data?.teams, specs],
   );
   const projectId = pilot.selectedProjectId ?? projects[0]?.id;
+  const desktopAvailable =
+    typeof window !== "undefined" && Boolean(window.interoDesktop);
   const steps = [
     {
       id: "invite",
@@ -72,10 +74,12 @@ export function FirstUseGuide() {
     },
     {
       id: "agent",
-      title: "连接 Coding Agent",
-      detail: "完成 MCP、项目配置与 SessionStart Hook 验证。",
+      title: "Attach Coding Agent",
+      detail: desktopAvailable
+        ? "在 Desktop 选择仓库与 Project，确认托管目标，并完成原生 MCP 服务端验证。"
+        : "选择 Project 并生成一次性连接任务，在 Coding Agent 所在主机完成原生 MCP 服务端验证。",
       done: progress.connectedAgent,
-      action: "连接 Agent",
+      action: "Attach Agent",
       open: () =>
         navigate({ to: "/settings/$category", params: { category: "agent" } }),
     },

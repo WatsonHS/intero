@@ -2,6 +2,7 @@ import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CopyIcon,
+  FolderOpenIcon,
   PlugsIcon,
   SpinnerGapIcon,
   TerminalWindowIcon,
@@ -12,16 +13,34 @@ import {
   type PilotAgentClient,
 } from "@intero/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  cleanupWorkspaceConnection,
+  getCodingAgentIntegrations,
+  manageCodingAgentIntegration,
+  previewCodingAgentIntegration,
+  previewWorkspaceConnectionCleanup,
+} from "../api.js";
+import { useI18n } from "../i18n/index.js";
 import {
   createPilotAgentConnection,
   disconnectPilotAgent,
   getPilotOverview,
+  PilotApiError,
 } from "../pilot/api.js";
 import { usePilot } from "../pilot/context.js";
 import { codexConnectionDeepLink } from "./agent/deep-link.js";
-import { summarizeProjectAgentConnections } from "./agent/connection-state.js";
+import {
+  agentBindingIsConnected,
+  agentRequiresLifecycleHook,
+  summarizeProjectAgentConnections,
+} from "./agent/connection-state.js";
+import {
+  attachmentAttemptContextKey,
+  attachmentMutationIdForAttempt,
+  settleAttachmentMutation,
+} from "./agent/attachment-mutation.js";
 import { copyTextToClipboard } from "./agent/copy-text.js";
 
 const CLIENTS: Array<{
@@ -44,7 +63,21 @@ const CLIENTS: Array<{
     label: "OpenCode",
     detail: "使用 OpenCode 的项目级原生配置完成 MCP 连接。",
   },
+  {
+    id: "cursor",
+    label: "Cursor",
+    detail: "使用 Cursor Agent 的原生 MCP 配置完成项目级连接与验证。",
+  },
+  {
+    id: "grok-build",
+    label: "Grok Build",
+    detail: "使用 Grok Build 原生 MCP 配置完成项目级连接与验证。",
+  },
 ];
+
+const CLIENT_LABELS = Object.fromEntries(
+  CLIENTS.map((client) => [client.id, client.label]),
+) as Record<PilotAgentClient, string>;
 
 type IssuedConnection = {
   bindingId: string;
@@ -54,6 +87,37 @@ type IssuedConnection = {
   expiresAt: string;
 };
 
+type AttachmentPhase =
+  "awaiting_confirmation" | "configuring" | "creating_binding";
+
+type RevokedConnection = {
+  client: PilotAgentClient;
+  name: string;
+  bindingId: string;
+  projectId: string;
+  workspaceId: string;
+  cleanupState: "pending" | "removed" | "cancelled" | "failed";
+};
+
+type ConnectionMutationResult =
+  | { cancelled: true; client: PilotAgentClient }
+  | {
+      cancelled: false;
+      client: PilotAgentClient;
+      result: Awaited<ReturnType<typeof createPilotAgentConnection>>;
+    };
+
+function isUnresolvedFallbackTransportError(
+  error: Error,
+  desktop: Window["interoDesktop"] | undefined,
+) {
+  if (desktop || error instanceof PilotApiError) return false;
+  if (error.name === "AbortError") return false;
+  // fetch rejects with TypeError when the browser cannot determine whether
+  // the request reached the server. Retain the id only for that narrow case.
+  return error instanceof TypeError || error.name === "NetworkError";
+}
+
 export function AgentConnectionsSettings({
   initialProjectId,
   onConnectedClientsChange,
@@ -61,6 +125,7 @@ export function AgentConnectionsSettings({
   initialProjectId?: string | undefined;
   onConnectedClientsChange?: (clients: PilotAgentClient[]) => void;
 }) {
+  const { locale } = useI18n();
   const pilot = usePilot();
   const queryClient = useQueryClient();
   const projects = pilot.projects.data?.projects ?? [];
@@ -77,7 +142,22 @@ export function AgentConnectionsSettings({
   );
   const [launchPending, setLaunchPending] = useState(false);
   const [launchError, setLaunchError] = useState<string>();
+  const [repository, setRepository] = useState<GitRepositorySelection>();
+  const [attachmentClient, setAttachmentClient] = useState<PilotAgentClient>();
+  const [attachmentPhase, setAttachmentPhase] = useState<AttachmentPhase>();
+  const [revokedConnection, setRevokedConnection] =
+    useState<RevokedConnection>();
   const [now, setNow] = useState(() => Date.now());
+  const pendingMutationIds = useRef(new Map<string, string>());
+  const desktop =
+    typeof window === "undefined" ? undefined : window.interoDesktop;
+  const localIntegrations = useQuery({
+    queryKey: ["desktop", "coding-agent-integrations"],
+    queryFn: getCodingAgentIntegrations,
+    enabled: Boolean(desktop),
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
+  });
 
   useEffect(() => {
     if (
@@ -101,10 +181,7 @@ export function AgentConnectionsSettings({
             (binding) =>
               binding.id === issued.bindingId &&
               !binding.disconnectedAt &&
-              (!binding.validatedAt ||
-                !binding.activityUpdatedAt ||
-                binding.configurationVersion !==
-                  PILOT_AGENT_CONFIGURATION_VERSION),
+              !agentBindingIsConnected(binding),
           );
           return pending && Date.parse(issued.expiresAt) > Date.now()
             ? 2_000
@@ -139,23 +216,108 @@ export function AgentConnectionsSettings({
       Boolean(project?.participatingTeamIds.includes(team.id)),
   );
 
-  const startConnection = useMutation({
+  const startConnection = useMutation<
+    ConnectionMutationResult,
+    Error,
+    {
+      client: PilotAgentClient;
+      bindingId?: string;
+      clientMutationId: string;
+    }
+  >({
     mutationFn: async ({
       client,
       bindingId,
-    }: {
-      client: PilotAgentClient;
-      bindingId?: string;
-    }) => ({
-      client,
-      result: await createPilotAgentConnection(
-        pilot.identityId!,
-        projectId,
+      clientMutationId,
+    }): Promise<ConnectionMutationResult> => {
+      setAttachmentClient(client);
+      setRevokedConnection(undefined);
+      let expectedWorkspaceId: string | undefined;
+      if (desktop) {
+        if (!repository || Date.parse(repository.expiresAt) <= Date.now()) {
+          throw new Error("请重新选择本地仓库后再 Attach Coding Agent。");
+        }
+        const local = localIntegrations.data?.find(
+          (integration) => integration.adapter === client,
+        );
+        if (!local?.detected) {
+          throw new Error(`Intero Desktop 未检测到 ${CLIENT_LABELS[client]}。`);
+        }
+        if (!local.supported) {
+          throw new Error(
+            `${CLIENT_LABELS[client]} 版本低于 Intero 当前支持范围。`,
+          );
+        }
+        setAttachmentPhase("awaiting_confirmation");
+        const preview = await previewCodingAgentIntegration({
+          adapter: client,
+          action: local.configured ? "repair" : "install",
+          locale,
+          projectId,
+          repositorySelectionToken: repository.selectionToken,
+        });
+        if (!preview) return { cancelled: true, client };
+        // The native boundary consumes this authority when confirmation is
+        // granted. Keep the path for launch/display, but require a fresh
+        // picker gesture before another mutation.
+        setRepository((current) =>
+          current?.selectionToken === repository.selectionToken
+            ? { ...current, expiresAt: new Date(0).toISOString() }
+            : current,
+        );
+        setAttachmentPhase("configuring");
+        const managed = await manageCodingAgentIntegration({
+          adapter: client,
+          token: preview.token,
+        });
+        if (
+          !managed.workspaceId ||
+          managed.workspaceId !== repository.workspaceId
+        ) {
+          throw new Error(
+            "Desktop 返回的仓库工作区与已确认仓库不一致；未创建云端连接。",
+          );
+        }
+        expectedWorkspaceId = managed.workspaceId;
+        await queryClient.invalidateQueries({
+          queryKey: ["desktop", "coding-agent-integrations"],
+        });
+      }
+      setAttachmentPhase("creating_binding");
+      return {
+        cancelled: false,
         client,
-        bindingId,
-      ),
-    }),
-    onSuccess: async ({ client, result }) => {
+        result: await createPilotAgentConnection(
+          pilot.identityId!,
+          projectId,
+          client,
+          bindingId,
+          clientMutationId,
+          desktop ? "desktop_bridge" : "web_cli",
+          expectedWorkspaceId,
+        ),
+      };
+    },
+    onSuccess: async (outcome, variables) => {
+      const contextKey = attachmentAttemptContextKey(
+        projectId,
+        variables.client,
+        variables.bindingId,
+      );
+      if (outcome.cancelled) {
+        settleAttachmentMutation(
+          pendingMutationIds.current,
+          contextKey,
+          "cancelled",
+        );
+        return;
+      }
+      settleAttachmentMutation(
+        pendingMutationIds.current,
+        contextKey,
+        "completed",
+      );
+      const { client, result } = outcome;
       setIssued({
         bindingId: result.bindingId,
         client,
@@ -169,11 +331,92 @@ export function AgentConnectionsSettings({
         queryKey: ["pilot", "overview", pilot.identityId, projectId],
       });
     },
+    onError: (error, variables) => {
+      const contextKey = attachmentAttemptContextKey(
+        projectId,
+        variables.client,
+        variables.bindingId,
+      );
+      settleAttachmentMutation(
+        pendingMutationIds.current,
+        contextKey,
+        isUnresolvedFallbackTransportError(error, desktop)
+          ? "unresolved_error"
+          : "terminal_error",
+      );
+    },
+    onSettled: () => {
+      setAttachmentClient(undefined);
+      setAttachmentPhase(undefined);
+    },
+  });
+  const cleanupConnection = useMutation<
+    { connection: RevokedConnection; removed: boolean },
+    Error,
+    RevokedConnection
+  >({
+    mutationFn: async (connection) => {
+      if (!desktop || !repository || !repositorySelectionCurrent) {
+        throw new Error("请重新选择这个 binding 对应的本地仓库后再清理。");
+      }
+      const preview = await previewWorkspaceConnectionCleanup({
+        adapter: connection.client,
+        locale,
+        projectId: connection.projectId,
+        bindingId: connection.bindingId,
+        workspaceId: connection.workspaceId,
+        repositorySelectionToken: repository.selectionToken,
+      });
+      if (!preview) return { connection, removed: false };
+      setRepository((current) =>
+        current?.selectionToken === repository.selectionToken
+          ? { ...current, expiresAt: new Date(0).toISOString() }
+          : current,
+      );
+      await cleanupWorkspaceConnection(preview.token);
+      return { connection, removed: true };
+    },
+    onSuccess: ({ connection, removed }) => {
+      setRevokedConnection((current) =>
+        current?.bindingId === connection.bindingId
+          ? {
+              ...current,
+              cleanupState: removed ? "removed" : "cancelled",
+            }
+          : current,
+      );
+    },
+    onError: (_error, connection) => {
+      setRevokedConnection((current) =>
+        current?.bindingId === connection.bindingId
+          ? { ...current, cleanupState: "failed" }
+          : current,
+      );
+    },
   });
   const disconnect = useMutation({
-    mutationFn: (bindingId: string) =>
-      disconnectPilotAgent(pilot.identityId!, bindingId),
-    onSuccess: async () => {
+    mutationFn: async (bindingId: string) => {
+      const binding = overview.data?.bindings.find(
+        (candidate) => candidate.id === bindingId,
+      );
+      const result = await disconnectPilotAgent(pilot.identityId!, bindingId);
+      return { binding, result };
+    },
+    onSuccess: async ({ binding }) => {
+      if (binding) {
+        const revoked: RevokedConnection = {
+          client: binding.client,
+          name: binding.name,
+          bindingId: binding.id,
+          projectId: binding.projectId,
+          workspaceId: binding.workspaceId,
+          cleanupState: "pending",
+        };
+        setRevokedConnection(revoked);
+        if (desktop && repositorySelectionCurrent) {
+          cleanupConnection.mutate(revoked);
+        }
+      }
       await queryClient.invalidateQueries({
         queryKey: ["pilot", "overview", pilot.identityId, projectId],
       });
@@ -205,7 +448,7 @@ export function AgentConnectionsSettings({
   const configurationCurrent =
     issuedBinding?.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION;
   const progress =
-    configurationCurrent && issuedBinding?.activityUpdatedAt
+    issuedBinding && agentBindingIsConnected(issuedBinding)
       ? 4
       : configurationCurrent && issuedBinding?.validatedAt
         ? 3
@@ -215,22 +458,63 @@ export function AgentConnectionsSettings({
             ? 1
             : 0;
   const issuedExpired = issued ? Date.parse(issued.expiresAt) <= now : false;
+  const repositorySelectionCurrent = Boolean(
+    repository && Date.parse(repository.expiresAt) > now,
+  );
 
   useEffect(() => {
-    if (!issued || issuedExpired) return;
+    if (
+      (!issued || issuedExpired) &&
+      (!repository || !repositorySelectionCurrent)
+    ) {
+      return;
+    }
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [issued, issuedExpired]);
+  }, [issued, issuedExpired, repository, repositorySelectionCurrent]);
+
+  function connectionVariables(client: PilotAgentClient, bindingId?: string) {
+    const contextKey = attachmentAttemptContextKey(
+      projectId,
+      client,
+      bindingId,
+    );
+    const clientMutationId = attachmentMutationIdForAttempt(
+      pendingMutationIds.current,
+      contextKey,
+      () => globalThis.crypto.randomUUID(),
+    );
+    pendingMutationIds.current.set(contextKey, clientMutationId);
+    return {
+      client,
+      ...(bindingId ? { bindingId } : {}),
+      clientMutationId,
+    };
+  }
+
+  async function chooseRepository() {
+    if (!desktop) return;
+    setLaunchError(undefined);
+    setLaunchPending(true);
+    try {
+      const selection = await desktop.chooseGitRepository();
+      if (selection) {
+        setRepository(selection);
+        setIssued(undefined);
+        pendingMutationIds.current.clear();
+      }
+    } catch {
+      setLaunchError("无法读取所选仓库，请确认它是可访问的 Git 仓库。");
+    } finally {
+      setLaunchPending(false);
+    }
+  }
 
   async function launchCodex(prompt: string) {
     setLaunchError(undefined);
-    const desktop =
-      typeof window === "undefined" ? undefined : window.interoDesktop;
-    if (!desktop) return;
+    if (!desktop || !repository) return;
     setLaunchPending(true);
     try {
-      const repository = await desktop.chooseGitRepository();
-      if (!repository) return;
       window.open(
         codexConnectionDeepLink(prompt, repository.repositoryPath),
         "_blank",
@@ -250,12 +534,68 @@ export function AgentConnectionsSettings({
       data-testid="agent-connections-settings"
     >
       <header>
-        <h2 className="text-[14px] font-[620]">连接管理</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-[14px] font-[620]">Attach Coding Agent</h2>
+          <span className="rounded-pill bg-accent-soft px-2.5 py-1 text-[9.5px] font-[650] text-accent-strong">
+            {desktop ? "DESKTOP CONTROLLED" : "WEB / CLI FALLBACK"}
+          </span>
+        </div>
         <p className="mt-2 max-w-[650px] text-[12px] leading-[1.7] text-ink-muted">
-          为一个明确的 Intero Project
-          配置当前本地仓库。连接只对该仓库生效，同一仓库以后新建的任务会自动复用。
+          {desktop
+            ? "先选择本地仓库和已授权 Project，再由 Intero Desktop 检测 Coding Agent、预览工具级公共 launcher 与该仓库独立的加密连接目标，并请求一次确认。公共 launcher 不持有 credential；每个仓库分别绑定 Project，只有原生 MCP 完成初始化与服务端验证后才会显示 Connected。"
+            : "浏览器保留远程开发与恢复路径：选择 Project 后生成一次性连接任务，在 Coding Agent 所在主机完成相同的 ticket、binding 与服务端验证。"}
         </p>
       </header>
+
+      {desktop ? (
+        <section className="mt-4 rounded-container border border-line bg-panel2 p-5">
+          <div className="flex items-start gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[11px] bg-raise text-accent-strong">
+              <FolderOpenIcon size={17} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <strong className="text-[12.5px] font-[630]">本地仓库</strong>
+              {repository ? (
+                <span className="mt-1.5 grid gap-1">
+                  <span
+                    className="truncate font-mono text-[10.5px] text-ink-muted"
+                    data-testid="agent-attachment-repository"
+                    title={repository.repositoryPath}
+                  >
+                    {repository.repositoryPath}
+                  </span>
+                  <small className="text-[10px] text-faint">
+                    {repository.snapshot.branch
+                      ? `分支 ${repository.snapshot.branch}`
+                      : "未命名分支"}
+                    {repository.snapshot.head
+                      ? ` · ${repository.snapshot.head.slice(0, 12)}`
+                      : ""}
+                  </small>
+                </span>
+              ) : (
+                <p className="mt-1.5 text-[10.5px] leading-[1.6] text-ink-muted">
+                  绝对路径只保存在本机确认上下文中，不会因为 Attach 被上传到
+                  Intero 云端。
+                </p>
+              )}
+            </span>
+            <button
+              type="button"
+              data-testid="agent-attachment-choose-repository"
+              disabled={launchPending || startConnection.isPending}
+              onClick={() => void chooseRepository()}
+              className="h-9 rounded-btn border border-line2 px-3.5 text-[11px] hover:border-accent-strong disabled:opacity-50"
+            >
+              {repositorySelectionCurrent
+                ? "更换仓库"
+                : repository
+                  ? "重新确认仓库"
+                  : "选择仓库"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-4 rounded-container border border-line bg-panel2 p-5">
         <label className="grid gap-2">
@@ -269,6 +609,7 @@ export function AgentConnectionsSettings({
               const nextProjectId = event.target.value;
               setProjectId(nextProjectId);
               setIssued(undefined);
+              pendingMutationIds.current.clear();
               if (nextProjectId) {
                 pilot.setSelectedProjectId(nextProjectId);
               }
@@ -296,6 +637,27 @@ export function AgentConnectionsSettings({
           </div>
         ) : null}
       </section>
+
+      {desktop && localIntegrations.isLoading ? (
+        <div className="mt-4 flex items-center gap-2 rounded-card bg-panel2 p-4 text-[11px] text-ink-muted">
+          <SpinnerGapIcon size={14} className="animate-spin" />
+          正在检测本机 Coding Agent 与托管配置…
+        </div>
+      ) : null}
+
+      {desktop && localIntegrations.isError ? (
+        <div className="mt-4 flex items-center gap-2 rounded-card bg-danger-soft p-4 text-[11px] text-danger">
+          <WarningCircleIcon size={15} />
+          无法读取本机 Agent 状态；未确认前不会写入任何配置。
+          <button
+            type="button"
+            className="ml-auto h-8 rounded-btn border border-danger px-3 text-[10px]"
+            onClick={() => void localIntegrations.refetch()}
+          >
+            重试检测
+          </button>
+        </div>
+      ) : null}
 
       {!projectId ? (
         <div className="mt-4 rounded-card border border-dashed border-line2 p-6 text-[12px] text-ink-muted">
@@ -373,25 +735,29 @@ export function AgentConnectionsSettings({
                 {overview.data.bindings
                   .filter((binding) => !binding.disconnectedAt)
                   .map((binding) => {
+                    const connected = agentBindingIsConnected(binding);
+                    const lifecycleRequired = agentRequiresLifecycleHook(
+                      binding.client,
+                    );
                     const ageMs = Date.now() - Date.parse(binding.createdAt);
                     const timedOut =
                       ageMs > 10 * 60_000 &&
-                      (!binding.validatedAt || !binding.activityUpdatedAt);
+                      (!binding.validatedAt ||
+                        (lifecycleRequired && !binding.activityUpdatedAt));
                     const nextAction =
                       binding.authMode === "oauth"
                         ? "下一步：撤销旧连接，并生成新的项目级原生连接任务。"
-                        : binding.validatedAt &&
-                            binding.activityUpdatedAt &&
-                            binding.configurationVersion ===
-                              PILOT_AGENT_CONFIGURATION_VERSION
+                        : connected
                           ? "连接完整；新的项目任务会自动复用。"
-                          : binding.validatedAt && !binding.activityUpdatedAt
-                            ? "下一步：在 GUI 批准 Hook，然后在该仓库新建一次任务。"
+                          : binding.validatedAt &&
+                              lifecycleRequired &&
+                              !binding.activityUpdatedAt
+                            ? "下一步：在 Coding Agent 中确认 Hook，并在该仓库新建一次会话。"
                             : binding.mcpInitializedAt
                               ? "下一步：等待连接任务写入凭据并完成 MCP 验证。"
                               : "下一步：在目标仓库运行连接任务，写入项目配置。";
                     const errorCode = timedOut
-                      ? binding.validatedAt
+                      ? binding.validatedAt && lifecycleRequired
                         ? "AGENT_HOOK_TIMEOUT"
                         : "AGENT_CONNECTION_TIMEOUT"
                       : undefined;
@@ -404,10 +770,7 @@ export function AgentConnectionsSettings({
                         <span
                           className={[
                             "grid h-[34px] w-[34px] place-items-center rounded-[10px]",
-                            binding.validatedAt &&
-                            binding.activityUpdatedAt &&
-                            binding.configurationVersion ===
-                              PILOT_AGENT_CONFIGURATION_VERSION
+                            connected
                               ? "bg-green-soft text-green"
                               : binding.validatedAt
                                 ? "bg-amber-soft text-amber"
@@ -416,10 +779,7 @@ export function AgentConnectionsSettings({
                                   : "bg-amber-soft text-amber",
                           ].join(" ")}
                         >
-                          {binding.validatedAt &&
-                          binding.activityUpdatedAt &&
-                          binding.configurationVersion ===
-                            PILOT_AGENT_CONFIGURATION_VERSION ? (
+                          {connected ? (
                             <CheckCircleIcon size={16} weight="fill" />
                           ) : (
                             <PlugsIcon size={16} />
@@ -430,19 +790,21 @@ export function AgentConnectionsSettings({
                             {binding.name}
                           </strong>
                           <small className="mt-1 text-[10.5px] text-ink-muted">
-                            {binding.client} ·{" "}
+                            {CLIENT_LABELS[binding.client]} ·{" "}
                             {binding.authMode === "oauth"
                               ? "旧 OAuth 连接已停用，请重新连接"
-                              : binding.validatedAt &&
-                                  binding.activityUpdatedAt &&
-                                  binding.configurationVersion !==
-                                    PILOT_AGENT_CONFIGURATION_VERSION
-                                ? `项目配置 v${binding.configurationVersion ?? "旧版"} · 需要升级到 v${PILOT_AGENT_CONFIGURATION_VERSION}`
-                                : binding.validatedAt &&
-                                    binding.activityUpdatedAt
+                              : connected
+                                ? lifecycleRequired
                                   ? "原生 MCP 与 SessionStart Hook 已验证"
-                                  : binding.validatedAt
-                                    ? "原生 MCP 已验证 · 等待 Codex Hook 首次上报"
+                                  : "原生 MCP 与项目配置已验证"
+                                : binding.validatedAt &&
+                                    (!lifecycleRequired ||
+                                      binding.activityUpdatedAt) &&
+                                    binding.configurationVersion !==
+                                      PILOT_AGENT_CONFIGURATION_VERSION
+                                  ? `项目配置 v${binding.configurationVersion ?? "旧版"} · 需要升级到 v${PILOT_AGENT_CONFIGURATION_VERSION}`
+                                  : binding.validatedAt && lifecycleRequired
+                                    ? "原生 MCP 已验证 · 等待 Hook 首次上报"
                                     : binding.mcpInitializedAt
                                       ? "MCP 已加载"
                                       : "等待连接任务写入配置"}
@@ -465,7 +827,7 @@ export function AgentConnectionsSettings({
                         {binding.ownerId === pilot.identityId ? (
                           <span className="flex items-center gap-2">
                             {binding.validatedAt &&
-                            binding.activityUpdatedAt &&
+                            (!lifecycleRequired || binding.activityUpdatedAt) &&
                             binding.configurationVersion !==
                               PILOT_AGENT_CONFIGURATION_VERSION ? (
                               <button
@@ -473,10 +835,12 @@ export function AgentConnectionsSettings({
                                 data-testid={`pilot-agent-repair-${binding.id}`}
                                 disabled={startConnection.isPending}
                                 onClick={() =>
-                                  startConnection.mutate({
-                                    client: binding.client,
-                                    bindingId: binding.id,
-                                  })
+                                  startConnection.mutate(
+                                    connectionVariables(
+                                      binding.client,
+                                      binding.id,
+                                    ),
+                                  )
                                 }
                                 className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                               >
@@ -489,10 +853,12 @@ export function AgentConnectionsSettings({
                                 data-testid={`pilot-agent-retry-${binding.id}`}
                                 disabled={startConnection.isPending}
                                 onClick={() =>
-                                  startConnection.mutate({
-                                    client: binding.client,
-                                    bindingId: binding.id,
-                                  })
+                                  startConnection.mutate(
+                                    connectionVariables(
+                                      binding.client,
+                                      binding.id,
+                                    ),
+                                  )
                                 }
                                 className="h-8 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                               >
@@ -503,7 +869,10 @@ export function AgentConnectionsSettings({
                               type="button"
                               data-testid={`pilot-agent-disconnect-${binding.id}`}
                               data-client={binding.client}
-                              disabled={disconnect.isPending}
+                              disabled={
+                                disconnect.isPending ||
+                                cleanupConnection.isPending
+                              }
                               onClick={() => disconnect.mutate(binding.id)}
                               className="h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11px] hover:border-danger hover:text-danger disabled:opacity-50"
                             >
@@ -524,9 +893,9 @@ export function AgentConnectionsSettings({
               <div className="mt-4 flex items-start gap-2 rounded-card border border-amber-soft bg-amber-soft px-3.5 py-3 text-[11px] leading-[1.65] text-amber">
                 <WarningCircleIcon size={15} className="mt-0.5 shrink-0" />
                 <span>
-                  MCP 已经可用，但 SessionStart 还没有到达。请在 Codex GUI 的
-                  Hook 审核提示中确认当前仓库的 Intero
-                  Hook，然后在该仓库新建一个任务；页面会在首次生命周期上报后自动变为完整连接。
+                  MCP 已经可用，但 SessionStart 还没有到达。请在对应 Coding
+                  Agent 的 Hook 审核提示中确认当前仓库的 Intero
+                  Hook，然后新建一个会话；页面会在首次生命周期上报后自动变为完整连接。
                 </span>
               </div>
             ) : null}
@@ -535,8 +904,8 @@ export function AgentConnectionsSettings({
                 <WarningCircleIcon size={15} className="mt-0.5 shrink-0" />
                 <span>
                   这些连接的凭据仍然有效，但项目级 MCP、Hook
-                  或持久化指令版本已经落后。点击“修复配置”会生成升级任务；Codex
-                  回报当前配置版本后，连接会恢复为完整状态。
+                  或持久化指令版本已经落后。点击“修复配置”会生成升级任务；Coding
+                  Agent 回报当前配置版本后，连接会恢复为完整状态。
                 </span>
               </div>
             ) : null}
@@ -559,6 +928,41 @@ export function AgentConnectionsSettings({
               const lifecyclePendingBinding = summary.mineLifecyclePending.find(
                 (binding) => binding.client === client.id,
               );
+              const local = localIntegrations.data?.find(
+                (integration) => integration.adapter === client.id,
+              );
+              const localUnavailable = Boolean(
+                desktop &&
+                (!repositorySelectionCurrent ||
+                  !local ||
+                  !local.detected ||
+                  !local.supported),
+              );
+              const localStatus = !desktop
+                ? "Web / CLI fallback"
+                : !local
+                  ? "检测中"
+                  : !local.detected
+                    ? "未检测到"
+                    : !local.supported
+                      ? `版本不受支持${local.version ? ` · ${local.version}` : ""}`
+                      : local.state === "needs_repair"
+                        ? "公共 launcher 需要修复"
+                        : local.state === "config_valid"
+                          ? "公共 launcher 已验证"
+                          : local.state === "pending_trust"
+                            ? "公共 launcher 已写入 · 等待客户端信任"
+                            : local.configured
+                              ? "公共 launcher 已写入"
+                              : `已检测${local.version ? ` · ${local.version}` : ""}`;
+              const thisClientPending =
+                startConnection.isPending && attachmentClient === client.id;
+              const pendingLabel =
+                attachmentPhase === "awaiting_confirmation"
+                  ? "等待确认配置目标…"
+                  : attachmentPhase === "configuring"
+                    ? "正在写入托管配置…"
+                    : "正在创建 Project binding…";
               return (
                 <article
                   key={client.id}
@@ -571,40 +975,106 @@ export function AgentConnectionsSettings({
                   <strong className="mt-3 text-[13px] font-[630]">
                     {client.label}
                   </strong>
+                  <span
+                    className={[
+                      "mt-1.5 w-fit rounded-pill px-2 py-0.5 text-[9px]",
+                      desktop && local?.detected && local.supported
+                        ? "bg-green-soft text-green"
+                        : desktop
+                          ? "bg-amber-soft text-amber"
+                          : "bg-raise text-faint",
+                    ].join(" ")}
+                    data-local-state={local?.state ?? "fallback"}
+                  >
+                    {localStatus}
+                  </span>
                   <p className="mt-2 text-[10.5px] leading-[1.65] text-ink-muted">
                     {client.detail}
                   </p>
                   <button
                     type="button"
                     data-testid={`connect-agent-${client.id}`}
-                    disabled={startConnection.isPending}
+                    disabled={startConnection.isPending || localUnavailable}
                     onClick={() =>
-                      startConnection.mutate({
-                        client: client.id,
-                        ...(outdatedBinding
-                          ? { bindingId: outdatedBinding.id }
-                          : lifecyclePendingBinding
-                            ? { bindingId: lifecyclePendingBinding.id }
-                            : {}),
-                      })
+                      startConnection.mutate(
+                        connectionVariables(
+                          client.id,
+                          outdatedBinding?.id ?? lifecyclePendingBinding?.id,
+                        ),
+                      )
                     }
                     className="mt-auto h-9 rounded-btn border-0 bg-accent-strong px-3 text-[11px] font-[620] text-on-accent disabled:opacity-50"
                   >
-                    {lifecyclePending
-                      ? `重新生成 ${client.label} 修复任务`
-                      : outdatedBinding
-                        ? `修复 ${client.label} 项目配置`
-                        : pending
-                          ? `重新生成 ${client.label} 连接`
-                          : mine > 0
-                            ? `连接另一个 ${client.label} 仓库`
-                            : `连接 ${client.label}`}
+                    {thisClientPending
+                      ? pendingLabel
+                      : desktop && !repositorySelectionCurrent
+                        ? "先选择本地仓库"
+                        : desktop && local && !local.detected
+                          ? `未检测到 ${client.label}`
+                          : desktop && local && !local.supported
+                            ? `${client.label} 版本不受支持`
+                            : lifecyclePending
+                              ? `重新生成 ${client.label} 修复任务`
+                              : outdatedBinding
+                                ? `修复 ${client.label} 项目配置`
+                                : pending
+                                  ? `重新生成 ${client.label} 连接`
+                                  : mine > 0
+                                    ? `连接另一个 ${client.label} 仓库`
+                                    : desktop
+                                      ? `Attach ${client.label}`
+                                      : `连接 ${client.label}`}
                   </button>
                 </article>
               );
             })}
           </section>
         </>
+      ) : null}
+
+      {revokedConnection ? (
+        <div
+          className="mt-4 flex items-start gap-2 rounded-card border border-green-soft bg-green-soft px-3.5 py-3 text-[11px] leading-[1.65] text-green"
+          data-testid="agent-connection-revoked"
+        >
+          <CheckCircleIcon
+            size={15}
+            className="mt-0.5 shrink-0"
+            weight="fill"
+          />
+          <span>
+            {revokedConnection.name} 的云端访问已撤销，旧 credential 立即失效。
+            {revokedConnection.cleanupState === "removed"
+              ? " 这个仓库的匹配加密连接状态也已删除；工具级公共 bridge 保留给其他 Project 使用。"
+              : revokedConnection.cleanupState === "cancelled"
+                ? " 本地清理已选择稍后处理；重新选择对应仓库即可继续。"
+                : revokedConnection.cleanupState === "failed"
+                  ? " 本地清理未完成；Intero 未删除不匹配的文件，可重新选择对应仓库后重试。"
+                  : desktop
+                    ? " 云端撤销不依赖本地清理；选择对应仓库后，Desktop 只会删除匹配 Project、binding 与 workspace 的加密连接状态。"
+                    : " 当前是 Web/CLI fallback；请在 Agent 主机删除这个 binding 的本地连接状态，云端撤销不受影响。"}
+          </span>
+          {desktop && revokedConnection.cleanupState !== "removed" ? (
+            <button
+              type="button"
+              disabled={cleanupConnection.isPending || launchPending}
+              onClick={() => {
+                if (!repositorySelectionCurrent) {
+                  void chooseRepository();
+                  return;
+                }
+                cleanupConnection.mutate(revokedConnection);
+              }}
+              className="ml-auto h-8 shrink-0 rounded-btn border border-green px-3 text-[10.5px] disabled:opacity-50"
+            >
+              {cleanupConnection.isPending
+                ? "正在清理…"
+                : repositorySelectionCurrent
+                  ? "清理本地连接"
+                  : "选择仓库"}
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {issued ? (
@@ -618,13 +1088,18 @@ export function AgentConnectionsSettings({
             </span>
             <span>
               <strong className="text-[13px] font-[630]">
-                在目标仓库中完成连接
+                在 {CLIENT_LABELS[issued.client]} 中完成原生验证
               </strong>
               <p className="mt-1.5 text-[11px] leading-[1.65] text-ink-muted">
-                Codex 打开后会把当前本地仓库配置到 {project?.name}
-                。任务会复用有效的 Project-scoped credential，必要时才兑换
-                ticket，并把当前配置版本写入项目原生配置；新的 GUI 任务完成
-                MCP、配置版本与 Hook 验证后，这里会自动显示完整连接。
+                {repository
+                  ? `Desktop 已将本地控制操作绑定到 ${repository.snapshot.repository} 与 ${project?.name}。`
+                  : `请在 Coding Agent 所在仓库完成到 ${project?.name} 的连接。`}
+                任务会复用匹配的 Project-scoped credential，必要时才兑换
+                ticket，并把当前配置版本写入原生配置；新的客户端会话完成 MCP
+                与配置版本验证后，这里才会显示完整连接。
+                {agentRequiresLifecycleHook(issued.client)
+                  ? " 该客户端还需一次 SessionStart Hook 上报。"
+                  : ` ${CLIENT_LABELS[issued.client]} 当前不声明未稳定的生命周期 Hook，完成态以原生 MCP 与服务端验证为准。`}
               </p>
             </span>
           </div>
@@ -634,7 +1109,9 @@ export function AgentConnectionsSettings({
               "单次连接 ticket 已创建",
               "等待原生 MCP 加载",
               `MCP + credential + 配置 v${PILOT_AGENT_CONFIGURATION_VERSION} 已验证`,
-              "SessionStart Hook 已验证",
+              agentRequiresLifecycleHook(issued.client)
+                ? "SessionStart Hook 已验证"
+                : "服务端连接状态已验证",
             ].map((label, index) => (
               <span
                 key={label}
@@ -664,7 +1141,7 @@ export function AgentConnectionsSettings({
           >
             {issuedExpired
               ? "连接 ticket 已过期 · AGENT_TICKET_EXPIRED。点击下方重试会生成新的单次任务，旧 ticket 不再可用。"
-              : `连接任务有效至 ${new Date(issued.expiresAt).toLocaleString()}。如果 MCP 已验证但 Hook 长时间没有到达，可重新生成修复任务。`}
+              : `连接任务有效至 ${new Date(issued.expiresAt).toLocaleString()}。${agentRequiresLifecycleHook(issued.client) ? "如果 MCP 已验证但 Hook 长时间没有到达，可重新生成修复任务。" : "完成 MCP initialize 与 intero.validate_connection 后会自动更新状态。"}`}
           </div>
 
           {startConnection.isError ? (
@@ -682,10 +1159,9 @@ export function AgentConnectionsSettings({
                 type="button"
                 disabled={startConnection.isPending}
                 onClick={() =>
-                  startConnection.mutate({
-                    client: issued.client,
-                    ...(issuedBinding ? { bindingId: issuedBinding.id } : {}),
-                  })
+                  startConnection.mutate(
+                    connectionVariables(issued.client, issuedBinding?.id),
+                  )
                 }
                 className="h-9 rounded-btn border-0 bg-accent-strong px-4 text-[11px] font-[620] text-on-accent disabled:opacity-50"
               >
@@ -701,9 +1177,7 @@ export function AgentConnectionsSettings({
                   className="inline-flex h-9 items-center gap-2 rounded-btn border-0 bg-accent-strong px-4 text-[11.5px] font-[620] text-on-accent disabled:opacity-50"
                 >
                   <ArrowSquareOutIcon size={14} />
-                  {launchPending
-                    ? "正在选择仓库…"
-                    : "选择仓库并在 Codex App 中继续"}
+                  {launchPending ? "正在打开 Codex…" : "在 Codex App 中继续"}
                 </button>
               ) : (
                 <a

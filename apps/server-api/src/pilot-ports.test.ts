@@ -46,6 +46,69 @@ afterEach(
 );
 
 describe("pilot adapter contracts", () => {
+  it("rejects a ticket revoked between resolve and exchange even after membership is restored", async () => {
+    const { store, teamId, project } = await seededStore();
+    const secrets = new AesGcmProviderSecretCipher(
+      "ticket-race-provider-secret",
+    );
+    await store.configureProvider({
+      administratorId: ADMIN,
+      endpoint: "https://models.example.test/v1",
+      defaultModel: "pilot-model",
+      encryptedApiKey: secrets.encrypt("key"),
+    });
+    const ticketId = uuidv7();
+    const ticketHash = "d".repeat(64);
+    const workspaceId = uuidv7();
+    await store.createAgentTicket({
+      id: ticketId,
+      projectId: project.id,
+      ownerId: MEMBER,
+      client: "cursor",
+      expectedWorkspaceId: workspaceId,
+      preferredLanguage: "en-US",
+      ticketHash,
+      expiresAt: "2026-07-25T09:00:00.000Z",
+      createdAt: "2026-07-25T08:00:00.000Z",
+    });
+    await expect(
+      store.resolveAgentTicket(ticketHash, "2026-07-25T08:00:10.000Z"),
+    ).resolves.toMatchObject({ id: ticketId });
+
+    await store.removeTeamMember({
+      teamId,
+      memberId: MEMBER,
+      principalId: ADMIN,
+      now: "2026-07-25T08:00:20.000Z",
+    });
+    await store.addTeamMember({
+      teamId,
+      memberId: MEMBER,
+      role: "member",
+      principalId: ADMIN,
+      now: "2026-07-25T08:00:30.000Z",
+    });
+
+    const binding: PilotAgentBinding = {
+      id: ticketId,
+      projectId: project.id,
+      ownerId: MEMBER,
+      client: "cursor",
+      name: "Cursor · restored-member-repository",
+      workspaceId,
+      preferredLanguage: "en-US",
+      credentialHash: "e".repeat(64),
+      createdAt: "2026-07-25T08:00:40.000Z",
+    };
+    await expect(
+      store.exchangeAgentTicket(
+        ticketHash,
+        binding,
+        "2026-07-25T08:00:40.000Z",
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_TICKET_INVALID" });
+  });
+
   it("keeps authorization derived from organization, team, and project membership", async () => {
     const { store, teamId, project } = await seededStore();
     const authorization = new MembershipAuthorizationAdapter(store);

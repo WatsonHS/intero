@@ -95,4 +95,26 @@ describe("summarizeProjectAgentConnections", () => {
     expect(result.lifecyclePending).toHaveLength(0);
     expect(result.pending).toHaveLength(0);
   });
+
+  it.each([
+    ["grok-build", "Grok Build"],
+    ["cursor", "Cursor"],
+  ] as const)(
+    "treats validated %s as connected without inventing a lifecycle hook",
+    (client, name) => {
+      const result = summarizeProjectAgentConnections([
+        binding({
+          id: "018f0000-0000-7000-8000-000000000014",
+          ownerId: "018f0000-0000-7000-8000-000000000022" as never,
+          client,
+          name: `${name} · repository`,
+          validatedAt: "2026-08-05T00:01:00.000Z",
+          configurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
+        }),
+      ]);
+
+      expect(result.connected).toHaveLength(1);
+      expect(result.lifecyclePending).toHaveLength(0);
+    },
+  );
 });

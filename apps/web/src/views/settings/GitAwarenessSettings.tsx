@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { SelectMenu } from "../../design/primitives.js";
 
-type GitClient = "codex" | "claude-code" | "opencode";
+export type GitClient = "codex" | "claude-code" | "opencode";
 
 const CLIENT_LABELS: Record<GitClient, string> = {
   codex: "Codex",

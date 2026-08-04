@@ -28,6 +28,42 @@ describe("CanonicalWorkEvent", () => {
     expect(event.payload.checkpointKind).toBe("decision");
   });
 
+  it("accepts Grok Build as a bounded event source", () => {
+    expect(
+      CanonicalWorkEvent.parse({
+        id: uuidv7(),
+        operationId: uuidv7(),
+        schemaVersion: 1,
+        source: "grok-build",
+        type: "CheckpointReported",
+        occurredAt: "2026-08-05T10:00:00.000Z",
+        receivedAt: "2026-08-05T10:00:01.000Z",
+        workspaceId: uuidv7(),
+        privacy: "P1_STAND_IN_PRIVATE",
+        payload: { summary: "Grok Build MCP configuration was verified." },
+        idempotencyKey: "grok-build:checkpoint:01",
+      }).source,
+    ).toBe("grok-build");
+  });
+
+  it("accepts Cursor as a bounded event source", () => {
+    expect(
+      CanonicalWorkEvent.parse({
+        id: uuidv7(),
+        operationId: uuidv7(),
+        schemaVersion: 1,
+        source: "cursor",
+        type: "CheckpointReported",
+        occurredAt: "2026-08-05T10:00:00.000Z",
+        receivedAt: "2026-08-05T10:00:01.000Z",
+        workspaceId: uuidv7(),
+        privacy: "P1_STAND_IN_PRIVATE",
+        payload: { summary: "Cursor MCP configuration was verified." },
+        idempotencyKey: "cursor:checkpoint:01",
+      }).source,
+    ).toBe("cursor");
+  });
+
   it("rejects raw or sensitive event fields", () => {
     expect(
       containsForbiddenEventField({

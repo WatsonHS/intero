@@ -7,6 +7,11 @@ Date: 2026-07-25
 Updated by: ADR-0007 for per-recipient invitation onboarding and the Phase 4–5
 product model
 
+Superseded in part by: ADR-0010 for Desktop-first product entry and controlled
+Coding Agent attachment. The cloud-authoritative runtime, canonical Web
+renderer, direct-cloud MCP path, and private-by-default data boundaries remain
+in force.
+
 ## Context
 
 Intero must be useful from the Web and from Coding Agents without requiring a

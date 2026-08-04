@@ -3,6 +3,25 @@ import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
 
 import type { PilotSafeAgentBinding } from "../../pilot/api.js";
 
+export function agentRequiresLifecycleHook(
+  client: PilotSafeAgentBinding["client"],
+): boolean {
+  return client !== "grok-build" && client !== "cursor";
+}
+
+export function agentBindingIsConnected(
+  binding: PilotSafeAgentBinding,
+): boolean {
+  const lifecycleReady =
+    !agentRequiresLifecycleHook(binding.client) ||
+    Boolean(binding.activityUpdatedAt);
+  return Boolean(
+    binding.validatedAt &&
+    lifecycleReady &&
+    binding.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION,
+  );
+}
+
 export type ProjectAgentConnectionSummary = {
   connected: PilotSafeAgentBinding[];
   outdated: PilotSafeAgentBinding[];
@@ -21,20 +40,20 @@ export function summarizeProjectAgentConnections(
   const active = bindings.filter(
     (binding) => !binding.disconnectedAt && binding.authMode !== "oauth",
   );
-  const connected = active.filter((binding) =>
-    Boolean(
-      binding.validatedAt &&
-      binding.activityUpdatedAt &&
-      binding.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION,
-    ),
-  );
+  const connected = active.filter(agentBindingIsConnected);
   const outdated = active.filter(
     (binding) =>
-      Boolean(binding.validatedAt && binding.activityUpdatedAt) &&
+      Boolean(binding.validatedAt) &&
+      (!agentRequiresLifecycleHook(binding.client) ||
+        Boolean(binding.activityUpdatedAt)) &&
       binding.configurationVersion !== PILOT_AGENT_CONFIGURATION_VERSION,
   );
   const lifecyclePending = active.filter((binding) =>
-    Boolean(binding.validatedAt && !binding.activityUpdatedAt),
+    Boolean(
+      agentRequiresLifecycleHook(binding.client) &&
+      binding.validatedAt &&
+      !binding.activityUpdatedAt,
+    ),
   );
   const pending = active.filter((binding) => !binding.validatedAt);
   return {

@@ -145,11 +145,22 @@ export class PilotApiError extends Error {
   }
 }
 
+export function pilotClientIsEnabled(input: {
+  hasDesktopBridge: boolean;
+  developmentBuild: boolean;
+  pilotFlag: boolean;
+}): boolean {
+  return input.hasDesktopBridge || input.developmentBuild || input.pilotFlag;
+}
+
 export function isPilotBrowser(): boolean {
   return (
     typeof window !== "undefined" &&
-    !window.interoDesktop &&
-    (import.meta.env.DEV || import.meta.env.VITE_INTERO_PILOT === "true")
+    pilotClientIsEnabled({
+      hasDesktopBridge: Boolean(window.interoDesktop),
+      developmentBuild: import.meta.env.DEV,
+      pilotFlag: import.meta.env.VITE_INTERO_PILOT === "true",
+    })
   );
 }
 
@@ -682,6 +693,9 @@ export function createPilotAgentConnection(
   projectId: string,
   client: PilotAgentClient,
   bindingId?: string,
+  clientMutationId?: string,
+  deliveryMode: "desktop_bridge" | "web_cli" = "web_cli",
+  expectedWorkspaceId?: string,
 ) {
   return request<{
     ticket: {
@@ -695,7 +709,13 @@ export function createPilotAgentConnection(
   }>(`/v1/pilot/projects/${projectId}/agent-connections`, {
     method: "POST",
     identityId,
-    body: { client, ...(bindingId ? { bindingId } : {}) },
+    body: {
+      client,
+      ...(bindingId ? { bindingId } : {}),
+      ...(clientMutationId ? { clientMutationId } : {}),
+      deliveryMode,
+      ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
+    },
   });
 }
 

@@ -1,13 +1,18 @@
-import { execFileSync, spawn } from "node:child_process";
+import {
+  execFileSync,
+  spawn,
+  type ExecFileSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   applyManagedInstall,
+  cloudWorkspaceClientFiles,
   diagnoseManagedInstall,
   integrationVersionIsSupported,
   integrationAdapters,
@@ -32,6 +37,25 @@ import {
   type GitAwarenessSnapshot,
   type GitMetadataSubscription,
 } from "./git-awareness.js";
+import {
+  INTEGRATION_PREVIEW_TTL_MS,
+  LOCAL_SELECTION_TTL_MS,
+  digestIntegrationPlan,
+  grokBuildMcpProbeIsValid,
+  parseIntegrationPreviewRequest,
+  parseWorkspaceCleanupRequest,
+  rendererUrlIsTrusted,
+  requireProjectRepositoryBinding,
+  requireWorkspaceCleanupBinding,
+  type ProjectRepositoryBinding,
+  type RepositorySelectionBinding,
+  type WorkspaceCleanupBinding,
+} from "./integration-boundary.js";
+import {
+  cursorAgentExecutableCandidates,
+  cursorAgentMcpListHasIntero,
+  isCursorAgentAdapter,
+} from "./cursor-agent.js";
 
 type IntegrationAction = "install" | "repair" | "uninstall";
 type GitAwarenessClient = "codex" | "claude-code" | "opencode";
@@ -60,7 +84,19 @@ const integrationPreviews = new Map<
     senderId: number;
     adapter: IntegrationKind;
     action: IntegrationAction;
+    binding?: ProjectRepositoryBinding;
     planDigest: string;
+    expiresAt: number;
+  }
+>();
+const repositorySelections = new Map<string, RepositorySelectionBinding>();
+const workspaceCleanupPreviews = new Map<
+  string,
+  {
+    senderId: number;
+    adapter: IntegrationKind;
+    binding: WorkspaceCleanupBinding;
+    digest: string;
     expiresAt: number;
   }
 >();
@@ -69,6 +105,8 @@ function registerDesktopIntegrationBridge() {
   ipcMain.removeHandler("intero:integration-status");
   ipcMain.removeHandler("intero:integration-preview");
   ipcMain.removeHandler("intero:integration-action");
+  ipcMain.removeHandler("intero:workspace-cleanup-preview");
+  ipcMain.removeHandler("intero:workspace-cleanup-action");
   ipcMain.removeHandler("intero:git-awareness-status");
   ipcMain.removeHandler("intero:git-awareness-clients");
   ipcMain.removeHandler("intero:git-awareness-choose-repository");
@@ -80,20 +118,24 @@ function registerDesktopIntegrationBridge() {
   });
   ipcMain.handle(
     "intero:integration-preview",
-    async (
-      event,
-      adapter: IntegrationKind,
-      action: IntegrationAction,
-      locale: "zh-CN" | "en-US",
-    ) => {
+    async (event, input: unknown) => {
       assertTrustedRenderer(event);
+      const previewInput = parseIntegrationPreviewRequest(input);
+      const adapter = previewInput.adapter as IntegrationKind;
+      const { action, locale } = previewInput;
       assertIntegrationAction(adapter, action);
       assertAgentSupportsMutation(adapter, action);
-      if (locale !== "zh-CN" && locale !== "en-US") {
-        throw new Error("Unsupported integration confirmation locale.");
-      }
+      pruneExpiredIntegrationAuthority();
+      const binding = requireProjectRepositoryBinding(
+        previewInput,
+        previewInput.repositorySelectionToken
+          ? repositorySelections.get(previewInput.repositorySelectionToken)
+          : undefined,
+        event.sender.id,
+        Date.now(),
+      );
       const plan = buildIntegrationPlan(adapter);
-      const targets = await integrationTargets(plan);
+      const targets = await integrationTargets(plan, adapter, binding);
       const parent = BrowserWindow.fromWebContents(event.sender);
       if (!parent) throw new Error("The trusted Intero window is unavailable.");
       const chinese = locale === "zh-CN";
@@ -101,9 +143,21 @@ function registerDesktopIntegrationBridge() {
         type: "warning",
         title: chinese ? "确认 Agent 配置变更" : "Confirm Agent configuration",
         message: chinese
-          ? "Intero 将只修改以下路径中的托管配置项。"
-          : "Intero will update only managed entries in these paths.",
-        detail: targets.join("\n"),
+          ? "Intero 将只管理以下工具级公共启动器和项目级加密连接目标。"
+          : "Intero will manage only the shared client launcher and Project-scoped encrypted connection targets below.",
+        detail: [
+          `Agent: ${adapter}`,
+          `${chinese ? "操作" : "Action"}: ${action}`,
+          ...(binding
+            ? [
+                `Project: ${binding.projectId}`,
+                `${chinese ? "仓库" : "Repository"}: ${binding.repositoryPath}`,
+              ]
+            : []),
+          "",
+          chinese ? "配置目标：" : "Configuration targets:",
+          ...targets,
+        ].join("\n"),
         buttons: chinese ? ["继续", "取消"] : ["Continue", "Cancel"],
         defaultId: 1,
         cancelId: 1,
@@ -111,13 +165,39 @@ function registerDesktopIntegrationBridge() {
       });
       if (confirmation.response !== 0) return null;
       const token = randomUUID();
-      const expiresAt = Date.now() + 60_000;
-      pruneIntegrationPreviews();
+      const expiresAt = Date.now() + INTEGRATION_PREVIEW_TTL_MS;
+      let confirmedBinding = binding;
+      if (confirmedBinding) {
+        // A user can leave the native confirmation open beyond the short
+        // repository-selection lifetime, so check it again at confirmation.
+        pruneExpiredIntegrationAuthority();
+        const freshBinding = requireProjectRepositoryBinding(
+          previewInput,
+          repositorySelections.get(confirmedBinding.repositorySelectionToken),
+          event.sender.id,
+          Date.now(),
+        );
+        if (!freshBinding) {
+          throw new Error("Project-scoped repository authority is required.");
+        }
+        confirmedBinding = freshBinding;
+        // A selection can authorize one confirmed Project-scoped preview only.
+        repositorySelections.get(
+          confirmedBinding.repositorySelectionToken,
+        )!.consumed = true;
+      }
       integrationPreviews.set(token, {
         senderId: event.sender.id,
         adapter,
         action,
-        planDigest: digestPlan(plan, action, targets),
+        ...(confirmedBinding ? { binding: confirmedBinding } : {}),
+        planDigest: digestPlan(
+          plan,
+          adapter,
+          action,
+          targets,
+          confirmedBinding,
+        ),
         expiresAt,
       });
       return {
@@ -134,26 +214,37 @@ function registerDesktopIntegrationBridge() {
     if (typeof token !== "string") {
       throw new Error("A configuration preview token is required.");
     }
-    pruneIntegrationPreviews();
+    pruneExpiredIntegrationAuthority();
     const preview = integrationPreviews.get(token);
     integrationPreviews.delete(token);
     if (!preview || preview.senderId !== event.sender.id) {
       throw new Error("The configuration preview is missing or expired.");
     }
-    const { adapter, action } = preview;
-    assertAgentSupportsMutation(adapter, action);
-    const plan = buildIntegrationPlan(adapter);
-    const currentTargets = await integrationTargets(plan);
-    if (digestPlan(plan, action, currentTargets) !== preview.planDigest) {
-      throw new Error("Integration plan changed after confirmation.");
-    }
+    const { adapter, action, binding } = preview;
     const operation = integrationMutation.then(async () => {
+      // Check immediately before this serialized mutation. A preceding queued
+      // operation may have changed a managed target after this preview.
+      assertAgentSupportsMutation(adapter, action);
+      const plan = buildIntegrationPlan(adapter);
+      const currentTargets = await integrationTargets(plan, adapter, binding);
+      if (
+        digestPlan(plan, adapter, action, currentTargets, binding) !==
+        preview.planDigest
+      ) {
+        throw new Error("Integration plan changed after confirmation.");
+      }
       if (action === "uninstall") {
         await uninstallManagedIntegration(adapter, homedir());
       } else {
         await applyManagedInstall(plan, homedir());
+        if (binding) {
+          await ensureWorkspaceIdentity(binding);
+        }
       }
-      return integrationStatus();
+      return {
+        integrations: await integrationStatus(),
+        ...(binding ? { workspaceId: binding.workspaceId } : {}),
+      };
     });
     integrationMutation = operation.then(
       () => undefined,
@@ -161,6 +252,125 @@ function registerDesktopIntegrationBridge() {
     );
     return operation;
   });
+  ipcMain.handle(
+    "intero:workspace-cleanup-preview",
+    async (event, input: unknown) => {
+      assertTrustedRenderer(event);
+      const request = parseWorkspaceCleanupRequest(input);
+      const adapter = request.adapter as IntegrationKind;
+      assertIntegrationAction(adapter, "uninstall");
+      pruneExpiredIntegrationAuthority();
+      let binding = requireWorkspaceCleanupBinding(
+        request,
+        repositorySelections.get(request.repositorySelectionToken),
+        event.sender.id,
+        Date.now(),
+      );
+      const plan = await workspaceCleanupPlan(adapter, binding);
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      if (!parent) throw new Error("The trusted Intero window is unavailable.");
+      const chinese = request.locale === "zh-CN";
+      const confirmation = await dialog.showMessageBox(parent, {
+        type: "warning",
+        title: chinese ? "确认清理项目连接" : "Confirm Project cleanup",
+        message: chinese
+          ? "云端访问已撤销。Intero 将只删除这个仓库和 binding 的本地加密连接状态。"
+          : "Cloud access is revoked. Intero will remove only this repository and binding's encrypted local connection state.",
+        detail: [
+          `Agent: ${adapter}`,
+          `Project: ${binding.projectId}`,
+          `Binding: ${binding.bindingId}`,
+          `${chinese ? "仓库" : "Repository"}: ${binding.repositoryPath}`,
+          "",
+          chinese ? "清理目标：" : "Cleanup targets:",
+          ...(plan.targets.length > 0
+            ? plan.targets
+            : [
+                chinese ? "本地连接已清理" : "Local connection already removed",
+              ]),
+        ].join("\n"),
+        buttons: chinese ? ["清理", "稍后"] : ["Clean up", "Later"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (confirmation.response !== 0) return null;
+      pruneExpiredIntegrationAuthority();
+      binding = requireWorkspaceCleanupBinding(
+        request,
+        repositorySelections.get(request.repositorySelectionToken),
+        event.sender.id,
+        Date.now(),
+      );
+      repositorySelections.get(request.repositorySelectionToken)!.consumed =
+        true;
+      const currentPlan = await workspaceCleanupPlan(adapter, binding);
+      if (currentPlan.digest !== plan.digest) {
+        throw new Error("Workspace connection changed during confirmation.");
+      }
+      const token = randomUUID();
+      const expiresAt = Date.now() + INTEGRATION_PREVIEW_TTL_MS;
+      workspaceCleanupPreviews.set(token, {
+        senderId: event.sender.id,
+        adapter,
+        binding,
+        digest: currentPlan.digest,
+        expiresAt,
+      });
+      return {
+        token,
+        targets: currentPlan.targets,
+        expiresAt: new Date(expiresAt).toISOString(),
+      };
+    },
+  );
+  ipcMain.handle(
+    "intero:workspace-cleanup-action",
+    async (event, token: unknown) => {
+      assertTrustedRenderer(event);
+      if (typeof token !== "string") {
+        throw new Error("A workspace cleanup preview token is required.");
+      }
+      pruneExpiredIntegrationAuthority();
+      const preview = workspaceCleanupPreviews.get(token);
+      workspaceCleanupPreviews.delete(token);
+      if (!preview || preview.senderId !== event.sender.id) {
+        throw new Error("The workspace cleanup preview is missing or expired.");
+      }
+      const operation = integrationMutation.then(async () => {
+        const plan = await workspaceCleanupPlan(
+          preview.adapter,
+          preview.binding,
+        );
+        if (plan.digest !== preview.digest) {
+          throw new Error("Workspace connection changed after confirmation.");
+        }
+        for (const target of plan.targets) {
+          try {
+            await unlink(target);
+          } catch (error) {
+            if (
+              !error ||
+              typeof error !== "object" ||
+              !("code" in error) ||
+              error.code !== "ENOENT"
+            ) {
+              throw error;
+            }
+          }
+        }
+        return {
+          removed: plan.targets,
+          alreadyRemoved: plan.targets.length === 0,
+        };
+      });
+      integrationMutation = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+  );
   ipcMain.handle("intero:git-awareness-status", async (event) => {
     assertTrustedRenderer(event);
     return presentGitAwareness();
@@ -180,7 +390,24 @@ function registerDesktopIntegrationBridge() {
     if (selection.canceled || !selection.filePaths[0]) return null;
     const snapshot = await readGitAwarenessSnapshot(selection.filePaths[0]);
     if (!snapshot) throw new Error("所选目录不是可读取的 Git 仓库。");
-    return { repositoryPath: selection.filePaths[0], snapshot };
+    pruneExpiredIntegrationAuthority();
+    const selectionToken = randomUUID();
+    const expiresAt = Date.now() + LOCAL_SELECTION_TTL_MS;
+    repositorySelections.set(selectionToken, {
+      token: selectionToken,
+      senderId: event.sender.id,
+      repositoryPath: selection.filePaths[0],
+      workspaceId: await selectedRepositoryWorkspaceId(selection.filePaths[0]),
+      expiresAt,
+      consumed: false,
+    });
+    return {
+      repositoryPath: selection.filePaths[0],
+      snapshot,
+      selectionToken,
+      workspaceId: repositorySelections.get(selectionToken)!.workspaceId,
+      expiresAt: new Date(expiresAt).toISOString(),
+    };
   });
   ipcMain.handle(
     "intero:git-awareness-configure",
@@ -544,35 +771,177 @@ function assertIntegrationAction(
 
 async function integrationTargets(
   plan: ReturnType<typeof buildIntegrationPlan>,
+  adapter?: IntegrationKind,
+  binding?: ProjectRepositoryBinding,
 ): Promise<string[]> {
-  return managedIntegrationTargets(plan, homedir());
+  const managedTargets = await managedIntegrationTargets(plan, homedir());
+  if (!adapter || !binding) return managedTargets;
+  const workspaceFiles = cloudWorkspaceClientFiles(
+    homedir(),
+    binding.repositoryPath,
+    adapter,
+  );
+  return [
+    ...managedTargets,
+    workspaceFiles.workspaceId,
+    workspaceFiles.connection,
+    workspaceFiles.outbox,
+    workspaceFiles.metadata,
+  ];
+}
+
+async function selectedRepositoryWorkspaceId(
+  repositoryPath: string,
+): Promise<string> {
+  const files = cloudWorkspaceClientFiles(homedir(), repositoryPath, "codex");
+  if (!existsSync(files.workspaceId)) return randomUUID();
+  const workspaceId = (await readFile(files.workspaceId, "utf8")).trim();
+  if (!isOpaqueWorkspaceId(workspaceId)) {
+    throw new Error(
+      "The selected repository has an invalid local Intero workspace identity.",
+    );
+  }
+  return workspaceId;
+}
+
+async function ensureWorkspaceIdentity(
+  binding: ProjectRepositoryBinding,
+): Promise<void> {
+  const files = cloudWorkspaceClientFiles(
+    homedir(),
+    binding.repositoryPath,
+    "codex",
+  );
+  await mkdir(files.directory, { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(files.workspaceId, `${binding.workspaceId}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    if (!existsSync(files.workspaceId)) throw error;
+  }
+  await chmod(files.workspaceId, 0o600);
+  const persisted = (await readFile(files.workspaceId, "utf8")).trim();
+  if (persisted !== binding.workspaceId) {
+    throw new Error(
+      "The selected repository already has a different Intero workspace identity.",
+    );
+  }
+}
+
+function isOpaqueWorkspaceId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function digestPlan(
   plan: ReturnType<typeof buildIntegrationPlan>,
+  adapter: IntegrationKind,
   action: IntegrationAction,
   targets: string[],
+  binding?: ProjectRepositoryBinding,
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        action,
-        targets,
-        files: plan.files.map((file) => ({
-          path: resolve(file.path),
-          format: file.format,
-          marker: file.marker,
-          content: file.content,
-        })),
-      }),
-    )
-    .digest("hex");
+  return digestIntegrationPlan({
+    adapter,
+    action,
+    targets,
+    ...(binding ? { binding } : {}),
+    plan: {
+      files: plan.files.map((file) => ({ ...file, path: resolve(file.path) })),
+    },
+  });
 }
 
-function pruneIntegrationPreviews(): void {
+async function workspaceCleanupPlan(
+  adapter: IntegrationKind,
+  binding: WorkspaceCleanupBinding,
+): Promise<{ targets: string[]; digest: string }> {
+  const files = cloudWorkspaceClientFiles(
+    homedir(),
+    binding.repositoryPath,
+    adapter,
+  );
+  const candidates = [files.connection, files.outbox, files.metadata];
+  const targets = candidates.filter(existsSync);
+  const metadataExists = existsSync(files.metadata);
+  if (!metadataExists && targets.length > 0) {
+    throw new Error(
+      "Local workspace connection metadata is missing; no files were removed.",
+    );
+  }
+  if (metadataExists) {
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(await readFile(files.metadata, "utf8"));
+    } catch {
+      throw new Error(
+        "Local workspace connection metadata is invalid; no files were removed.",
+      );
+    }
+    if (!workspaceMetadataMatches(metadata, adapter, binding)) {
+      throw new Error(
+        "The selected repository is attached to a different Project or binding.",
+      );
+    }
+    const workspaceId = (await readFile(files.workspaceId, "utf8")).trim();
+    if (workspaceId !== binding.workspaceId) {
+      throw new Error(
+        "The selected repository has a different local workspace identity.",
+      );
+    }
+  }
+  const fingerprints = await Promise.all(
+    targets.map(async (target) => ({
+      target,
+      hash: createHash("sha256")
+        .update(await readFile(target))
+        .digest("hex"),
+    })),
+  );
+  return {
+    targets,
+    digest: createHash("sha256")
+      .update(
+        JSON.stringify({
+          adapter,
+          binding,
+          fingerprints,
+        }),
+      )
+      .digest("hex"),
+  };
+}
+
+function workspaceMetadataMatches(
+  value: unknown,
+  adapter: IntegrationKind,
+  binding: WorkspaceCleanupBinding,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const metadata = value as Record<string, unknown>;
+  return (
+    metadata.schemaVersion === 1 &&
+    metadata.projectId === binding.projectId &&
+    metadata.bindingId === binding.bindingId &&
+    metadata.client === adapter &&
+    metadata.workspaceId === binding.workspaceId
+  );
+}
+
+function pruneExpiredIntegrationAuthority(): void {
   const now = Date.now();
   for (const [token, preview] of integrationPreviews) {
     if (preview.expiresAt <= now) integrationPreviews.delete(token);
+  }
+  for (const [token, preview] of workspaceCleanupPreviews) {
+    if (preview.expiresAt <= now) workspaceCleanupPreviews.delete(token);
+  }
+  for (const [token, selection] of repositorySelections) {
+    if (selection.expiresAt <= now || selection.consumed) {
+      repositorySelections.delete(token);
+    }
   }
 }
 
@@ -702,12 +1071,17 @@ function mcpExecutableSpec(): { command: string; prefixArgs: string[] } {
 function detectAgent(
   adapter: IntegrationKind,
 ): { executable: string; version: string } | undefined {
+  const grokHome = process.env.GROK_HOME || join(homedir(), ".grok");
   const candidates =
     adapter === "codex"
       ? ["codex", "/Applications/Codex.app/Contents/Resources/codex"]
       : adapter === "claude-code"
         ? ["claude", join(homedir(), ".local/bin/claude")]
-        : ["opencode", join(homedir(), ".opencode/bin/opencode")];
+        : adapter === "opencode"
+          ? ["opencode", join(homedir(), ".opencode/bin/opencode")]
+          : isCursorAgentAdapter(adapter)
+            ? cursorAgentExecutableCandidates(homedir())
+            : ["grok", join(grokHome, "bin", "grok")];
   for (const executable of candidates) {
     try {
       const output = execFileSync(executable, ["--version"], {
@@ -727,19 +1101,45 @@ function agentConfigurationState(
   adapter: IntegrationKind,
   executable: string,
 ): "valid" | "runtime_unreachable" | "invalid" {
-  const argumentsByAdapter: Record<IntegrationKind, string[]> = {
-    codex: ["mcp", "get", "intero", "--json"],
-    "claude-code": ["mcp", "get", "intero"],
-    opencode: ["mcp", "list"],
-  };
   try {
-    const output = execFileSync(executable, argumentsByAdapter[adapter], {
+    const options: ExecFileSyncOptionsWithStringEncoding = {
       encoding: "utf8",
-      env: { ...process.env, INTERO_INTEGRATION_PROBE: "1" },
+      env: {
+        ...process.env,
+        INTERO_INTEGRATION_PROBE: "1",
+        ...(adapter === "grok-build"
+          ? { GROK_HOME: process.env.GROK_HOME || join(homedir(), ".grok") }
+          : {}),
+      },
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 3_000,
-    });
+    };
+    const grokProbe =
+      adapter === "grok-build"
+        ? [
+            execFileSync(
+              executable,
+              ["mcp", "doctor", "intero", "--json"],
+              options,
+            ),
+            execFileSync(executable, ["inspect", "--json"], options),
+          ]
+        : undefined;
+    const output =
+      grokProbe?.join("\n") ??
+      execFileSync(
+        executable,
+        adapter === "codex"
+          ? ["mcp", "get", "intero", "--json"]
+          : adapter === "claude-code"
+            ? ["mcp", "get", "intero"]
+            : ["mcp", "list"],
+        options,
+      );
     const normalized = output.toLowerCase();
+    if (isCursorAgentAdapter(adapter) && !cursorAgentMcpListHasIntero(output)) {
+      return "invalid";
+    }
     if (!normalized.includes("intero")) return "invalid";
     if (
       /\b(enoent|not found|no such file|invalid|malformed)\b/.test(normalized)
@@ -757,6 +1157,16 @@ function agentConfigurationState(
     }
     if (adapter === "opencode") {
       return normalized.includes("connected") || output.includes("✓")
+        ? "valid"
+        : "runtime_unreachable";
+    }
+    if (adapter === "grok-build") {
+      if (!grokProbe) return "runtime_unreachable";
+      const [doctorOutput, inspectOutput] = grokProbe;
+      if (doctorOutput === undefined || inspectOutput === undefined) {
+        return "runtime_unreachable";
+      }
+      return grokBuildMcpProbeIsValid(doctorOutput, inspectOutput)
         ? "valid"
         : "runtime_unreachable";
     }
@@ -788,7 +1198,8 @@ function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
     !frame ||
     frame !== event.sender.mainFrame ||
     event.sender.id !== trustedRendererId ||
-    frame.url !== trustedRendererUrl
+    !trustedRendererUrl ||
+    !rendererUrlIsTrusted(frame.url, trustedRendererUrl)
   ) {
     throw new Error("Integration management is limited to the main frame.");
   }

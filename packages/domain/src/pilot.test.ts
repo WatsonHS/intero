@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   personalStandInId,
   PilotCheckpointInput,
+  PilotAgentClient,
   PrincipalId,
   uuidv7,
 } from "./index.js";
@@ -36,6 +37,14 @@ const checkpoint = {
 } as const;
 
 describe("pilot checkpoint narrative contract", () => {
+  it("recognizes Grok Build as a Project Agent client", () => {
+    expect(PilotAgentClient.parse("grok-build")).toBe("grok-build");
+  });
+
+  it("recognizes Cursor as a Project Agent client", () => {
+    expect(PilotAgentClient.parse("cursor")).toBe("cursor");
+  });
+
   it("accepts the five-part human-readable work narrative", () => {
     expect(PilotCheckpointInput.parse(checkpoint).narrative).toEqual(
       checkpoint.narrative,

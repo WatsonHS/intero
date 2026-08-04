@@ -30,6 +30,8 @@ export const EventSource = z.enum([
   "codex",
   "claude-code",
   "opencode",
+  "grok-build",
+  "cursor",
   "desktop",
   "system",
 ]);

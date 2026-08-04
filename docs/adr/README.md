@@ -8,6 +8,7 @@ Current decisions:
 - [ADR-0007: Post-Pilot product model and delivery sequence](0007-post-pilot-product-model-and-delivery-sequence.md)
 - [ADR-0008: Phase 7 bounded Stand-in and Agent automation](0008-phase-7-bounded-stand-in-and-agent-automation.md)
 - [ADR-0009: Durable, authorized realtime conversations](0009-durable-authorized-realtime-conversations.md)
+- [ADR-0010: Desktop-first product entry and controlled Coding Agent attachment](0010-desktop-first-product-entry-and-controlled-agent-attachment.md)
 
 ADRs record architectural commitments and their consequences. Product behavior
 remains authoritative in

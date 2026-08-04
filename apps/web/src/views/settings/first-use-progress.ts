@@ -1,10 +1,9 @@
-import { PILOT_AGENT_CONFIGURATION_VERSION } from "@intero/domain";
-
 import type { ProjectSpecPayload } from "../../api.js";
 import type {
   PilotOverviewPayload,
   PilotTeamPayload,
 } from "../../pilot/api.js";
+import { agentBindingIsConnected } from "../agent/connection-state.js";
 
 export interface FirstUseProgress {
   invitedMember: boolean;
@@ -31,11 +30,7 @@ export function deriveFirstUseProgress(input: {
   const activeBindings = input.overviews.flatMap((overview) =>
     overview.bindings.filter((binding) => !binding.disconnectedAt),
   );
-  const connectedAgent = activeBindings.some(
-    (binding) =>
-      Boolean(binding.validatedAt && binding.activityUpdatedAt) &&
-      binding.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION,
-  );
+  const connectedAgent = activeBindings.some(agentBindingIsConnected);
   const receivedCheckpoint = input.overviews.some(
     (overview) =>
       overview.privateWorkState.length > 0 || overview.pulse.length > 0,

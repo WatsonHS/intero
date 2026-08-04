@@ -7,6 +7,7 @@ import {
   type PreferredLanguage,
   type WorkstreamPhase,
 } from "@intero/domain";
+import { cloudWorkspaceClientFiles } from "@intero/integrations";
 import {
   createCipheriv,
   createDecipheriv,
@@ -40,6 +41,14 @@ interface CloudConnection {
     workspaceId: string;
     preferredLanguage: PreferredLanguage;
   };
+}
+
+interface CloudConnectionMetadata {
+  schemaVersion: 1;
+  projectId: string;
+  bindingId: string;
+  client: PilotAgentClient;
+  workspaceId: string;
 }
 
 interface QueuedEvent {
@@ -94,8 +103,11 @@ export class CloudPilotClient {
     client: PilotAgentClient;
     cwd: string;
     configDirectory?: string;
+    expectedWorkspaceId?: string;
   }): Promise<CloudPilotClient> {
     const baseUrl = input.baseUrl.replace(/\/+$/, "");
+    const directory = cloudDirectory(input.configDirectory, input.cwd);
+    const workspaceId = loadWorkspaceId(directory, input.expectedWorkspaceId);
     const response = await fetch(`${baseUrl}/v1/pilot/agent/connect`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -103,7 +115,7 @@ export class CloudPilotClient {
         ticket: input.ticket,
         client: input.client,
         name: `${clientLabel(input.client)} · ${basename(input.cwd)}`,
-        workspaceId: randomUUID(),
+        workspaceId,
       }),
       signal: AbortSignal.timeout(5_000),
     });
@@ -125,7 +137,11 @@ export class CloudPilotClient {
         body.message ?? `Agent ticket exchange failed (${response.status}).`,
       );
     }
-    const directory = cloudDirectory(input.configDirectory);
+    if (body.binding.workspaceId !== workspaceId) {
+      throw new Error(
+        "Agent connection returned a different workspace identity.",
+      );
+    }
     const key = loadMasterKey(directory);
     const connection: CloudConnection = {
       baseUrl,
@@ -134,6 +150,7 @@ export class CloudPilotClient {
       binding: body.binding,
     };
     writeEncrypted(connectionPath(directory, input.client), connection, key);
+    writeConnectionMetadata(directory, connection);
     return new CloudPilotClient(
       connection,
       new EncryptedOutbox(outboxPath(directory, input.client), key),
@@ -144,13 +161,20 @@ export class CloudPilotClient {
   static load(input: {
     client: PilotAgentClient;
     configDirectory?: string;
+    cwd?: string;
   }): CloudPilotClient {
-    const directory = cloudDirectory(input.configDirectory);
+    const directory = cloudDirectory(input.configDirectory, input.cwd);
     const key = loadMasterKey(directory);
     const connection = readEncrypted<CloudConnection>(
       connectionPath(directory, input.client),
       key,
     );
+    if (connection.binding.workspaceId !== loadWorkspaceId(directory)) {
+      throw new Error(
+        "The encrypted Agent connection belongs to a different workspace.",
+      );
+    }
+    assertConnectionMetadata(directory, connection);
     return new CloudPilotClient(
       connection,
       new EncryptedOutbox(outboxPath(directory, input.client), key),
@@ -520,15 +544,106 @@ export class EncryptedOutbox {
   }
 }
 
-function cloudDirectory(override?: string): string {
+export function defaultCloudDirectoryForWorkspace(
+  cwd: string,
+  homeDirectory = homedir(),
+): string {
+  return cloudWorkspaceClientFiles(homeDirectory, cwd, "codex").directory;
+}
+
+function cloudDirectory(override?: string, cwd = process.cwd()): string {
   const directory = resolve(
     override ??
       process.env.INTERO_CLOUD_DATA_DIR ??
-      join(homedir(), ".intero", "cloud"),
+      defaultCloudDirectoryForWorkspace(cwd),
   );
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   return directory;
+}
+
+function loadWorkspaceId(
+  directory: string,
+  expectedWorkspaceId?: string,
+): string {
+  const path = join(directory, "workspace-id");
+  if (!existsSync(path)) {
+    if (expectedWorkspaceId) {
+      throw new Error(
+        "The Desktop-confirmed Intero workspace identity is missing from this repository.",
+      );
+    }
+    try {
+      writeFileSync(path, `${randomUUID()}\n`, { mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if (!existsSync(path)) throw error;
+    }
+  }
+  chmodSync(path, 0o600);
+  const workspaceId = readFileSync(path, "utf8").trim();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      workspaceId,
+    )
+  ) {
+    throw new Error("The local Intero workspace identity is invalid.");
+  }
+  if (expectedWorkspaceId && workspaceId !== expectedWorkspaceId) {
+    throw new Error(
+      "The Desktop Agent ticket belongs to a different local repository workspace.",
+    );
+  }
+  return workspaceId;
+}
+
+function metadataPath(directory: string, client: PilotAgentClient): string {
+  return join(directory, `${client}.metadata.json`);
+}
+
+function writeConnectionMetadata(
+  directory: string,
+  connection: CloudConnection,
+): void {
+  const metadata: CloudConnectionMetadata = {
+    schemaVersion: 1,
+    projectId: connection.projectId,
+    bindingId: connection.binding.id,
+    client: connection.binding.client,
+    workspaceId: connection.binding.workspaceId,
+  };
+  const path = metadataPath(directory, connection.binding.client);
+  writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  chmodSync(path, 0o600);
+}
+
+function assertConnectionMetadata(
+  directory: string,
+  connection: CloudConnection,
+): void {
+  const path = metadataPath(directory, connection.binding.client);
+  let metadata: CloudConnectionMetadata;
+  try {
+    metadata = JSON.parse(
+      readFileSync(path, "utf8"),
+    ) as CloudConnectionMetadata;
+  } catch {
+    throw new Error(
+      "The local Agent connection metadata is missing or invalid.",
+    );
+  }
+  if (
+    metadata.schemaVersion !== 1 ||
+    metadata.projectId !== connection.projectId ||
+    metadata.bindingId !== connection.binding.id ||
+    metadata.client !== connection.binding.client ||
+    metadata.workspaceId !== connection.binding.workspaceId
+  ) {
+    throw new Error(
+      "The local Agent connection metadata does not match its credential.",
+    );
+  }
 }
 
 function loadMasterKey(directory: string): Buffer {
@@ -644,7 +759,11 @@ function clientLabel(client: PilotAgentClient): string {
     ? "Claude Code"
     : client === "opencode"
       ? "OpenCode"
-      : "Codex";
+      : client === "grok-build"
+        ? "Grok Build"
+        : client === "cursor"
+          ? "Cursor"
+          : "Codex";
 }
 
 function phaseForEvent(eventType: PilotCheckpointEventType): WorkstreamPhase {

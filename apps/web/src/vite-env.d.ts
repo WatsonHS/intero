@@ -5,26 +5,45 @@ interface Window {
     platform: string;
     runtimeVersion: string;
     getIntegrationStatus(): Promise<CodingAgentIntegrationStatus[]>;
-    previewIntegration(
-      adapter: CodingAgentAdapter,
-      action: CodingAgentIntegrationAction,
-      locale: "zh-CN" | "en-US",
-    ): Promise<CodingAgentIntegrationPreview | null>;
-    manageIntegration(token: string): Promise<CodingAgentIntegrationStatus[]>;
+    previewIntegration(input: {
+      adapter: CodingAgentAdapter;
+      action: CodingAgentIntegrationAction;
+      locale: "zh-CN" | "en-US";
+      projectId?: string;
+      repositorySelectionToken?: string;
+    }): Promise<CodingAgentIntegrationPreview | null>;
+    manageIntegration(token: string): Promise<{
+      integrations: CodingAgentIntegrationStatus[];
+      workspaceId?: string;
+    }>;
+    previewWorkspaceCleanup(input: {
+      adapter: CodingAgentAdapter;
+      locale: "zh-CN" | "en-US";
+      projectId: string;
+      bindingId: string;
+      workspaceId: string;
+      repositorySelectionToken: string;
+    }): Promise<WorkspaceCleanupPreview | null>;
+    cleanupWorkspaceConnection(token: string): Promise<{
+      removed: string[];
+      alreadyRemoved: boolean;
+    }>;
     getGitAwarenessStatus(): Promise<GitAwarenessStatus[]>;
-    getGitAwarenessClients(): Promise<CodingAgentAdapter[]>;
+    getGitAwarenessClients(): Promise<GitAwarenessClient[]>;
     chooseGitRepository(): Promise<GitRepositorySelection | null>;
     configureGitAwareness(input: {
       repositoryPath: string;
-      client: CodingAgentAdapter;
+      client: GitAwarenessClient;
       enabled: boolean;
     }): Promise<GitAwarenessStatus[]>;
     removeGitAwareness(repositoryPath: string): Promise<GitAwarenessStatus[]>;
   };
 }
 
-type CodingAgentAdapter = "codex" | "claude-code" | "opencode";
+type CodingAgentAdapter =
+  "codex" | "claude-code" | "opencode" | "cursor" | "grok-build";
 type CodingAgentIntegrationAction = "install" | "repair" | "uninstall";
+type GitAwarenessClient = "codex" | "claude-code" | "opencode";
 
 interface CodingAgentIntegrationStatus {
   adapter: CodingAgentAdapter;
@@ -51,6 +70,12 @@ interface CodingAgentIntegrationPreview {
   expiresAt: string;
 }
 
+interface WorkspaceCleanupPreview {
+  token: string;
+  targets: string[];
+  expiresAt: string;
+}
+
 interface GitAwarenessSnapshot {
   repository: string;
   branch?: string;
@@ -62,7 +87,7 @@ interface GitAwarenessSnapshot {
 interface GitAwarenessStatus {
   repositoryPath: string;
   repositoryName: string;
-  client: CodingAgentAdapter;
+  client: GitAwarenessClient;
   enabled: boolean;
   snapshot?: GitAwarenessSnapshot;
   lastDeliveredAt?: string;
@@ -72,4 +97,7 @@ interface GitAwarenessStatus {
 interface GitRepositorySelection {
   repositoryPath: string;
   snapshot: GitAwarenessSnapshot;
+  selectionToken: string;
+  workspaceId: string;
+  expiresAt: string;
 }

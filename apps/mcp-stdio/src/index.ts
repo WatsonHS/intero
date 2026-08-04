@@ -49,7 +49,9 @@ async function runMcpServer() {
   if (
     mcpSource !== "codex" &&
     mcpSource !== "claude-code" &&
-    mcpSource !== "opencode"
+    mcpSource !== "opencode" &&
+    mcpSource !== "grok-build" &&
+    mcpSource !== "cursor"
   ) {
     throw new Error("A supported --mcp-source is required.");
   }
@@ -59,11 +61,12 @@ async function runMcpServer() {
 }
 
 async function runCloudMcpServer(
-  mcpSource: "codex" | "claude-code" | "opencode",
+  mcpSource: "codex" | "claude-code" | "opencode" | "grok-build" | "cursor",
 ) {
   const configDirectory = argumentValue("--cloud-data-dir");
   const client = CloudPilotClient.load({
     client: mcpSource,
+    cwd: process.cwd(),
     ...(configDirectory ? { configDirectory } : {}),
   });
   const preferredLanguage = client.context().preferredLanguage;
@@ -656,6 +659,7 @@ async function runCloudCommand() {
     argumentValue("--mcp-source") ?? argumentValue("--client"),
   );
   const configDirectory = argumentValue("--cloud-data-dir");
+  const expectedWorkspaceId = argumentValue("--workspace-id");
   if (action === "connect") {
     const baseUrl = argumentValue("--cloud-url");
     const ticket = argumentValue("--connect-ticket");
@@ -669,6 +673,7 @@ async function runCloudCommand() {
       ticket,
       client: source,
       cwd: process.cwd(),
+      ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
       ...(configDirectory ? { configDirectory } : {}),
     });
     const validation = await client.validateConnection();
@@ -676,7 +681,10 @@ async function runCloudCommand() {
     process.stdout.write(
       `${JSON.stringify(
         {
-          connected: true,
+          connected:
+            Boolean(validation) &&
+            typeof validation === "object" &&
+            (validation as { status?: unknown }).status === "connected",
           context: client.context(),
           validation,
           connectionCheck,
@@ -693,6 +701,7 @@ async function runCloudCommand() {
   }
   const client = CloudPilotClient.load({
     client: source,
+    cwd: process.cwd(),
     ...(configDirectory ? { configDirectory } : {}),
   });
   if (action === "status") {
@@ -884,9 +893,13 @@ async function runIntegrationManagement() {
                 : complete
                   ? adapter.kind === "codex"
                     ? "pending_trust"
-                    : configurationState === "valid"
-                      ? "config_valid"
-                      : "config_written"
+                    : adapter.kind === "grok-build"
+                      ? configurationState === "valid"
+                        ? "config_valid"
+                        : "config_written"
+                      : configurationState === "valid"
+                        ? "config_valid"
+                        : "config_written"
                   : configured
                     ? "needs_repair"
                     : "not_installed",
@@ -916,7 +929,11 @@ function detectAgent(
       ? ["codex", "/Applications/Codex.app/Contents/Resources/codex"]
       : adapter === "claude-code"
         ? ["claude", join(userHome, ".local/bin/claude")]
-        : ["opencode", join(userHome, ".opencode/bin/opencode")];
+        : adapter === "opencode"
+          ? ["opencode", join(userHome, ".opencode/bin/opencode")]
+          : adapter === "grok-build"
+            ? ["grok"]
+            : ["cursor-agent"];
   for (const executable of candidates) {
     try {
       const version = execFileSync(executable, ["--version"], {
@@ -942,6 +959,8 @@ function agentConfigurationState(
     codex: ["mcp", "get", "intero", "--json"],
     "claude-code": ["mcp", "get", "intero"],
     opencode: ["mcp", "list"],
+    "grok-build": ["mcp", "doctor", "intero", "--json"],
+    cursor: ["mcp", "list"],
   };
   try {
     const output = execFileSync(executable, argumentsByAdapter[adapter], {
@@ -971,10 +990,38 @@ function agentConfigurationState(
         ? "valid"
         : "runtime_unreachable";
     }
+    if (adapter === "grok-build") {
+      return grokBuildDoctorIsHealthy(output) ? "valid" : "runtime_unreachable";
+    }
     return "valid";
   } catch {
     return "runtime_unreachable";
   }
+}
+
+function grokBuildDoctorIsHealthy(output: string): boolean {
+  let report: unknown;
+  try {
+    report = JSON.parse(output);
+  } catch {
+    return false;
+  }
+  return jsonReportContainsHealthyStatus(report);
+}
+
+function jsonReportContainsHealthyStatus(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(jsonReportContainsHealthyStatus);
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.healthy === true) return true;
+  if (
+    typeof record.status === "string" &&
+    (record.status.toLowerCase() === "ok" ||
+      record.status.toLowerCase() === "healthy")
+  ) {
+    return true;
+  }
+  return Object.values(record).some(jsonReportContainsHealthyStatus);
 }
 
 function argumentValue(name: string): string | undefined {

@@ -205,7 +205,6 @@ function createPilotMcpServer(
       return toolResult({
         ...state,
         mcpConnected: Boolean(binding.validatedAt),
-        lifecycleReady: Boolean(binding.activityUpdatedAt),
         configurationVersion: binding.configurationVersion,
         requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
         configurationUpdatedAt: binding.configurationUpdatedAt,
@@ -218,7 +217,7 @@ function createPilotMcpServer(
         validatedAt: binding.validatedAt,
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
-        action: agentConnectionAction(state.status),
+        action: agentConnectionAction(state.status, binding.client),
       });
     },
   );
@@ -250,7 +249,6 @@ function createPilotMcpServer(
       return toolResult({
         ...state,
         mcpConnected: true,
-        lifecycleReady: Boolean(binding.activityUpdatedAt),
         configurationVersion: binding.configurationVersion,
         requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
         configurationUpdatedAt: binding.configurationUpdatedAt,
@@ -264,7 +262,7 @@ function createPilotMcpServer(
         validatedAt: binding.validatedAt,
         activityStatus: binding.activityStatus,
         activityUpdatedAt: binding.activityUpdatedAt,
-        action: agentConnectionAction(state.status),
+        action: agentConnectionAction(state.status, binding.client),
       });
     },
   );
@@ -298,7 +296,6 @@ function createPilotMcpServer(
       return toolResult({
         ...state,
         mcpConnected: Boolean(binding.validatedAt),
-        lifecycleReady: Boolean(binding.activityUpdatedAt),
         configurationVersion: binding.configurationVersion,
         requiredConfigurationVersion: PILOT_AGENT_CONFIGURATION_VERSION,
         configurationUpdatedAt: binding.configurationUpdatedAt,
@@ -509,16 +506,23 @@ function agentConnectionState(binding: PilotAgentBinding): {
   status: AgentConnectionStatus;
   connected: boolean;
   ready: boolean;
+  lifecycleHooks: boolean;
+  lifecycleReady: boolean;
   configurationCurrent: boolean;
 } {
-  const connected = Boolean(binding.validatedAt && binding.activityUpdatedAt);
+  const lifecycleHooks =
+    binding.client !== "grok-build" && binding.client !== "cursor";
+  const lifecycleReady = lifecycleHooks
+    ? Boolean(binding.activityUpdatedAt)
+    : true;
+  const connected = Boolean(binding.validatedAt && lifecycleReady);
   const configurationCurrent =
     binding.configurationVersion === PILOT_AGENT_CONFIGURATION_VERSION;
   const status: AgentConnectionStatus = !binding.validatedAt
     ? binding.mcpInitializedAt
       ? "mcp_initialized"
       : "awaiting_initialization"
-    : !binding.activityUpdatedAt
+    : !lifecycleReady
       ? "lifecycle_pending"
       : !configurationCurrent
         ? "configuration_outdated"
@@ -527,17 +531,22 @@ function agentConnectionState(binding: PilotAgentBinding): {
     status,
     connected,
     ready: connected && configurationCurrent,
+    lifecycleHooks,
+    lifecycleReady,
     configurationCurrent,
   };
 }
 
-function agentConnectionAction(status: AgentConnectionStatus): string {
+function agentConnectionAction(
+  status: AgentConnectionStatus,
+  client: PilotAgentBinding["client"],
+): string {
   if (status === "connected") return "Use Project-scoped Intero tools.";
   if (status === "configuration_outdated") {
     return `Run the Project connection repair task from Intero settings, then call intero.validate_connection with configurationVersion ${PILOT_AGENT_CONFIGURATION_VERSION}.`;
   }
   if (status === "lifecycle_pending") {
-    return "Complete the Codex Hook review, then start a fresh GUI task in this repository and call intero.connection_status again.";
+    return `Complete the native ${client} lifecycle setup, then start a fresh session in this repository and call intero.connection_status again.`;
   }
   return "Call intero.validate_connection with the temporary verification code and the setup configurationVersion.";
 }

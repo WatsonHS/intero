@@ -8,9 +8,42 @@ import {
   containsForbiddenEventField,
   uuidv7,
 } from "@intero/domain";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 export type IntegrationKind = Exclude<EventSource, "desktop" | "system">;
+
+export function cloudWorkspaceDirectory(
+  homeDirectory: string,
+  repositoryPath: string,
+): string {
+  const workspaceKey = createHash("sha256")
+    .update(resolve(repositoryPath))
+    .digest("hex");
+  return join(
+    resolve(homeDirectory),
+    ".intero",
+    "cloud",
+    "workspaces",
+    workspaceKey,
+  );
+}
+
+export function cloudWorkspaceClientFiles(
+  homeDirectory: string,
+  repositoryPath: string,
+  client: IntegrationKind,
+) {
+  const directory = cloudWorkspaceDirectory(homeDirectory, repositoryPath);
+  return {
+    directory,
+    workspaceId: join(directory, "workspace-id"),
+    connection: join(directory, `${client}.connection.enc`),
+    outbox: join(directory, `${client}.outbox.enc`),
+    metadata: join(directory, `${client}.metadata.json`),
+  };
+}
 
 const MINIMUM_SUPPORTED_VERSIONS: Record<
   IntegrationKind,
@@ -19,6 +52,11 @@ const MINIMUM_SUPPORTED_VERSIONS: Record<
   codex: [0, 146, 0],
   "claude-code": [2, 1, 140],
   opencode: [1, 17, 4],
+  // Grok Build is in active beta. Accept any semantic version until xAI
+  // publishes a compatibility floor for its local MCP configuration.
+  "grok-build": [0, 0, 0],
+  // Cursor Agent has no published compatibility floor for MCP registration.
+  cursor: [0, 0, 0],
 };
 
 export function integrationVersionIsSupported(
@@ -126,6 +164,11 @@ const EVENT_MAP: Record<IntegrationKind, Record<string, CanonicalEventType>> = {
     "session.idle": "SessionPaused",
     "session.deleted": "SessionStopped",
   },
+  // Grok Build has MCP support, but no lifecycle event payload contract that
+  // we can safely normalize and operate. Do not invent one.
+  "grok-build": {},
+  // Cursor supports MCP registration but has no stable lifecycle Hook contract.
+  cursor: {},
 };
 
 function normalize(kind: IntegrationKind, input: AdapterInput) {
@@ -507,10 +550,95 @@ export const InteroPlugin: Plugin = async ({ directory, worktree }) => ({
   },
 };
 
+export const grokBuildAdapter: IntegrationAdapter = {
+  kind: "grok-build",
+  capabilities: {
+    mcp: true,
+    lifecycleHooks: false,
+    fileEvents: false,
+    validationEvents: false,
+    todoEvents: false,
+    managedPlugin: false,
+  },
+  normalize: (input) => normalize("grok-build", input),
+  installPlan: (home, executable, executablePrefixArgs = []) => {
+    const grokHome = process.env.GROK_HOME || `${home}/.grok`;
+    return {
+      adapter: "grok-build",
+      allowedRoots: [home, grokHome],
+      files: [
+        {
+          path: `${grokHome}/config.toml`,
+          format: "toml",
+          marker: "intero-managed",
+          content: `[mcp_servers.intero]\ncommand = ${tomlString(executable)}\nargs = [${[...executablePrefixArgs, "--mcp-source", "grok-build", "--cloud"].map(tomlString).join(", ")}]\nenabled = true\n`,
+        },
+      ],
+      diagnostics: [
+        "Grok Build config contains mcp_servers.intero",
+        "Run grok mcp doctor intero --json to verify the configured server",
+      ],
+      uninstallPaths: [],
+    };
+  },
+};
+
+export const cursorAdapter: IntegrationAdapter = {
+  kind: "cursor",
+  capabilities: {
+    mcp: true,
+    lifecycleHooks: false,
+    fileEvents: false,
+    validationEvents: false,
+    todoEvents: false,
+    managedPlugin: false,
+  },
+  normalize: (input) => normalize("cursor", input),
+  installPlan: (home, executable, executablePrefixArgs = []) => {
+    const cursorHome = `${home}/.cursor`;
+    return {
+      adapter: "cursor",
+      allowedRoots: [home, cursorHome],
+      files: [
+        {
+          path: `${cursorHome}/mcp.json`,
+          format: "json",
+          marker: "intero-managed",
+          content: JSON.stringify(
+            {
+              mcpServers: {
+                intero: {
+                  command: executable,
+                  args: [
+                    ...executablePrefixArgs,
+                    "--mcp-source",
+                    "cursor",
+                    "--cloud",
+                  ],
+                  env: {},
+                },
+              },
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+      diagnostics: [
+        "Cursor global MCP config contains mcpServers.intero",
+        "Run cursor-agent mcp list to verify the configured server",
+      ],
+      uninstallPaths: [],
+    };
+  },
+};
+
 export const integrationAdapters = [
   codexAdapter,
   claudeCodeAdapter,
   openCodeAdapter,
+  grokBuildAdapter,
+  cursorAdapter,
 ] as const;
 
 export {
