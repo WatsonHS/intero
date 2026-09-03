@@ -8,9 +8,13 @@ import {
   type ConversationChangeReason,
   type ConversationThread,
   type CoordinationResult,
+  decodeMessageSearchCursor,
+  encodeMessageSearchCursor,
   type DecisionRecord,
+  highlightSearchSnippet,
   type KanbanCard,
   type KanbanCardId,
+  type MessageSearchPage,
   type OperationId,
   type OrganizationId,
   type OutboxEntry,
@@ -20,6 +24,7 @@ import {
   type ProjectId,
   type PublicWorkProjection,
   type ReactionEmoji,
+  type SearchMessageFilters,
   type Spec,
   type SpecId,
   type SpecRevision,
@@ -49,6 +54,7 @@ import {
   buildThreadMessage,
   claimFromEvent,
   type KanbanCardUpdate,
+  messageSearchResult,
   type MutationResult,
   normalizeMentionIds,
   sameCoordinationSummaryIdentity,
@@ -1604,6 +1610,7 @@ export class PostgresPlatformStore implements PlatformStore {
                WHERE thread_id = $1
                  AND sequence >= $2
                  AND sequence > $3
+                 AND deleted_at IS NULL
                ORDER BY sequence
                LIMIT $4`,
               [
@@ -1620,6 +1627,7 @@ export class PostgresPlatformStore implements PlatformStore {
                    WHERE thread_id = $1
                      AND sequence >= $2
                      AND sequence < $3
+                     AND deleted_at IS NULL
                    ORDER BY sequence DESC
                    LIMIT $4
                  ) page
@@ -1631,22 +1639,60 @@ export class PostgresPlatformStore implements PlatformStore {
                   query.limit + 1,
                 ],
               )
-            : await client.query(
-                `SELECT * FROM (
+            : query.aroundSequence !== undefined
+              ? await client.query(
+                  `SELECT * FROM (
+                     (
+                       SELECT * FROM messages
+                       WHERE thread_id = $1
+                         AND sequence >= $2
+                         AND sequence <= $3
+                         AND deleted_at IS NULL
+                       ORDER BY sequence DESC
+                       LIMIT $4
+                     )
+                     UNION ALL
+                     (
+                       SELECT * FROM messages
+                       WHERE thread_id = $1
+                         AND sequence >= $2
+                         AND sequence > $3
+                         AND deleted_at IS NULL
+                       ORDER BY sequence
+                       LIMIT $5
+                     )
+                   ) page
+                   ORDER BY sequence`,
+                  [
+                    threadId,
+                    metadata.visible_from_sequence,
+                    query.aroundSequence,
+                    Math.ceil(query.limit / 2) + 1,
+                    Math.floor(query.limit / 2) + 1,
+                  ],
+                )
+              : await client.query(
+                  `SELECT * FROM (
                    SELECT * FROM messages
                    WHERE thread_id = $1
                      AND sequence >= $2
+                     AND deleted_at IS NULL
                    ORDER BY sequence DESC
                    LIMIT $3
                  ) page
                  ORDER BY sequence`,
-                [threadId, metadata.visible_from_sequence, limit + 1],
-              );
-      const hasMore = result.rows.length > limit;
+                  [threadId, metadata.visible_from_sequence, limit + 1],
+                );
+      const pageLimit =
+        query.aroundSequence !== undefined ? query.limit : limit;
+      const hasMore = result.rows.length > pageLimit;
       const rows =
-        query.beforeSequence !== undefined || query.afterSequence === undefined
-          ? result.rows.slice(hasMore ? 1 : 0)
-          : result.rows.slice(0, limit);
+        query.aroundSequence !== undefined
+          ? result.rows.slice(0, Math.min(result.rows.length, query.limit))
+          : query.beforeSequence !== undefined ||
+              query.afterSequence === undefined
+            ? result.rows.slice(hasMore ? 1 : 0)
+            : result.rows.slice(0, limit);
       return {
         items: rows.map(messageFromRow),
         headSequence: metadata.sequence,
@@ -1671,7 +1717,8 @@ export class PostgresPlatformStore implements PlatformStore {
           AND viewer.revoked_at IS NULL
          WHERE m.thread_id = $1
            AND m.id = $3
-           AND m.sequence >= viewer.visible_from_sequence`,
+           AND m.sequence >= viewer.visible_from_sequence
+           AND m.deleted_at IS NULL`,
         [threadId, principalId, messageId],
       );
       return result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
@@ -2206,6 +2253,7 @@ export class PostgresPlatformStore implements PlatformStore {
                       AND m.sequence >= viewer.visible_from_sequence
                       AND m.sequence > COALESCE(tr.last_read_sequence, 0)
                       AND m.sender_id <> $2
+                      AND m.deleted_at IS NULL
                   )
                 END AS unread_count,
                 CASE
@@ -2225,6 +2273,7 @@ export class PostgresPlatformStore implements PlatformStore {
                       AND m.sequence > COALESCE(tr.last_read_sequence, 0)
                       AND m.sender_id <> $2
                       AND $2 = ANY(m.mentioned_principal_ids)
+                      AND m.deleted_at IS NULL
                   )
                 END AS mention_count
          FROM threads t
@@ -2297,7 +2346,8 @@ export class PostgresPlatformStore implements PlatformStore {
          WHERE m.thread_id = $1
            AND m.sequence >= viewer.visible_from_sequence
            AND m.sequence > COALESCE(tr.last_read_sequence, 0)
-           AND m.sender_id <> $2`,
+           AND m.sender_id <> $2
+           AND m.deleted_at IS NULL`,
         [threadId, principalId],
       );
       const mentions = await client.query<{ mention_count: number }>(
@@ -2314,7 +2364,8 @@ export class PostgresPlatformStore implements PlatformStore {
            AND m.sequence >= viewer.visible_from_sequence
            AND m.sequence > COALESCE(tr.last_read_sequence, 0)
            AND m.sender_id <> $2
-           AND $2 = ANY(m.mentioned_principal_ids)`,
+           AND $2 = ANY(m.mentioned_principal_ids)
+           AND m.deleted_at IS NULL`,
         [threadId, principalId],
       );
       return {
@@ -2362,6 +2413,130 @@ export class PostgresPlatformStore implements PlatformStore {
       const visible = new Set(result.rows.map((row) => row.principal_id));
       if (candidateIds.includes(viewerId)) visible.add(viewerId);
       return candidateIds.filter((principalId) => visible.has(principalId));
+    });
+  }
+
+  async searchMessages(
+    principalId: PrincipalId,
+    input: {
+      filters: SearchMessageFilters;
+      cursor?: string | undefined;
+      limit: number;
+    },
+  ): Promise<MessageSearchPage> {
+    return this.read(async (client) => {
+      const cursor = input.cursor
+        ? decodeMessageSearchCursor(input.cursor)
+        : undefined;
+      const result = await client.query<{
+        id: ThreadMessage["id"];
+        thread_id: ThreadId;
+        sequence: number;
+        sender_id: PrincipalId;
+        created_at: Date;
+        title: string;
+        project_id: string | null;
+        snippet: string;
+        rank: number;
+      }>(
+        `SELECT m.id, m.thread_id, m.sequence, m.sender_id, m.created_at,
+                t.title, t.project_id,
+                CASE
+                  WHEN $4 = '' THEN left(regexp_replace(m.body, '\\s+', ' ', 'g'), 180)
+                  ELSE ts_headline(
+                    'simple',
+                    m.body,
+                    websearch_to_tsquery('simple', $4),
+                    'StartSel=<b>, StopSel=</b>, MaxWords=32, MinWords=10, MaxFragments=1'
+                  )
+                END AS snippet,
+                CASE
+                  WHEN $4 = '' THEN 0::float8
+                  ELSE ts_rank(m.search_vector, websearch_to_tsquery('simple', $4))
+                END AS rank
+         FROM messages m
+         JOIN threads t ON t.id = m.thread_id
+         JOIN thread_participants tp
+           ON tp.thread_id = m.thread_id
+          AND tp.principal_id = $1
+          AND tp.revoked_at IS NULL
+         LEFT JOIN principals sender ON sender.id = m.sender_id
+         WHERE m.deleted_at IS NULL
+           AND m.server_readable
+           AND COALESCE(m.body, '') <> ''
+           AND m.search_vector IS NOT NULL
+           AND m.sequence >= tp.visible_from_sequence
+           AND ($2::uuid IS NULL OR t.id = $2)
+           AND ($3::text IS NULL OR t.title ILIKE '%' || $3 || '%')
+           AND ($4 = '' OR m.search_vector @@ websearch_to_tsquery('simple', $4))
+           AND ($5::uuid IS NULL OR m.sender_id = $5)
+           AND (
+             $6::text IS NULL
+             OR sender.display_name ILIKE '%' || $6 || '%'
+           )
+           AND ($7::timestamptz IS NULL OR m.created_at < $7)
+           AND ($8::timestamptz IS NULL OR m.created_at >= $8)
+           AND ($9::boolean IS NOT TRUE OR jsonb_array_length(m.attachments) > 0)
+           AND (
+             $10::float8 IS NULL
+             OR (CASE
+                   WHEN $4 = '' THEN 0::float8
+                   ELSE ts_rank(m.search_vector, websearch_to_tsquery('simple', $4))
+                 END, m.created_at, m.id)
+                < ($10::float8, $11::timestamptz, $12::uuid)
+           )
+         ORDER BY rank DESC, m.created_at DESC, m.id DESC
+         LIMIT $13`,
+        [
+          principalId,
+          input.filters.inThreadId ?? null,
+          input.filters.inTitle ?? null,
+          input.filters.text,
+          input.filters.fromPrincipalId ?? null,
+          input.filters.fromDisplayName ?? null,
+          input.filters.before ? `${input.filters.before}T00:00:00.000Z` : null,
+          input.filters.after ? `${input.filters.after}T00:00:00.000Z` : null,
+          input.filters.hasAttachment ?? null,
+          cursor?.rank ?? null,
+          cursor?.createdAt ?? null,
+          cursor?.id ?? null,
+          input.limit + 1,
+        ],
+      );
+      const hasMore = result.rows.length > input.limit;
+      const rows = hasMore ? result.rows.slice(0, input.limit) : result.rows;
+      const last = rows.at(-1);
+      return {
+        items: rows.map((row) =>
+          messageSearchResult(
+            {
+              id: row.thread_id,
+              title: row.title,
+              projectId: row.project_id ?? undefined,
+            } as ConversationThread,
+            {
+              id: row.id,
+              threadId: row.thread_id,
+              senderId: row.sender_id,
+              sequence: row.sequence,
+              createdAt: row.created_at.toISOString(),
+            } as ThreadMessage,
+            (row.snippet || highlightSearchSnippet(row.snippet, [])).slice(
+              0,
+              500,
+            ),
+          ),
+        ),
+        ...(hasMore && last
+          ? {
+              nextCursor: encodeMessageSearchCursor({
+                rank: Number(last.rank),
+                createdAt: last.created_at.toISOString(),
+                id: last.id,
+              }),
+            }
+          : {}),
+      };
     });
   }
 
@@ -2700,6 +2875,7 @@ export class PostgresPlatformStore implements PlatformStore {
             `SELECT * FROM messages
              WHERE thread_id = $1
                AND ($2::integer IS NULL OR sequence >= $2)
+               AND deleted_at IS NULL
              ORDER BY sequence`,
             [threadId, viewer?.visible_from_sequence ?? null],
           )
@@ -2708,6 +2884,7 @@ export class PostgresPlatformStore implements PlatformStore {
                SELECT * FROM messages
                WHERE thread_id = $1
                  AND ($2::integer IS NULL OR sequence >= $2)
+                 AND deleted_at IS NULL
                ORDER BY sequence DESC
                LIMIT $3
              ) tail

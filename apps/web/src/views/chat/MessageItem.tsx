@@ -31,6 +31,7 @@ import { StandInAvatar } from "./StandInAvatar.js";
 
 export function MessageItem({
   message,
+  highlighted = false,
   current,
   currentSenderId,
   currentIsPilot,
@@ -61,6 +62,7 @@ export function MessageItem({
   onDelete,
 }: {
   message: ThreadMessage;
+  highlighted?: boolean;
   current: ThreadPayload;
   currentSenderId: PrincipalId | undefined;
   currentIsPilot: boolean;
@@ -193,7 +195,10 @@ export function MessageItem({
     return (
       <div
         data-message-id={message.id}
-        className="group/message grid grid-cols-[30px_minmax(0,1fr)] gap-3"
+        className={cn(
+          "group/message grid grid-cols-[30px_minmax(0,1fr)] gap-3 rounded-[10px]",
+          highlighted ? "ring-2 ring-accent-strong/70" : "",
+        )}
       >
         <StandInAvatar
           ownerId={avatarIdentity.ownerId}
@@ -496,10 +501,11 @@ export function MessageItem({
   return (
     <div
       className={cn(
-        "group/message grid gap-3",
+        "group/message grid gap-3 rounded-[10px]",
         isOwn
           ? "grid-cols-[minmax(0,1fr)_30px]"
           : "grid-cols-[30px_minmax(0,1fr)]",
+        highlighted ? "ring-2 ring-accent-strong/70" : "",
       )}
       data-message-side={isOwn ? "right" : "left"}
       data-message-id={message.id}

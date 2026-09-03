@@ -2,14 +2,20 @@ import {
   type ActionEnvelope,
   type ActionInboxItem,
   type ActivityEvent,
+  type AuthorizedSearchResult,
   type CanonicalWorkEvent,
   type CapabilityGrant,
   type Claim,
   type ConversationThread,
   type CoordinationResult,
   type DecisionRecord,
+  decodeMessageSearchCursor,
+  encodeMessageSearchCursor,
+  highlightSearchSnippet,
+  type MessageSearchCursor,
   type KanbanCard,
   type KanbanCardId,
+  type MessageSearchPage,
   type OperationId,
   type OutboxEntry,
   personalStandInId,
@@ -18,6 +24,7 @@ import {
   type ProjectId,
   type PublicWorkProjection,
   type ReactionEmoji,
+  type SearchMessageFilters,
   type Spec,
   type SpecId,
   type SpecRevision,
@@ -28,6 +35,7 @@ import {
   type ThreadMessageAttachment,
   type ThreadMessageReaction,
   type ThreadMessageStreamState,
+  tokenizeSearchText,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -71,6 +79,7 @@ export type KanbanCardUpdate = Partial<
 export interface ThreadMessagePageQuery {
   afterSequence?: number | undefined;
   beforeSequence?: number | undefined;
+  aroundSequence?: number | undefined;
   tail?: number | undefined;
   limit: number;
 }
@@ -1000,6 +1009,20 @@ export class InMemoryPlatformStore {
       );
       candidates = matching.slice(-query.limit);
       hasMore = matching.length > candidates.length;
+    } else if (query.aroundSequence !== undefined) {
+      const around = query.aroundSequence;
+      const before = visible
+        .filter((message) => message.sequence <= around)
+        .slice(-Math.ceil(query.limit / 2));
+      const after = visible
+        .filter((message) => message.sequence > around)
+        .slice(0, Math.floor(query.limit / 2));
+      candidates = [...before, ...after];
+      hasMore =
+        (visible[0] !== undefined &&
+          candidates[0] !== undefined &&
+          visible[0].sequence < candidates[0].sequence) ||
+        (visible.at(-1)?.sequence ?? 0) > (candidates.at(-1)?.sequence ?? 0);
     } else {
       const limit = query.tail ?? query.limit;
       candidates = visible.slice(-limit);
@@ -1024,6 +1047,138 @@ export class InMemoryPlatformStore {
     return (this.messages.get(threadId) ?? []).find(
       (message) => message.id === messageId && message.sequence >= visibleFrom,
     );
+  }
+
+  searchMessages(
+    principalId: PrincipalId,
+    input: {
+      filters: SearchMessageFilters;
+      cursor?: string | undefined;
+      limit: number;
+    },
+  ): MessageSearchPage {
+    const cursor = input.cursor
+      ? decodeMessageSearchCursor(input.cursor)
+      : undefined;
+    const queryTokens = tokenizeSearchText(input.filters.text);
+    const ranked: Array<{
+      message: ThreadMessage;
+      thread: ConversationThread;
+      rank: number;
+      snippet: string;
+    }> = [];
+    for (const thread of this.threads.values()) {
+      if (
+        !this.messageSearchThreadVisible(thread, principalId, input.filters)
+      ) {
+        continue;
+      }
+      const visibleFrom =
+        this.threadVisibility.get(`${thread.id}:${principalId}`) ?? 1;
+      for (const message of this.messages.get(thread.id) ?? []) {
+        if (
+          !this.messageSearchCandidateVisible(
+            message,
+            principalId,
+            visibleFrom,
+            input.filters,
+          )
+        ) {
+          continue;
+        }
+        const rank = rankSearchMessage(message.body, queryTokens);
+        if (queryTokens.length > 0 && rank === 0) continue;
+        if (cursor && !isAfterSearchCursor(rank, message, cursor)) continue;
+        ranked.push({
+          message,
+          thread,
+          rank,
+          snippet: highlightSearchSnippet(message.body, queryTokens),
+        });
+      }
+    }
+    ranked.sort((left, right) => {
+      if (right.rank !== left.rank) return right.rank - left.rank;
+      const byTime = right.message.createdAt.localeCompare(
+        left.message.createdAt,
+      );
+      if (byTime !== 0) return byTime;
+      return right.message.id.localeCompare(left.message.id);
+    });
+    const page = ranked.slice(0, input.limit);
+    const last = page.at(-1);
+    return {
+      items: page.map(({ message, thread, snippet }) =>
+        messageSearchResult(thread, message, snippet),
+      ),
+      ...(ranked.length > input.limit && last
+        ? {
+            nextCursor: encodeMessageSearchCursor({
+              rank: last.rank,
+              createdAt: last.message.createdAt,
+              id: last.message.id,
+            }),
+          }
+        : {}),
+    };
+  }
+
+  private messageSearchThreadVisible(
+    thread: ConversationThread,
+    principalId: PrincipalId,
+    filters: SearchMessageFilters,
+  ): boolean {
+    if (!thread.participantIds.includes(principalId)) return false;
+    if (filters.inThreadId && thread.id !== filters.inThreadId) return false;
+    if (
+      filters.inTitle &&
+      !thread.title
+        .toLocaleLowerCase()
+        .includes(filters.inTitle.toLocaleLowerCase())
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private messageSearchCandidateVisible(
+    message: ThreadMessage,
+    principalId: PrincipalId,
+    visibleFrom: number,
+    filters: SearchMessageFilters,
+  ): boolean {
+    if (message.deletedAt) return false;
+    if (!message.serverReadable) return false;
+    if (message.sequence < visibleFrom) return false;
+    if (
+      filters.fromPrincipalId &&
+      message.senderId !== filters.fromPrincipalId
+    ) {
+      return false;
+    }
+    if (filters.fromDisplayName) {
+      const name = this.principals.get(message.senderId)?.displayName ?? "";
+      if (
+        !name
+          .toLocaleLowerCase()
+          .includes(filters.fromDisplayName.toLocaleLowerCase())
+      ) {
+        return false;
+      }
+    }
+    if (
+      filters.before &&
+      message.createdAt >= `${filters.before}T00:00:00.000Z`
+    ) {
+      return false;
+    }
+    if (filters.after && message.createdAt < `${filters.after}T00:00:00.000Z`) {
+      return false;
+    }
+    if (filters.hasAttachment && !(message.attachments?.length ?? 0)) {
+      return false;
+    }
+    return true;
   }
 
   concludeThreadIntoParent(input: {
@@ -1935,6 +2090,52 @@ export function claimFromEvent(event: CanonicalWorkEvent): Claim | undefined {
     confidence: event.type === "CheckpointReported" ? 0.74 : 0.92,
     privacy: event.privacy,
     evidenceRefs: [event.id],
+  };
+}
+
+function rankSearchMessage(
+  body: string,
+  queryTokens: readonly string[],
+): number {
+  if (queryTokens.length === 0) return 0;
+  const lower = body.toLocaleLowerCase();
+  if (!queryTokens.every((token) => lower.includes(token))) return 0;
+  return queryTokens.reduce(
+    (sum, token) => sum + lower.split(token).length - 1,
+    0,
+  );
+}
+
+function isAfterSearchCursor(
+  rank: number,
+  message: ThreadMessage,
+  cursor: MessageSearchCursor,
+): boolean {
+  if (rank !== cursor.rank) return rank < cursor.rank;
+  if (message.createdAt !== cursor.createdAt) {
+    return message.createdAt < cursor.createdAt;
+  }
+  return message.id < cursor.id;
+}
+
+export function messageSearchResult(
+  thread: ConversationThread,
+  message: ThreadMessage,
+  snippet: string,
+): AuthorizedSearchResult {
+  return {
+    id: message.id,
+    type: "message",
+    title: thread.title,
+    snippet: snippet.slice(0, 500),
+    sourceRef: `message:${thread.id}:${message.id}`,
+    updatedAt: message.createdAt,
+    threadId: thread.id,
+    messageId: message.id,
+    sequence: message.sequence,
+    senderId: message.senderId,
+    createdAt: message.createdAt,
+    ...(thread.projectId ? { projectId: thread.projectId } : {}),
   };
 }
 

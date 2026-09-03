@@ -207,6 +207,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["search"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -574,6 +590,55 @@ export interface components {
           kind: "human" | "stand_in" | "service";
         }[];
       }[];
+    };
+    SearchQuery: {
+      /** @default  */
+      q: string;
+      /** Format: uuid */
+      projectId?: string;
+      types?: string;
+      in?: string;
+      from?: string;
+      before?: string;
+      after?: string;
+      /** @enum {string} */
+      has?: "attachment";
+      cursor?: string;
+      /** @default 20 */
+      limit: number;
+    };
+    SearchResponse: {
+      items: {
+        id: string;
+        /** Format: uuid */
+        projectId?: string;
+        projectName?: string;
+        /** @enum {string} */
+        type:
+          | "work_item"
+          | "spec"
+          | "spec_version"
+          | "comment"
+          | "code_reference"
+          | "coordination"
+          | "stand_in_activity"
+          | "message";
+        title: string;
+        snippet: string;
+        sourceRef: string;
+        /** Format: date-time */
+        updatedAt: string;
+        /** Format: uuid */
+        threadId?: string;
+        /** Format: uuid */
+        messageId?: string;
+        sequence?: number;
+        /** Format: uuid */
+        senderId?: string;
+        /** Format: date-time */
+        createdAt?: string;
+      }[];
+      nextCursor?: string;
     };
     TeamPulseResponse: {
       /** Format: date-time */
@@ -1223,6 +1288,28 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SpecListResponse"];
+        };
+      };
+    };
+  };
+  search: {
+    parameters: {
+      query?: {
+        q?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Authorized search results, including messages */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SearchResponse"];
         };
       };
     };

@@ -24,6 +24,8 @@ export function useThreadMessages({
   currentIsPilot,
   currentIsPilotStandIn,
   currentSenderId,
+  focusMessageId,
+  focusSequence,
 }: {
   current: ThreadPayload | undefined;
   conversationIdentity:
@@ -31,6 +33,8 @@ export function useThreadMessages({
   currentIsPilot: boolean;
   currentIsPilotStandIn: boolean;
   currentSenderId: PrincipalId | undefined;
+  focusMessageId?: string | undefined;
+  focusSequence?: number | undefined;
 }) {
   const { t } = useI18n();
   const notifications = useNotifications();
@@ -50,6 +54,10 @@ export function useThreadMessages({
   const [historyExhausted, setHistoryExhausted] = useState<Set<string>>(
     () => new Set(),
   );
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | undefined
+  >();
+  const loadedFocusRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     setReactionPickerMessageId(undefined);
@@ -110,46 +118,58 @@ export function useThreadMessages({
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
   });
+  const mergeMessagePage = (
+    threadId: string,
+    page: { items: ThreadMessage[]; hasMore: boolean },
+  ) => {
+    if (!page.hasMore) {
+      setHistoryExhausted((currentHistory) => {
+        const next = new Set(currentHistory);
+        next.add(threadId);
+        return next;
+      });
+    }
+    queryClient.setQueryData<{ items: ThreadPayload[] }>(
+      ["threads"],
+      (cached) => {
+        if (!cached) return cached;
+        return {
+          ...cached,
+          items: cached.items.map((item) => {
+            if (item.thread.id !== threadId) return item;
+            const messages = new Map(
+              [...page.items, ...item.messages].map((message) => [
+                message.sequence,
+                message,
+              ]),
+            );
+            return {
+              ...item,
+              historyExpanded: true,
+              messages: [...messages.values()].sort(
+                (left, right) => left.sequence - right.sequence,
+              ),
+            };
+          }),
+        };
+      },
+    );
+  };
   const loadOlder = useMutation({
     mutationFn: (input: { threadId: string; beforeSequence: number }) =>
       getThreadMessages(input.threadId, {
         beforeSequence: input.beforeSequence,
         limit: 100,
       }),
-    onSuccess: (page, input) => {
-      if (!page.hasMore) {
-        setHistoryExhausted((current) => {
-          const next = new Set(current);
-          next.add(input.threadId);
-          return next;
-        });
-      }
-      queryClient.setQueryData<{ items: ThreadPayload[] }>(
-        ["threads"],
-        (cached) => {
-          if (!cached) return cached;
-          return {
-            ...cached,
-            items: cached.items.map((item) => {
-              if (item.thread.id !== input.threadId) return item;
-              const messages = new Map(
-                [...page.items, ...item.messages].map((message) => [
-                  message.sequence,
-                  message,
-                ]),
-              );
-              return {
-                ...item,
-                historyExpanded: true,
-                messages: [...messages.values()].sort(
-                  (left, right) => left.sequence - right.sequence,
-                ),
-              };
-            }),
-          };
-        },
-      );
-    },
+    onSuccess: (page, input) => mergeMessagePage(input.threadId, page),
+  });
+  const loadAround = useMutation({
+    mutationFn: (input: { threadId: string; aroundSequence: number }) =>
+      getThreadMessages(input.threadId, {
+        aroundSequence: input.aroundSequence,
+        limit: 100,
+      }),
+    onSuccess: (page, input) => mergeMessagePage(input.threadId, page),
   });
   const reaction = useMutation({
     mutationFn: setThreadMessageReaction,
@@ -245,6 +265,7 @@ export function useThreadMessages({
   }, [current?.thread.id, currentHeadSequence, currentUnread, failedReadKey]);
 
   useEffect(() => {
+    if (focusMessageId) return;
     const node = messagesEndRef.current;
     if (node && typeof node.scrollIntoView === "function") {
       node.scrollIntoView({
@@ -252,7 +273,38 @@ export function useThreadMessages({
         behavior: currentLastRevision > 1 ? "auto" : "smooth",
       });
     }
-  }, [current?.thread.id, currentLastRevision, currentLastSequence]);
+  }, [
+    current?.thread.id,
+    currentLastRevision,
+    currentLastSequence,
+    focusMessageId,
+  ]);
+
+  useEffect(() => {
+    if (!current || !focusMessageId) return;
+    setHighlightedMessageId(focusMessageId);
+    if (current.messages.some((message) => message.id === focusMessageId)) {
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      );
+      return;
+    }
+    if (!focusSequence) return;
+    const key = `${current.thread.id}:${focusMessageId}:${focusSequence}`;
+    if (loadedFocusRef.current === key) return;
+    loadedFocusRef.current = key;
+    loadAround.mutate({
+      threadId: current.thread.id,
+      aroundSequence: focusSequence,
+    });
+  }, [
+    current?.thread.id,
+    current?.messages.length,
+    focusMessageId,
+    focusSequence,
+  ]);
 
   function toggleMessageReaction(message: ThreadMessage, emoji: string) {
     if (
@@ -316,8 +368,11 @@ export function useThreadMessages({
     remove,
     expanded,
     historyExhausted,
+    highlightedMessageId,
+    setHighlightedMessageId,
     markRead,
     loadOlder,
+    loadAround,
     reaction,
     toggleMessageReaction,
     toggleReactionPicker,

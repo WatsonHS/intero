@@ -20,6 +20,7 @@ import {
   MarkThreadReadRequest,
   PresenceHeartbeatRequest,
   PresenceResponse,
+  SearchQuery,
   SendThreadMessageRequest,
   SetMessageReactionRequest,
   ThreadMessagesQuery,
@@ -33,6 +34,8 @@ import {
   PrivacySafeMetrics,
 } from "@intero/config";
 import {
+  mergeSearchFilters,
+  parseSearchQuery,
   personalStandInId,
   roomInteroPrincipalId,
   ThreadKind,
@@ -1031,23 +1034,9 @@ export async function buildApp(
   });
 
   app.get("/v1/search", async (request) => {
-    if (!informationStore)
-      throw new PilotStoreError(
-        "SEARCH_UNAVAILABLE",
-        503,
-        "Authorized search requires PostgreSQL persistence.",
-      );
     const principal = await requestAuth.resolve(request);
-    const input = parse(
-      z.object({
-        q: z.string().trim().min(2).max(200),
-        projectId: z.string().uuid().optional(),
-        types: z.string().max(300).optional(),
-        limit: z.coerce.number().int().min(1).max(50).default(20),
-      }),
-      request.query,
-    );
-    const allowedTypes = [
+    const input = parse(SearchQuery, request.query);
+    const contentTypes = [
       "work_item",
       "spec",
       "spec_version",
@@ -1056,18 +1045,61 @@ export async function buildApp(
       "coordination",
       "stand_in_activity",
     ] as const;
+    const allowedTypes = [...contentTypes, "message"] as const;
     const requestedTypes = input.types
       ?.split(",")
       .filter((type): type is (typeof allowedTypes)[number] =>
         allowedTypes.includes(type as (typeof allowedTypes)[number]),
       );
+    const wantsMessage =
+      !requestedTypes?.length || requestedTypes.includes("message");
+    const contentRequested = requestedTypes?.filter(
+      (type): type is (typeof contentTypes)[number] => type !== "message",
+    );
+    const wantsContent =
+      !requestedTypes?.length || Boolean(contentRequested?.length);
+    if (wantsContent && !wantsMessage && !informationStore) {
+      throw new PilotStoreError(
+        "SEARCH_UNAVAILABLE",
+        503,
+        "Authorized search requires PostgreSQL persistence.",
+      );
+    }
+    const filters = mergeSearchFilters(parseSearchQuery(input.q), {
+      ...(input.in ? { in: input.in } : {}),
+      ...(input.from ? { from: input.from } : {}),
+      ...(input.before ? { before: input.before } : {}),
+      ...(input.after ? { after: input.after } : {}),
+      ...(input.has ? { has: input.has } : {}),
+    });
+    const messagePage = wantsMessage
+      ? await store.searchMessages(principal!.id, {
+          filters,
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+          limit: input.limit,
+        })
+      : { items: [] };
+    if (requestedTypes?.length === 1 && requestedTypes[0] === "message") {
+      return messagePage;
+    }
+    const contentQuery = filters.text || input.q.trim();
+    const contentItems =
+      wantsContent && informationStore && contentQuery.length >= 2
+        ? await informationStore.search(principal!.id, {
+            query: contentQuery,
+            ...(input.projectId
+              ? { projectId: input.projectId as ProjectId }
+              : {}),
+            ...(contentRequested?.length ? { types: contentRequested } : {}),
+            limit: input.limit,
+          })
+        : [];
     return {
-      items: await informationStore.search(principal!.id, {
-        query: input.q,
-        ...(input.projectId ? { projectId: input.projectId as ProjectId } : {}),
-        ...(requestedTypes?.length ? { types: requestedTypes } : {}),
-        limit: input.limit,
-      }),
+      items: [...messagePage.items, ...contentItems]
+        .toSorted((left, right) =>
+          right.updatedAt.localeCompare(left.updatedAt),
+        )
+        .slice(0, input.limit),
     };
   });
 

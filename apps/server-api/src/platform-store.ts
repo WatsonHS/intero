@@ -54,6 +54,7 @@ export interface PlatformStore {
   listThreadReads: StoreMethod<"listThreadReads">;
   listThreadMessages: StoreMethod<"listThreadMessages">;
   getThreadMessage: StoreMethod<"getThreadMessage">;
+  searchMessages: StoreMethod<"searchMessages">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
   concludeCoordinationThread: StoreMethod<"concludeCoordinationThread">;
   createSpec: StoreMethod<"createSpec">;

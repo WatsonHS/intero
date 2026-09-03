@@ -111,7 +111,7 @@ export function ThreadSidebar({
           <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
-              aria-label={t("chat.search")}
+              aria-label={t("general.search")}
               className="grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted"
               onClick={onToggleSearch}
             >
@@ -131,8 +131,8 @@ export function ThreadSidebar({
           <input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
-            placeholder={t("chat.search")}
-            aria-label={t("chat.search")}
+            placeholder={t("general.search")}
+            aria-label={t("general.search")}
             className="mt-2.5 h-8 w-full rounded-[9px] border border-line2 bg-transparent px-2.5 text-[12px] outline-none placeholder:text-faint"
           />
         ) : null}
