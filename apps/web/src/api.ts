@@ -971,6 +971,7 @@ export async function previewCodingAgentIntegration(input: {
   locale: "zh-CN" | "en-US";
   projectId?: string;
   repositorySelectionToken?: string;
+  bridgeRegistration?: CodingAgentBridgeRegistration;
 }): Promise<CodingAgentIntegrationPreview | null> {
   if (typeof window === "undefined" || !window.interoDesktop) {
     throw new Error("Integration management requires Intero Desktop.");
@@ -981,6 +982,7 @@ export async function previewCodingAgentIntegration(input: {
 export async function manageCodingAgentIntegration(input: {
   adapter: CodingAgentAdapter;
   token: string;
+  bridgeRegistration?: CodingAgentBridgeRegistration;
 }): Promise<{
   integrations: CodingAgentIntegrationStatus[];
   workspaceId?: string;
@@ -988,7 +990,15 @@ export async function manageCodingAgentIntegration(input: {
   if (typeof window === "undefined" || !window.interoDesktop) {
     throw new Error("Integration management requires Intero Desktop.");
   }
-  return window.interoDesktop.manageIntegration(input.token);
+  // The confirmed mode is repeated here on purpose: Desktop rebuilds the plan
+  // before applying it, so a mode that no longer matches the confirmation fails
+  // the plan-digest check instead of writing an unconfirmed target set.
+  return window.interoDesktop.manageIntegration({
+    token: input.token,
+    ...(input.bridgeRegistration
+      ? { bridgeRegistration: input.bridgeRegistration }
+      : {}),
+  });
 }
 
 export async function previewWorkspaceConnectionCleanup(input: {

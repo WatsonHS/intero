@@ -9,6 +9,7 @@ Current decisions:
 - [ADR-0008: Phase 7 bounded Stand-in and Agent automation](0008-phase-7-bounded-stand-in-and-agent-automation.md)
 - [ADR-0009: Durable, authorized realtime conversations](0009-durable-authorized-realtime-conversations.md)
 - [ADR-0010: Desktop-first product entry and controlled Coding Agent attachment](0010-desktop-first-product-entry-and-controlled-agent-attachment.md)
+- [ADR-0011: Agent Plugins standard as an additional launcher distribution path](0011-agent-plugins-standard-distribution-path.md) (proposed)
 
 ADRs record architectural commitments and their consequences. Product behavior
 remains authoritative in

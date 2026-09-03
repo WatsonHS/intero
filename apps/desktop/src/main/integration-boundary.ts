@@ -11,6 +11,17 @@ export interface IntegrationPreviewRequest {
   locale: "zh-CN" | "en-US";
   projectId?: string;
   repositorySelectionToken?: string;
+  /**
+   * The explicit ADR-0011 opt-in. Absent means "use Intero's own reading of who
+   * owns the bridge"; present always wins over that reading, and a mode the
+   * detected client cannot honour is rejected before any plan is built.
+   */
+  bridgeRegistration?: BridgeRegistration;
+}
+
+export interface IntegrationActionRequest {
+  token: string;
+  bridgeRegistration?: BridgeRegistration;
 }
 
 export interface RepositorySelectionBinding {
@@ -88,6 +99,12 @@ export function parseIntegrationPreviewRequest(
   ) {
     throw new Error("Repository selection token is invalid.");
   }
+  if (
+    input.bridgeRegistration !== undefined &&
+    !isBridgeRegistration(input.bridgeRegistration)
+  ) {
+    throw new Error("Bridge registration mode is invalid.");
+  }
   return {
     adapter: input.adapter,
     action: input.action,
@@ -95,6 +112,46 @@ export function parseIntegrationPreviewRequest(
     ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.repositorySelectionToken
       ? { repositorySelectionToken: input.repositorySelectionToken }
+      : {}),
+    ...(input.bridgeRegistration
+      ? { bridgeRegistration: input.bridgeRegistration }
+      : {}),
+  };
+}
+
+/**
+ * Parses the apply-side input. The confirmed preview token stays the only
+ * authority; the optional registration repeats the explicit opt-in the preview
+ * carried, so a mode that changed between confirmation and apply builds a
+ * different plan and fails the existing plan-digest check instead of silently
+ * writing a different target set. A bare token string is still accepted so a
+ * renderer bundle built before the opt-in existed keeps working.
+ */
+export function parseIntegrationActionRequest(
+  value: unknown,
+): IntegrationActionRequest {
+  if (typeof value === "string") return { token: value };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("A configuration preview token is required.");
+  }
+  const input = value as Partial<IntegrationActionRequest>;
+  if (
+    typeof input.token !== "string" ||
+    input.token.length === 0 ||
+    input.token.length > 200
+  ) {
+    throw new Error("A configuration preview token is required.");
+  }
+  if (
+    input.bridgeRegistration !== undefined &&
+    !isBridgeRegistration(input.bridgeRegistration)
+  ) {
+    throw new Error("Bridge registration mode is invalid.");
+  }
+  return {
+    token: input.token,
+    ...(input.bridgeRegistration
+      ? { bridgeRegistration: input.bridgeRegistration }
       : {}),
   };
 }
@@ -222,6 +279,165 @@ export function digestIntegrationPlan(input: {
 }
 
 /**
+ * Who owns the credential-free `intero` MCP registration for one client
+ * (ADR-0011). `managed` is the default path Intero writes itself;
+ * `standard_plugin` is hybrid mode, where the published Agent Plugin owns the
+ * registration and the managed plan narrows to what the standard cannot
+ * express.
+ */
+export type BridgeRegistration = "managed" | "standard_plugin";
+
+export type AgentConfigurationState =
+  "valid" | "runtime_unreachable" | "invalid";
+
+export interface ManagedInstallDiagnostic {
+  path: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface ResolvedBridgeRegistration {
+  bridgeRegistration: BridgeRegistration;
+  diagnostics: ManagedInstallDiagnostic[];
+  complete: boolean;
+  configurationState: AgentConfigurationState | undefined;
+}
+
+/**
+ * Resolves who registered the bridge from the managed diagnosis, the narrowed
+ * ADR-0011 diagnosis, and one client probe.
+ *
+ * The managed diagnosis stays authoritative: a complete managed install
+ * resolves exactly as it did before hybrid mode existed. Only an incomplete
+ * managed diagnosis consults the narrowed plan, and only for a detected client
+ * version that can actually load the published plugin — the caller expresses
+ * that by supplying `standardPluginDiagnostics`. A client without standard
+ * support therefore never reaches the probe.
+ *
+ * The narrowed plan is the managed plan minus its MCP targets, so a narrowed
+ * diagnosis that passes while the managed one fails already proves no managed
+ * MCP entry is present. Only a positive probe is then accepted as evidence
+ * that something else registered `intero`: an unreachable or rejecting client
+ * runtime proves nothing, and falls back to the managed reading unchanged.
+ *
+ * An empty `standardPluginDiagnostics` is vacuously complete, which is the
+ * honest reading of an MCP-only client (Cursor) whose narrowed plan has no
+ * managed target left at all.
+ */
+export function resolveBridgeRegistration(input: {
+  managedDiagnostics: ManagedInstallDiagnostic[];
+  standardPluginDiagnostics?: ManagedInstallDiagnostic[] | undefined;
+  probe?: (() => AgentConfigurationState) | undefined;
+}): ResolvedBridgeRegistration {
+  if (input.managedDiagnostics.every((item) => item.ok)) {
+    return {
+      bridgeRegistration: "managed",
+      diagnostics: input.managedDiagnostics,
+      complete: true,
+      configurationState: input.probe?.(),
+    };
+  }
+  if (
+    input.standardPluginDiagnostics &&
+    input.probe &&
+    input.standardPluginDiagnostics.every((item) => item.ok)
+  ) {
+    const configurationState = input.probe();
+    if (configurationState === "valid") {
+      return {
+        bridgeRegistration: "standard_plugin",
+        diagnostics: input.standardPluginDiagnostics,
+        complete: true,
+        configurationState,
+      };
+    }
+  }
+  return {
+    bridgeRegistration: "managed",
+    diagnostics: input.managedDiagnostics,
+    complete: false,
+    configurationState: undefined,
+  };
+}
+
+/**
+ * What an attach or repair knows about who owns the `intero` registration this
+ * client would actually use, independent of whether the managed install around
+ * it is complete.
+ */
+export interface BridgeRegistrationEvidence {
+  /**
+   * Whether Intero's own managed MCP target is present and unchanged. A present
+   * managed entry is the registration this client is already using, so no
+   * client reading can move the default off `managed`.
+   */
+  managedMcpRegistration: boolean;
+  /**
+   * Whether the client itself resolves an `intero` server that the managed
+   * diagnosis above does not account for. Only a positive client reading counts:
+   * an unread, unreachable, or rejecting client is reported as `false`, and a
+   * client that cannot load the published plugin at all is never read.
+   */
+  pluginBridgeRegistration: boolean;
+}
+
+/**
+ * Which registration a mutation plan is built for.
+ *
+ * An explicit opt-in always wins, and is not cross-checked here: the caller
+ * still fails closed on a client that cannot load the published plugin, and
+ * asking for a mode this evidence does not yet show is exactly how a user
+ * declares that the plugin is the intended owner.
+ *
+ * Without an explicit choice the default is evidence-based rather than
+ * state-based. `resolveBridgeRegistration` stays a truthful reading of the
+ * install and only calls a partially installed hybrid client `managed`, but
+ * repairing that client from a full managed plan would write a second `intero`
+ * entry beside the plugin's. So a confirmed plugin registration the managed
+ * diagnosis does not account for narrows the plan even when the narrowed
+ * diagnosis is incomplete — repair then writes only the missing hooks and
+ * instructions. With no confirmed plugin registration the default stays the
+ * full managed install.
+ *
+ * Detach keeps the full managed set: it replays the recorded install manifest
+ * rather than a plan, so narrowing would only hide targets an earlier full
+ * install still owns — and it must not spend a client probe, or honour an
+ * opt-in, to decide something it does not use.
+ */
+export async function bridgeRegistrationForMutation(input: {
+  action: IntegrationMutationAction;
+  requested?: BridgeRegistration | undefined;
+  readEvidence: () => Promise<BridgeRegistrationEvidence>;
+}): Promise<BridgeRegistration> {
+  if (input.action === "uninstall") return "managed";
+  if (input.requested) return input.requested;
+  const evidence = await input.readEvidence();
+  return evidence.pluginBridgeRegistration && !evidence.managedMcpRegistration
+    ? "standard_plugin"
+    : "managed";
+}
+
+/**
+ * Fail-closed guard for the ADR-0011 opt-in. A narrowed plan omits the managed
+ * MCP entry, so it is only ever a truthful install for a client that can load
+ * the published plugin replacing it. `supportsStandardPlugin` is the per-client,
+ * per-version capability the caller has already detected; a client with no
+ * standard support at all is never capable at any version, so an explicit
+ * opt-in for it is rejected before any plan is built.
+ */
+export function assertBridgeRegistrationIsInstallable(
+  adapter: string,
+  bridgeRegistration: BridgeRegistration,
+  supportsStandardPlugin: boolean,
+): void {
+  if (bridgeRegistration === "standard_plugin" && !supportsStandardPlugin) {
+    throw new Error(
+      `The installed ${adapter} version cannot load the Intero Agent Plugin.`,
+    );
+  }
+}
+
+/**
  * Grok Build's documented local MCP contract is a healthy named-server doctor
  * result plus an inspect report that discovers that server. Both reports are
  * required so a syntactically present but undiscovered entry is not presented
@@ -290,6 +506,10 @@ function isIntegrationMutationAction(
   action: unknown,
 ): action is IntegrationMutationAction {
   return action === "install" || action === "repair" || action === "uninstall";
+}
+
+function isBridgeRegistration(value: unknown): value is BridgeRegistration {
+  return value === "managed" || value === "standard_plugin";
 }
 
 function isProjectId(value: string): boolean {

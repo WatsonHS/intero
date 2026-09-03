@@ -3,9 +3,14 @@ import { uuidv7 } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
 import {
+  adapterSupportsStandardPlugin,
   cloudWorkspaceClientFiles,
+  codexAdapter,
+  cursorAdapter,
   integrationAdapters,
   integrationVersionIsSupported,
+  standardPluginClients,
+  standardPluginIsSupported,
 } from "./index.js";
 
 describe("IntegrationAdapter conformance", () => {
@@ -208,5 +213,86 @@ describe("IntegrationAdapter conformance", () => {
     expect(integrationVersionIsSupported("opencode", "1.4.10")).toBe(false);
     expect(integrationVersionIsSupported("grok-build", "0.1.0")).toBe(true);
     expect(integrationVersionIsSupported("cursor", "0.0.1")).toBe(true);
+  });
+
+  it("limits Agent Plugins standard support to its launch clients", () => {
+    expect([...standardPluginClients]).toEqual(["codex", "cursor"]);
+    expect(
+      integrationAdapters
+        .filter((adapter) => adapterSupportsStandardPlugin(adapter.kind))
+        .map((adapter) => adapter.kind),
+    ).toEqual([...standardPluginClients]);
+    // Claude Code ships a near-identical native plugin format that is not the
+    // standard; OpenCode and Grok Build have announced no support.
+    expect(adapterSupportsStandardPlugin("claude-code")).toBe(false);
+    expect(standardPluginIsSupported("claude-code", "9.9.9")).toBe(false);
+    expect(standardPluginIsSupported("opencode", "9.9.9")).toBe(false);
+    expect(standardPluginIsSupported("grok-build", "9.9.9")).toBe(false);
+    expect(standardPluginIsSupported("codex", "codex-cli 0.145.9")).toBe(false);
+    expect(standardPluginIsSupported("codex", "codex-cli 0.146.0")).toBe(true);
+    expect(standardPluginIsSupported("cursor", "0.0.1")).toBe(true);
+    expect(standardPluginIsSupported("cursor", "no version here")).toBe(false);
+  });
+
+  it("narrows a hybrid plan to what the standard cannot express", () => {
+    const home = "/Users/example";
+    const full = codexAdapter.installPlan(home, "/opt/intero-mcp");
+    const hybrid = codexAdapter.installPlan(home, "/opt/intero-mcp", [], {
+      bridgeRegistration: "standard_plugin",
+    });
+
+    expect(full.files.map((file) => file.role)).toEqual([
+      "instructions",
+      "mcp",
+      "hooks",
+    ]);
+    expect(hybrid.files.map((file) => file.role)).toEqual([
+      "instructions",
+      "hooks",
+    ]);
+    expect(hybrid.files.map((file) => file.path)).toEqual([
+      `${home}/.codex/AGENTS.md`,
+      `${home}/.codex/hooks.json`,
+    ]);
+    expect(hybrid.files.some((file) => file.path.endsWith("config.toml"))).toBe(
+      false,
+    );
+    expect(hybrid.diagnostics).not.toContain(
+      "Codex config contains mcp_servers.intero",
+    );
+    expect(hybrid.diagnostics).toContain(
+      "The intero Agent Plugin owns the MCP bridge registration; no managed MCP entry is written",
+    );
+    expect(hybrid.allowedRoots).toEqual(full.allowedRoots);
+
+    // The default and the explicit managed mode stay the full plan.
+    expect(
+      codexAdapter.installPlan(home, "/opt/intero-mcp", [], {
+        bridgeRegistration: "managed",
+      }),
+    ).toEqual(full);
+    expect(codexAdapter.installPlan(home, "/opt/intero-mcp", [])).toEqual(full);
+  });
+
+  it("leaves a hooks-free standard client with nothing managed to write", () => {
+    const hybrid = cursorAdapter.installPlan("/Users/example", "/opt/mcp", [], {
+      bridgeRegistration: "standard_plugin",
+    });
+    expect(hybrid.files).toEqual([]);
+    expect(hybrid.diagnostics).toContain(
+      "The intero Agent Plugin owns the MCP bridge registration; no managed MCP entry is written",
+    );
+  });
+
+  it("refuses to narrow a client without Agent Plugins support", () => {
+    for (const adapter of integrationAdapters.filter(
+      (candidate) => !adapterSupportsStandardPlugin(candidate.kind),
+    )) {
+      expect(() =>
+        adapter.installPlan("/Users/example", "/opt/intero-mcp", [], {
+          bridgeRegistration: "standard_plugin",
+        }),
+      ).toThrow(/no Agent Plugins standard support/);
+    }
   });
 });

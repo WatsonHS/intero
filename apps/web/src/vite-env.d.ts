@@ -11,8 +11,16 @@ interface Window {
       locale: "zh-CN" | "en-US";
       projectId?: string;
       repositorySelectionToken?: string;
+      bridgeRegistration?: CodingAgentBridgeRegistration;
     }): Promise<CodingAgentIntegrationPreview | null>;
-    manageIntegration(token: string): Promise<{
+    manageIntegration(
+      input:
+        | string
+        | {
+            token: string;
+            bridgeRegistration?: CodingAgentBridgeRegistration;
+          },
+    ): Promise<{
       integrations: CodingAgentIntegrationStatus[];
       workspaceId?: string;
     }>;
@@ -43,6 +51,7 @@ interface Window {
 type CodingAgentAdapter =
   "codex" | "claude-code" | "opencode" | "cursor" | "grok-build";
 type CodingAgentIntegrationAction = "install" | "repair" | "uninstall";
+type CodingAgentBridgeRegistration = "managed" | "standard_plugin";
 type GitAwarenessClient = "codex" | "claude-code" | "opencode";
 
 interface CodingAgentIntegrationStatus {
@@ -50,6 +59,8 @@ interface CodingAgentIntegrationStatus {
   detected: boolean;
   supported: boolean;
   configured: boolean;
+  bridgeRegistration: CodingAgentBridgeRegistration;
+  standardPluginCapable: boolean;
   version?: string;
   state:
     | "not_installed"

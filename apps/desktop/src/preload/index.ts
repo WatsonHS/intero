@@ -10,9 +10,16 @@ contextBridge.exposeInMainWorld("interoDesktop", {
     locale: "zh-CN" | "en-US";
     projectId?: string;
     repositorySelectionToken?: string;
+    bridgeRegistration?: "managed" | "standard_plugin";
   }) => ipcRenderer.invoke("intero:integration-preview", input),
-  manageIntegration: (token: string) =>
-    ipcRenderer.invoke("intero:integration-action", token),
+  manageIntegration: (
+    input:
+      | string
+      | {
+          token: string;
+          bridgeRegistration?: "managed" | "standard_plugin";
+        },
+  ) => ipcRenderer.invoke("intero:integration-action", input),
   previewWorkspaceCleanup: (input: {
     adapter: "codex" | "claude-code" | "opencode" | "grok-build" | "cursor";
     locale: "zh-CN" | "en-US";

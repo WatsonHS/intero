@@ -8,6 +8,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,7 @@ import {
 import {
   applyManagedInstall,
   diagnoseManagedInstall,
+  managedIntegrationTargets,
   uninstallManagedIntegration,
 } from "./installer";
 
@@ -297,6 +299,66 @@ describe("managed integration installer", () => {
     expect(
       (await diagnoseManagedInstall(plan, home)).every((item) => item.ok),
     ).toBe(true);
+  });
+
+  it("keeps uninstall able to clean a previously full install after hybrid narrowing", async () => {
+    const home = await mkdtemp(join(tmpdir(), "intero-hybrid-codex-"));
+    await mkdir(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+    const original = 'model = "gpt-5"\n';
+    await writeFile(configPath, original);
+    const full = codexAdapter.installPlan(home, "/opt/intero/mcp-stdio");
+    const hybrid = codexAdapter.installPlan(home, "/opt/intero/mcp-stdio", [], {
+      bridgeRegistration: "standard_plugin",
+    });
+
+    await applyManagedInstall(full, home);
+    expect(await readFile(configPath, "utf8")).toContain(
+      "# >>> intero-managed",
+    );
+    // Preview before switching still owns the managed MCP entry, so detach and
+    // repair see the file the narrowed plan is about to release.
+    expect(await managedIntegrationTargets(hybrid, home)).toContain(configPath);
+
+    // Switching to the plugin path retires the managed MCP entry and leaves
+    // the unrelated Codex setting untouched.
+    await applyManagedInstall(hybrid, home);
+    expect(await readFile(configPath, "utf8")).toBe(original);
+    expect(await managedIntegrationTargets(hybrid, home)).toEqual([
+      join(home, ".codex", "AGENTS.md"),
+      join(home, ".codex", "hooks.json"),
+    ]);
+    expect(
+      (await diagnoseManagedInstall(hybrid, home)).every((item) => item.ok),
+    ).toBe(true);
+
+    await uninstallManagedIntegration("codex", home);
+    expect(await readFile(configPath, "utf8")).toBe(original);
+    expect(existsSync(join(home, ".codex", "hooks.json"))).toBe(false);
+  });
+
+  it("removes a full managed install even when the current plan is narrowed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "intero-hybrid-cursor-"));
+    await applyManagedInstall(
+      cursorAdapter.installPlan(home, "/opt/intero/mcp-stdio"),
+      home,
+    );
+    const mcpPath = join(home, ".cursor", "mcp.json");
+    expect(existsSync(mcpPath)).toBe(true);
+
+    const hybrid = cursorAdapter.installPlan(
+      home,
+      "/opt/intero/mcp-stdio",
+      [],
+      {
+        bridgeRegistration: "standard_plugin",
+      },
+    );
+    expect(hybrid.files).toEqual([]);
+    expect(await managedIntegrationTargets(hybrid, home)).toEqual([mcpPath]);
+
+    await uninstallManagedIntegration("cursor", home);
+    expect(existsSync(mcpPath)).toBe(false);
   });
 
   it("reclaims a lock whose owner process no longer exists", async () => {

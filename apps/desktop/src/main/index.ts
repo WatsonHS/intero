@@ -18,6 +18,7 @@ import {
   integrationAdapters,
   managedIntegrationHasState,
   managedIntegrationTargets,
+  standardPluginIsSupported,
   uninstallManagedIntegration,
   type IntegrationKind,
 } from "@intero/integrations";
@@ -40,13 +41,19 @@ import {
 import {
   INTEGRATION_PREVIEW_TTL_MS,
   LOCAL_SELECTION_TTL_MS,
+  assertBridgeRegistrationIsInstallable,
+  bridgeRegistrationForMutation,
   digestIntegrationPlan,
   grokBuildMcpProbeIsValid,
+  parseIntegrationActionRequest,
   parseIntegrationPreviewRequest,
   parseWorkspaceCleanupRequest,
   rendererUrlIsTrusted,
   requireProjectRepositoryBinding,
   requireWorkspaceCleanupBinding,
+  resolveBridgeRegistration,
+  type AgentConfigurationState,
+  type BridgeRegistration,
   type ProjectRepositoryBinding,
   type RepositorySelectionBinding,
   type WorkspaceCleanupBinding,
@@ -124,7 +131,12 @@ function registerDesktopIntegrationBridge() {
       const adapter = previewInput.adapter as IntegrationKind;
       const { action, locale } = previewInput;
       assertIntegrationAction(adapter, action);
-      assertAgentSupportsMutation(adapter, action);
+      const bridgeRegistration = await mutationBridgeRegistration(
+        adapter,
+        action,
+        previewInput.bridgeRegistration,
+      );
+      assertAgentSupportsMutation(adapter, action, bridgeRegistration);
       pruneExpiredIntegrationAuthority();
       const binding = requireProjectRepositoryBinding(
         previewInput,
@@ -134,8 +146,9 @@ function registerDesktopIntegrationBridge() {
         event.sender.id,
         Date.now(),
       );
-      const plan = buildIntegrationPlan(adapter);
+      const plan = buildIntegrationPlan(adapter, bridgeRegistration);
       const targets = await integrationTargets(plan, adapter, binding);
+      const vacuous = await integrationPlanWritesNothing(plan, adapter);
       const parent = BrowserWindow.fromWebContents(event.sender);
       if (!parent) throw new Error("The trusted Intero window is unavailable.");
       const chinese = locale === "zh-CN";
@@ -152,6 +165,20 @@ function registerDesktopIntegrationBridge() {
             ? [
                 `Project: ${binding.projectId}`,
                 `${chinese ? "仓库" : "Repository"}: ${binding.repositoryPath}`,
+              ]
+            : []),
+          ...(bridgeRegistration === "standard_plugin"
+            ? [
+                chinese
+                  ? "MCP bridge 由已安装的 intero Agent Plugin 注册；Intero 不会写入托管 MCP 条目。"
+                  : "The installed intero Agent Plugin owns the MCP bridge registration; Intero writes no managed MCP entry.",
+              ]
+            : []),
+          ...(vacuous
+            ? [
+                chinese
+                  ? "这个客户端没有剩余的托管配置目标：Intero 不会修改它的任何配置文件，下面只是项目级加密连接状态。"
+                  : "No managed configuration target is left for this client: Intero modifies none of its configuration files, and the targets below are Project-scoped encrypted connection state only.",
               ]
             : []),
           "",
@@ -209,11 +236,10 @@ function registerDesktopIntegrationBridge() {
       };
     },
   );
-  ipcMain.handle("intero:integration-action", async (event, token: string) => {
+  ipcMain.handle("intero:integration-action", async (event, input: unknown) => {
     assertTrustedRenderer(event);
-    if (typeof token !== "string") {
-      throw new Error("A configuration preview token is required.");
-    }
+    const { token, bridgeRegistration: requestedRegistration } =
+      parseIntegrationActionRequest(input);
     pruneExpiredIntegrationAuthority();
     const preview = integrationPreviews.get(token);
     integrationPreviews.delete(token);
@@ -223,9 +249,18 @@ function registerDesktopIntegrationBridge() {
     const { adapter, action, binding } = preview;
     const operation = integrationMutation.then(async () => {
       // Check immediately before this serialized mutation. A preceding queued
-      // operation may have changed a managed target after this preview.
-      assertAgentSupportsMutation(adapter, action);
-      const plan = buildIntegrationPlan(adapter);
+      // operation may have changed a managed target after this preview, a
+      // client that gained or lost its plugin registration since then yields a
+      // different plan, and a registration mode that differs from the confirmed
+      // one yields a different plan too — all three fail the digest below
+      // rather than writing an unconfirmed target set.
+      const bridgeRegistration = await mutationBridgeRegistration(
+        adapter,
+        action,
+        requestedRegistration,
+      );
+      assertAgentSupportsMutation(adapter, action, bridgeRegistration);
+      const plan = buildIntegrationPlan(adapter, bridgeRegistration);
       const currentTargets = await integrationTargets(plan, adapter, binding);
       if (
         digestPlan(plan, adapter, action, currentTargets, binding) !==
@@ -236,7 +271,13 @@ function registerDesktopIntegrationBridge() {
       if (action === "uninstall") {
         await uninstallManagedIntegration(adapter, homedir());
       } else {
-        await applyManagedInstall(plan, homedir());
+        // A narrowed plan for an MCP-only client can have no managed file left.
+        // With no recorded manifest to reconcile either, there is nothing to
+        // write: recording an empty managed install would only claim ownership
+        // Intero does not have.
+        if (!(await integrationPlanWritesNothing(plan, adapter))) {
+          await applyManagedInstall(plan, homedir());
+        }
         if (binding) {
           await ensureWorkspaceIdentity(binding);
         }
@@ -953,17 +994,23 @@ async function integrationStatus(): Promise<CodingAgentIntegrationStatus[]> {
       const supported =
         detectedAgent !== undefined &&
         integrationVersionIsSupported(adapter.kind, detectedAgent.version);
+      // Whether hybrid mode is even offerable for this client at this version.
+      // Pure version arithmetic, so it costs the status refresh no client probe.
+      const standardPluginCapable =
+        detectedAgent !== undefined &&
+        standardPluginIsSupported(adapter.kind, detectedAgent.version);
       try {
         const plan = buildIntegrationPlan(adapter.kind);
-        const diagnostics = await diagnoseManagedInstall(plan, homedir());
-        const complete = diagnostics.every((item) => item.ok);
+        const {
+          bridgeRegistration,
+          diagnostics,
+          complete,
+          configurationState,
+        } = await integrationRegistration(adapter.kind, plan, detectedAgent);
         const configured =
+          complete ||
           diagnostics.some((item) => item.ok) ||
           (await managedIntegrationHasState(adapter.kind, homedir()));
-        const configurationState =
-          complete && detectedAgent
-            ? agentConfigurationState(adapter.kind, detectedAgent.executable)
-            : undefined;
         const warnings = [
           ...(configurationState === "runtime_unreachable"
             ? ["agent_runtime_unreachable"]
@@ -978,6 +1025,8 @@ async function integrationStatus(): Promise<CodingAgentIntegrationStatus[]> {
           detected: detectedAgent !== undefined,
           supported,
           configured,
+          bridgeRegistration,
+          standardPluginCapable,
           ...(version ? { version } : {}),
           state:
             !detectedAgent && !configured
@@ -987,7 +1036,12 @@ async function integrationStatus(): Promise<CodingAgentIntegrationStatus[]> {
                 : complete && configurationState === "invalid"
                   ? ("needs_repair" as const)
                   : complete
-                    ? adapter.kind === "codex"
+                    ? // Codex asks the user to trust an MCP entry Intero just
+                      // wrote. Hybrid mode writes none, and only reaches here
+                      // once the client itself resolved the plugin-registered
+                      // server, so there is nothing left to wait for.
+                      adapter.kind === "codex" &&
+                      bridgeRegistration === "managed"
                       ? ("pending_trust" as const)
                       : configurationState === "valid"
                         ? ("config_valid" as const)
@@ -1004,6 +1058,8 @@ async function integrationStatus(): Promise<CodingAgentIntegrationStatus[]> {
           detected: detectedAgent !== undefined,
           supported,
           configured: false,
+          bridgeRegistration: "managed" as const,
+          standardPluginCapable,
           ...(version ? { version } : {}),
           state: "needs_repair" as const,
           diagnostics: [],
@@ -1019,6 +1075,13 @@ interface CodingAgentIntegrationStatus {
   detected: boolean;
   supported: boolean;
   configured: boolean;
+  /** Who owns the `intero` MCP registration Intero is reporting on. */
+  bridgeRegistration: BridgeRegistration;
+  /**
+   * Whether this detected client version can load the published Agent Plugin,
+   * and therefore whether the hybrid-mode opt-in is offerable for it at all.
+   */
+  standardPluginCapable: boolean;
   version?: string;
   state:
     | "not_installed"
@@ -1031,7 +1094,10 @@ interface CodingAgentIntegrationStatus {
   warnings: string[];
 }
 
-function buildIntegrationPlan(adapter: IntegrationKind) {
+function buildIntegrationPlan(
+  adapter: IntegrationKind,
+  bridgeRegistration: BridgeRegistration = "managed",
+) {
   const selected = integrationAdapters.find(
     (candidate) => candidate.kind === adapter,
   );
@@ -1041,6 +1107,121 @@ function buildIntegrationPlan(adapter: IntegrationKind) {
     homedir(),
     executable.command,
     executable.prefixArgs,
+    { bridgeRegistration },
+  );
+}
+
+/**
+ * Reads who owns this client's bridge registration right now (ADR-0011). The
+ * narrowed plan is only diagnosed when the managed one is incomplete and the
+ * detected client version can load the published Agent Plugin, so hybrid mode
+ * is recognized where it is real and is never inferred as the default.
+ */
+async function integrationRegistration(
+  adapter: IntegrationKind,
+  plan: ReturnType<typeof buildIntegrationPlan>,
+  detected: { executable: string; version: string } | undefined,
+) {
+  const managedDiagnostics = await diagnoseManagedInstall(plan, homedir());
+  const standardPluginCapable =
+    detected !== undefined &&
+    !managedDiagnostics.every((item) => item.ok) &&
+    standardPluginIsSupported(adapter, detected.version);
+  return resolveBridgeRegistration({
+    managedDiagnostics,
+    ...(standardPluginCapable
+      ? {
+          standardPluginDiagnostics: await diagnoseManagedInstall(
+            buildIntegrationPlan(adapter, "standard_plugin"),
+            homedir(),
+          ),
+        }
+      : {}),
+    ...(detected
+      ? {
+          probe: (): AgentConfigurationState =>
+            agentConfigurationState(adapter, detected.executable),
+        }
+      : {}),
+  });
+}
+
+/**
+ * Which registration the next attach, repair, or detach plan is built for. An
+ * explicit renderer opt-in wins and costs no client probe; without one, the
+ * evidence below decides. Only a client that is standard-capable at its
+ * detected version is ever read for hybrid mode, so a narrowed plan can never
+ * be produced for a client that cannot load the plugin at all — and an explicit
+ * opt-in for such a client is rejected by `assertAgentSupportsMutation`.
+ */
+async function mutationBridgeRegistration(
+  adapter: IntegrationKind,
+  action: IntegrationAction,
+  requested: BridgeRegistration | undefined,
+): Promise<BridgeRegistration> {
+  return bridgeRegistrationForMutation({
+    action,
+    requested,
+    readEvidence: async () => {
+      const detected = detectAgent(adapter);
+      if (!detected || !standardPluginIsSupported(adapter, detected.version)) {
+        // Unread evidence is absent evidence: this client keeps the full
+        // managed plan without spending a probe on a plugin it cannot load.
+        return {
+          managedMcpRegistration: false,
+          pluginBridgeRegistration: false,
+        };
+      }
+      const managedMcpRegistration =
+        await managedMcpRegistrationIsPresent(adapter);
+      return {
+        managedMcpRegistration,
+        pluginBridgeRegistration:
+          !managedMcpRegistration &&
+          agentConfigurationState(adapter, detected.executable) === "valid",
+      };
+    },
+  });
+}
+
+/**
+ * Whether Intero's own managed `intero` MCP entry is present and unchanged.
+ * This is what separates "the client resolves a server Intero wrote" from "the
+ * client resolves a server something else registered", which is the only
+ * evidence that lets a repair narrow away the managed MCP target.
+ */
+async function managedMcpRegistrationIsPresent(
+  adapter: IntegrationKind,
+): Promise<boolean> {
+  const plan = buildIntegrationPlan(adapter);
+  const mcpTargets = new Set(
+    plan.files
+      .filter((file) => file.role === "mcp")
+      .map((file) => resolve(file.path)),
+  );
+  if (mcpTargets.size === 0) return false;
+  const diagnostics = await diagnoseManagedInstall(plan, homedir());
+  const mcpDiagnostics = diagnostics.filter((item) =>
+    mcpTargets.has(resolve(item.path)),
+  );
+  return (
+    mcpDiagnostics.length === mcpTargets.size &&
+    mcpDiagnostics.every((item) => item.ok)
+  );
+}
+
+/**
+ * Whether applying this plan would write nothing at all. A narrowed plan for an
+ * MCP-only client has no managed file left, and with no recorded manifest there
+ * is no earlier managed target to retire either.
+ */
+async function integrationPlanWritesNothing(
+  plan: ReturnType<typeof buildIntegrationPlan>,
+  adapter: IntegrationKind,
+): Promise<boolean> {
+  return (
+    plan.files.length === 0 &&
+    !(await managedIntegrationHasState(adapter, homedir()))
   );
 }
 
@@ -1100,7 +1281,7 @@ function detectAgent(
 function agentConfigurationState(
   adapter: IntegrationKind,
   executable: string,
-): "valid" | "runtime_unreachable" | "invalid" {
+): AgentConfigurationState {
   try {
     const options: ExecFileSyncOptionsWithStringEncoding = {
       encoding: "utf8",
@@ -1179,6 +1360,7 @@ function agentConfigurationState(
 function assertAgentSupportsMutation(
   adapter: IntegrationKind,
   action: IntegrationAction,
+  bridgeRegistration: BridgeRegistration,
 ): void {
   if (action === "uninstall") return;
   const detected = detectAgent(adapter);
@@ -1190,6 +1372,11 @@ function assertAgentSupportsMutation(
       `The installed ${adapter} version is below Intero's supported minimum.`,
     );
   }
+  assertBridgeRegistrationIsInstallable(
+    adapter,
+    bridgeRegistration,
+    standardPluginIsSupported(adapter, detected.version),
+  );
 }
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {

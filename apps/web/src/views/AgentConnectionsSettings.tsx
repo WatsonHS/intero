@@ -147,6 +147,11 @@ export function AgentConnectionsSettings({
   const [attachmentPhase, setAttachmentPhase] = useState<AttachmentPhase>();
   const [revokedConnection, setRevokedConnection] =
     useState<RevokedConnection>();
+  // ADR-0011 opt-in, per client. An absent entry means "follow Desktop's own
+  // reading of who owns the bridge"; a present one is sent explicitly and wins.
+  const [bridgeChoice, setBridgeChoice] = useState<
+    Partial<Record<PilotAgentClient, CodingAgentBridgeRegistration>>
+  >({});
   const [now, setNow] = useState(() => Date.now());
   const pendingMutationIds = useRef(new Map<string, string>());
   const desktop =
@@ -248,6 +253,9 @@ export function AgentConnectionsSettings({
             `${CLIENT_LABELS[client]} 版本低于 Intero 当前支持范围。`,
           );
         }
+        const bridgeRegistration = local.standardPluginCapable
+          ? bridgeChoice[client]
+          : undefined;
         setAttachmentPhase("awaiting_confirmation");
         const preview = await previewCodingAgentIntegration({
           adapter: client,
@@ -255,6 +263,7 @@ export function AgentConnectionsSettings({
           locale,
           projectId,
           repositorySelectionToken: repository.selectionToken,
+          ...(bridgeRegistration ? { bridgeRegistration } : {}),
         });
         if (!preview) return { cancelled: true, client };
         // The native boundary consumes this authority when confirmation is
@@ -269,6 +278,7 @@ export function AgentConnectionsSettings({
         const managed = await manageCodingAgentIntegration({
           adapter: client,
           token: preview.token,
+          ...(bridgeRegistration ? { bridgeRegistration } : {}),
         });
         if (
           !managed.workspaceId ||
@@ -955,6 +965,14 @@ export function AgentConnectionsSettings({
                             : local.configured
                               ? "公共 launcher 已写入"
                               : `已检测${local.version ? ` · ${local.version}` : ""}`;
+              // Checked reflects the explicit opt-in when there is one, and
+              // otherwise Desktop's current reading of who owns the bridge.
+              const pluginOwnsBridge =
+                (bridgeChoice[client.id] ?? local?.bridgeRegistration) ===
+                "standard_plugin";
+              const pluginNotDetected =
+                bridgeChoice[client.id] === "standard_plugin" &&
+                local?.bridgeRegistration !== "standard_plugin";
               const thisClientPending =
                 startConnection.isPending && attachmentClient === client.id;
               const pendingLabel =
@@ -985,12 +1003,54 @@ export function AgentConnectionsSettings({
                           : "bg-raise text-faint",
                     ].join(" ")}
                     data-local-state={local?.state ?? "fallback"}
+                    data-bridge-registration={
+                      local?.bridgeRegistration ?? "managed"
+                    }
                   >
                     {localStatus}
+                    {local?.bridgeRegistration === "standard_plugin"
+                      ? " · 由 Agent Plugin 注册"
+                      : null}
                   </span>
                   <p className="mt-2 text-[10.5px] leading-[1.65] text-ink-muted">
                     {client.detail}
                   </p>
+                  {desktop && local?.standardPluginCapable ? (
+                    <>
+                      <label className="mt-2 flex items-start gap-1.5 text-[10px] leading-[1.6] text-ink-muted">
+                        <input
+                          type="checkbox"
+                          data-testid={`bridge-registration-${client.id}`}
+                          checked={pluginOwnsBridge}
+                          disabled={startConnection.isPending}
+                          onChange={(event) =>
+                            setBridgeChoice((current) => ({
+                              ...current,
+                              [client.id]: event.target.checked
+                                ? "standard_plugin"
+                                : "managed",
+                            }))
+                          }
+                          className="mt-[1px] shrink-0"
+                        />
+                        <span>
+                          {locale === "zh-CN"
+                            ? "由 intero Agent Plugin 注册 MCP bridge；Intero 只写入 Hook 与常驻指令。"
+                            : "Let the intero Agent Plugin own the MCP bridge; Intero writes only hooks and instructions."}
+                        </span>
+                      </label>
+                      {pluginNotDetected ? (
+                        <p
+                          className="mt-1.5 text-[10px] leading-[1.6] text-amber"
+                          data-testid={`bridge-registration-guidance-${client.id}`}
+                        >
+                          {locale === "zh-CN"
+                            ? `尚未检测到 ${client.label} 中的 intero Agent Plugin：请先在客户端安装该插件，否则 Intero 不写入托管 MCP 条目，bridge 无人注册。`
+                            : `The intero Agent Plugin is not detected in ${client.label} yet: install it in the client first, or no one registers the bridge — Intero writes no managed MCP entry.`}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     data-testid={`connect-agent-${client.id}`}

@@ -421,6 +421,98 @@ describe("pilot cloud-first vertical slice", () => {
     expect(desktopPrompt).not.toContain("~/.cursor/mcp.json");
   });
 
+  it("offers the Agent Plugin path only to standard-capable clients", async () => {
+    const { project } = await readyProject(app);
+    const pluginRequest = async (client: string) => {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/pilot/projects/${project.id}/agent-connections`,
+        headers: identity(A),
+        payload: {
+          client,
+          clientMutationId: `standard-plugin-${client}-attachment`,
+          deliveryMode: "standard_plugin",
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      return response.json().connectPrompt as string;
+    };
+
+    const codexPrompt = await pluginRequest("codex");
+    expect(codexPrompt).toContain('"deliveryMode":"standard_plugin"');
+    expect(codexPrompt).toContain('"standard":"agent-plugins/1.0.0"');
+    expect(codexPrompt).toContain('"components":["mcp:intero","skill:intero"]');
+    expect(codexPrompt).toContain(
+      '"installation":"client_owned_plugin_installation"',
+    );
+    expect(codexPrompt).toContain('"executable":"intero-mcp"');
+    expect(codexPrompt).toContain("was not found on PATH");
+    // Hybrid mode: hooks and always-on instructions stay on the managed path.
+    expect(codexPrompt).toContain(
+      '"managedRemainder":{"required":true,"targets":["lifecycle_hooks","instructions"]',
+    );
+    expect(codexPrompt).toContain(
+      "not portable in Agent Plugins 1.0.0 and still come from the Intero managed install path",
+    );
+    expect(codexPrompt).toContain(
+      "An installed plugin alone is never Connected",
+    );
+    // The plugin variant replaces per-client managed file paths.
+    expect(codexPrompt).not.toContain(".codex/config.toml");
+    expect(codexPrompt).not.toContain(".codex/hooks.json");
+
+    const cursorPrompt = await pluginRequest("cursor");
+    expect(cursorPrompt).toContain('"deliveryMode":"standard_plugin"');
+    expect(cursorPrompt).toContain(
+      '"managedRemainder":{"required":false,"targets":[]',
+    );
+    expect(cursorPrompt).toContain("carries this client's entire registration");
+    expect(cursorPrompt).not.toContain("~/.cursor/mcp.json");
+
+    // A client without Agent Plugins support keeps the managed variant.
+    for (const client of ["claude-code", "opencode", "grok-build"]) {
+      const managedPrompt = await pluginRequest(client);
+      expect(managedPrompt).not.toContain("standard_plugin");
+      expect(managedPrompt).not.toContain("agent-plugins/1.0.0");
+      expect(managedPrompt).toContain("Connection parameters:");
+    }
+    expect(await pluginRequest("claude-code")).toContain(".mcp.json");
+    expect(await pluginRequest("grok-build")).toContain(
+      "$GROK_HOME/config.toml",
+    );
+  });
+
+  it("leaves the managed prompt byte-identical for a client without plugin support", async () => {
+    const { project } = await readyProject(app);
+    const promptFor = async (client: string, deliveryMode: string) => {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/pilot/projects/${project.id}/agent-connections`,
+        headers: identity(A),
+        payload: {
+          client,
+          clientMutationId: `managed-${client}-${deliveryMode}-attachment`,
+          deliveryMode,
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      return (response.json().connectPrompt as string)
+        .replace(/ticket_[A-Za-z0-9_-]+/g, "<ticket>")
+        .replace(/"expiresAt":"[^"]+"/g, '"expiresAt":"<expires>"');
+    };
+
+    for (const client of ["claude-code", "opencode", "grok-build"]) {
+      expect(await promptFor(client, "standard_plugin")).toBe(
+        await promptFor(client, "web_cli"),
+      );
+    }
+    for (const client of ["codex", "cursor"]) {
+      expect(await promptFor(client, "standard_plugin")).not.toBe(
+        await promptFor(client, "web_cli"),
+      );
+    }
+  });
+
   it.each(["grok-build", "cursor"] as const)(
     "treats %s MCP validation as ready without inventing a Hook",
     async (client) => {

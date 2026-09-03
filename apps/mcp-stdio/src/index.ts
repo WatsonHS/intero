@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
+import { guardedToolRegistrar } from "./client-declaration.js";
 import { CloudPilotClient } from "./cloud-client.js";
 import { runHook } from "./hook.js";
 
@@ -71,7 +72,11 @@ async function runCloudMcpServer(
   });
   const preferredLanguage = client.context().preferredLanguage;
   const server = new McpServer({ name: "intero-cloud", version: "0.1.0" });
-  server.registerTool(
+  // The published plugin artifact differs per client only in --mcp-source, so
+  // a misinstalled artifact would masquerade as another client. Every tool on
+  // this path is registered through the ADR-0011 declaration cross-check.
+  const registerTool = guardedToolRegistrar(server, mcpSource);
+  registerTool(
     "stand_in.current_context",
     {
       description:
@@ -80,7 +85,7 @@ async function runCloudMcpServer(
     },
     async () => result(await client.currentContext()),
   );
-  server.registerTool(
+  registerTool(
     "stand_in.report_checkpoint",
     {
       description:
@@ -105,7 +110,7 @@ async function runCloudMcpServer(
     .array(z.string().regex(/^block:block_[a-zA-Z0-9_-]{8,80}$/))
     .min(1)
     .max(50);
-  server.registerTool(
+  registerTool(
     "project.create_epic",
     {
       description:
@@ -124,7 +129,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.update_epic",
     {
       description: "Update roadmap-only Epic content inside the bound Project.",
@@ -143,7 +148,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.list_work",
     {
       description:
@@ -152,7 +157,7 @@ async function runCloudMcpServer(
     },
     async () => result(await client.projectRequest({ path: "" })),
   );
-  server.registerTool(
+  registerTool(
     "project.create_feature",
     {
       description:
@@ -180,7 +185,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.update_feature",
     {
       description:
@@ -209,7 +214,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revert_feature",
     {
       description:
@@ -230,7 +235,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revoke_feature",
     {
       description:
@@ -245,7 +250,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.create_work_item",
     {
       description:
@@ -277,7 +282,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.update_work_item",
     {
       description:
@@ -310,7 +315,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.add_work_relation",
     {
       description:
@@ -341,7 +346,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.add_work_comment",
     {
       description:
@@ -366,7 +371,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revoke_work_comment",
     {
       description:
@@ -384,7 +389,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revoke_work_relation",
     {
       description:
@@ -409,7 +414,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.attach_code_reference",
     {
       description:
@@ -432,7 +437,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revert_work_item",
     {
       description:
@@ -453,7 +458,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "project.revoke_work_item",
     {
       description:
@@ -468,7 +473,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.create",
     {
       description: "Create an immutable Project Spec version.",
@@ -490,7 +495,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.update",
     {
       description:
@@ -514,7 +519,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.request_review",
     {
       description:
@@ -535,7 +540,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.list_confirmed",
     {
       description:
@@ -545,7 +550,7 @@ async function runCloudMcpServer(
     async () =>
       result(await client.projectRequest({ path: "/specs/confirmed" })),
   );
-  server.registerTool(
+  registerTool(
     "spec.get_confirmed",
     {
       description:
@@ -559,7 +564,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.comment",
     {
       description:
@@ -584,7 +589,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.list_review_comments",
     {
       description:
@@ -594,7 +599,7 @@ async function runCloudMcpServer(
     async () =>
       result(await client.projectRequest({ path: "/specs/review-context" })),
   );
-  server.registerTool(
+  registerTool(
     "spec.confirm",
     {
       description:
@@ -610,7 +615,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.revert",
     {
       description:
@@ -631,7 +636,7 @@ async function runCloudMcpServer(
         }),
       ),
   );
-  server.registerTool(
+  registerTool(
     "spec.revoke_version",
     {
       description:

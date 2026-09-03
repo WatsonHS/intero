@@ -1383,7 +1383,7 @@ export async function registerPilotRoutes(
           clientMutationId: z.string().min(8).max(200).optional(),
           expectedWorkspaceId: z.uuid().optional(),
           deliveryMode: z
-            .enum(["desktop_bridge", "web_cli"])
+            .enum(["desktop_bridge", "standard_plugin", "web_cli"])
             .default("web_cli"),
         })
         .strict()
@@ -2582,6 +2582,16 @@ function presentAgentTicket(ticket: PilotAgentTicket) {
   };
 }
 
+/**
+ * Clients that can receive the credential-free launcher layer as the published
+ * `intero` Agent Plugin (ADR-0011). The authoritative capability flag lives in
+ * `packages/integrations` next to MINIMUM_SUPPORTED_VERSIONS; this prompt-only
+ * copy exists so the API server does not take a runtime dependency on the
+ * local installer machinery. Keep the two lists in step.
+ */
+const STANDARD_PLUGIN_CLIENTS: ReadonlySet<PilotAgentBinding["client"]> =
+  new Set(["codex", "cursor"]);
+
 function buildConnectPrompt(
   client: PilotAgentBinding["client"],
   deploymentBaseUrl: string,
@@ -2590,7 +2600,7 @@ function buildConnectPrompt(
   project: Pick<PilotProject, "id" | "name">,
   preferredLanguage: PilotAgentBinding["preferredLanguage"],
   repairBindingId?: string,
-  deliveryMode: "desktop_bridge" | "web_cli" = "web_cli",
+  deliveryMode: "desktop_bridge" | "standard_plugin" | "web_cli" = "web_cli",
   expectedWorkspaceId?: string,
 ): string {
   const baseUrl = deploymentBaseUrl.replace(/\/+$/, "");
@@ -2784,6 +2794,25 @@ function buildConnectPrompt(
       ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
     });
   }
+  // A client without Agent Plugins support keeps the managed variant below,
+  // because the plugin path cannot register its bridge at all.
+  if (
+    deliveryMode === "standard_plugin" &&
+    STANDARD_PLUGIN_CLIENTS.has(client)
+  ) {
+    return buildStandardPluginConnectPrompt({
+      client,
+      clientLabel,
+      baseUrl,
+      ticket,
+      expiresAt,
+      project,
+      preferredLanguage,
+      lifecycleHooks,
+      ...(repairBindingId ? { repairBindingId } : {}),
+      ...(expectedWorkspaceId ? { expectedWorkspaceId } : {}),
+    });
+  }
   const serializedSetup = JSON.stringify(setup);
   return preferredLanguage === "zh-CN"
     ? [
@@ -2948,5 +2977,152 @@ function buildDesktopBridgeConnectPrompt(input: {
     `5. Keep the shared client bridge and minimally merge repository intero-managed instructions${input.lifecycleHooks ? " plus the privacy-filtered lifecycle Hook" : "; do not configure an undeclared lifecycle Hook"}.`,
     `6. Start a fresh ${input.clientLabel} session and call intero.connection_status. Require connected=true, ready=true, configurationCurrent=true${input.lifecycleHooks ? ", and lifecycleReady=true" : " with lifecycleHooks=false"}.`,
     "7. Report changed, unchanged, preserved, conflicts, Project, binding, workspace, and validation results with credentials redacted.",
+  ].join("\n");
+}
+
+/**
+ * ADR-0011 plugin-path variant. For a client that natively supports the Agent
+ * Plugins standard, the credential-free launcher layer arrives as the
+ * published `intero` plugin instead of per-client managed file paths. The
+ * attachment contract is unchanged: the same one-time ticket, the same
+ * revocable credential, and the same native validation decide Connected.
+ */
+function buildStandardPluginConnectPrompt(input: {
+  client: PilotAgentBinding["client"];
+  clientLabel: string;
+  baseUrl: string;
+  ticket: string;
+  expiresAt: string;
+  project: Pick<PilotProject, "id" | "name">;
+  preferredLanguage: PilotAgentBinding["preferredLanguage"];
+  lifecycleHooks: boolean;
+  repairBindingId?: string;
+  expectedWorkspaceId?: string;
+}): string {
+  const managedRemainder = input.lifecycleHooks
+    ? ["lifecycle_hooks", "instructions"]
+    : [];
+  const setup = {
+    protocol: "intero-agent-setup/v1",
+    deliveryMode: "standard_plugin",
+    project: input.project,
+    client: { id: input.client, label: input.clientLabel },
+    authorization: {
+      ticket: input.ticket,
+      expiresAt: input.expiresAt,
+      retryableUntil: "connected_or_expired",
+      ...(input.repairBindingId
+        ? { expectedBindingId: input.repairBindingId }
+        : {}),
+      ...(input.expectedWorkspaceId
+        ? { expectedWorkspaceId: input.expectedWorkspaceId }
+        : {}),
+    },
+    plugin: {
+      standard: "agent-plugins/1.0.0",
+      name: "intero",
+      components: ["mcp:intero", "skill:intero"],
+      installation: "client_owned_plugin_installation",
+      contains: "launcher_registration_only",
+      excludes: [
+        "credentials",
+        "project_identifiers",
+        "workspace_state",
+        "lifecycle_hooks",
+        "instructions_files",
+      ],
+      launcher: {
+        executable: "intero-mcp",
+        resolution: "installed_launcher_on_path",
+        missingMessage:
+          "The Intero launcher intero-mcp was not found on PATH. Install it, then reload the intero plugin.",
+      },
+    },
+    bridge: {
+      workingDirectory: "selected_repository_root",
+      connectArguments: [
+        "cloud",
+        "connect",
+        "--client",
+        input.client,
+        "--cloud-url",
+        input.baseUrl,
+        "--connect-ticket",
+        input.ticket,
+        ...(input.expectedWorkspaceId
+          ? ["--workspace-id", input.expectedWorkspaceId]
+          : []),
+      ],
+      localState:
+        "encrypted workspace state keyed by the selected local repository; no path is uploaded",
+    },
+    managedRemainder: {
+      required: managedRemainder.length > 0,
+      targets: managedRemainder,
+      reason: "not_portable_in_agent_plugins_1_0_0",
+    },
+    configuration: { version: PILOT_AGENT_CONFIGURATION_VERSION },
+    hooks: {
+      lifecycleHooks: input.lifecycleHooks,
+      readinessSignal: input.lifecycleHooks
+        ? "intero.connection_status.lifecycleReady"
+        : "not_applicable_without_a_stable_lifecycle_hook_contract",
+    },
+    projectInstructions: {
+      preferredLanguage: input.preferredLanguage,
+      initialIntent: "stand_in.report_checkpoint before substantive work",
+      semanticBranchPoints: [
+        "intent",
+        "decision",
+        "blocker",
+        "dependency",
+        "scope_change",
+        "artifact",
+        "validation",
+        "pause",
+        "completion",
+      ],
+    },
+  };
+  const serialized = JSON.stringify(setup);
+  if (input.preferredLanguage === "zh-CN") {
+    return [
+      `请通过已发布的 intero Agent Plugin 完成 ${input.clientLabel} 到 Intero 项目“${input.project.name}”的连接。`,
+      "",
+      "连接参数：",
+      "```json",
+      serialized,
+      "```",
+      "",
+      "按顺序执行：",
+      "1. 确认当前工作目录是目标仓库根目录；保留所有非 Intero 配置。",
+      `2. 用 ${input.clientLabel} 自带的插件安装能力安装 plugin.name 插件；插件目录由客户端拥有，不要在其中新增、修改或删除任何文件，也不要改写 plugin.components 之外的内容。`,
+      "3. 确认 plugin.launcher.executable 已安装且在 PATH 上可解析。mcp.json 的 command 不支持 ${PLUGIN_ROOT} 展开；找不到 launcher 时直接报告 plugin.launcher.missingMessage，不要把它当作普通 MCP 启动失败。",
+      "4. 在仓库根目录用 launcher 执行 bridge.connectArguments 兑换 ticket。响应丢失时用相同命令重试，workspace identity、credential 与 verification 必须保持稳定；凭据只写入按仓库隔离的本地加密状态。",
+      managedRemainder.length > 0
+        ? "5. 插件只承载 plugin.components。managedRemainder.targets 中的 lifecycle Hook 与常驻 instructions 不在 Agent Plugins 1.0.0 的可移植范围内，仍需通过 Intero 托管安装路径写入；未安装前不得声称 Hook 就绪。"
+        : "5. 插件已承载该客户端的全部注册内容，managedRemainder.required=false；不要为它编写任何托管配置文件。",
+      `6. 新建 ${input.clientLabel} 会话，调用 intero.connection_status，确认 connected=true、ready=true、configurationCurrent=true${input.lifecycleHooks ? " 且 lifecycleReady=true" : "；lifecycleHooks=false"}。仅安装插件不等于已连接。`,
+      "7. 报告插件拥有的组件与托管路径写入的目标各自是什么，以及 changed、unchanged、preserved、conflicts、Project、binding、workspace 与验证结果；凭证脱敏。",
+    ].join("\n");
+  }
+  return [
+    `Connect ${input.clientLabel} to the Intero Project "${input.project.name}" through the published intero Agent Plugin.`,
+    "",
+    "Connection parameters:",
+    "```json",
+    serialized,
+    "```",
+    "",
+    "Execute in order:",
+    "1. Confirm the working directory is the target repository root and preserve every non-Intero setting.",
+    `2. Install the plugin.name plugin with ${input.clientLabel}'s own plugin installation. The plugin directory is client-owned: never add, edit, or delete files inside it, and never extend it beyond plugin.components.`,
+    "3. Verify plugin.launcher.executable is installed and resolvable on PATH. mcp.json cannot expand ${PLUGIN_ROOT} inside command, so when the launcher is missing report plugin.launcher.missingMessage instead of a raw MCP spawn failure.",
+    "4. Exchange the ticket by running the launcher with bridge.connectArguments from the repository root. Retry the same command after an uncertain response and require stable workspace, credential, and verification identities; the credential is written only to repository-isolated encrypted local state.",
+    managedRemainder.length > 0
+      ? "5. The plugin carries plugin.components only. The lifecycle hooks and always-on instructions in managedRemainder.targets are not portable in Agent Plugins 1.0.0 and still come from the Intero managed install path; do not claim Hook readiness before they exist."
+      : "5. The plugin carries this client's entire registration and managedRemainder.required is false; do not write any managed configuration file for it.",
+    `6. Start a fresh ${input.clientLabel} session and call intero.connection_status. Require connected=true, ready=true, configurationCurrent=true${input.lifecycleHooks ? ", and lifecycleReady=true" : " with lifecycleHooks=false"}. An installed plugin alone is never Connected.`,
+    "7. Report which components the plugin owns and which targets the managed path wrote, plus changed, unchanged, preserved, conflicts, Project, binding, workspace, and validation results with credentials redacted.",
   ].join("\n");
 }
