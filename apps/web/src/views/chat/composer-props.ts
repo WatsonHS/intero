@@ -1,0 +1,49 @@
+import type { ThreadMessage } from "@intero/domain";
+import type { ChangeEvent, RefObject } from "react";
+
+import type { ComposerImage } from "./constants.js";
+import type { ConversationMentionCandidate } from "./mentions.js";
+
+export interface ComposerProps {
+  currentAccessMode: string;
+  currentSenderId: string | undefined;
+  currentIsPilot: boolean;
+  currentIsPilotStandIn: boolean;
+  legacyStandInRecord: boolean;
+  canAttachImages: boolean;
+  mentionPickerOpen: boolean;
+  emojiPickerOpen: boolean;
+  markdownPreview: boolean;
+  draft: string;
+  visibleMentionCandidates: ConversationMentionCandidate[];
+  activeMentionCandidate: ConversationMentionCandidate | undefined;
+  mentionOptionRefs: RefObject<Map<string, HTMLButtonElement>>;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  composerMirrorRef: RefObject<HTMLDivElement | null>;
+  imageInputRef: RefObject<HTMLInputElement | null>;
+  composerImages: ComposerImage[];
+  replyingToMessageId: string | undefined;
+  replyingToMessage: ThreadMessage | undefined;
+  principalNames: Map<string, string>;
+  mentionCandidates: ConversationMentionCandidate[];
+  sendPending: boolean;
+  onAddImages(files: File[]): void | Promise<void>;
+  onToggleMention(): void;
+  onToggleEmoji(): void;
+  onCloseEmoji(): void;
+  onSelectEmoji(emoji: string): void;
+  onImageInputChange(event: ChangeEvent<HTMLInputElement>): void;
+  onPickImages(): void;
+  onToggleMarkdown(): void;
+  onSelectMention(candidate: ConversationMentionCandidate): void;
+  onHoverMention(index: number): void;
+  onCancelReply(): void;
+  onRemoveImage(id: string): void;
+  onDraftChange(value: string): void;
+  onSetMentionCursor(cursor: number): void;
+  onResetMentionIndex(): void;
+  onSetMentionPickerOpen(open: boolean): void;
+  onCloseMention(): void;
+  onMoveMentionIndex(updater: (currentIndex: number) => number): void;
+  onSubmit(): void;
+}
