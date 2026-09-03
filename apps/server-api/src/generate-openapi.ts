@@ -19,6 +19,9 @@ import {
   SearchQuery,
   SearchResponse,
   TeamPulseResponse,
+  TeamRoomsResponse,
+  ThreadNotificationPreferenceResponse,
+  ThreadNotificationPreferenceUpdate,
   ThreadResponse,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
@@ -47,6 +50,9 @@ const schemas = {
   SearchResponse,
   TeamPulseResponse,
   ThreadResponse,
+  TeamRoomsResponse,
+  ThreadNotificationPreferenceResponse,
+  ThreadNotificationPreferenceUpdate,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
   EditThreadMessageRequest,
@@ -221,6 +227,162 @@ const document = {
           "404": {
             description: "Thread not found or inaccessible",
           },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/notification-preference": {
+      get: {
+        operationId: "getThreadNotificationPreference",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Per-thread notification preference",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ThreadNotificationPreferenceResponse",
+                },
+              },
+            },
+          },
+        },
+      },
+      put: {
+        operationId: "setThreadNotificationPreference",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/ThreadNotificationPreferenceUpdate",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Updated per-thread notification preference",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ThreadNotificationPreferenceResponse",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/join": {
+      post: {
+        operationId: "joinThread",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "201": { description: "Joined the team-visible Room" },
+          "200": { description: "Already a participant" },
+          "403": { description: "Not a team member" },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/leave": {
+      post: {
+        operationId: "leaveThread",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "204": { description: "Left the Room" },
+          "404": { description: "Not a participant" },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/archive": {
+      post: {
+        operationId: "archiveThread",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": { description: "Archived" },
+          "403": { description: "Not allowed to archive this Room" },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/unarchive": {
+      post: {
+        operationId: "unarchiveThread",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": { description: "Unarchived" },
+        },
+      },
+    },
+    "/v1/teams/{teamId}/rooms": {
+      get: {
+        operationId: "listTeamRooms",
+        parameters: [
+          {
+            in: "path",
+            name: "teamId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+          {
+            in: "query",
+            name: "includeJoined",
+            required: false,
+            schema: { type: "boolean" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Team-visible Rooms",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/TeamRoomsResponse" },
+              },
+            },
+          },
+          "403": { description: "Not a team member" },
         },
       },
     },

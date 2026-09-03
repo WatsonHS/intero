@@ -1,5 +1,8 @@
 import {
+  ArchiveIcon,
+  BellSlashIcon,
   CircleNotchIcon,
+  HashIcon,
   MagnifyingGlassIcon,
   PlusIcon,
   RobotIcon,
@@ -25,7 +28,9 @@ import { THREAD_GROUPS } from "./constants.js";
 import {
   canRenderCommunicationItems,
   resolveStandInAvatarIdentity,
+  threadUnreadPresentation,
 } from "./helpers.js";
+import { isThreadMuted } from "@intero/domain";
 import { RealtimeDeliveryStatus } from "./RealtimeDeliveryStatus.js";
 import { PresenceAvatar, PresenceBadge } from "./PresenceAvatar.js";
 import { StandInAvatar } from "./StandInAvatar.js";
@@ -60,6 +65,10 @@ export function ThreadSidebar({
   onSelectThread,
   onSelectStandIn,
   onCreateStandIn,
+  onBrowseChannels,
+  listFilter,
+  onListFilterChange,
+  canBrowseChannels,
   presence,
 }: {
   realtimeStatus: ConversationRealtimeStatus;
@@ -97,6 +106,10 @@ export function ThreadSidebar({
   onSelectThread(threadId: string): void;
   onSelectStandIn(ownerId: PrincipalId): void;
   onCreateStandIn(): void;
+  onBrowseChannels(): void;
+  listFilter: "active" | "archived";
+  onListFilterChange(filter: "active" | "archived"): void;
+  canBrowseChannels: boolean;
   presence: Map<string, PresenceState>;
 }) {
   const { formatRelative, t } = useI18n();
@@ -109,6 +122,34 @@ export function ThreadSidebar({
           </strong>
           <RealtimeDeliveryStatus status={realtimeStatus} />
           <div className="ml-auto flex items-center gap-2">
+            {canBrowseChannels ? (
+              <button
+                type="button"
+                aria-label={t("chat.browseChannels")}
+                title={t("chat.browseChannels")}
+                className="grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted"
+                onClick={onBrowseChannels}
+              >
+                <HashIcon size={14} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              aria-label={t("chat.archivedFilter")}
+              title={t("chat.archivedFilter")}
+              className={
+                listFilter === "archived"
+                  ? "grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-sel text-accent-strong"
+                  : "grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted"
+              }
+              onClick={() =>
+                onListFilterChange(
+                  listFilter === "archived" ? "active" : "archived",
+                )
+              }
+            >
+              <ArchiveIcon size={14} />
+            </button>
             <button
               type="button"
               aria-label={t("general.search")}
@@ -182,7 +223,11 @@ export function ThreadSidebar({
             const grouped = (
               group.kind === "stand_in" ? items : visibleItems
             ).filter((item) => item.thread.kind === group.kind);
-            if (grouped.length === 0 && group.kind !== "stand_in") return null;
+            if (
+              grouped.length === 0 &&
+              (group.kind !== "stand_in" || listFilter === "archived")
+            )
+              return null;
             return (
               <div key={group.kind}>
                 <div className="px-2.5 py-2 text-[10.5px] font-[650] tracking-[0.1em] text-faint">
@@ -287,8 +332,8 @@ function SidebarThreadItem({
   const humanParticipants = item.thread.participantIds.filter(
     (id) => !item.thread.standInIds.includes(id),
   );
-  const unread = item.unreadCount ?? 0;
-  const mentions = item.mentionCount ?? 0;
+  const unread = threadUnreadPresentation(item);
+  const muted = isThreadMuted(item.notificationPreference);
   const teamName = item.thread.teamId
     ? teamNames.get(item.thread.teamId)
     : undefined;
@@ -322,7 +367,9 @@ function SidebarThreadItem({
           <span
             className={cn(
               "truncate text-[12.5px]",
-              unread > 0 ? "font-[650] text-ink" : "font-[570]",
+              unread.unreadBadge > 0 || unread.unreadDot
+                ? "font-[650] text-ink"
+                : "font-[570]",
             )}
           >
             {item.thread.title}
@@ -334,6 +381,13 @@ function SidebarThreadItem({
             >
               {teamName}
             </span>
+          ) : null}
+          {muted ? (
+            <BellSlashIcon
+              size={11}
+              className="shrink-0 text-faint"
+              aria-label={t("chat.muted")}
+            />
           ) : null}
           {item.thread.standInIds.length > 0 ? (
             <RobotIcon
@@ -355,6 +409,11 @@ function SidebarThreadItem({
         {item.thread.concludedAt ? (
           <span className="justify-self-start rounded-pill bg-green-soft px-2 py-[3px] text-[9.5px] font-[620] text-green">
             {t("chat.concluded")}
+          </span>
+        ) : null}
+        {item.thread.archivedAt || item.viewerArchivedAt ? (
+          <span className="justify-self-start rounded-pill bg-raise px-2 py-[3px] text-[9.5px] font-[620] text-ink-muted">
+            {t("chat.archived")}
           </span>
         ) : null}
         {humanParticipants.length > 1 ? (
@@ -379,18 +438,23 @@ function SidebarThreadItem({
       </span>
       <span className="grid justify-items-end gap-1.5">
         <time className="font-mono text-[9.5px] text-faint">{time}</time>
-        {mentions > 0 ? (
+        {unread.mentionBadge > 0 ? (
           <span
             className="animate-badge-bounce grid h-[17px] min-w-[22px] place-items-center rounded-[9px] bg-amber px-[5px] font-mono text-[9px] font-[700] text-white"
             title={t("chat.mentionNotificationTitle")}
           >
-            @{mentions > 9 ? "9+" : mentions}
+            @{unread.mentionBadge > 9 ? "9+" : unread.mentionBadge}
           </span>
         ) : null}
-        {unread > 0 ? (
+        {unread.unreadBadge > 0 ? (
           <span className="animate-badge-bounce grid h-[17px] min-w-[17px] place-items-center rounded-[9px] bg-accent-strong px-[5px] font-mono text-[9.5px] text-on-accent">
-            {unread > 99 ? "99+" : unread}
+            {unread.unreadBadge > 99 ? "99+" : unread.unreadBadge}
           </span>
+        ) : unread.unreadDot ? (
+          <span
+            className="mt-0.5 h-2 w-2 rounded-full bg-accent-strong"
+            aria-label={t("chat.muted")}
+          />
         ) : null}
       </span>
     </button>

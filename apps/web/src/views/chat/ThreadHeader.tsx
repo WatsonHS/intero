@@ -1,14 +1,19 @@
 import {
+  ArchiveIcon,
   ArrowBendDownRightIcon,
+  BellSlashIcon,
   CheckCircleIcon,
   CircleNotchIcon,
+  DotsThreeIcon,
   GearSixIcon,
   GitBranchIcon,
   MagnifyingGlassIcon,
   RobotIcon,
   UserPlusIcon,
 } from "@phosphor-icons/react";
+import { useState } from "react";
 import type { PresenceState, PrincipalId } from "@intero/domain";
+import { isThreadMuted } from "@intero/domain";
 
 import type { ThreadPayload } from "../../api.js";
 import { ConversationCall } from "../../calls/ConversationCall.js";
@@ -45,6 +50,11 @@ export function ThreadHeader({
   onCancelConclude,
   onConclusionChange,
   onConclude,
+  onMute,
+  onUnmute,
+  onArchive,
+  onUnarchive,
+  canManageRoom,
   presence,
   onToggleSearch,
 }: {
@@ -80,10 +90,28 @@ export function ThreadHeader({
   onCancelConclude(): void;
   onConclusionChange(value: string): void;
   onConclude(input: { threadId: string; conclusion: string }): void;
+  onMute(input: {
+    hours?: number;
+    indefinitely?: boolean;
+    includingMentions?: boolean;
+  }): void;
+  onUnmute(): void;
+  onArchive(): void;
+  onUnarchive(): void;
+  canManageRoom: boolean;
   presence: Map<string, PresenceState>;
   onToggleSearch(): void;
 }) {
   const { t } = useI18n();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const muted = isThreadMuted(current.notificationPreference);
+  const archived = Boolean(
+    current.thread.archivedAt || current.viewerArchivedAt,
+  );
+  const canArchiveRoom = current.thread.kind === "room" && canManageRoom;
+  const canArchivePersonal =
+    current.thread.kind === "human_direct" ||
+    current.thread.kind === "human_group";
   return (
     <>
       <header className="flex shrink-0 items-center gap-[13px] border-b border-line p-[18px_26px]">
@@ -134,7 +162,8 @@ export function ThreadHeader({
         {currentSenderId &&
         current.thread.kind !== "stand_in" &&
         !currentIsPilotStandIn &&
-        !current.thread.concludedAt ? (
+        !current.thread.concludedAt &&
+        !current.thread.archivedAt ? (
           <ConversationCall
             key={current.thread.id}
             enabled={callsEnabled}
@@ -213,7 +242,109 @@ export function ThreadHeader({
             替身已加入
           </span>
         ) : null}
+        {!currentIsPilot && !currentIsPilotStandIn ? (
+          <div className="relative ml-auto">
+            <button
+              type="button"
+              data-testid="thread-header-menu"
+              aria-label={t("chat.mute")}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-btn border border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+            >
+              {muted ? (
+                <BellSlashIcon size={14} />
+              ) : (
+                <DotsThreeIcon size={16} />
+              )}
+            </button>
+            {menuOpen ? (
+              <div className="absolute right-0 z-30 mt-1.5 min-w-[220px] rounded-[12px] border border-line bg-panel p-1.5 shadow-lg">
+                {muted ? (
+                  <button
+                    type="button"
+                    className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                    onClick={() => {
+                      onUnmute();
+                      setMenuOpen(false);
+                    }}
+                  >
+                    {t("chat.unmute")}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                      onClick={() => {
+                        onMute({ hours: 1 });
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {t("chat.mute1h")}
+                    </button>
+                    <button
+                      type="button"
+                      className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                      onClick={() => {
+                        onMute({ hours: 8 });
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {t("chat.mute8h")}
+                    </button>
+                    <button
+                      type="button"
+                      className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                      onClick={() => {
+                        onMute({ indefinitely: true });
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {t("chat.muteIndefinitely")}
+                    </button>
+                    <button
+                      type="button"
+                      className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                      onClick={() => {
+                        onMute({ indefinitely: true, includingMentions: true });
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {t("chat.muteIncludingMentions")}
+                    </button>
+                  </>
+                )}
+                {canArchiveRoom || canArchivePersonal ? (
+                  <button
+                    type="button"
+                    className="mt-1 block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
+                    onClick={() => {
+                      if (archived) onUnarchive();
+                      else onArchive();
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <ArchiveIcon size={12} />
+                      {archived
+                        ? t("chat.unarchive")
+                        : canArchivePersonal
+                          ? t("chat.hideForMe")
+                          : t("chat.archive")}
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </header>
+      {current.thread.archivedAt ? (
+        <div className="border-b border-line px-[26px] py-2 text-[11px] text-ink-muted">
+          {t("chat.archivedReadOnly")}
+        </div>
+      ) : null}
       {activeRelevance && currentCoordination ? (
         <div
           data-testid="coordination-relevance-prompt"

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   defaultNotificationPreferences,
+  shouldNotifyForThreadMessage,
   type PrincipalId,
   type TypingEvent,
 } from "@intero/domain";
@@ -20,6 +21,7 @@ import {
   createRealtimeSubscription,
   getBootstrap,
   sendPresenceHeartbeat,
+  type ThreadPayload,
 } from "../api.js";
 import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
@@ -132,15 +134,7 @@ export function ConversationRealtimeProvider({
               });
             }
             const cached = queryClient.getQueryData<{
-              items: Array<{
-                thread: {
-                  id: string;
-                  title: string;
-                  accessMode: "human_only_e2ee" | "agent_readable";
-                  mutedUntil?: string;
-                };
-                principals: Array<{ id: string; displayName: string }>;
-              }>;
+              items: ThreadPayload[];
             }>(["threads"]);
             const inbox = queryClient.getQueryData<ActionInboxSnapshot>([
               "action-inbox",
@@ -154,8 +148,8 @@ export function ConversationRealtimeProvider({
                 {
                   title: item.thread.title,
                   accessMode: item.thread.accessMode,
-                  ...(item.thread.mutedUntil
-                    ? { mutedUntil: item.thread.mutedUntil }
+                  ...(item.notificationPreference?.mutedUntil
+                    ? { mutedUntil: item.notificationPreference.mutedUntil }
                     : {}),
                 },
               ]),
@@ -183,9 +177,24 @@ export function ConversationRealtimeProvider({
               if (notifiedMentionIds.current.size > 500) {
                 notifiedMentionIds.current = new Set([selected.message.id]);
               }
-              const thread = cached?.items.find(
-                (item) => item.thread.id === selected.threadId,
-              );
+              const archivedCached = queryClient.getQueryData<{
+                items: ThreadPayload[];
+              }>(["threads", "archived"]);
+              const thread =
+                cached?.items.find(
+                  (item) => item.thread.id === selected.threadId,
+                ) ??
+                archivedCached?.items.find(
+                  (item) => item.thread.id === selected.threadId,
+                );
+              if (
+                !shouldNotifyForThreadMessage({
+                  preference: thread?.notificationPreference,
+                  mentioned: selected.mentioned,
+                })
+              ) {
+                continue;
+              }
               const sender = thread?.principals.find(
                 (principal) => principal.id === selected.message.senderId,
               );

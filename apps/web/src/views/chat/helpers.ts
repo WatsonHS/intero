@@ -2,7 +2,9 @@ import type {
   ConversationThread,
   PrincipalId,
   ThreadMessage,
+  ThreadNotificationPreference,
 } from "@intero/domain";
+import { isThreadMuted } from "@intero/domain";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -30,6 +32,39 @@ export function typingLabelFor(
     return t("chat.typingTwo", { a: names[0]!, b: names[1]! });
   }
   return t("chat.typingMany", { names: names.join("、") });
+}
+
+export function threadUnreadPresentation(
+  item: {
+    unreadCount?: number;
+    mentionCount?: number;
+    notificationPreference?: ThreadNotificationPreference;
+  },
+  now: Date = new Date(),
+): {
+  unreadDot: boolean;
+  unreadBadge: number;
+  mentionBadge: number;
+} {
+  const unread = item.unreadCount ?? 0;
+  const mentions = item.mentionCount ?? 0;
+  if (unread === 0) {
+    return { unreadDot: false, unreadBadge: 0, mentionBadge: 0 };
+  }
+  if (!isThreadMuted(item.notificationPreference, now)) {
+    return {
+      unreadDot: false,
+      unreadBadge: unread,
+      mentionBadge: mentions,
+    };
+  }
+  return {
+    unreadDot: true,
+    unreadBadge: 0,
+    mentionBadge: item.notificationPreference?.muteIncludingMentions
+      ? 0
+      : mentions,
+  };
 }
 
 export function markCachedThreadRead(
