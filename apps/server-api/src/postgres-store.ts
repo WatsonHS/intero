@@ -23,6 +23,7 @@ import {
   type OrganizationId,
   type OutboxEntry,
   personalStandInId,
+  type PresenceSnapshot,
   type PrincipalId,
   type Project,
   type ProjectId,
@@ -55,6 +56,12 @@ import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
 import { PilotStoreError } from "./pilot-store.js";
+import { presenceTimesFromRow, snapshotFor } from "./presence.js";
+import type { ProviderSecretCipher } from "./provider-secrets.js";
+import {
+  generateWebPushKeyPair,
+  type WebPushKeyPair,
+} from "./web-push-keys.js";
 import {
   assertMutableThreadMessage,
   assertThreadWritable,
@@ -81,6 +88,7 @@ export class PostgresPlatformStore implements PlatformStore {
   constructor(
     private readonly pool: Pool,
     private readonly organizationId: OrganizationId,
+    private readonly secrets?: ProviderSecretCipher,
   ) {}
 
   async initializeOrganization(name: string): Promise<void> {
@@ -3364,6 +3372,109 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async upsertPresenceHeartbeat(
+    principalId: PrincipalId,
+    input: { active?: boolean; now?: number } = {},
+  ): Promise<PresenceSnapshot> {
+    const now = input.now ?? Date.now();
+    const timestamp = new Date(now).toISOString();
+    const preserveActivity = input.active === false;
+    return this.write(async (client) => {
+      const result = await client.query(
+        `INSERT INTO presence_heartbeats
+          (organization_id, principal_id, last_seen_at, last_active_at, updated_at)
+         VALUES ($1, $2, $3::timestamptz, $3::timestamptz, $3::timestamptz)
+         ON CONFLICT (organization_id, principal_id) DO UPDATE SET
+           last_seen_at = EXCLUDED.last_seen_at,
+           last_active_at = CASE
+             WHEN $4::boolean THEN presence_heartbeats.last_active_at
+             ELSE EXCLUDED.last_active_at
+           END,
+           updated_at = EXCLUDED.updated_at
+         RETURNING *`,
+        [this.organizationId, principalId, timestamp, preserveActivity],
+      );
+      return presenceSnapshotFromRow(result.rows[0], now);
+    });
+  }
+
+  async listPresence(
+    principalIds: readonly PrincipalId[],
+    now = Date.now(),
+  ): Promise<PresenceSnapshot[]> {
+    if (principalIds.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM presence_heartbeats
+         WHERE principal_id = ANY($1::uuid[])`,
+        [principalIds],
+      );
+      const byId = new Map(
+        result.rows.map((row) => [row.principal_id as PrincipalId, row]),
+      );
+      return principalIds.map((principalId) => {
+        const row = byId.get(principalId);
+        return row
+          ? presenceSnapshotFromRow(row, now)
+          : { principalId, state: "offline" as const };
+      });
+    });
+  }
+
+  async ensureWebPushKeys(): Promise<WebPushKeyPair> {
+    return this.write(async (client) => {
+      const existing = await this.readWebPushKeys(client);
+      if (existing) return existing;
+      const generated = generateWebPushKeyPair();
+      await client.query(
+        `INSERT INTO platform_web_push_keys
+          (organization_id, public_key, private_key_encrypted, created_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (organization_id) DO NOTHING`,
+        [
+          this.organizationId,
+          generated.publicKey,
+          this.requireSecrets().encrypt(generated.privateKey),
+        ],
+      );
+      const stored = await this.readWebPushKeys(client);
+      if (!stored) throw new Error("web_push_keys_missing_after_insert");
+      return stored;
+    });
+  }
+
+  async getWebPushKeys(): Promise<WebPushKeyPair | undefined> {
+    return this.read((client) => this.readWebPushKeys(client));
+  }
+
+  private async readWebPushKeys(
+    client: PoolClient,
+  ): Promise<WebPushKeyPair | undefined> {
+    const result = await client.query(
+      `SELECT public_key, private_key_encrypted
+         FROM platform_web_push_keys
+        WHERE organization_id = $1`,
+      [this.organizationId],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      publicKey: String(row.public_key),
+      privateKey: this.requireSecrets().decrypt(
+        String(row.private_key_encrypted),
+      ),
+    };
+  }
+
+  private requireSecrets(): ProviderSecretCipher {
+    if (!this.secrets) {
+      throw new Error(
+        "INTERO_PROVIDER_ENCRYPTION_KEY is required to store Web Push keys.",
+      );
+    }
+    return this.secrets;
+  }
+
   async getSpec(specId: SpecId) {
     return this.read((client) => this.getSpecInTransaction(client, specId));
   }
@@ -4258,6 +4369,20 @@ function claimFromRow(row: QueryResultRow): Claim {
     ...(row.supersedes ? { supersedes: row.supersedes } : {}),
     ...(row.withdrawn_at ? { withdrawnAt: asIso(row.withdrawn_at) } : {}),
   };
+}
+
+function presenceSnapshotFromRow(
+  row: QueryResultRow,
+  now: number,
+): PresenceSnapshot {
+  return snapshotFor(
+    row.principal_id as PrincipalId,
+    presenceTimesFromRow({
+      last_seen_at: row.last_seen_at,
+      last_active_at: row.last_active_at,
+    }),
+    now,
+  );
 }
 
 function webPushSubscriptionFromRow(row: QueryResultRow): WebPushSubscription {

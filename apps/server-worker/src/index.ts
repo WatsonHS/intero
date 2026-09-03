@@ -21,6 +21,7 @@ import { PilotInteroRequestProcessor } from "../../server-api/src/intero-request
 import { assertDatabaseMigrationReadiness } from "../../server-api/src/database/migration-readiness.js";
 import { PostgresInformationStore } from "../../server-api/src/information-store.js";
 import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
+import { webPushSubjectFromPublicUrl } from "../../server-api/src/web-push-keys.js";
 import {
   InstrumentedModelGateway,
   MembershipAuthorizationAdapter,
@@ -155,14 +156,12 @@ const conversationPool = new Pool({ connectionString });
 const conversations = new PostgresPlatformStore(
   conversationPool,
   organizationId,
+  new AesGcmProviderSecretCipher(providerEncryptionSecret),
 );
 const informationStore = new PostgresInformationStore(
   conversationPool,
   organizationId,
 );
-const webPushSender = serviceConfig.webPush
-  ? createWebPushLibSender(serviceConfig.webPush)
-  : undefined;
 const coordinationKernel = new CoordinationKernel(pilotStore, conversations);
 const standInHandler = new PilotStandInJobHandler(
   pilotStore,
@@ -246,13 +245,17 @@ const portfolioSummaryOutbox = new PortfolioSummaryOutboxDispatcher(
 
 const tasks: TaskList = {
   [WEB_PUSH_TASK]: async (payload: unknown) => {
-    if (!webPushSender) return;
+    const keys = await conversations.getWebPushKeys();
+    if (!keys) return;
     await deliverConversationWebPush({
       payload: WebPushNotifyPayload.parse(payload),
       store: conversations,
       getPreferences: (principalId) =>
         informationStore.getPreferences(principalId),
-      sender: webPushSender,
+      sender: createWebPushLibSender({
+        ...keys,
+        subject: webPushSubjectFromPublicUrl(serviceConfig.publicUrl),
+      }),
     });
   },
   [PILOT_INTERO_TASK]: async (payload: unknown) => {
@@ -451,24 +454,16 @@ const centrifugoRealtime = new CentrifugoRealtime(
   centrifugoApiUrl,
   pilotAdapterConfig.centrifugoApiKey,
 );
-const enqueueWebPush = webPushSender
-  ? async (event: Record<string, unknown>) => {
-      const payload = conversationEventToWebPushPayload(organizationId, event);
-      if (payload) await webPushJobs.enqueue(payload);
-    }
-  : undefined;
-const realtimeOutbox = enqueueWebPush
-  ? new OutboxDispatcher(
-      organizationId,
-      realtimeOutboxRepository,
-      centrifugoRealtime,
-      enqueueWebPush,
-    )
-  : new OutboxDispatcher(
-      organizationId,
-      realtimeOutboxRepository,
-      centrifugoRealtime,
-    );
+const enqueueWebPush = async (event: Record<string, unknown>) => {
+  const payload = conversationEventToWebPushPayload(organizationId, event);
+  if (payload) await webPushJobs.enqueue(payload);
+};
+const realtimeOutbox = new OutboxDispatcher(
+  organizationId,
+  realtimeOutboxRepository,
+  centrifugoRealtime,
+  enqueueWebPush,
+);
 tasks.dispatch_outbox = async (_payload, helpers) => {
   await realtimeOutbox.dispatch();
   await helpers.addJob(

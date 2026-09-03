@@ -114,7 +114,6 @@ import {
 } from "./pilot-ports.js";
 import { registerPilotRoutes } from "./pilot-routes.js";
 import { registerProjectWorkRoutes } from "./project-work-routes.js";
-import { InMemoryPresenceDirectory } from "./presence.js";
 import {
   InMemoryRealtimeRateLimiter,
   registerRealtimeRoutes,
@@ -225,8 +224,6 @@ export interface BuildAppOptions {
   };
   callTokenIssuer?: CallTokenIssuer;
   callEventPublisher?: CallEventPublisher;
-  presenceDirectory?: InMemoryPresenceDirectory;
-  webPushPublicKey?: string;
 }
 
 export async function buildApp(
@@ -263,8 +260,6 @@ export async function buildApp(
   );
   const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
-  const presenceDirectory =
-    options.presenceDirectory ?? new InMemoryPresenceDirectory();
   const typingLimiter = new InMemoryRealtimeRateLimiter();
   const organization = options.organization ?? {
     id: "019b5ac0-7600-7000-8000-000000000001",
@@ -1057,9 +1052,8 @@ export async function buildApp(
 
   app.get("/v1/config/web-push", async (request) => {
     await requestAuth.resolve(request);
-    return options.webPushPublicKey
-      ? { enabled: true, publicKey: options.webPushPublicKey }
-      : { enabled: false };
+    const keys = await store.ensureWebPushKeys();
+    return { enabled: true, publicKey: keys.publicKey };
   });
 
   app.post("/v1/me/push-subscriptions", async (request, reply) => {
@@ -1349,7 +1343,7 @@ export async function buildApp(
   app.post("/v1/presence/heartbeat", async (request) => {
     const principal = await requestAuth.resolve(request);
     const input = parse(PresenceHeartbeatRequest, request.body ?? {});
-    return presenceDirectory.heartbeat(principal!.id, {
+    return store.upsertPresenceHeartbeat(principal!.id, {
       ...(input.active === undefined ? {} : { active: input.active }),
     });
   });
@@ -1381,7 +1375,7 @@ export async function buildApp(
         principalId === principal!.id || teamPeerIds.has(principalId),
     );
     return PresenceResponse.parse({
-      items: presenceDirectory.list(visible),
+      items: await store.listPresence(visible),
     });
   });
 

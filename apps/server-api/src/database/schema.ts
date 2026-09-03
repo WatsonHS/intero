@@ -658,6 +658,37 @@ export const webPushSubscriptions = pgTable(
   ],
 );
 
+export const presenceHeartbeats = pgTable(
+  "presence_heartbeats",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.principalId] }),
+  ],
+);
+
+export const platformWebPushKeys = pgTable("platform_web_push_keys", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id),
+  publicKey: text("public_key").notNull(),
+  privateKeyEncrypted: text("private_key_encrypted").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const authActivationAttempts = pgTable(
   "auth_activation_attempts",
   {

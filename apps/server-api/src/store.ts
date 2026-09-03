@@ -41,6 +41,7 @@ import {
   type ThreadMessageReaction,
   type ThreadMessageStreamState,
   tokenizeSearchText,
+  type PresenceSnapshot,
   type UpsertWebPushSubscriptionRequest,
   type WebPushSubscription,
   type Workstream,
@@ -58,6 +59,8 @@ import {
 
 import type { PrincipalSummary } from "./platform-store.js";
 import { PilotStoreError } from "./pilot-store.js";
+import { InMemoryPresenceDirectory } from "./presence.js";
+import { ensureWebPushKeyPair, type WebPushKeyPair } from "./web-push-keys.js";
 
 const DEMO_ORGANIZATION_ID =
   "019b5ac0-7600-7000-8000-000000000001" as ActivityEvent["organizationId"];
@@ -158,6 +161,8 @@ export class InMemoryPlatformStore {
   readonly decisions = new Map<DecisionRecord["id"], DecisionRecord>();
   readonly inbox = new Map<string, ActionInboxItem>();
   readonly webPushSubscriptions = new Map<string, WebPushSubscription>();
+  private webPushKeys: WebPushKeyPair | undefined;
+  private readonly presence = new InMemoryPresenceDirectory();
   readonly principals = new Map<PrincipalId, PrincipalSummary>();
   readonly activities: ActivityEvent[] = [];
   readonly outbox: OutboxEntry[] = [];
@@ -2096,6 +2101,34 @@ export class InMemoryPlatformStore {
     return [...this.webPushSubscriptions.values()].filter((item) =>
       allowed.has(item.principalId),
     );
+  }
+
+  upsertPresenceHeartbeat(
+    principalId: PrincipalId,
+    input: { active?: boolean; now?: number } = {},
+  ): PresenceSnapshot {
+    return this.presence.heartbeat(principalId, input);
+  }
+
+  listPresence(
+    principalIds: readonly PrincipalId[],
+    now = Date.now(),
+  ): PresenceSnapshot[] {
+    return this.presence.list(principalIds, now);
+  }
+
+  async ensureWebPushKeys(): Promise<WebPushKeyPair> {
+    this.webPushKeys = await ensureWebPushKeyPair({
+      read: async () => this.webPushKeys,
+      insertIfAbsent: async (keys) => {
+        this.webPushKeys ??= keys;
+      },
+    });
+    return this.webPushKeys;
+  }
+
+  getWebPushKeys(): WebPushKeyPair | undefined {
+    return this.webPushKeys;
   }
 
   private recordConversationChange(

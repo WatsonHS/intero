@@ -88,6 +88,10 @@ export interface PlatformStore {
   deleteWebPushSubscriptionByEndpoint: StoreMethod<"deleteWebPushSubscriptionByEndpoint">;
   listWebPushSubscriptions: StoreMethod<"listWebPushSubscriptions">;
   listWebPushSubscriptionsForPrincipals: StoreMethod<"listWebPushSubscriptionsForPrincipals">;
+  upsertPresenceHeartbeat: StoreMethod<"upsertPresenceHeartbeat">;
+  listPresence: StoreMethod<"listPresence">;
+  ensureWebPushKeys: StoreMethod<"ensureWebPushKeys">;
+  getWebPushKeys: StoreMethod<"getWebPushKeys">;
   getThread: StoreMethod<"getThread">;
   getSpec: StoreMethod<"getSpec">;
   listSpecs: StoreMethod<"listSpecs">;

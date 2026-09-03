@@ -29,7 +29,6 @@ describe("Web Push subscription routes", () => {
     app = await buildTestApp({
       store,
       logger: false,
-      webPushPublicKey: "B".repeat(88),
       pilotIdentities: [
         { id: ALEX, displayName: "Alex Rivera", kind: "human" },
         { id: PRIYA, displayName: "Priya Shah", kind: "human" },
@@ -97,30 +96,22 @@ describe("Web Push subscription routes", () => {
     expect(store.listWebPushSubscriptions(ALEX)).toHaveLength(0);
   });
 
-  it("returns the VAPID public key only when Web Push is configured", async () => {
+  it("generates a VAPID public key on first config read", async () => {
     const enabled = await app.inject({
       method: "GET",
       url: "/v1/config/web-push",
       headers: auth(ALEX),
     });
-    expect(enabled.json()).toEqual({
-      enabled: true,
-      publicKey: "B".repeat(88),
-    });
+    expect(enabled.statusCode).toBe(200);
+    const first = enabled.json() as { enabled: boolean; publicKey: string };
+    expect(first.enabled).toBe(true);
+    expect(first.publicKey.length).toBeGreaterThanOrEqual(16);
 
-    await app.close();
-    app = await buildTestApp({
-      store,
-      logger: false,
-      pilotIdentities: [
-        { id: ALEX, displayName: "Alex Rivera", kind: "human" },
-      ],
-    });
-    const disabled = await app.inject({
+    const again = await app.inject({
       method: "GET",
       url: "/v1/config/web-push",
       headers: auth(ALEX),
     });
-    expect(disabled.json()).toEqual({ enabled: false });
+    expect(again.json()).toEqual(first);
   });
 });

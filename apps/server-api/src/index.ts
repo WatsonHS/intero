@@ -26,6 +26,7 @@ import type { PilotStore } from "./pilot-store.js";
 import { InMemoryPilotStore } from "./pilot-store.js";
 import { TransactionalOutboxJobRunner } from "./pilot-service.js";
 import { PostgresPlatformStore } from "./postgres-store.js";
+import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
 import { PostgresProjectWorkStore } from "./project-work-store.js";
 import {
   loadSpiceDbCertificate,
@@ -82,7 +83,13 @@ let actionInboxEvents: PostgresActionInboxEventSource;
   }
   databasePool = pool;
   authDatabase = pool;
-  const postgresStore = new PostgresPlatformStore(pool, organizationId);
+  const postgresStore = new PostgresPlatformStore(
+    pool,
+    organizationId,
+    providerEncryptionSecret
+      ? new AesGcmProviderSecretCipher(providerEncryptionSecret)
+      : undefined,
+  );
   await postgresStore.initializeOrganization(organizationName);
   if (
     demoSeedingEnabled(process.env.INTERO_SEED_DEMO) &&
@@ -237,9 +244,6 @@ const app = await buildApp({
     : {}),
   attachments: attachmentService,
   realtimeConfig: serviceConfig.realtime,
-  ...(serviceConfig.webPush
-    ? { webPushPublicKey: serviceConfig.webPush.publicKey }
-    : {}),
   ...(serviceConfig.calls
     ? {
         callTokenIssuer: new LiveKitCallTokenIssuer(

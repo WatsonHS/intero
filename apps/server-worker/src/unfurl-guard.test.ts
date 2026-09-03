@@ -7,8 +7,6 @@ import {
   UnfurlBlockedError,
 } from "./unfurl-guard.js";
 
-const denyHosts = new Set(["blocked.example"]);
-
 describe("unfurl SSRF guard", () => {
   it.each([
     ["127.0.0.1", true],
@@ -53,16 +51,16 @@ describe("unfurl SSRF guard", () => {
     ["https://example.com:8080/", "port_blocked"],
     ["http://example.com:22/", "port_blocked"],
     ["https://user:pass@example.com/", "credentials_blocked"],
-    ["https://blocked.example/", "host_denied"],
     ["https://localhost/", "host_denied"],
     ["https://foo.localhost/", "host_denied"],
+    ["https://foo.local/", "host_denied"],
     ["https://foo.internal/", "host_denied"],
   ])("refuses %s (%s)", (raw, detail) => {
-    expect(() => assertUnfurlUrlShape(new URL(raw), denyHosts)).toThrow(
+    expect(() => assertUnfurlUrlShape(new URL(raw))).toThrow(
       UnfurlBlockedError,
     );
     try {
-      assertUnfurlUrlShape(new URL(raw), denyHosts);
+      assertUnfurlUrlShape(new URL(raw));
     } catch (error) {
       expect(error).toBeInstanceOf(UnfurlBlockedError);
       expect((error as Error).message).toBe(detail);
@@ -71,32 +69,29 @@ describe("unfurl SSRF guard", () => {
 
   it("allows default http/https ports on public hosts", () => {
     expect(() =>
-      assertUnfurlUrlShape(new URL("https://example.com/docs"), denyHosts),
+      assertUnfurlUrlShape(new URL("https://example.com/docs")),
     ).not.toThrow();
     expect(() =>
-      assertUnfurlUrlShape(new URL("http://example.com:80/"), denyHosts),
+      assertUnfurlUrlShape(new URL("http://example.com:80/")),
     ).not.toThrow();
     expect(() =>
-      assertUnfurlUrlShape(new URL("https://example.com:443/"), denyHosts),
+      assertUnfurlUrlShape(new URL("https://example.com:443/")),
     ).not.toThrow();
   });
 
   it("resolves DNS and refuses private answers including IPv6-mapped", async () => {
     await expect(
       assertSafeUnfurlTarget("https://evil.example/", {
-        denyHosts,
         lookup: async () => [{ address: "127.0.0.1", family: 4 }],
       }),
     ).rejects.toThrow("address_blocked");
     await expect(
       assertSafeUnfurlTarget("https://evil.example/", {
-        denyHosts,
         lookup: async () => [{ address: "::ffff:10.1.2.3", family: 6 }],
       }),
     ).rejects.toThrow("address_blocked");
     await expect(
       assertSafeUnfurlTarget("https://evil.example/", {
-        denyHosts,
         lookup: async () => [
           { address: "8.8.8.8", family: 4 },
           { address: "192.168.0.9", family: 4 },
@@ -107,7 +102,6 @@ describe("unfurl SSRF guard", () => {
 
   it("accepts a public DNS answer", async () => {
     const url = await assertSafeUnfurlTarget("https://example.com/a", {
-      denyHosts,
       lookup: async () => [{ address: "93.184.216.34", family: 4 }],
     });
     expect(url.href).toBe("https://example.com/a");

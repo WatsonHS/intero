@@ -7,13 +7,13 @@ import type {
 const HEARTBEAT_OFFLINE_AFTER_MS = 75_000;
 const AWAY_AFTER_MS = 5 * 60_000;
 
-interface PresenceEntry {
-  lastHeartbeatAt: number;
-  lastActivityAt: number;
+export interface PresenceTimes {
+  lastSeenAt: number;
+  lastActiveAt: number;
 }
 
 export class InMemoryPresenceDirectory {
-  readonly #entries = new Map<PrincipalId, PresenceEntry>();
+  readonly #entries = new Map<PrincipalId, PresenceTimes>();
 
   heartbeat(
     principalId: PrincipalId,
@@ -21,17 +21,11 @@ export class InMemoryPresenceDirectory {
   ): PresenceSnapshot {
     const now = input.now ?? Date.now();
     const current = this.#entries.get(principalId);
-    const lastActivityAt =
-      input.active === false ? (current?.lastActivityAt ?? now) : now;
-    this.#entries.set(principalId, {
-      lastHeartbeatAt: now,
-      lastActivityAt,
-    });
-    return snapshotFor(
-      principalId,
-      { lastHeartbeatAt: now, lastActivityAt },
-      now,
-    );
+    const lastActiveAt =
+      input.active === false ? (current?.lastActiveAt ?? now) : now;
+    const entry = { lastSeenAt: now, lastActiveAt };
+    this.#entries.set(principalId, entry);
+    return snapshotFor(principalId, entry, now);
   }
 
   list(
@@ -47,26 +41,35 @@ export class InMemoryPresenceDirectory {
   }
 }
 
-function snapshotFor(
+export function presenceTimesFromRow(row: {
+  last_seen_at: Date | string;
+  last_active_at: Date | string;
+}): PresenceTimes {
+  return {
+    lastSeenAt: new Date(row.last_seen_at).getTime(),
+    lastActiveAt: new Date(row.last_active_at).getTime(),
+  };
+}
+
+export function snapshotFor(
   principalId: PrincipalId,
-  entry: PresenceEntry,
+  entry: PresenceTimes,
   now: number,
 ): PresenceSnapshot {
-  const state = presenceState(entry, now);
   return {
     principalId,
-    state,
-    lastSeenAt: new Date(entry.lastHeartbeatAt).toISOString(),
+    state: presenceState(entry, now),
+    lastSeenAt: new Date(entry.lastSeenAt).toISOString(),
   };
 }
 
 export function presenceState(
-  entry: PresenceEntry,
+  entry: PresenceTimes,
   now: number,
 ): PresenceState {
-  if (now - entry.lastHeartbeatAt > HEARTBEAT_OFFLINE_AFTER_MS) {
+  if (now - entry.lastSeenAt > HEARTBEAT_OFFLINE_AFTER_MS) {
     return "offline";
   }
-  if (now - entry.lastActivityAt >= AWAY_AFTER_MS) return "away";
+  if (now - entry.lastActiveAt >= AWAY_AFTER_MS) return "away";
   return "online";
 }

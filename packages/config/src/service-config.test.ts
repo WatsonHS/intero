@@ -107,31 +107,22 @@ describe("service environment schemas", () => {
     ).toThrow();
   });
 
-  it("disables Web Push when VAPID keys are unset and rejects partial config", () => {
-    expect(loadApiServiceConfig(postgresEnvironment).webPush).toBeUndefined();
+  it("loads the worker public URL from INTERO_PUBLIC_URL", () => {
     expect(
       loadWorkerServiceConfig({
         ...postgresEnvironment,
         INTERO_WORKER_DATABASE_URL:
           "postgres://intero_worker:secret@db.internal/intero",
-      }).webPush,
-    ).toBeUndefined();
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_WEB_PUSH_PUBLIC_KEY: "B".repeat(16),
-      }),
-    ).toThrow("INTERO_WEB_PUSH_PUBLIC_KEY");
+      }).publicUrl,
+    ).toBe("http://localhost:4310");
     expect(
-      loadApiServiceConfig({
+      loadWorkerServiceConfig({
         ...postgresEnvironment,
-        INTERO_WEB_PUSH_PUBLIC_KEY: "B".repeat(88),
-        INTERO_WEB_PUSH_PRIVATE_KEY: "private-vapid-key-16",
-        INTERO_WEB_PUSH_SUBJECT: "mailto:intero@example.com",
-      }).webPush,
-    ).toMatchObject({
-      subject: "mailto:intero@example.com",
-    });
+        INTERO_WORKER_DATABASE_URL:
+          "postgres://intero_worker:secret@db.internal/intero",
+        INTERO_PUBLIC_URL: "https://intero.example.com",
+      }).publicUrl,
+    ).toBe("https://intero.example.com");
   });
 
   it("rejects the removed realtime mode switch", () => {

@@ -12,7 +12,6 @@ import type { PlatformStore } from "../../server-api/src/platform-store.js";
 import {
   assertSafeUnfurlTarget,
   defaultDnsLookup,
-  loadUnfurlDenyHosts,
   UNFURL_MAX_BODY_BYTES,
   UNFURL_MAX_REDIRECTS,
   UNFURL_TIMEOUT_MS,
@@ -199,7 +198,6 @@ export interface UnfurlHandlerOptions {
   >;
   fetch?: typeof fetch;
   lookup?: DnsLookupFn;
-  denyHosts?: ReadonlySet<string>;
   now?: () => Date;
 }
 
@@ -247,7 +245,6 @@ export class UnfurlJobHandler {
       const html = await fetchUnfurlHtml(url, {
         fetch: this.options.fetch ?? fetch,
         lookup: this.options.lookup ?? defaultDnsLookup,
-        denyHosts: this.options.denyHosts ?? loadUnfurlDenyHosts(),
       });
       const parsed = parseLinkPreviewHtml(html, new URL(url));
       return {
@@ -274,7 +271,6 @@ export async function fetchUnfurlHtml(
   options: {
     fetch: typeof fetch;
     lookup: DnsLookupFn;
-    denyHosts: ReadonlySet<string>;
   },
 ): Promise<string> {
   let current = raw;

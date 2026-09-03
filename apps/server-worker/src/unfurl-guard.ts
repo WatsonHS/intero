@@ -63,18 +63,6 @@ const IPV6_BLOCKED_CIDRS = [
   "2002::/16",
 ] as const;
 
-export function loadUnfurlDenyHosts(
-  environment: NodeJS.ProcessEnv = process.env,
-): Set<string> {
-  const configured = environment.INTERO_UNFURL_DENY_HOSTS ?? "";
-  return new Set(
-    configured
-      .split(",")
-      .map((host) => host.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
 export function defaultDnsLookup(hostname: string): Promise<ResolvedAddress[]> {
   return dnsLookup(hostname, { all: true, verbatim: true }).then((records) =>
     records.map((record) => ({
@@ -92,10 +80,7 @@ export function parseUnfurlUrl(raw: string): URL {
   return new URL(normalized);
 }
 
-export function assertUnfurlUrlShape(
-  url: URL,
-  denyHosts: ReadonlySet<string>,
-): void {
+export function assertUnfurlUrlShape(url: URL): void {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new UnfurlBlockedError("scheme_blocked");
   }
@@ -113,8 +98,6 @@ export function assertUnfurlUrlShape(
   const hostname = url.hostname.toLowerCase();
   const address = unwrapIpv6Hostname(hostname);
   if (
-    denyHosts.has(hostname) ||
-    denyHosts.has(address) ||
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
     hostname.endsWith(".local") ||
@@ -143,12 +126,11 @@ export function isBlockedAddress(address: string): boolean {
 export async function assertSafeUnfurlTarget(
   raw: string,
   options: {
-    denyHosts: ReadonlySet<string>;
     lookup?: DnsLookupFn;
-  },
+  } = {},
 ): Promise<URL> {
   const url = parseUnfurlUrl(raw);
-  assertUnfurlUrlShape(url, options.denyHosts);
+  assertUnfurlUrlShape(url);
   const address = unwrapIpv6Hostname(url.hostname.toLowerCase());
   if (isIP(address)) return url;
   const records = await (options.lookup ?? defaultDnsLookup)(url.hostname);

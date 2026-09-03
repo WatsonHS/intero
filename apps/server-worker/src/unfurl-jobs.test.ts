@@ -27,7 +27,6 @@ describe("fetchUnfurlHtml", () => {
       fetchUnfurlHtml("https://public.example/start", {
         fetch: fetchImpl as unknown as typeof fetch,
         lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-        denyHosts: new Set(),
       }),
     ).rejects.toBeInstanceOf(UnfurlBlockedError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -46,7 +45,6 @@ describe("fetchUnfurlHtml", () => {
       fetchUnfurlHtml("https://public.example/start", {
         fetch: fetchImpl as unknown as typeof fetch,
         lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-        denyHosts: new Set(),
       }),
     ).rejects.toThrow("redirect_limit");
     expect(hops).toBe(4);
@@ -79,7 +77,6 @@ describe("UnfurlJobHandler", () => {
           { status: 200, headers: { "content-type": "text/html" } },
         )) as typeof fetch,
       lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-      denyHosts: new Set(),
       now: () => new Date("2026-09-03T00:00:00.000Z"),
     });
 
