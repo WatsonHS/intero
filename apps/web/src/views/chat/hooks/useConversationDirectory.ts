@@ -55,13 +55,16 @@ export function useConversationDirectory({
   );
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  const [listFilter, setListFilter] = useState<"active" | "archived">("active");
+  const [showChannelDirectory, setShowChannelDirectory] = useState(false);
   const [selectedStandInOwnerId, setSelectedStandInOwnerId] = useState<
     PrincipalId | undefined
   >(initialStandInOwnerId as PrincipalId | undefined);
 
   const threads = useQuery({
-    queryKey: ["threads"],
-    queryFn: ({ signal }) => getThreads(undefined, signal),
+    queryKey: listFilter === "archived" ? ["threads", "archived"] : ["threads"],
+    queryFn: ({ signal }) =>
+      getThreads(undefined, signal, { archived: listFilter === "archived" }),
     refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
@@ -420,5 +423,9 @@ export function useConversationDirectory({
     activeRelevance,
     selectThread,
     selectStandIn,
+    listFilter,
+    setListFilter,
+    showChannelDirectory,
+    setShowChannelDirectory,
   };
 }

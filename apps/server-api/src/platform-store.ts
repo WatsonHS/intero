@@ -40,6 +40,14 @@ export interface PlatformStore {
   createThread: StoreMethod<"createThread">;
   ensureRoomServicePrincipal: StoreMethod<"ensureRoomServicePrincipal">;
   updateThread: StoreMethod<"updateThread">;
+  getThreadRecord: StoreMethod<"getThreadRecord">;
+  joinThread: StoreMethod<"joinThread">;
+  leaveThread: StoreMethod<"leaveThread">;
+  archiveThread: StoreMethod<"archiveThread">;
+  unarchiveThread: StoreMethod<"unarchiveThread">;
+  getThreadNotificationPreference: StoreMethod<"getThreadNotificationPreference">;
+  setThreadNotificationPreference: StoreMethod<"setThreadNotificationPreference">;
+  listTeamRooms: StoreMethod<"listTeamRooms">;
   appendMessage: StoreMethod<"appendMessage">;
   enqueueStandInQuestion(
     input: StandInQuestionInput,

@@ -14,6 +14,7 @@ import { useThreadRealtime } from "./chat/hooks/useThreadRealtime.js";
 import { typingLabelFor } from "./chat/helpers.js";
 import { useThreadTyping } from "./chat/hooks/useThreadTyping.js";
 import { MessageList } from "./chat/MessageList.js";
+import { ChannelDirectoryPanel } from "./chat/ChannelDirectoryPanel.js";
 import { ThreadHeader } from "./chat/ThreadHeader.js";
 import { ThreadSidebar } from "./chat/ThreadSidebar.js";
 
@@ -100,6 +101,21 @@ export function CommunicationsView({
   const presence = usePresence(presenceIds);
 
   const current = directory.current;
+  const currentPrincipalId = directory.conversationIdentity?.currentPrincipalId;
+  const canManageRoom = Boolean(
+    current?.thread.kind === "room" &&
+    currentPrincipalId &&
+    (current.thread.createdBy === currentPrincipalId ||
+      directory.pilot?.bootstrap.data?.organizationRole === "admin" ||
+      (directory.pilot?.teams.data?.teams ?? []).some(
+        (team) =>
+          team.id === current?.thread.teamId &&
+          team.members.some(
+            (member) =>
+              member.id === currentPrincipalId && member.teamRole === "leader",
+          ),
+      )),
+  );
   const profilePrincipal = actions.profilePrincipalId
     ? directory.principals.find(
         (principal) =>
@@ -181,6 +197,12 @@ export function CommunicationsView({
         onSelectThread={selectThread}
         onSelectStandIn={directory.selectStandIn}
         onCreateStandIn={() => actions.createStandIn.mutate()}
+        onBrowseChannels={() => directory.setShowChannelDirectory(true)}
+        listFilter={directory.listFilter}
+        onListFilterChange={directory.setListFilter}
+        canBrowseChannels={
+          (directory.pilot?.teams.data?.teams ?? []).length > 0
+        }
       />
 
       {current ? (
@@ -208,6 +230,27 @@ export function CommunicationsView({
                 : {})}
             />
           ) : null}
+          {directory.showChannelDirectory ? (
+            <ChannelDirectoryPanel
+              teams={(directory.pilot?.teams.data?.teams ?? []).map((team) => ({
+                id: team.id,
+                name: team.name,
+              }))}
+              onClose={() => directory.setShowChannelDirectory(false)}
+              onJoined={(threadId) => {
+                directory.setShowChannelDirectory(false);
+                selectThread(threadId);
+              }}
+              onLeft={(threadId) => {
+                if (current?.thread.id === threadId) {
+                  const next = directory.items.find(
+                    (item) => item.thread.id !== threadId,
+                  );
+                  if (next) selectThread(next.thread.id);
+                }
+              }}
+            />
+          ) : null}
           {actions.showManage && current.thread.kind === "room" ? (
             <GroupChatManagementModal
               title={current.thread.title}
@@ -218,6 +261,8 @@ export function CommunicationsView({
               candidates={directory.conversationCandidates}
               protectedParticipantId={directory.currentSenderId}
               busy={actions.updateGroupChat.isPending}
+              visibility={current.thread.visibility ?? "private"}
+              canChangeVisibility={canManageRoom}
               error={
                 actions.updateGroupChat.error instanceof Error
                   ? actions.updateGroupChat.error.message
@@ -270,6 +315,11 @@ export function CommunicationsView({
             onCancelConclude={() => actions.setConcluding(false)}
             onConclusionChange={actions.setConclusion}
             onConclude={(input) => actions.conclude.mutate(input)}
+            onMute={(input) => actions.mute.mutate(input)}
+            onUnmute={() => actions.unmute.mutate()}
+            onArchive={() => actions.archive.mutate()}
+            onUnarchive={() => actions.unarchive.mutate()}
+            canManageRoom={canManageRoom}
             presence={presence}
           />
           <MessageList
@@ -324,59 +374,61 @@ export function CommunicationsView({
             onDelete={(message) => messages.setDeletingMessage(message)}
             typingLabel={typingLabel}
           />
-          <Composer
-            currentAccessMode={current.thread.accessMode}
-            currentSenderId={directory.currentSenderId}
-            currentIsPilot={directory.currentIsPilot}
-            currentIsPilotStandIn={directory.currentIsPilotStandIn}
-            legacyStandInRecord={directory.legacyStandInRecord}
-            canAttachImages={directory.canAttachImages}
-            mentionPickerOpen={composer.mentionPickerOpen}
-            emojiPickerOpen={composer.emojiPickerOpen}
-            markdownPreview={composer.markdownPreview}
-            draft={composer.draft}
-            visibleMentionCandidates={composer.visibleMentionCandidates}
-            activeMentionCandidate={composer.activeMentionCandidate}
-            mentionOptionRefs={composer.mentionOptionRefs}
-            composerRef={composer.composerRef}
-            composerMirrorRef={composer.composerMirrorRef}
-            imageInputRef={composer.imageInputRef}
-            composerImages={composer.composerImages}
-            replyingToMessageId={composer.replyingToMessageId}
-            replyingToMessage={composer.replyingToMessage}
-            principalNames={directory.principalNames}
-            mentionCandidates={directory.mentionCandidates}
-            sendPending={composer.send.isPending}
-            onAddImages={composer.addComposerImages}
-            onToggleMention={() =>
-              composer.setMentionPickerOpen((open) => !open)
-            }
-            onToggleEmoji={() => composer.setEmojiPickerOpen((open) => !open)}
-            onCloseEmoji={() => composer.setEmojiPickerOpen(false)}
-            onSelectEmoji={composer.selectEmoji}
-            onImageInputChange={(event) => {
-              void composer.addComposerImages([
-                ...(event.currentTarget.files ?? []),
-              ]);
-              event.currentTarget.value = "";
-            }}
-            onPickImages={() => composer.imageInputRef.current?.click()}
-            onToggleMarkdown={() =>
-              composer.setMarkdownPreview((visible) => !visible)
-            }
-            onSelectMention={composer.selectMention}
-            onHoverMention={composer.setActiveMentionIndex}
-            onCancelReply={() => composer.setReplyingToMessageId(undefined)}
-            onRemoveImage={composer.removeComposerImage}
-            onDraftChange={composer.setDraft}
-            onTyping={typing.notifyTyping}
-            onSetMentionCursor={composer.setMentionCursor}
-            onResetMentionIndex={() => composer.setActiveMentionIndex(0)}
-            onSetMentionPickerOpen={composer.setMentionPickerOpen}
-            onCloseMention={() => composer.setMentionPickerOpen(false)}
-            onMoveMentionIndex={composer.setActiveMentionIndex}
-            onSubmit={composer.submit}
-          />
+          {current.thread.archivedAt ? null : (
+            <Composer
+              currentAccessMode={current.thread.accessMode}
+              currentSenderId={directory.currentSenderId}
+              currentIsPilot={directory.currentIsPilot}
+              currentIsPilotStandIn={directory.currentIsPilotStandIn}
+              legacyStandInRecord={directory.legacyStandInRecord}
+              canAttachImages={directory.canAttachImages}
+              mentionPickerOpen={composer.mentionPickerOpen}
+              emojiPickerOpen={composer.emojiPickerOpen}
+              markdownPreview={composer.markdownPreview}
+              draft={composer.draft}
+              visibleMentionCandidates={composer.visibleMentionCandidates}
+              activeMentionCandidate={composer.activeMentionCandidate}
+              mentionOptionRefs={composer.mentionOptionRefs}
+              composerRef={composer.composerRef}
+              composerMirrorRef={composer.composerMirrorRef}
+              imageInputRef={composer.imageInputRef}
+              composerImages={composer.composerImages}
+              replyingToMessageId={composer.replyingToMessageId}
+              replyingToMessage={composer.replyingToMessage}
+              principalNames={directory.principalNames}
+              mentionCandidates={directory.mentionCandidates}
+              sendPending={composer.send.isPending}
+              onAddImages={composer.addComposerImages}
+              onToggleMention={() =>
+                composer.setMentionPickerOpen((open) => !open)
+              }
+              onToggleEmoji={() => composer.setEmojiPickerOpen((open) => !open)}
+              onCloseEmoji={() => composer.setEmojiPickerOpen(false)}
+              onSelectEmoji={composer.selectEmoji}
+              onImageInputChange={(event) => {
+                void composer.addComposerImages([
+                  ...(event.currentTarget.files ?? []),
+                ]);
+                event.currentTarget.value = "";
+              }}
+              onPickImages={() => composer.imageInputRef.current?.click()}
+              onToggleMarkdown={() =>
+                composer.setMarkdownPreview((visible) => !visible)
+              }
+              onSelectMention={composer.selectMention}
+              onHoverMention={composer.setActiveMentionIndex}
+              onCancelReply={() => composer.setReplyingToMessageId(undefined)}
+              onRemoveImage={composer.removeComposerImage}
+              onDraftChange={composer.setDraft}
+              onTyping={typing.notifyTyping}
+              onSetMentionCursor={composer.setMentionCursor}
+              onResetMentionIndex={() => composer.setActiveMentionIndex(0)}
+              onSetMentionPickerOpen={composer.setMentionPickerOpen}
+              onCloseMention={() => composer.setMentionPickerOpen(false)}
+              onMoveMentionIndex={composer.setActiveMentionIndex}
+              onSubmit={composer.submit}
+            />
+          )}
           {messages.deletingMessage ? (
             <Modal
               title={t("chat.deleteConfirmTitle")}

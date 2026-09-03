@@ -254,6 +254,10 @@ export const threads = pgTable(
     parentThreadId: uuid("parent_thread_id"),
     concludedAt: timestamp("concluded_at", { withTimezone: true }),
     concludedBy: uuid("concluded_by").references(() => principals.id),
+    visibility: text("visibility").notNull().default("private"),
+    createdBy: uuid("created_by").references(() => principals.id),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archivedBy: uuid("archived_by").references(() => principals.id),
     ...timestamps,
   },
   (table) => [
@@ -308,9 +312,37 @@ export const threadParticipants = pgTable(
     standIn: boolean("stand_in").notNull().default(false),
     visibleFromSequence: integer("visible_from_sequence").notNull().default(1),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [primaryKey({ columns: [table.threadId, table.principalId] })],
+);
+
+export const threadNotificationPreferences = pgTable(
+  "thread_notification_preferences",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => threads.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    mutedUntil: timestamp("muted_until", { withTimezone: true }),
+    muteIncludingMentions: boolean("mute_including_mentions")
+      .notNull()
+      .default(false),
+    ...timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.threadId, table.principalId] }),
+    index("thread_notification_preferences_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+    ),
+  ],
 );
 
 export const messages = pgTable(

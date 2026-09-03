@@ -1,16 +1,20 @@
-import { PrincipalId } from "@intero/domain";
+import { PrincipalId, ThreadId } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
 import type { PrincipalSummary, ThreadPayload } from "../../api.js";
+import { MUTED_INDEFINITELY_UNTIL } from "@intero/domain";
+
 import {
   buildPrincipalNames,
   collectPrincipals,
   ownerNameFor,
+  threadUnreadPresentation,
 } from "./helpers.js";
 import { replyMessageSummary } from "./format.js";
 
 const aliceId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000001");
 const bobId = PrincipalId.parse("019f9ba4-3108-7000-8000-000000000002");
+const threadId = ThreadId.parse("019f9ba4-3108-7000-8000-000000000010");
 
 const alice: PrincipalSummary = {
   id: aliceId,
@@ -137,5 +141,50 @@ describe("replyMessageSummary", () => {
         labels,
       ),
     ).toBe("deleted");
+  });
+});
+
+describe("threadUnreadPresentation", () => {
+  const now = new Date("2026-09-03T12:00:00.000Z");
+
+  it("shows a numeric badge when the thread is not muted", () => {
+    expect(
+      threadUnreadPresentation({ unreadCount: 4, mentionCount: 1 }, now),
+    ).toEqual({ unreadDot: false, unreadBadge: 4, mentionBadge: 1 });
+  });
+
+  it("shows a muted unread dot and keeps mention badges unless mentions are muted", () => {
+    expect(
+      threadUnreadPresentation(
+        {
+          unreadCount: 4,
+          mentionCount: 2,
+          notificationPreference: {
+            threadId,
+            principalId: aliceId,
+            mutedUntil: MUTED_INDEFINITELY_UNTIL,
+            muteIncludingMentions: false,
+            updatedAt: now.toISOString(),
+          },
+        },
+        now,
+      ),
+    ).toEqual({ unreadDot: true, unreadBadge: 0, mentionBadge: 2 });
+    expect(
+      threadUnreadPresentation(
+        {
+          unreadCount: 4,
+          mentionCount: 2,
+          notificationPreference: {
+            threadId,
+            principalId: aliceId,
+            mutedUntil: MUTED_INDEFINITELY_UNTIL,
+            muteIncludingMentions: true,
+            updatedAt: now.toISOString(),
+          },
+        },
+        now,
+      ),
+    ).toEqual({ unreadDot: true, unreadBadge: 0, mentionBadge: 0 });
   });
 });

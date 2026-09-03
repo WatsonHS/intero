@@ -7,6 +7,9 @@ import {
   type Claim,
   type ConversationThread,
   type CoordinationResult,
+  type TeamRoomDirectoryItem,
+  type ThreadNotificationPreference,
+  type ThreadVisibility,
   type DecisionRecord,
   type KanbanCard,
   type KanbanCardId,
@@ -144,6 +147,13 @@ export class InMemoryPlatformStore {
   readonly activities: ActivityEvent[] = [];
   readonly outbox: OutboxEntry[] = [];
   readonly processedIdempotencyKeys = new Set<string>();
+  /** Keyed `${threadId}:${principalId}`. */
+  private readonly threadNotificationPreferences = new Map<
+    string,
+    ThreadNotificationPreference
+  >();
+  /** Per-principal hide-for-me on DMs and groups. */
+  private readonly threadViewerArchives = new Map<string, string>();
   #sequence = 0;
 
   ensureProject(project: Project): Project {
@@ -363,8 +373,24 @@ export class InMemoryPlatformStore {
         thread.standInIds.includes(participantId) ? "stand_in" : "human",
       );
     }
+    if (thread.visibility === "team" && thread.kind !== "room") {
+      throw new PilotStoreError(
+        "THREAD_VISIBILITY_UNSUPPORTED",
+        409,
+        "Only Rooms can be team-visible.",
+      );
+    }
+    if (thread.visibility === "team" && !thread.teamId) {
+      throw new PilotStoreError(
+        "THREAD_TEAM_REQUIRED",
+        400,
+        "A team-visible Room requires a teamId.",
+      );
+    }
     const stored = {
       ...thread,
+      visibility: thread.visibility ?? "private",
+      ...(actorId ? { createdBy: thread.createdBy ?? actorId } : {}),
       accessVersion: thread.accessVersion ?? 1,
     };
     this.threads.set(thread.id, stored);
@@ -419,25 +445,17 @@ export class InMemoryPlatformStore {
     threadId: ThreadId,
     input: {
       title?: string;
+      visibility?: ThreadVisibility;
       addParticipantIds: PrincipalId[];
       removeParticipantIds?: PrincipalId[];
     },
     actorId: PrincipalId,
   ): { thread: ConversationThread; event?: ThreadMessage } {
     const current = this.threads.get(threadId);
-    if (!current || !current.participantIds.includes(actorId)) {
+    if (!current) {
       throw new Error("Thread was not found.");
     }
-    if (current.standInIds.includes(actorId)) {
-      throw new Error("Only a human participant can manage this Thread.");
-    }
-    if (current.kind !== "room" && current.kind !== "human_group") {
-      throw new Error("Only group conversations can be managed.");
-    }
-    const title = input.title?.trim();
-    if (title !== undefined && (title.length === 0 || title.length > 200)) {
-      throw new Error("Thread title is invalid.");
-    }
+    const isParticipant = current.participantIds.includes(actorId);
     const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
       (principalId) => !current.participantIds.includes(principalId),
     );
@@ -448,6 +466,44 @@ export class InMemoryPlatformStore {
         current.participantIds.includes(principalId) &&
         !current.standInIds.includes(principalId),
     );
+    const visibilityOnly =
+      input.visibility !== undefined &&
+      input.title === undefined &&
+      addedParticipantIds.length === 0 &&
+      removedParticipantIds.length === 0;
+    if (!isParticipant && !visibilityOnly) {
+      throw new Error("Thread was not found.");
+    }
+    if (isParticipant && current.standInIds.includes(actorId)) {
+      throw new Error("Only a human participant can manage this Thread.");
+    }
+    if (
+      !visibilityOnly &&
+      current.kind !== "room" &&
+      current.kind !== "human_group"
+    ) {
+      throw new Error("Only group conversations can be managed.");
+    }
+    if (input.visibility !== undefined) {
+      if (current.kind !== "room") {
+        throw new PilotStoreError(
+          "THREAD_VISIBILITY_UNSUPPORTED",
+          409,
+          "Only Rooms can change visibility.",
+        );
+      }
+      if (input.visibility === "team" && !current.teamId) {
+        throw new PilotStoreError(
+          "THREAD_TEAM_REQUIRED",
+          400,
+          "A team-visible Room requires a teamId.",
+        );
+      }
+    }
+    const title = input.title?.trim();
+    if (title !== undefined && (title.length === 0 || title.length > 200)) {
+      throw new Error("Thread title is invalid.");
+    }
     if (removedParticipantIds.includes(actorId)) {
       throw new Error("A group manager cannot remove their own access.");
     }
@@ -455,8 +511,12 @@ export class InMemoryPlatformStore {
       this.ensurePrincipal(participantId, "human");
     }
     const titleChanged = title !== undefined && title !== current.title;
+    const visibilityChanged =
+      input.visibility !== undefined &&
+      input.visibility !== (current.visibility ?? "private");
     if (
       !titleChanged &&
+      !visibilityChanged &&
       addedParticipantIds.length === 0 &&
       removedParticipantIds.length === 0
     ) {
@@ -488,6 +548,12 @@ export class InMemoryPlatformStore {
     const updated: ConversationThread = {
       ...current,
       ...(titleChanged ? { title } : {}),
+      ...(visibilityChanged ? { visibility: input.visibility } : {}),
+      ...(visibilityChanged || event
+        ? {
+            accessVersion: (current.accessVersion ?? 1) + 1,
+          }
+        : {}),
       ...(event
         ? {
             participantIds: [
@@ -500,7 +566,6 @@ export class InMemoryPlatformStore {
               (id) => !removedParticipantIds.includes(id),
             ),
             sequence: event!.sequence,
-            accessVersion: (current.accessVersion ?? 1) + 1,
             latestMessageAt: event!.createdAt,
           }
         : {}),
@@ -530,6 +595,225 @@ export class InMemoryPlatformStore {
     return { thread: updated, ...(event ? { event } : {}) };
   }
 
+  getThreadRecord(threadId: ThreadId): ConversationThread | undefined {
+    return this.threads.get(threadId);
+  }
+
+  joinThread(threadId: ThreadId, actorId: PrincipalId): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (
+      !current ||
+      current.kind !== "room" ||
+      (current.visibility ?? "private") !== "team"
+    ) {
+      throw new Error("Thread was not found.");
+    }
+    assertThreadWritable(current);
+    if (current.participantIds.includes(actorId)) return current;
+    this.ensurePrincipal(actorId, "human");
+    const event: ThreadMessage = {
+      id: uuidv7() as ThreadMessage["id"],
+      threadId,
+      senderId: actorId,
+      sequence: current.sequence + 1,
+      kind: "system_access_change",
+      body: "1 member(s) joined; earlier history remains withheld.",
+      createdAt: new Date().toISOString(),
+      serverReadable: true,
+    };
+    const updated: ConversationThread = {
+      ...current,
+      participantIds: [...current.participantIds, actorId],
+      sequence: event.sequence,
+      accessVersion: (current.accessVersion ?? 1) + 1,
+      latestMessageAt: event.createdAt,
+    };
+    this.threads.set(threadId, updated);
+    this.messages.set(threadId, [
+      ...(this.messages.get(threadId) ?? []),
+      event,
+    ]);
+    this.threadVisibility.set(`${threadId}:${actorId}`, event.sequence);
+    this.recordConversationChange(updated, actorId, "access_changed", event.id);
+    return updated;
+  }
+
+  leaveThread(threadId: ThreadId, actorId: PrincipalId): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (!current || !current.participantIds.includes(actorId)) {
+      throw new Error("Thread was not found.");
+    }
+    if (current.kind !== "room") {
+      throw new PilotStoreError(
+        "THREAD_LEAVE_UNSUPPORTED",
+        409,
+        "Only Rooms can be left this way.",
+      );
+    }
+    if (current.standInIds.includes(actorId)) {
+      throw new Error("Only a human participant can leave this Thread.");
+    }
+    const event: ThreadMessage = {
+      id: uuidv7() as ThreadMessage["id"],
+      threadId,
+      senderId: actorId,
+      sequence: current.sequence + 1,
+      kind: "system_access_change",
+      body: "1 member(s) left and lost access immediately.",
+      createdAt: new Date().toISOString(),
+      serverReadable: true,
+    };
+    const updated: ConversationThread = {
+      ...current,
+      participantIds: current.participantIds.filter((id) => id !== actorId),
+      sequence: event.sequence,
+      accessVersion: (current.accessVersion ?? 1) + 1,
+      latestMessageAt: event.createdAt,
+    };
+    this.threads.set(threadId, updated);
+    this.messages.set(threadId, [
+      ...(this.messages.get(threadId) ?? []),
+      event,
+    ]);
+    this.threadVisibility.delete(`${threadId}:${actorId}`);
+    this.threadViewerArchives.delete(`${threadId}:${actorId}`);
+    this.recordConversationChange(updated, actorId, "access_changed", event.id);
+    return updated;
+  }
+
+  archiveThread(threadId: ThreadId, actorId: PrincipalId): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (!current) throw new Error("Thread was not found.");
+    const at = new Date().toISOString();
+    if (current.kind === "room") {
+      if (current.archivedAt) return current;
+      const updated: ConversationThread = {
+        ...current,
+        archivedAt: at,
+        archivedBy: actorId,
+        accessVersion: (current.accessVersion ?? 1) + 1,
+      };
+      this.threads.set(threadId, updated);
+      this.recordConversationChange(
+        updated,
+        actorId,
+        "thread_updated",
+        uuidv7(),
+      );
+      return updated;
+    }
+    if (current.kind !== "human_direct" && current.kind !== "human_group") {
+      throw new PilotStoreError(
+        "THREAD_ARCHIVE_UNSUPPORTED",
+        409,
+        "This Thread kind cannot be archived.",
+      );
+    }
+    if (!current.participantIds.includes(actorId)) {
+      throw new Error("Thread was not found.");
+    }
+    this.threadViewerArchives.set(`${threadId}:${actorId}`, at);
+    return current;
+  }
+
+  unarchiveThread(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): ConversationThread {
+    const current = this.threads.get(threadId);
+    if (!current) throw new Error("Thread was not found.");
+    if (current.kind === "room") {
+      if (!current.archivedAt) return current;
+      const updated: ConversationThread = { ...current };
+      delete updated.archivedAt;
+      delete updated.archivedBy;
+      updated.accessVersion = (current.accessVersion ?? 1) + 1;
+      this.threads.set(threadId, updated);
+      this.recordConversationChange(
+        updated,
+        actorId,
+        "thread_updated",
+        uuidv7(),
+      );
+      return updated;
+    }
+    if (current.kind !== "human_direct" && current.kind !== "human_group") {
+      throw new PilotStoreError(
+        "THREAD_ARCHIVE_UNSUPPORTED",
+        409,
+        "This Thread kind cannot be archived.",
+      );
+    }
+    if (!current.participantIds.includes(actorId)) {
+      throw new Error("Thread was not found.");
+    }
+    this.threadViewerArchives.delete(`${threadId}:${actorId}`);
+    return current;
+  }
+
+  getThreadNotificationPreference(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): ThreadNotificationPreference {
+    return (
+      this.threadNotificationPreferences.get(`${threadId}:${principalId}`) ??
+      defaultThreadNotificationPreference(threadId, principalId)
+    );
+  }
+
+  setThreadNotificationPreference(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    input: {
+      mutedUntil?: string | null | undefined;
+      muteIncludingMentions?: boolean | undefined;
+    },
+  ): ThreadNotificationPreference {
+    const current = this.getThreadNotificationPreference(threadId, principalId);
+    const next: ThreadNotificationPreference = {
+      threadId,
+      principalId,
+      muteIncludingMentions:
+        input.muteIncludingMentions ?? current.muteIncludingMentions,
+      updatedAt: new Date().toISOString(),
+    };
+    const mutedUntil =
+      input.mutedUntil === undefined ? current.mutedUntil : input.mutedUntil;
+    if (mutedUntil) next.mutedUntil = mutedUntil;
+    this.threadNotificationPreferences.set(`${threadId}:${principalId}`, next);
+    return next;
+  }
+
+  listTeamRooms(
+    teamId: string,
+    viewerId: PrincipalId,
+    options: { includeJoined?: boolean } = {},
+  ): TeamRoomDirectoryItem[] {
+    const includeJoined = options.includeJoined === true;
+    return [...this.threads.values()]
+      .filter(
+        (thread) =>
+          thread.kind === "room" &&
+          thread.teamId === teamId &&
+          (thread.visibility ?? "private") === "team" &&
+          !thread.archivedAt &&
+          (includeJoined || !thread.participantIds.includes(viewerId)),
+      )
+      .toSorted((left, right) =>
+        (right.latestMessageAt ?? right.createdAt).localeCompare(
+          left.latestMessageAt ?? left.createdAt,
+        ),
+      )
+      .map((thread) => ({
+        thread,
+        memberCount: humanMemberCount(thread),
+        ...(thread.latestMessageAt
+          ? { latestMessageAt: thread.latestMessageAt }
+          : {}),
+        joined: thread.participantIds.includes(viewerId),
+      }));
+  }
+
   appendMessage(
     threadId: ThreadId,
     input: {
@@ -546,6 +830,7 @@ export class InMemoryPlatformStore {
   ): ThreadMessage {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Thread was not found.");
+    assertThreadWritable(thread);
     if (!thread.participantIds.includes(input.senderId)) {
       throw new Error("Sender is not a Thread participant.");
     }
@@ -789,6 +1074,7 @@ export class InMemoryPlatformStore {
     if (!thread?.participantIds.includes(input.principalId)) {
       throw new Error("Thread was not found.");
     }
+    assertThreadWritable(thread);
     const messages = this.messages.get(input.threadId) ?? [];
     const messageIndex = messages.findIndex(
       (message) =>
@@ -1291,13 +1577,19 @@ export class InMemoryPlatformStore {
     );
   }
 
-  listThreads(kind?: ConversationThread["kind"], principalId?: PrincipalId) {
+  listThreads(
+    kind?: ConversationThread["kind"],
+    principalId?: PrincipalId,
+    options: { archived?: boolean } = {},
+  ) {
     return [...this.threads.values()]
       .filter(
         (thread) =>
           (kind === undefined || thread.kind === kind) &&
           (principalId === undefined ||
-            thread.participantIds.includes(principalId)),
+            thread.participantIds.includes(principalId)) &&
+          (principalId === undefined ||
+            this.matchesArchiveFilter(thread, principalId, options.archived)),
       )
       .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((thread) => {
@@ -1329,8 +1621,43 @@ export class InMemoryPlatformStore {
                   message.mentionedPrincipalIds?.includes(principalId),
               ).length
             : 0,
+          ...(principalId
+            ? {
+                notificationPreference: this.getThreadNotificationPreference(
+                  thread.id,
+                  principalId,
+                ),
+                ...(this.threadViewerArchives.has(`${thread.id}:${principalId}`)
+                  ? {
+                      viewerArchivedAt: this.threadViewerArchives.get(
+                        `${thread.id}:${principalId}`,
+                      ),
+                    }
+                  : {}),
+              }
+            : {}),
         };
       });
+  }
+
+  private matchesArchiveFilter(
+    thread: ConversationThread,
+    principalId: PrincipalId,
+    archived?: boolean,
+  ): boolean {
+    const isArchived = this.threadIsArchivedForViewer(thread, principalId);
+    return archived === true ? isArchived : !isArchived;
+  }
+
+  private threadIsArchivedForViewer(
+    thread: ConversationThread,
+    principalId: PrincipalId,
+  ): boolean {
+    if (thread.kind === "room") return Boolean(thread.archivedAt);
+    if (thread.kind === "human_direct" || thread.kind === "human_group") {
+      return this.threadViewerArchives.has(`${thread.id}:${principalId}`);
+    }
+    return false;
   }
 
   getThread(threadId: ThreadId, principalId?: PrincipalId) {
@@ -1369,6 +1696,21 @@ export class InMemoryPlatformStore {
               message.mentionedPrincipalIds?.includes(principalId),
           ).length
         : 0,
+      ...(principalId
+        ? {
+            notificationPreference: this.getThreadNotificationPreference(
+              thread.id,
+              principalId,
+            ),
+            ...(this.threadViewerArchives.has(`${thread.id}:${principalId}`)
+              ? {
+                  viewerArchivedAt: this.threadViewerArchives.get(
+                    `${thread.id}:${principalId}`,
+                  ),
+                }
+              : {}),
+          }
+        : {}),
     };
   }
 
@@ -1737,18 +2079,46 @@ export function updateMessageReactions(
   return { changed: true, reactions };
 }
 
+export function assertThreadWritable(thread: ConversationThread): void {
+  if (thread.concludedAt) {
+    throw new PilotStoreError(
+      "THREAD_CONCLUDED",
+      409,
+      "Concluded threads cannot be changed.",
+    );
+  }
+  if (thread.archivedAt) {
+    throw new PilotStoreError(
+      "THREAD_ARCHIVED",
+      409,
+      "Archived threads are read-only.",
+    );
+  }
+}
+
+export function defaultThreadNotificationPreference(
+  threadId: ThreadId,
+  principalId: PrincipalId,
+): ThreadNotificationPreference {
+  return {
+    threadId,
+    principalId,
+    muteIncludingMentions: false,
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+
+export function humanMemberCount(thread: ConversationThread): number {
+  return thread.participantIds.filter((id) => !thread.standInIds.includes(id))
+    .length;
+}
+
 export function assertMutableThreadMessage(input: {
   thread: ConversationThread;
   message: ThreadMessage;
   actorId: PrincipalId;
 }): void {
-  if (input.thread.concludedAt) {
-    throw new PilotStoreError(
-      "THREAD_CONCLUDED",
-      409,
-      "Concluded threads cannot be edited.",
-    );
-  }
+  assertThreadWritable(input.thread);
   if (input.message.deletedAt) {
     throw new PilotStoreError(
       "MESSAGE_DELETED",
@@ -1880,6 +2250,7 @@ export function sameThreadCreation(
     left.projectId === right.projectId &&
     left.teamId === right.teamId &&
     left.parentThreadId === right.parentThreadId &&
+    (left.visibility ?? "private") === (right.visibility ?? "private") &&
     sameIds(left.participantIds, right.participantIds) &&
     sameIds(left.standInIds, right.standInIds)
   );

@@ -23,6 +23,8 @@ export function GroupChatManagementModal({
   protectedParticipantId,
   busy,
   error,
+  visibility,
+  canChangeVisibility,
   onClose,
   onSave,
 }: {
@@ -35,9 +37,12 @@ export function GroupChatManagementModal({
   protectedParticipantId?: string | undefined;
   busy: boolean;
   error?: string | undefined;
+  visibility?: "private" | "team";
+  canChangeVisibility?: boolean;
   onClose: () => void;
   onSave: (input: {
     title?: string;
+    visibility?: "private" | "team";
     addParticipantIds: string[];
     removeParticipantIds: string[];
   }) => void;
@@ -47,6 +52,9 @@ export function GroupChatManagementModal({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
+  const [nextVisibility, setNextVisibility] = useState<"private" | "team">(
+    visibility ?? "private",
+  );
   const existing = new Set(participantIds);
   const needle = query.trim().toLocaleLowerCase();
   const available = candidates
@@ -60,7 +68,14 @@ export function GroupChatManagementModal({
   const normalizedTitle = title.trim();
   const titleChanged =
     normalizedTitle.length > 0 && normalizedTitle !== initialTitle;
-  const ready = titleChanged || picked.length > 0 || removed.length > 0;
+  const visibilityChanged =
+    Boolean(canChangeVisibility) &&
+    nextVisibility !== (visibility ?? "private");
+  const ready =
+    titleChanged ||
+    picked.length > 0 ||
+    removed.length > 0 ||
+    visibilityChanged;
 
   function toggle(id: string) {
     setPicked((current) =>
@@ -100,6 +115,41 @@ export function GroupChatManagementModal({
               />
             </div>
           </div>
+
+          {canChangeVisibility ? (
+            <div className="mt-[18px]">
+              <SectionLabel>{t("chat.visibility")}</SectionLabel>
+              <div className="mt-[9px] flex gap-1.5">
+                <button
+                  type="button"
+                  aria-pressed={nextVisibility === "private"}
+                  onClick={() => setNextVisibility("private")}
+                  className={
+                    nextVisibility === "private"
+                      ? "h-8 rounded-btn border-0 bg-sel px-3 text-[11.5px]"
+                      : "h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted"
+                  }
+                >
+                  {t("chat.visibilityPrivate")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={nextVisibility === "team"}
+                  onClick={() => setNextVisibility("team")}
+                  className={
+                    nextVisibility === "team"
+                      ? "h-8 rounded-btn border-0 bg-sel px-3 text-[11.5px]"
+                      : "h-8 rounded-btn border border-line2 bg-transparent px-3 text-[11.5px] text-ink-muted"
+                  }
+                >
+                  {t("chat.visibilityTeam")}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[10.5px] text-faint">
+                {t("chat.visibilityTeamHint")}
+              </p>
+            </div>
+          ) : null}
 
           <div className="mt-[18px] flex items-baseline gap-2">
             <SectionLabel>{t("chat.currentMembers")}</SectionLabel>
@@ -185,6 +235,7 @@ export function GroupChatManagementModal({
             onClick={() =>
               onSave({
                 ...(titleChanged ? { title: normalizedTitle } : {}),
+                ...(visibilityChanged ? { visibility: nextVisibility } : {}),
                 addParticipantIds: picked,
                 removeParticipantIds: removed,
               })

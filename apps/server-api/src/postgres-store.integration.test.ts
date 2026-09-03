@@ -93,6 +93,7 @@ databaseSuite("PostgreSQL platform store", () => {
       "decisions",
       "attachments",
       "messages",
+      "thread_notification_preferences",
       "thread_participants",
       "threads",
       "capability_grants",

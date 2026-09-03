@@ -2,10 +2,15 @@ import type { PrincipalId } from "@intero/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import { MUTED_INDEFINITELY_UNTIL } from "@intero/domain";
+
 import {
   addStandInToThread,
+  archiveThread,
   concludeThread,
   createConversationThread,
+  setThreadNotificationPreference,
+  unarchiveThread,
   updateConversationThread,
 } from "../../../api.js";
 import type { PrincipalSummary, ThreadPayload } from "../../../api.js";
@@ -126,6 +131,7 @@ export function useThreadActions({
     mutationFn: (input: {
       threadId: string;
       title?: string;
+      visibility?: "private" | "team";
       addParticipantIds: string[];
       removeParticipantIds: string[];
     }) => updateConversationThread(input),
@@ -239,6 +245,49 @@ export function useThreadActions({
       );
     },
   });
+  const mute = useMutation({
+    mutationFn: (input: {
+      hours?: number;
+      indefinitely?: boolean;
+      includingMentions?: boolean;
+    }) => {
+      if (!current) throw new Error(t("chat.identityUnavailable"));
+      const mutedUntil = input.indefinitely
+        ? MUTED_INDEFINITELY_UNTIL
+        : new Date(
+            Date.now() + (input.hours ?? 1) * 60 * 60 * 1000,
+          ).toISOString();
+      return setThreadNotificationPreference(current.thread.id, {
+        mutedUntil,
+        muteIncludingMentions: Boolean(input.includingMentions),
+      });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+  });
+  const unmute = useMutation({
+    mutationFn: () => {
+      if (!current) throw new Error(t("chat.identityUnavailable"));
+      return setThreadNotificationPreference(current.thread.id, {
+        mutedUntil: null,
+        muteIncludingMentions: false,
+      });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+  });
+  const archive = useMutation({
+    mutationFn: () => {
+      if (!current) throw new Error(t("chat.identityUnavailable"));
+      return archiveThread(current.thread.id);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+  });
+  const unarchive = useMutation({
+    mutationFn: () => {
+      if (!current) throw new Error(t("chat.identityUnavailable"));
+      return unarchiveThread(current.thread.id);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+  });
 
   return {
     showCreate,
@@ -258,5 +307,9 @@ export function useThreadActions({
     addStandIn,
     createStandIn,
     startProfileDirectMessage,
+    mute,
+    unmute,
+    archive,
+    unarchive,
   };
 }

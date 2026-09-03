@@ -17,12 +17,15 @@ import {
   CursorQuery,
   EditThreadMessageRequest,
   IngestEventRequest,
+  ListThreadsQuery,
   MarkThreadReadRequest,
   PresenceHeartbeatRequest,
   PresenceResponse,
   SendThreadMessageRequest,
   SetMessageReactionRequest,
+  TeamRoomsQuery,
   ThreadMessagesQuery,
+  ThreadNotificationPreferenceUpdate,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
 } from "@intero/api-contracts";
@@ -35,7 +38,7 @@ import {
 import {
   personalStandInId,
   roomInteroPrincipalId,
-  ThreadKind,
+  type ConversationThread,
   type MessageId,
   type KanbanCard,
   type KanbanCardId,
@@ -1114,13 +1117,10 @@ export async function buildApp(
 
   app.get("/v1/threads", async (request) => {
     const viewer = await requestAuth.resolve(request);
-    const query = parse(
-      z.object({
-        kind: ThreadKind.optional(),
-      }),
-      request.query,
-    );
-    let items = await store.listThreads(query.kind, viewer!.id);
+    const query = parse(ListThreadsQuery, request.query);
+    let items = await store.listThreads(query.kind, viewer!.id, {
+      archived: query.archived,
+    });
     await Promise.all(
       items
         .filter(
@@ -1130,7 +1130,9 @@ export async function buildApp(
         )
         .map((item) => ensureRoomIntero(store, item.thread.id)),
     );
-    items = await store.listThreads(query.kind, viewer!.id);
+    items = await store.listThreads(query.kind, viewer!.id, {
+      archived: query.archived,
+    });
     const reads = new Map(
       (await store.listThreadReads(viewer!.id)).map((entry) => [
         entry.threadId as string,
@@ -1237,8 +1239,15 @@ export async function buildApp(
     async (request, reply) => {
       const principal = await requestAuth.resolve(request);
       const threadId = request.params.threadId as ThreadId;
-      const visible = await store.hasThreadAccess(threadId, principal!.id);
+      const visible = await store.getThread(threadId, principal!.id);
       if (!visible) return notFound(reply, "Thread");
+      if (visible.thread.archivedAt) {
+        throw new PilotStoreError(
+          "THREAD_ARCHIVED",
+          409,
+          "Archived threads are read-only.",
+        );
+      }
       const retryAfter = await typingLimiter.consume(
         `typing:${threadId}:${principal!.id}`,
         1,
@@ -1377,14 +1386,19 @@ export async function buildApp(
       const principal = await requestAuth.resolve(request);
       const threadId = request.params.threadId as ThreadId;
       const input = parse(UpdateThreadRequest, request.body);
-      const visible = await store.hasThreadAccess(threadId, principal!.id);
-      if (!visible) return notFound(reply, "Thread");
       const requestedParticipants = [
         ...new Set(input.addParticipantIds as PrincipalId[]),
       ];
       const removedParticipants = [
         ...new Set(input.removeParticipantIds as PrincipalId[]),
       ];
+      const visibilityOnly =
+        input.visibility !== undefined &&
+        input.title === undefined &&
+        requestedParticipants.length === 0 &&
+        removedParticipants.length === 0;
+      const visible = await store.hasThreadAccess(threadId, principal!.id);
+      if (!visible && !visibilityOnly) return notFound(reply, "Thread");
       const knownParticipants = await principalDirectory.list(
         requestedParticipants,
       );
@@ -1398,10 +1412,25 @@ export async function buildApp(
           "New Thread participants must be known human members.",
         );
       }
+      if (input.visibility !== undefined) {
+        const record = await store.getThreadRecord(threadId);
+        if (!record) return notFound(reply, "Thread");
+        if (!(await canManageRoom(pilotStore, record, principal!.id))) {
+          if (!visible) return notFound(reply, "Thread");
+          throw new PilotStoreError(
+            "THREAD_MANAGE_FORBIDDEN",
+            403,
+            "Only the creator or an organization/team administrator can change Room visibility.",
+          );
+        }
+      }
       const result = await store.updateThread(
         threadId,
         {
           ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.visibility !== undefined
+            ? { visibility: input.visibility }
+            : {}),
           addParticipantIds: requestedParticipants,
           removeParticipantIds: removedParticipants,
         },
@@ -1420,6 +1449,195 @@ export async function buildApp(
         );
       }
       return result;
+    },
+  );
+
+  app.get<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/notification-preference",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+        return notFound(reply, "Thread");
+      }
+      return {
+        preference: await store.getThreadNotificationPreference(
+          threadId,
+          principal!.id,
+        ),
+      };
+    },
+  );
+
+  app.put<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/notification-preference",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+        return notFound(reply, "Thread");
+      }
+      const input = parse(ThreadNotificationPreferenceUpdate, request.body);
+      return {
+        preference: await store.setThreadNotificationPreference(
+          threadId,
+          principal!.id,
+          input,
+        ),
+      };
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/join",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const record = await store.getThreadRecord(threadId);
+      if (
+        !record ||
+        record.kind !== "room" ||
+        (record.visibility ?? "private") !== "team"
+      ) {
+        return notFound(reply, "Thread");
+      }
+      if (!record.teamId) return notFound(reply, "Thread");
+      const role = await pilotStore.getTeamRole(record.teamId, principal!.id);
+      if (!role) {
+        throw new PilotStoreError(
+          "TEAM_MEMBERSHIP_REQUIRED",
+          403,
+          "This identity is not a member of the team.",
+        );
+      }
+      const alreadyJoined = record.participantIds.includes(principal!.id);
+      const thread = await store.joinThread(threadId, principal!.id);
+      return reply.status(alreadyJoined ? 200 : 201).send({ thread });
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/leave",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+        return notFound(reply, "Thread");
+      }
+      await store.leaveThread(threadId, principal!.id);
+      const revocation = await Promise.allSettled([
+        options.realtimeAccessRevoker?.revoke(principal!.id, threadId),
+      ]);
+      if (revocation.some((item) => item.status === "rejected")) {
+        throw new PilotStoreError(
+          "REALTIME_ACCESS_REVOKE_PENDING",
+          503,
+          "Participant access was removed durably, but realtime disconnect is pending. Retry this change.",
+        );
+      }
+      return reply.status(204).send();
+    },
+  );
+
+  app.get<{ Params: { teamId: string } }>(
+    "/v1/teams/:teamId/rooms",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const teamId = request.params.teamId;
+      const team = await pilotStore.getTeam(teamId);
+      if (!team) return notFound(reply, "Team");
+      const role = await pilotStore.getTeamRole(teamId, principal!.id);
+      if (!role) {
+        throw new PilotStoreError(
+          "TEAM_MEMBERSHIP_REQUIRED",
+          403,
+          "This identity is not a member of the team.",
+        );
+      }
+      const query = parse(TeamRoomsQuery, request.query);
+      return {
+        items: await store.listTeamRooms(teamId, principal!.id, {
+          includeJoined: query.includeJoined,
+        }),
+      };
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/archive",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const record = await store.getThreadRecord(threadId);
+      if (!record) return notFound(reply, "Thread");
+      if (record.kind === "room") {
+        if (!(await canManageRoom(pilotStore, record, principal!.id))) {
+          if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+            return notFound(reply, "Thread");
+          }
+          throw new PilotStoreError(
+            "THREAD_MANAGE_FORBIDDEN",
+            403,
+            "Only the creator or an organization/team administrator can archive a Room.",
+          );
+        }
+      } else if (
+        record.kind === "human_direct" ||
+        record.kind === "human_group"
+      ) {
+        if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+          return notFound(reply, "Thread");
+        }
+      } else {
+        if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+          return notFound(reply, "Thread");
+        }
+        throw new PilotStoreError(
+          "THREAD_ARCHIVE_UNSUPPORTED",
+          409,
+          "This Thread kind cannot be archived.",
+        );
+      }
+      return { thread: await store.archiveThread(threadId, principal!.id) };
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/unarchive",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const record = await store.getThreadRecord(threadId);
+      if (!record) return notFound(reply, "Thread");
+      if (record.kind === "room") {
+        if (!(await canManageRoom(pilotStore, record, principal!.id))) {
+          if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+            return notFound(reply, "Thread");
+          }
+          throw new PilotStoreError(
+            "THREAD_MANAGE_FORBIDDEN",
+            403,
+            "Only the creator or an organization/team administrator can unarchive a Room.",
+          );
+        }
+      } else if (
+        record.kind === "human_direct" ||
+        record.kind === "human_group"
+      ) {
+        if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+          return notFound(reply, "Thread");
+        }
+      } else {
+        if (!(await store.hasThreadAccess(threadId, principal!.id))) {
+          return notFound(reply, "Thread");
+        }
+        throw new PilotStoreError(
+          "THREAD_ARCHIVE_UNSUPPORTED",
+          409,
+          "This Thread kind cannot be archived.",
+        );
+      }
+      return { thread: await store.unarchiveThread(threadId, principal!.id) };
     },
   );
 
@@ -1769,6 +1987,12 @@ async function presentThread(
     unreadCount,
     mentionCount: item.mentionCount ?? 0,
     lastReadSequence: lastRead,
+    ...("notificationPreference" in item && item.notificationPreference
+      ? { notificationPreference: item.notificationPreference }
+      : {}),
+    ...("viewerArchivedAt" in item && item.viewerArchivedAt
+      ? { viewerArchivedAt: item.viewerArchivedAt }
+      : {}),
     principals: await store.listPrincipals(item.thread.participantIds),
     actions: (await store.listActionEnvelopes(operationIds)).map(
       (envelope) => ({
@@ -1790,6 +2014,22 @@ async function presentSpec(
       ...item.reviews.map((review) => review.reviewerId),
     ]),
   };
+}
+
+async function canManageRoom(
+  pilotStore: PilotStore,
+  thread: ConversationThread,
+  principalId: PrincipalId,
+): Promise<boolean> {
+  if (thread.kind !== "room") return false;
+  if (thread.createdBy === principalId) return true;
+  if ((await pilotStore.getOrganizationRole(principalId)) === "admin") {
+    return true;
+  }
+  if (!thread.teamId) return false;
+  return (
+    (await pilotStore.getTeamRole(thread.teamId, principalId)) === "leader"
+  );
 }
 
 function parse<T>(schema: ZodType<T>, input: unknown): T {

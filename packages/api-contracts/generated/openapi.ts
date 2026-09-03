@@ -127,6 +127,102 @@ export interface paths {
     patch: operations["updateThread"];
     trace?: never;
   };
+  "/v1/threads/{threadId}/notification-preference": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getThreadNotificationPreference"];
+    put: operations["setThreadNotificationPreference"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/join": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["joinThread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/leave": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["leaveThread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["archiveThread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/unarchive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["unarchiveThread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/teams/{teamId}/rooms": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listTeamRooms"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/threads/{threadId}/messages/{messageId}": {
     parameters: {
       query?: never;
@@ -663,6 +759,14 @@ export interface components {
         concludedAt?: string;
         /** Format: uuid */
         concludedBy?: string;
+        /** Format: uuid */
+        createdBy?: string;
+        /** @enum {string} */
+        visibility?: "private" | "team";
+        /** Format: date-time */
+        archivedAt?: string;
+        /** Format: uuid */
+        archivedBy?: string;
         /** Format: date-time */
         createdAt: string;
       };
@@ -783,6 +887,19 @@ export interface components {
       mentionCount: number;
       /** @default 0 */
       lastReadSequence: number;
+      notificationPreference?: {
+        /** Format: uuid */
+        threadId: string;
+        /** Format: uuid */
+        principalId: string;
+        /** Format: date-time */
+        mutedUntil?: string;
+        muteIncludingMentions: boolean;
+        /** Format: date-time */
+        updatedAt: string;
+      };
+      /** Format: date-time */
+      viewerArchivedAt?: string;
       principals: {
         /** Format: uuid */
         id: string;
@@ -845,6 +962,76 @@ export interface components {
         status: "resolved";
       }[];
     };
+    TeamRoomsResponse: {
+      items: {
+        thread: {
+          /** Format: uuid */
+          id: string;
+          /** @enum {string} */
+          kind:
+            | "human_direct"
+            | "human_group"
+            | "stand_in"
+            | "room"
+            | "coordination"
+            | "spec_review"
+            | "decision"
+            | "task";
+          title: string;
+          participantIds: string[];
+          standInIds: string[];
+          /** @enum {string} */
+          accessMode: "human_only_e2ee" | "agent_readable";
+          accessChangedAtSequence?: number;
+          priorHistoryGranted: boolean;
+          sequence: number;
+          accessVersion?: number;
+          /** Format: date-time */
+          latestMessageAt?: string;
+          /** Format: uuid */
+          projectId?: string;
+          /** Format: uuid */
+          teamId?: string;
+          /** Format: uuid */
+          parentThreadId?: string;
+          /** Format: date-time */
+          concludedAt?: string;
+          /** Format: uuid */
+          concludedBy?: string;
+          /** Format: uuid */
+          createdBy?: string;
+          /** @enum {string} */
+          visibility?: "private" | "team";
+          /** Format: date-time */
+          archivedAt?: string;
+          /** Format: uuid */
+          archivedBy?: string;
+          /** Format: date-time */
+          createdAt: string;
+        };
+        memberCount: number;
+        /** Format: date-time */
+        latestMessageAt?: string;
+        joined: boolean;
+      }[];
+    };
+    ThreadNotificationPreferenceResponse: {
+      preference: {
+        /** Format: uuid */
+        threadId: string;
+        /** Format: uuid */
+        principalId: string;
+        /** Format: date-time */
+        mutedUntil?: string;
+        muteIncludingMentions: boolean;
+        /** Format: date-time */
+        updatedAt: string;
+      };
+    };
+    ThreadNotificationPreferenceUpdate: {
+      mutedUntil?: string | null;
+      muteIncludingMentions?: boolean;
+    };
     UpdateKanbanCardRequest: {
       title?: string;
       description?: string;
@@ -858,6 +1045,8 @@ export interface components {
     };
     UpdateThreadRequest: {
       title?: string;
+      /** @enum {string} */
+      visibility?: "private" | "team";
       /** @default [] */
       addParticipantIds: string[];
       /** @default [] */
@@ -1062,6 +1251,193 @@ export interface operations {
       };
       /** @description Thread not found or inaccessible */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  getThreadNotificationPreference: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Per-thread notification preference */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ThreadNotificationPreferenceResponse"];
+        };
+      };
+    };
+  };
+  setThreadNotificationPreference: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ThreadNotificationPreferenceUpdate"];
+      };
+    };
+    responses: {
+      /** @description Updated per-thread notification preference */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ThreadNotificationPreferenceResponse"];
+        };
+      };
+    };
+  };
+  joinThread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Already a participant */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Joined the team-visible Room */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Not a team member */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  leaveThread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Left the Room */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Not a participant */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  archiveThread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Archived */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Not allowed to archive this Room */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  unarchiveThread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Unarchived */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  listTeamRooms: {
+    parameters: {
+      query?: {
+        includeJoined?: boolean;
+      };
+      header?: never;
+      path: {
+        teamId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Team-visible Rooms */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TeamRoomsResponse"];
+        };
+      };
+      /** @description Not a team member */
+      403: {
         headers: {
           [name: string]: unknown;
         };

@@ -29,7 +29,9 @@ import type {
   SpecRevision,
   SpecReviewResponse,
   PresenceSnapshot,
+  TeamRoomDirectoryItem,
   ThreadMessage,
+  ThreadNotificationPreference,
   Sprint,
   WorkCodeReference,
   WorkComment,
@@ -122,6 +124,8 @@ export interface ThreadPayload {
   /** Unread messages that explicitly target the current principal. */
   mentionCount?: number;
   lastReadSequence?: number;
+  notificationPreference?: ThreadNotificationPreference;
+  viewerArchivedAt?: string;
   /** Client-only marker: the user explicitly paged beyond the bounded tail. */
   historyExpanded?: boolean;
   principals: PrincipalSummary[];
@@ -589,13 +593,15 @@ export async function searchAuthorizedContent(
 export async function getThreads(
   kind?: ConversationThread["kind"],
   signal?: AbortSignal,
+  options: { archived?: boolean } = {},
 ): Promise<{
   items: ThreadPayload[];
 }> {
-  return getJson(
-    kind ? `/v1/threads?kind=${encodeURIComponent(kind)}` : "/v1/threads",
-    signal,
-  );
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (options.archived) params.set("archived", "true");
+  const query = params.toString();
+  return getJson(query ? `/v1/threads?${query}` : "/v1/threads", signal);
 }
 
 export async function createRealtimeSession(): Promise<RealtimeSessionPayload> {
@@ -902,14 +908,86 @@ export async function createConversationThread(input: {
 export async function updateConversationThread(input: {
   threadId: string;
   title?: string;
+  visibility?: ConversationThread["visibility"];
   addParticipantIds?: string[];
   removeParticipantIds?: string[];
 }): Promise<{ thread: ConversationThread; event?: ThreadMessage }> {
   return patchJson(`/v1/threads/${encodeURIComponent(input.threadId)}`, {
     ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
     addParticipantIds: input.addParticipantIds ?? [],
     removeParticipantIds: input.removeParticipantIds ?? [],
   });
+}
+
+export async function getThreadNotificationPreference(threadId: string) {
+  return getJson<{ preference: ThreadNotificationPreference }>(
+    `/v1/threads/${encodeURIComponent(threadId)}/notification-preference`,
+  );
+}
+
+export async function setThreadNotificationPreference(
+  threadId: string,
+  input: {
+    mutedUntil?: string | null;
+    muteIncludingMentions?: boolean;
+  },
+) {
+  return putJson<{ preference: ThreadNotificationPreference }>(
+    `/v1/threads/${encodeURIComponent(threadId)}/notification-preference`,
+    input,
+  );
+}
+
+export async function joinThread(threadId: string) {
+  return postJson<{ thread: ConversationThread }>(
+    `/v1/threads/${encodeURIComponent(threadId)}/join`,
+    {},
+  );
+}
+
+export async function leaveThread(threadId: string): Promise<void> {
+  const response = await fetch(
+    `${API_URL}/v1/threads/${encodeURIComponent(threadId)}/leave`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+        ...developmentIdentityHeaders(),
+      },
+      body: "{}",
+    },
+  );
+  await ensureResponseOk(response);
+}
+
+export async function archiveThread(threadId: string) {
+  return postJson<{ thread: ConversationThread }>(
+    `/v1/threads/${encodeURIComponent(threadId)}/archive`,
+    {},
+  );
+}
+
+export async function unarchiveThread(threadId: string) {
+  return postJson<{ thread: ConversationThread }>(
+    `/v1/threads/${encodeURIComponent(threadId)}/unarchive`,
+    {},
+  );
+}
+
+export async function getTeamRooms(
+  teamId: string,
+  options: { includeJoined?: boolean } = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  if (options.includeJoined) params.set("includeJoined", "true");
+  const query = params.toString();
+  return getJson<{ items: TeamRoomDirectoryItem[] }>(
+    `/v1/teams/${encodeURIComponent(teamId)}/rooms${query ? `?${query}` : ""}`,
+    signal,
+  );
 }
 
 export async function markThreadRead(input: {

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { PrincipalId, TypingEvent } from "@intero/domain";
+import { shouldNotifyForThreadMessage } from "@intero/domain";
 import {
   createContext,
   useCallback,
@@ -16,6 +17,7 @@ import {
   createRealtimeSubscription,
   getBootstrap,
   sendPresenceHeartbeat,
+  type ThreadPayload,
 } from "../api.js";
 import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
@@ -139,14 +141,26 @@ export function ConversationRealtimeProvider({
                 notifiedMentionIds.current = new Set([message.id]);
               }
               const cached = queryClient.getQueryData<{
-                items: Array<{
-                  thread: { id: string; title: string };
-                  principals: Array<{ id: string; displayName: string }>;
-                }>;
+                items: ThreadPayload[];
               }>(["threads"]);
-              const thread = cached?.items.find(
-                (item) => item.thread.id === message.threadId,
-              );
+              const archivedCached = queryClient.getQueryData<{
+                items: ThreadPayload[];
+              }>(["threads", "archived"]);
+              const thread =
+                cached?.items.find(
+                  (item) => item.thread.id === message.threadId,
+                ) ??
+                archivedCached?.items.find(
+                  (item) => item.thread.id === message.threadId,
+                );
+              if (
+                !shouldNotifyForThreadMessage({
+                  preference: thread?.notificationPreference,
+                  mentioned: true,
+                })
+              ) {
+                continue;
+              }
               const sender = thread?.principals.find(
                 (principal) => principal.id === message.senderId,
               );

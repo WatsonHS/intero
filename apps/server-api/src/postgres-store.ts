@@ -8,6 +8,9 @@ import {
   type ConversationChangeReason,
   type ConversationThread,
   type CoordinationResult,
+  type TeamRoomDirectoryItem,
+  type ThreadNotificationPreference,
+  type ThreadVisibility,
   type DecisionRecord,
   type KanbanCard,
   type KanbanCardId,
@@ -46,8 +49,11 @@ import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
 import { PilotStoreError } from "./pilot-store.js";
 import {
   assertMutableThreadMessage,
+  assertThreadWritable,
   buildThreadMessage,
   claimFromEvent,
+  defaultThreadNotificationPreference,
+  humanMemberCount,
   type KanbanCardUpdate,
   type MutationResult,
   normalizeMentionIds,
@@ -525,13 +531,28 @@ export class PostgresPlatformStore implements PlatformStore {
     thread: ConversationThread,
     actorId?: PrincipalId,
   ): Promise<ConversationThread> {
+    if (thread.visibility === "team" && thread.kind !== "room") {
+      throw new PilotStoreError(
+        "THREAD_VISIBILITY_UNSUPPORTED",
+        409,
+        "Only Rooms can be team-visible.",
+      );
+    }
+    if (thread.visibility === "team" && !thread.teamId) {
+      throw new PilotStoreError(
+        "THREAD_TEAM_REQUIRED",
+        400,
+        "A team-visible Room requires a teamId.",
+      );
+    }
     return this.write(async (client) => {
       const inserted = await client.query(
         `INSERT INTO threads
           (id, organization_id, project_id, kind, title, access_mode,
            access_changed_at_sequence, prior_history_granted, sequence,
-           access_version, team_id, parent_thread_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12)
+           access_version, team_id, parent_thread_id, visibility,
+           created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13, $14)
          ON CONFLICT (id) DO NOTHING
          RETURNING id`,
         [
@@ -546,6 +567,8 @@ export class PostgresPlatformStore implements PlatformStore {
           thread.sequence,
           thread.teamId ?? null,
           thread.parentThreadId ?? null,
+          thread.visibility ?? "private",
+          actorId ?? thread.createdBy ?? null,
           thread.createdAt,
         ],
       );
@@ -685,6 +708,7 @@ export class PostgresPlatformStore implements PlatformStore {
     threadId: ThreadId,
     input: {
       title?: string;
+      visibility?: ThreadVisibility;
       addParticipantIds: PrincipalId[];
       removeParticipantIds?: PrincipalId[];
     },
@@ -700,39 +724,73 @@ export class PostgresPlatformStore implements PlatformStore {
         undefined,
         0,
       );
-      if (!current || !current.thread.participantIds.includes(actorId)) {
+      if (!current) {
         throw new Error("Thread was not found.");
       }
-      if (current.thread.standInIds.includes(actorId)) {
-        throw new Error("Only a human participant can manage this Thread.");
-      }
-      if (
-        current.thread.kind !== "room" &&
-        current.thread.kind !== "human_group"
-      ) {
-        throw new Error("Only group conversations can be managed.");
-      }
-      const title = input.title?.trim();
-      if (title !== undefined && (title.length === 0 || title.length > 200)) {
-        throw new Error("Thread title is invalid.");
-      }
-      const addedParticipantIds = [...new Set(input.addParticipantIds)].filter(
+      const isParticipant = current.thread.participantIds.includes(actorId);
+      const addedParticipantIdsPreview = [
+        ...new Set(input.addParticipantIds),
+      ].filter(
         (principalId) => !current.thread.participantIds.includes(principalId),
       );
-      const removedParticipantIds = [
+      const removedParticipantIdsPreview = [
         ...new Set(input.removeParticipantIds ?? []),
       ].filter(
         (principalId) =>
           current.thread.participantIds.includes(principalId) &&
           !current.thread.standInIds.includes(principalId),
       );
+      const visibilityOnly =
+        input.visibility !== undefined &&
+        input.title === undefined &&
+        addedParticipantIdsPreview.length === 0 &&
+        removedParticipantIdsPreview.length === 0;
+      if (!isParticipant && !visibilityOnly) {
+        throw new Error("Thread was not found.");
+      }
+      if (isParticipant && current.thread.standInIds.includes(actorId)) {
+        throw new Error("Only a human participant can manage this Thread.");
+      }
+      if (
+        !visibilityOnly &&
+        current.thread.kind !== "room" &&
+        current.thread.kind !== "human_group"
+      ) {
+        throw new Error("Only group conversations can be managed.");
+      }
+      if (input.visibility !== undefined) {
+        if (current.thread.kind !== "room") {
+          throw new PilotStoreError(
+            "THREAD_VISIBILITY_UNSUPPORTED",
+            409,
+            "Only Rooms can change visibility.",
+          );
+        }
+        if (input.visibility === "team" && !current.thread.teamId) {
+          throw new PilotStoreError(
+            "THREAD_TEAM_REQUIRED",
+            400,
+            "A team-visible Room requires a teamId.",
+          );
+        }
+      }
+      const title = input.title?.trim();
+      if (title !== undefined && (title.length === 0 || title.length > 200)) {
+        throw new Error("Thread title is invalid.");
+      }
+      const addedParticipantIds = addedParticipantIdsPreview;
+      const removedParticipantIds = removedParticipantIdsPreview;
       if (removedParticipantIds.includes(actorId)) {
         throw new Error("A group manager cannot remove their own access.");
       }
       const titleChanged =
         title !== undefined && title !== current.thread.title;
+      const visibilityChanged =
+        input.visibility !== undefined &&
+        input.visibility !== (current.thread.visibility ?? "private");
       if (
         !titleChanged &&
+        !visibilityChanged &&
         addedParticipantIds.length === 0 &&
         removedParticipantIds.length === 0
       ) {
@@ -794,14 +852,18 @@ export class PostgresPlatformStore implements PlatformStore {
            sequence = $3,
            access_version = access_version + $4,
            latest_message_at = $5,
+           visibility = $6,
            updated_at = now()
          WHERE id = $1`,
         [
           threadId,
           titleChanged ? title : current.thread.title,
           event?.sequence ?? current.thread.sequence,
-          event ? 1 : 0,
+          event || visibilityChanged ? 1 : 0,
           event?.createdAt ?? current.thread.latestMessageAt ?? null,
+          visibilityChanged
+            ? input.visibility
+            : (current.thread.visibility ?? "private"),
         ],
       );
       if (event) await this.insertMessage(client, event);
@@ -818,6 +880,401 @@ export class PostgresPlatformStore implements PlatformStore {
         reason: event ? "access_changed" : "thread_updated",
       });
       return { thread: updated, ...(event ? { event } : {}) };
+    });
+  }
+
+  async getThreadRecord(
+    threadId: ThreadId,
+  ): Promise<ConversationThread | undefined> {
+    return this.read(async (client) => {
+      const item = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      return item?.thread;
+    });
+  }
+
+  async joinThread(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (
+        !current ||
+        current.thread.kind !== "room" ||
+        (current.thread.visibility ?? "private") !== "team"
+      ) {
+        throw new Error("Thread was not found.");
+      }
+      assertThreadWritable(current.thread);
+      if (current.thread.participantIds.includes(actorId)) {
+        return current.thread;
+      }
+      await this.ensurePrincipal(client, actorId, "human");
+      const event: ThreadMessage = {
+        id: uuidv7() as ThreadMessage["id"],
+        threadId,
+        senderId: actorId,
+        sequence: current.thread.sequence + 1,
+        kind: "system_access_change",
+        body: "1 member(s) joined; earlier history remains withheld.",
+        createdAt: new Date().toISOString(),
+        serverReadable: true,
+      };
+      await client.query(
+        `INSERT INTO thread_participants
+          (organization_id, thread_id, principal_id, stand_in,
+           visible_from_sequence, revoked_at)
+         VALUES ($1, $2, $3, false, $4, NULL)
+         ON CONFLICT (thread_id, principal_id)
+         DO UPDATE SET
+           stand_in = false,
+           visible_from_sequence = EXCLUDED.visible_from_sequence,
+           revoked_at = NULL,
+           updated_at = now()`,
+        [this.organizationId, threadId, actorId, event.sequence],
+      );
+      await client.query(
+        `UPDATE threads SET
+           sequence = $2,
+           access_version = access_version + 1,
+           latest_message_at = $3,
+           updated_at = now()
+         WHERE id = $1`,
+        [threadId, event.sequence, event.createdAt],
+      );
+      await this.insertMessage(client, event);
+      const updated = (await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      ))!.thread;
+      await this.recordConversationChange(client, {
+        eventId: event.id as unknown as OperationId,
+        thread: updated,
+        actorId,
+        reason: "access_changed",
+      });
+      return updated;
+    });
+  }
+
+  async leaveThread(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!current || !current.thread.participantIds.includes(actorId)) {
+        throw new Error("Thread was not found.");
+      }
+      if (current.thread.kind !== "room") {
+        throw new PilotStoreError(
+          "THREAD_LEAVE_UNSUPPORTED",
+          409,
+          "Only Rooms can be left this way.",
+        );
+      }
+      if (current.thread.standInIds.includes(actorId)) {
+        throw new Error("Only a human participant can leave this Thread.");
+      }
+      const event: ThreadMessage = {
+        id: uuidv7() as ThreadMessage["id"],
+        threadId,
+        senderId: actorId,
+        sequence: current.thread.sequence + 1,
+        kind: "system_access_change",
+        body: "1 member(s) left and lost access immediately.",
+        createdAt: new Date().toISOString(),
+        serverReadable: true,
+      };
+      await client.query(
+        `UPDATE thread_participants
+         SET revoked_at = $3, archived_at = NULL, updated_at = now()
+         WHERE thread_id = $1
+           AND principal_id = $2
+           AND revoked_at IS NULL`,
+        [threadId, actorId, event.createdAt],
+      );
+      await client.query(
+        `UPDATE threads SET
+           sequence = $2,
+           access_version = access_version + 1,
+           latest_message_at = $3,
+           updated_at = now()
+         WHERE id = $1`,
+        [threadId, event.sequence, event.createdAt],
+      );
+      await this.insertMessage(client, event);
+      const updated = (await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      ))!.thread;
+      await this.recordConversationChange(client, {
+        eventId: event.id as unknown as OperationId,
+        thread: updated,
+        actorId,
+        reason: "access_changed",
+      });
+      return updated;
+    });
+  }
+
+  async archiveThread(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!current) throw new Error("Thread was not found.");
+      const at = new Date().toISOString();
+      if (current.thread.kind === "room") {
+        if (current.thread.archivedAt) return current.thread;
+        await client.query(
+          `UPDATE threads SET
+             archived_at = $2,
+             archived_by = $3,
+             access_version = access_version + 1,
+             updated_at = now()
+           WHERE id = $1`,
+          [threadId, at, actorId],
+        );
+        const updated = (await this.getThreadInTransaction(
+          client,
+          threadId,
+          undefined,
+          0,
+        ))!.thread;
+        await this.recordConversationChange(client, {
+          eventId: uuidv7() as OperationId,
+          thread: updated,
+          actorId,
+          reason: "thread_updated",
+        });
+        return updated;
+      }
+      if (
+        current.thread.kind !== "human_direct" &&
+        current.thread.kind !== "human_group"
+      ) {
+        throw new PilotStoreError(
+          "THREAD_ARCHIVE_UNSUPPORTED",
+          409,
+          "This Thread kind cannot be archived.",
+        );
+      }
+      if (!current.thread.participantIds.includes(actorId)) {
+        throw new Error("Thread was not found.");
+      }
+      await client.query(
+        `UPDATE thread_participants
+         SET archived_at = $3, updated_at = now()
+         WHERE thread_id = $1 AND principal_id = $2 AND revoked_at IS NULL`,
+        [threadId, actorId, at],
+      );
+      return current.thread;
+    });
+  }
+
+  async unarchiveThread(
+    threadId: ThreadId,
+    actorId: PrincipalId,
+  ): Promise<ConversationThread> {
+    return this.write(async (client) => {
+      await client.query("SELECT id FROM threads WHERE id = $1 FOR UPDATE", [
+        threadId,
+      ]);
+      const current = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!current) throw new Error("Thread was not found.");
+      if (current.thread.kind === "room") {
+        if (!current.thread.archivedAt) return current.thread;
+        await client.query(
+          `UPDATE threads SET
+             archived_at = NULL,
+             archived_by = NULL,
+             access_version = access_version + 1,
+             updated_at = now()
+           WHERE id = $1`,
+          [threadId],
+        );
+        const updated = (await this.getThreadInTransaction(
+          client,
+          threadId,
+          undefined,
+          0,
+        ))!.thread;
+        await this.recordConversationChange(client, {
+          eventId: uuidv7() as OperationId,
+          thread: updated,
+          actorId,
+          reason: "thread_updated",
+        });
+        return updated;
+      }
+      if (
+        current.thread.kind !== "human_direct" &&
+        current.thread.kind !== "human_group"
+      ) {
+        throw new PilotStoreError(
+          "THREAD_ARCHIVE_UNSUPPORTED",
+          409,
+          "This Thread kind cannot be archived.",
+        );
+      }
+      if (!current.thread.participantIds.includes(actorId)) {
+        throw new Error("Thread was not found.");
+      }
+      await client.query(
+        `UPDATE thread_participants
+         SET archived_at = NULL, updated_at = now()
+         WHERE thread_id = $1 AND principal_id = $2 AND revoked_at IS NULL`,
+        [threadId, actorId],
+      );
+      return current.thread;
+    });
+  }
+
+  async getThreadNotificationPreference(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): Promise<ThreadNotificationPreference> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM thread_notification_preferences
+         WHERE thread_id = $1 AND principal_id = $2`,
+        [threadId, principalId],
+      );
+      return result.rows[0]
+        ? threadNotificationPreferenceFromRow(result.rows[0])
+        : defaultThreadNotificationPreference(threadId, principalId);
+    });
+  }
+
+  async setThreadNotificationPreference(
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    input: {
+      mutedUntil?: string | null | undefined;
+      muteIncludingMentions?: boolean | undefined;
+    },
+  ): Promise<ThreadNotificationPreference> {
+    return this.write(async (client) => {
+      const current = await client.query(
+        `SELECT * FROM thread_notification_preferences
+         WHERE thread_id = $1 AND principal_id = $2`,
+        [threadId, principalId],
+      );
+      const existing = current.rows[0]
+        ? threadNotificationPreferenceFromRow(current.rows[0])
+        : defaultThreadNotificationPreference(threadId, principalId);
+      const muteIncludingMentions =
+        input.muteIncludingMentions ?? existing.muteIncludingMentions;
+      const mutedUntil =
+        input.mutedUntil === undefined ? existing.mutedUntil : input.mutedUntil;
+      const result = await client.query(
+        `INSERT INTO thread_notification_preferences
+          (organization_id, thread_id, principal_id, muted_until,
+           mute_including_mentions)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (thread_id, principal_id) DO UPDATE SET
+           muted_until = EXCLUDED.muted_until,
+           mute_including_mentions = EXCLUDED.mute_including_mentions,
+           updated_at = now()
+         RETURNING *`,
+        [
+          this.organizationId,
+          threadId,
+          principalId,
+          mutedUntil ?? null,
+          muteIncludingMentions,
+        ],
+      );
+      return threadNotificationPreferenceFromRow(result.rows[0]!);
+    });
+  }
+
+  async listTeamRooms(
+    teamId: string,
+    viewerId: PrincipalId,
+    options: { includeJoined?: boolean } = {},
+  ): Promise<TeamRoomDirectoryItem[]> {
+    return this.read(async (client) => {
+      const includeJoined = options.includeJoined === true;
+      const result = await client.query<{ id: ThreadId }>(
+        `SELECT t.id
+         FROM threads t
+         WHERE t.kind = 'room'
+           AND t.team_id = $1
+           AND t.visibility = 'team'
+           AND t.archived_at IS NULL
+           AND (
+             $3::boolean
+             OR NOT EXISTS (
+               SELECT 1 FROM thread_participants tp
+               WHERE tp.thread_id = t.id
+                 AND tp.principal_id = $2
+                 AND tp.revoked_at IS NULL
+             )
+           )
+         ORDER BY COALESCE(t.latest_message_at, t.created_at) DESC
+         LIMIT 100`,
+        [teamId, viewerId, includeJoined],
+      );
+      const items: TeamRoomDirectoryItem[] = [];
+      for (const row of result.rows) {
+        const item = await this.getThreadInTransaction(
+          client,
+          row.id,
+          undefined,
+          0,
+        );
+        if (!item) continue;
+        items.push({
+          thread: item.thread,
+          memberCount: humanMemberCount(item.thread),
+          ...(item.thread.latestMessageAt
+            ? { latestMessageAt: item.thread.latestMessageAt }
+            : {}),
+          joined: item.thread.participantIds.includes(viewerId),
+        });
+      }
+      return items;
     });
   }
 
@@ -846,6 +1303,7 @@ export class PostgresPlatformStore implements PlatformStore {
         0,
       );
       if (!current) throw new Error("Thread was not found.");
+      assertThreadWritable(current.thread);
       if (!current.thread.participantIds.includes(input.senderId)) {
         throw new Error("Sender is not a Thread participant.");
       }
@@ -1175,6 +1633,14 @@ export class PostgresPlatformStore implements PlatformStore {
         ? messageFromRow(result.rows[0])
         : undefined;
       if (!current) throw new Error("Message was not found.");
+      const thread = await this.getThreadInTransaction(
+        client,
+        input.threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      assertThreadWritable(thread.thread);
       if (current.deletedAt) {
         throw new PilotStoreError(
           "MESSAGE_DELETED",
@@ -1199,13 +1665,6 @@ export class PostgresPlatformStore implements PlatformStore {
         [input.threadId, input.messageId, json(reactionUpdate.reactions)],
       );
       const updated = messageFromRow(updatedRow.rows[0]!);
-      const thread = await this.getThreadInTransaction(
-        client,
-        input.threadId,
-        undefined,
-        0,
-      );
-      if (!thread) throw new Error("Thread was not found.");
       await this.recordConversationChange(client, {
         eventId: uuidv7() as OperationId,
         thread: thread.thread,
@@ -2182,8 +2641,10 @@ export class PostgresPlatformStore implements PlatformStore {
   async listThreads(
     kind?: ConversationThread["kind"],
     principalId?: PrincipalId,
+    options: { archived?: boolean } = {},
   ) {
     return this.read(async (client) => {
+      const archived = options.archived === true;
       const result = await client.query<{
         id: ThreadId;
         unread_count: number;
@@ -2238,9 +2699,38 @@ export class PostgresPlatformStore implements PlatformStore {
                  AND tp.revoked_at IS NULL
              )
            )
+           AND (
+             $2::uuid IS NULL OR (
+               CASE WHEN $3::boolean THEN (
+                 (t.kind = 'room' AND t.archived_at IS NOT NULL)
+                 OR (
+                   t.kind IN ('human_direct', 'human_group')
+                   AND EXISTS (
+                     SELECT 1 FROM thread_participants p
+                     WHERE p.thread_id = t.id
+                       AND p.principal_id = $2
+                       AND p.revoked_at IS NULL
+                       AND p.archived_at IS NOT NULL
+                   )
+                 )
+               ) ELSE NOT (
+                 (t.kind = 'room' AND t.archived_at IS NOT NULL)
+                 OR (
+                   t.kind IN ('human_direct', 'human_group')
+                   AND EXISTS (
+                     SELECT 1 FROM thread_participants p
+                     WHERE p.thread_id = t.id
+                       AND p.principal_id = $2
+                       AND p.revoked_at IS NULL
+                       AND p.archived_at IS NOT NULL
+                   )
+                 )
+               ) END
+             )
+           )
          ORDER BY COALESCE(t.latest_message_at, t.created_at) DESC
          LIMIT 50`,
-        [kind ?? null, principalId ?? null],
+        [kind ?? null, principalId ?? null, archived],
       );
       const items = await Promise.all(
         result.rows.map(async (row) => {
@@ -2672,7 +3162,13 @@ export class PostgresPlatformStore implements PlatformStore {
     viewerId?: PrincipalId,
     messageLimit?: number,
   ): Promise<
-    { thread: ConversationThread; messages: ThreadMessage[] } | undefined
+    | {
+        thread: ConversationThread;
+        messages: ThreadMessage[];
+        notificationPreference?: ThreadNotificationPreference;
+        viewerArchivedAt?: string;
+      }
+    | undefined
   > {
     const threadResult = await client.query(
       "SELECT * FROM threads WHERE id = $1",
@@ -2684,8 +3180,9 @@ export class PostgresPlatformStore implements PlatformStore {
       principal_id: PrincipalId;
       stand_in: boolean;
       visible_from_sequence: number;
+      archived_at: Date | string | null;
     }>(
-      `SELECT principal_id, stand_in, visible_from_sequence
+      `SELECT principal_id, stand_in, visible_from_sequence, archived_at
        FROM thread_participants
        WHERE thread_id = $1 AND revoked_at IS NULL`,
       [threadId],
@@ -2740,10 +3237,41 @@ export class PostgresPlatformStore implements PlatformStore {
           : {}),
         ...(row.concluded_at ? { concludedAt: asIso(row.concluded_at) } : {}),
         ...(row.concluded_by ? { concludedBy: row.concluded_by } : {}),
+        visibility: row.visibility === "team" ? "team" : "private",
+        ...(row.created_by ? { createdBy: row.created_by } : {}),
+        ...(row.archived_at ? { archivedAt: asIso(row.archived_at) } : {}),
+        ...(row.archived_by ? { archivedBy: row.archived_by } : {}),
         createdAt: asIso(row.created_at),
       },
       messages: messages.rows.map(messageFromRow),
+      ...(viewerId
+        ? {
+            notificationPreference: await this.loadThreadNotificationPreference(
+              client,
+              threadId,
+              viewerId,
+            ),
+            ...(viewer?.archived_at
+              ? { viewerArchivedAt: asIso(viewer.archived_at) }
+              : {}),
+          }
+        : {}),
     };
+  }
+
+  private async loadThreadNotificationPreference(
+    client: PoolClient,
+    threadId: ThreadId,
+    principalId: PrincipalId,
+  ): Promise<ThreadNotificationPreference> {
+    const result = await client.query(
+      `SELECT * FROM thread_notification_preferences
+       WHERE thread_id = $1 AND principal_id = $2`,
+      [threadId, principalId],
+    );
+    return result.rows[0]
+      ? threadNotificationPreferenceFromRow(result.rows[0])
+      : defaultThreadNotificationPreference(threadId, principalId);
   }
 
   private async getSpecInTransaction(
@@ -3162,6 +3690,18 @@ function asIso(value: Date | string): string {
   return value instanceof Date
     ? value.toISOString()
     : new Date(value).toISOString();
+}
+
+function threadNotificationPreferenceFromRow(
+  row: QueryResultRow,
+): ThreadNotificationPreference {
+  return {
+    threadId: row.thread_id,
+    principalId: row.principal_id,
+    ...(row.muted_until ? { mutedUntil: asIso(row.muted_until) } : {}),
+    muteIncludingMentions: row.mute_including_mentions,
+    updatedAt: asIso(row.updated_at),
+  };
 }
 
 function kanbanCardFromRow(row: QueryResultRow): KanbanCard {

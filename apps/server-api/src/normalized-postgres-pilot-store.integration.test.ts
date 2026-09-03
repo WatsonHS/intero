@@ -857,6 +857,7 @@ async function deleteOrganizationFixture(
     "pilot_project_teams",
     "pilot_project_settings",
     "messages",
+    "thread_notification_preferences",
     "thread_reads",
     "thread_participants",
     "threads",

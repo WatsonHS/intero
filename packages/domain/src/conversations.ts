@@ -25,6 +25,12 @@ export type ThreadKind = z.infer<typeof ThreadKind>;
 export const ThreadAccessMode = z.enum(["human_only_e2ee", "agent_readable"]);
 export type ThreadAccessMode = z.infer<typeof ThreadAccessMode>;
 
+export const ThreadVisibility = z.enum(["private", "team"]);
+export type ThreadVisibility = z.infer<typeof ThreadVisibility>;
+
+/** Far-future muteUntil meaning "until I turn it back on". */
+export const MUTED_INDEFINITELY_UNTIL = "9999-12-31T23:59:59.000Z";
+
 export const ConversationThread = z
   .object({
     id: ThreadId,
@@ -49,10 +55,77 @@ export const ConversationThread = z
     /** Set once the branch has been concluded back into its parent. */
     concludedAt: z.iso.datetime().optional(),
     concludedBy: PrincipalId.optional(),
+    /**
+     * Who created the Thread. Optional on legacy rows; new writes set it from
+     * the authenticated actor.
+     */
+    createdBy: PrincipalId.optional(),
+    /**
+     * Discoverability. Only `room` may be `team`; every other kind stays
+     * `private`. Omitted on legacy rows and treated as `private`.
+     */
+    visibility: ThreadVisibility.optional(),
+    /**
+     * Thread-level archive for Rooms. Distinct from `concludedAt` and from
+     * per-principal hide-for-me on DMs and groups.
+     */
+    archivedAt: z.iso.datetime().optional(),
+    archivedBy: PrincipalId.optional(),
     createdAt: z.iso.datetime(),
   })
   .strict();
 export type ConversationThread = z.infer<typeof ConversationThread>;
+
+/**
+ * Per-principal, per-thread mute. `mutedUntil` absent or in the past means
+ * not muted; a far-future value means muted indefinitely.
+ */
+export const ThreadNotificationPreference = z
+  .object({
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    mutedUntil: z.iso.datetime().optional(),
+    muteIncludingMentions: z.boolean(),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export type ThreadNotificationPreference = z.infer<
+  typeof ThreadNotificationPreference
+>;
+
+export const TeamRoomDirectoryItem = z
+  .object({
+    thread: ConversationThread,
+    memberCount: z.number().int().nonnegative(),
+    latestMessageAt: z.iso.datetime().optional(),
+    joined: z.boolean(),
+  })
+  .strict();
+export type TeamRoomDirectoryItem = z.infer<typeof TeamRoomDirectoryItem>;
+
+export function threadVisibilityOf(
+  thread: Pick<ConversationThread, "visibility">,
+): ThreadVisibility {
+  return thread.visibility ?? "private";
+}
+
+export function isThreadMuted(
+  preference: ThreadNotificationPreference | undefined,
+  now: Date = new Date(),
+): boolean {
+  return Boolean(
+    preference?.mutedUntil && Date.parse(preference.mutedUntil) > now.getTime(),
+  );
+}
+
+export function shouldNotifyForThreadMessage(input: {
+  preference: ThreadNotificationPreference | undefined;
+  mentioned: boolean;
+  now?: Date;
+}): boolean {
+  if (!isThreadMuted(input.preference, input.now)) return true;
+  return input.mentioned && !input.preference?.muteIncludingMentions;
+}
 
 /**
  * How much of a thread a person has seen. Unread is derived from this and the

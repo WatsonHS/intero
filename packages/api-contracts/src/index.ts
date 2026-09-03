@@ -7,6 +7,8 @@ import {
   Claim,
   ConversationThread,
   CoordinationResult,
+  TeamRoomDirectoryItem,
+  ThreadNotificationPreference,
   DecisionRecord,
   KanbanCard,
   KanbanColumn,
@@ -19,6 +21,7 @@ import {
   SpecRevision,
   SpecReviewResponse,
   PresenceSnapshot,
+  ThreadKind,
   ThreadMessage,
   Workstream,
 } from "@intero/domain";
@@ -117,13 +120,16 @@ export const CoordinateRequest = z.object({ envelope: ActionEnvelope });
 export const CoordinateResponse = z.object({ result: CoordinationResult });
 export const CreateCapabilityGrantRequest = CapabilityGrant;
 
-// Conclusion state is set by concluding, never by the creator.
+// Conclusion, archive, and creator are set by server commands, never by create.
 export const CreateThreadRequest = ConversationThread.omit({
   sequence: true,
   accessVersion: true,
   latestMessageAt: true,
   concludedAt: true,
   concludedBy: true,
+  archivedAt: true,
+  archivedBy: true,
+  createdBy: true,
 });
 export const ConcludeThreadRequest = z
   .object({
@@ -197,6 +203,7 @@ export const CorrectInteroScopeResponse = z
 export const UpdateThreadRequest = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
+    visibility: z.enum(["private", "team"]).optional(),
     addParticipantIds: z.array(z.string().uuid()).max(20).default([]),
     removeParticipantIds: z.array(z.string().uuid()).max(20).default([]),
   })
@@ -204,10 +211,44 @@ export const UpdateThreadRequest = z
   .refine(
     (input) =>
       input.title !== undefined ||
+      input.visibility !== undefined ||
       input.addParticipantIds.length > 0 ||
       input.removeParticipantIds.length > 0,
-    "Update the title, add a participant, and/or remove a participant.",
+    "Update the title, visibility, add a participant, and/or remove a participant.",
   );
+export const ThreadNotificationPreferenceUpdate = z
+  .object({
+    mutedUntil: z.iso.datetime().nullable().optional(),
+    muteIncludingMentions: z.boolean().optional(),
+  })
+  .strict();
+export const ThreadNotificationPreferenceResponse = z
+  .object({
+    preference: ThreadNotificationPreference,
+  })
+  .strict();
+export const TeamRoomsQuery = z
+  .object({
+    includeJoined: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((value) => value === "true"),
+  })
+  .strict();
+export const TeamRoomsResponse = z
+  .object({
+    items: z.array(TeamRoomDirectoryItem),
+  })
+  .strict();
+export const ListThreadsQuery = z
+  .object({
+    kind: ThreadKind.optional(),
+    archived: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((value) => value === "true"),
+  })
+  .strict();
 export const ThreadMessagesQuery = z
   .object({
     afterSequence: z.coerce.number().int().nonnegative().optional(),
@@ -237,6 +278,8 @@ export const ThreadResponse = z.object({
   unreadCount: z.number().int().nonnegative().default(0),
   mentionCount: z.number().int().nonnegative().default(0),
   lastReadSequence: z.number().int().nonnegative().default(0),
+  notificationPreference: ThreadNotificationPreference.optional(),
+  viewerArchivedAt: z.iso.datetime().optional(),
   principals: z.array(PrincipalSummary),
   actions: z.array(
     z.object({

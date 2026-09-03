@@ -98,13 +98,15 @@ export function MessageItem({
     !currentIsPilot &&
     !currentIsPilotStandIn &&
     thread.accessMode !== "human_only_e2ee" &&
-    !message.deletedAt;
+    !message.deletedAt &&
+    !thread.archivedAt;
   const canMutateOwnMessage =
     Boolean(onBeginEdit && onDelete) &&
     isOwn &&
     message.kind === "message" &&
     !message.deletedAt &&
     !thread.concludedAt &&
+    !thread.archivedAt &&
     !currentIsPilot &&
     !currentIsPilotStandIn &&
     message.serverReadable &&
