@@ -573,13 +573,28 @@ export async function searchAuthorizedContent(
     query: string;
     projectId?: string;
     types?: AuthorizedSearchResult["type"][];
+    in?: string;
+    from?: string;
+    before?: string;
+    after?: string;
+    has?: "attachment";
+    cursor?: string;
+    limit?: number;
   },
   signal?: AbortSignal,
 ) {
-  const params = new URLSearchParams({ q: input.query });
+  const params = new URLSearchParams();
+  if (input.query) params.set("q", input.query);
   if (input.projectId) params.set("projectId", input.projectId);
   if (input.types?.length) params.set("types", input.types.join(","));
-  return getJson<{ items: AuthorizedSearchResult[] }>(
+  if (input.in) params.set("in", input.in);
+  if (input.from) params.set("from", input.from);
+  if (input.before) params.set("before", input.before);
+  if (input.after) params.set("after", input.after);
+  if (input.has) params.set("has", input.has);
+  if (input.cursor) params.set("cursor", input.cursor);
+  if (input.limit) params.set("limit", String(input.limit));
+  return getJson<{ items: AuthorizedSearchResult[]; nextCursor?: string }>(
     `/v1/search?${params}`,
     signal,
   );
@@ -801,6 +816,7 @@ export async function getThreadMessages(
   input: {
     afterSequence?: number;
     beforeSequence?: number;
+    aroundSequence?: number;
     tail?: number;
     limit?: number;
   },
@@ -817,6 +833,9 @@ export async function getThreadMessages(
   }
   if (input.beforeSequence !== undefined) {
     query.set("beforeSequence", String(input.beforeSequence));
+  }
+  if (input.aroundSequence !== undefined) {
+    query.set("aroundSequence", String(input.aroundSequence));
   }
   if (input.tail !== undefined) query.set("tail", String(input.tail));
   if (input.limit !== undefined) query.set("limit", String(input.limit));

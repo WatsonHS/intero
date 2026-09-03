@@ -175,25 +175,3 @@ export const ProjectAutomationAudit = z
   })
   .strict();
 export type ProjectAutomationAudit = z.infer<typeof ProjectAutomationAudit>;
-
-export const AuthorizedSearchResult = z
-  .object({
-    id: z.string().min(1).max(300),
-    projectId: z.string().uuid(),
-    projectName: z.string().min(1).max(240),
-    type: z.enum([
-      "work_item",
-      "spec",
-      "spec_version",
-      "comment",
-      "code_reference",
-      "coordination",
-      "stand_in_activity",
-    ]),
-    title: z.string().min(1).max(300),
-    snippet: z.string().max(500),
-    sourceRef: z.string().max(400),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export type AuthorizedSearchResult = z.infer<typeof AuthorizedSearchResult>;

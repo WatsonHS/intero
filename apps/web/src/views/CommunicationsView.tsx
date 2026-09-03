@@ -1,5 +1,7 @@
 import { CircleNotchIcon } from "@phosphor-icons/react";
 import type { PrincipalId, ThreadMessage } from "@intero/domain";
+import { useEffect, useState } from "react";
+
 import { useI18n } from "../i18n/index.js";
 import { ConversationProfileModal } from "./chat/ConversationProfileModal.js";
 import { Composer } from "./chat/Composer.js";
@@ -11,11 +13,14 @@ import { useThreadMessages } from "./chat/hooks/useThreadMessages.js";
 import { useThreadRealtime } from "./chat/hooks/useThreadRealtime.js";
 import { MessageList } from "./chat/MessageList.js";
 import { ThreadHeader } from "./chat/ThreadHeader.js";
+import { ThreadSearch } from "./chat/ThreadSearch.js";
 import { ThreadSidebar } from "./chat/ThreadSidebar.js";
 
 export function CommunicationsView({
   initialThreadId,
   initialStandInOwnerId,
+  initialMessageId,
+  initialSequence,
   selectedProjectId,
   onOpenThread,
   onOpenStandIn,
@@ -24,6 +29,8 @@ export function CommunicationsView({
 }: {
   initialThreadId?: string;
   initialStandInOwnerId?: string;
+  initialMessageId?: string;
+  initialSequence?: number;
   selectedProjectId?: string;
   onOpenThread?: (threadId: string) => void;
   onOpenStandIn?: (ownerId: string) => void;
@@ -31,6 +38,23 @@ export function CommunicationsView({
   onOpenPerson?: (personId: string) => void;
 } = {}) {
   const { t } = useI18n();
+  const [threadSearchOpen, setThreadSearchOpen] = useState(false);
+  const [focusMessage, setFocusMessage] = useState<{
+    messageId: string;
+    sequence: number;
+  } | null>(
+    initialMessageId && initialSequence
+      ? { messageId: initialMessageId, sequence: initialSequence }
+      : null,
+  );
+  useEffect(() => {
+    if (initialMessageId && initialSequence) {
+      setFocusMessage({
+        messageId: initialMessageId,
+        sequence: initialSequence,
+      });
+    }
+  }, [initialThreadId, initialMessageId, initialSequence]);
   const directory = useConversationDirectory({
     initialThreadId,
     initialStandInOwnerId,
@@ -44,6 +68,12 @@ export function CommunicationsView({
     currentIsPilot: directory.currentIsPilot,
     currentIsPilotStandIn: directory.currentIsPilotStandIn,
     currentSenderId: directory.currentSenderId,
+    ...(focusMessage
+      ? {
+          focusMessageId: focusMessage.messageId,
+          focusSequence: focusMessage.sequence,
+        }
+      : {}),
   });
   const actions = useThreadActions({
     conversationIdentity: directory.conversationIdentity,
@@ -101,6 +131,10 @@ export function CommunicationsView({
   function selectThread(threadId: string) {
     messages.onThreadSelected(threadId);
     directory.selectThread(threadId);
+    setThreadSearchOpen(false);
+    if (focusMessage && current?.thread.id !== threadId) {
+      setFocusMessage(null);
+    }
   }
 
   function toggleReactionPicker(messageId: string) {
@@ -240,7 +274,15 @@ export function CommunicationsView({
             onCancelConclude={() => actions.setConcluding(false)}
             onConclusionChange={actions.setConclusion}
             onConclude={(input) => actions.conclude.mutate(input)}
+            onToggleSearch={() => setThreadSearchOpen((open) => !open)}
           />
+          {threadSearchOpen && current ? (
+            <ThreadSearch
+              threadId={current.thread.id}
+              onClose={() => setThreadSearchOpen(false)}
+              onSelectHit={(hit) => setFocusMessage(hit)}
+            />
+          ) : null}
           <MessageList
             current={current}
             currentPilotStandInJoined={Boolean(
@@ -258,6 +300,7 @@ export function CommunicationsView({
             standInOwnerIds={directory.standInOwnerIds}
             mentionCandidates={directory.mentionCandidates}
             expanded={messages.expanded}
+            highlightedMessageId={messages.highlightedMessageId}
             reactionPickerMessageId={messages.reactionPickerMessageId}
             reactionPending={messages.reaction.isPending}
             reactionPendingMessageId={messages.reaction.variables?.messageId}

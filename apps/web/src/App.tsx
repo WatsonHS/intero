@@ -819,6 +819,8 @@ export function RoutedWorkspace() {
   const routeSearch = useSearch({ strict: false }) as {
     standInOwnerId?: string;
     itemId?: string;
+    messageId?: string;
+    sequence?: number;
   };
   const {
     openAction,
@@ -888,6 +890,12 @@ export function RoutedWorkspace() {
           : {})}
         {...(routeSearch.standInOwnerId
           ? { initialStandInOwnerId: routeSearch.standInOwnerId }
+          : {})}
+        {...(routeSearch.messageId
+          ? { initialMessageId: routeSearch.messageId }
+          : {})}
+        {...(routeSearch.sequence
+          ? { initialSequence: routeSearch.sequence }
           : {})}
         onOpenThread={(threadId) =>
           void navigate({
@@ -1014,6 +1022,17 @@ export function RoutedWorkspace() {
           })
         }
         onOpenResult={(result) => {
+          if (result.type === "message" && result.threadId) {
+            void navigate({
+              to: "/communications/$threadId",
+              params: { threadId: result.threadId },
+              search: {
+                ...(result.messageId ? { messageId: result.messageId } : {}),
+                ...(result.sequence ? { sequence: result.sequence } : {}),
+              },
+            });
+            return;
+          }
           if (result.sourceRef.startsWith("work-item:")) {
             if (!selectedProjectId) return;
             void navigate({

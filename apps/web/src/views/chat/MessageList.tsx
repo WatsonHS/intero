@@ -26,6 +26,7 @@ export function MessageList({
   standInOwnerIds,
   mentionCandidates,
   expanded,
+  highlightedMessageId,
   reactionPickerMessageId,
   reactionPending,
   reactionPendingMessageId,
@@ -55,6 +56,7 @@ export function MessageList({
   standInOwnerIds: Map<PrincipalId, PrincipalId>;
   mentionCandidates: ConversationMentionCandidate[];
   expanded: Set<string>;
+  highlightedMessageId?: string | undefined;
   reactionPickerMessageId: string | undefined;
   reactionPending: boolean;
   reactionPendingMessageId: string | undefined;
@@ -129,6 +131,7 @@ export function MessageList({
               >
                 <MessageItem
                   message={message}
+                  highlighted={highlightedMessageId === message.id}
                   current={current}
                   currentSenderId={currentSenderId}
                   currentIsPilot={currentIsPilot}

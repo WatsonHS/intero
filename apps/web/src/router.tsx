@@ -47,6 +47,17 @@ const communicationsRoute = createRoute({
 const communicationThreadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/communications/$threadId",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { messageId?: string; sequence?: number } => {
+    const sequence = Number(search.sequence);
+    return {
+      ...(typeof search.messageId === "string"
+        ? { messageId: search.messageId }
+        : {}),
+      ...(Number.isFinite(sequence) && sequence > 0 ? { sequence } : {}),
+    };
+  },
   component: RoutedWorkspace,
 });
 

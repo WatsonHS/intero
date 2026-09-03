@@ -274,6 +274,13 @@
       "when": 1786896000000,
       "tag": "0038_golden_case_coordination",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1786982400000,
+      "tag": "0039_message_search_vector",
+      "breakpoints": true
     }
   ]
 }

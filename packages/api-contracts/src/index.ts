@@ -11,6 +11,7 @@ import {
   KanbanCard,
   KanbanColumn,
   KanbanWorkstreamLinks,
+  MessageSearchPage,
   PilotInteroRequest,
   Project,
   PublicWorkProjection,
@@ -192,17 +193,53 @@ export const ThreadMessagesQuery = z
   .object({
     afterSequence: z.coerce.number().int().nonnegative().optional(),
     beforeSequence: z.coerce.number().int().positive().optional(),
+    aroundSequence: z.coerce.number().int().positive().optional(),
     tail: z.coerce.number().int().min(1).max(200).optional(),
     limit: z.coerce.number().int().min(1).max(200).default(100),
   })
   .strict()
   .refine(
     (input) =>
-      [input.afterSequence, input.beforeSequence, input.tail].filter(
-        (value) => value !== undefined,
-      ).length <= 1,
-    "Use only one of afterSequence, beforeSequence, or tail.",
+      [
+        input.afterSequence,
+        input.beforeSequence,
+        input.aroundSequence,
+        input.tail,
+      ].filter((value) => value !== undefined).length <= 1,
+    "Use only one of afterSequence, beforeSequence, aroundSequence, or tail.",
   );
+export const SearchQuery = z
+  .object({
+    q: z.string().trim().max(200).default(""),
+    projectId: z.string().uuid().optional(),
+    types: z.string().max(300).optional(),
+    in: z.string().trim().min(1).max(200).optional(),
+    from: z.string().trim().min(1).max(120).optional(),
+    before: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    after: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    has: z.enum(["attachment"]).optional(),
+    cursor: z.string().max(800).optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      input.q.trim().length >= 2 ||
+      Boolean(input.in) ||
+      Boolean(input.from) ||
+      Boolean(input.before) ||
+      Boolean(input.after) ||
+      Boolean(input.has) ||
+      Boolean(input.cursor),
+    "Provide a search query, a filter, or a cursor.",
+  );
+export const SearchResponse = MessageSearchPage;
 export const ThreadMessagesResponse = z
   .object({
     items: z.array(ThreadMessage),

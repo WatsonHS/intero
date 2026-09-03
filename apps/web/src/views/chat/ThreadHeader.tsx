@@ -4,6 +4,7 @@ import {
   CircleNotchIcon,
   GearSixIcon,
   GitBranchIcon,
+  MagnifyingGlassIcon,
   RobotIcon,
   UserPlusIcon,
 } from "@phosphor-icons/react";
@@ -43,6 +44,7 @@ export function ThreadHeader({
   onCancelConclude,
   onConclusionChange,
   onConclude,
+  onToggleSearch,
 }: {
   current: ThreadPayload;
   currentSenderId: PrincipalId | undefined;
@@ -76,6 +78,7 @@ export function ThreadHeader({
   onCancelConclude(): void;
   onConclusionChange(value: string): void;
   onConclude(input: { threadId: string; conclusion: string }): void;
+  onToggleSearch(): void;
 }) {
   const { t } = useI18n();
   return (
@@ -84,7 +87,7 @@ export function ThreadHeader({
         <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-accent-soft text-[12px] font-[650] text-accent-strong">
           {initials(current.thread.title)}
         </span>
-        <span className="grid min-w-0">
+        <span className="grid min-w-0 flex-1">
           <strong className="truncate text-[14.5px] font-[620] tracking-[-0.015em]">
             {current.thread.title}
           </strong>
@@ -99,6 +102,15 @@ export function ThreadHeader({
                   })}
           </small>
         </span>
+        <button
+          type="button"
+          data-testid="thread-search-toggle"
+          aria-label={t("chat.search")}
+          onClick={() => onToggleSearch()}
+          className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-btn border border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+        >
+          <MagnifyingGlassIcon size={14} />
+        </button>
         {currentSenderId &&
         current.thread.kind !== "stand_in" &&
         !currentIsPilotStandIn &&

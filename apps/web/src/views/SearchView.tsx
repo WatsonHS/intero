@@ -1,24 +1,32 @@
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
-import type { AuthorizedSearchResult } from "@intero/domain";
+import {
+  applySearchFilter,
+  type AuthorizedSearchResult,
+  parseSearchQuery,
+  stripSearchFilter,
+} from "@intero/domain";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { searchAuthorizedContent } from "../api.js";
 import { Avatar } from "../design/primitives.js";
+import { useI18n } from "../i18n/index.js";
+import type { TranslationKey } from "../i18n/locales/zh-CN.js";
 import type { PilotTeamPayload } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { HighlightedSnippet } from "./search/HighlightedSnippet.js";
 
-const FILTERS: Array<{
-  id: AuthorizedSearchResult["type"];
-  label: string;
+const CONTENT_FILTERS: Array<{
+  id: Exclude<AuthorizedSearchResult["type"], "message">;
+  label: TranslationKey;
 }> = [
-  { id: "work_item", label: "工作项" },
-  { id: "spec", label: "Spec" },
-  { id: "spec_version", label: "Spec 版本" },
-  { id: "comment", label: "评论" },
-  { id: "code_reference", label: "代码引用" },
-  { id: "coordination", label: "协调" },
-  { id: "stand_in_activity", label: "替身活动" },
+  { id: "work_item", label: "search.type.work_item" },
+  { id: "spec", label: "search.type.spec" },
+  { id: "spec_version", label: "search.type.spec_version" },
+  { id: "comment", label: "search.type.comment" },
+  { id: "code_reference", label: "search.type.code_reference" },
+  { id: "coordination", label: "search.type.coordination" },
+  { id: "stand_in_activity", label: "search.type.stand_in_activity" },
 ];
 
 export function searchTeamContacts(
@@ -65,28 +73,51 @@ export function SearchView({
   onOpenResult: (result: AuthorizedSearchResult) => void;
   onOpenPerson: (ownerId: string) => void;
 }) {
+  const { t, formatDate, formatTime } = useI18n();
   const pilot = usePilotOptional();
   const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<"content" | "messages">("content");
   const [types, setTypes] = useState<AuthorizedSearchResult["type"][]>([]);
   const [projectId, setProjectId] = useState("");
+  const parsed = useMemo(() => parseSearchQuery(query), [query]);
+  const requestedTypes =
+    tab === "messages"
+      ? (["message"] as AuthorizedSearchResult["type"][])
+      : types.length
+        ? types
+        : CONTENT_FILTERS.map((filter) => filter.id);
+  const canSearch =
+    query.trim().length >= 2 ||
+    Boolean(parsed.inThreadId) ||
+    Boolean(parsed.inTitle) ||
+    Boolean(parsed.fromPrincipalId) ||
+    Boolean(parsed.fromDisplayName) ||
+    Boolean(parsed.before) ||
+    Boolean(parsed.after) ||
+    Boolean(parsed.hasAttachment);
   const results = useQuery({
-    queryKey: ["authorized-search", query, projectId, types],
+    queryKey: ["authorized-search", tab, query, projectId, requestedTypes],
     queryFn: ({ signal }) =>
       searchAuthorizedContent(
         {
           query,
-          ...(projectId ? { projectId } : {}),
-          ...(types.length ? { types } : {}),
+          ...(projectId && tab === "content" ? { projectId } : {}),
+          ...(requestedTypes.length ? { types: requestedTypes } : {}),
         },
         signal,
       ),
-    enabled: query.trim().length >= 2,
+    enabled: canSearch,
     staleTime: 5_000,
   });
   const contacts = searchTeamContacts(
     pilot?.teams.data?.teams ?? [],
     pilot?.identityId,
-    query,
+    parseSearchQuery(query).text || query,
+  );
+  const principalNames = new Map(
+    (pilot?.teams.data?.teams ?? []).flatMap((team) =>
+      team.members.map((member) => [member.id, member.displayName] as const),
+    ),
   );
 
   return (
@@ -96,10 +127,10 @@ export function SearchView({
           SEARCH
         </p>
         <h1 className="mt-2 text-[25px] font-[560] tracking-[-0.035em]">
-          搜索联系人和你有权限看到的内容
+          {t("search.title")}
         </h1>
         <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted">
-          搜索联系人、工作项、Spec、评论、显式代码引用、协调和你的替身活动。私有原始内容不会进入结果。
+          {t("search.lede")}
         </p>
       </header>
 
@@ -109,60 +140,123 @@ export function SearchView({
           autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="输入至少两个字符"
+          placeholder={
+            tab === "messages"
+              ? t("search.placeholderMessages")
+              : t("search.placeholder")
+          }
+          title={t("search.syntaxHint")}
           className="min-w-0 flex-1 border-0 bg-transparent text-[13px] text-ink outline-none placeholder:text-faint"
         />
-        <select
-          aria-label="项目范围"
-          value={projectId}
-          onChange={(event) => setProjectId(event.target.value)}
-          className="h-8 rounded-btn border border-line bg-panel px-2 text-[10.5px] text-ink-muted"
-        >
-          <option value="">所有可访问项目</option>
-          {(pilot?.projects.data?.projects ?? []).map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
+        {tab === "content" ? (
+          <select
+            aria-label={t("search.projectScope")}
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+            className="h-8 rounded-btn border border-line bg-panel px-2 text-[10.5px] text-ink-muted"
+          >
+            <option value="">{t("search.allProjects")}</option>
+            {(pilot?.projects.data?.projects ?? []).map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {FILTERS.map((filter) => {
-          const active = types.includes(filter.id);
-          return (
-            <button
-              key={filter.id}
-              type="button"
-              onClick={() =>
-                setTypes((current) =>
-                  active
-                    ? current.filter((item) => item !== filter.id)
-                    : [...current, filter.id],
-                )
-              }
-              className={[
-                "h-7 rounded-full border px-3 text-[10px]",
-                active
-                  ? "border-accent-strong bg-accent-soft text-accent-strong"
-                  : "border-line bg-panel2 text-faint",
-              ].join(" ")}
-            >
-              {filter.label}
-            </button>
-          );
-        })}
+      <div className="mt-3 flex gap-2">
+        {(["content", "messages"] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={[
+              "h-8 rounded-full border px-3 text-[11px]",
+              tab === id
+                ? "border-accent-strong bg-accent-soft text-accent-strong"
+                : "border-line bg-panel2 text-faint",
+            ].join(" ")}
+          >
+            {t(id === "content" ? "search.tab.content" : "search.tab.messages")}
+          </button>
+        ))}
       </div>
+
+      {tab === "content" ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {CONTENT_FILTERS.map((filter) => {
+            const active = types.includes(filter.id);
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() =>
+                  setTypes((current) =>
+                    active
+                      ? current.filter((item) => item !== filter.id)
+                      : [...current, filter.id],
+                  )
+                }
+                className={[
+                  "h-7 rounded-full border px-3 text-[10px]",
+                  active
+                    ? "border-accent-strong bg-accent-soft text-accent-strong"
+                    : "border-line bg-panel2 text-faint",
+                ].join(" ")}
+              >
+                {t(filter.label)}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <MessageFilterChips query={query} onChange={setQuery} />
+      )}
 
       <section className="mt-6 grid gap-2.5">
-        {query.trim().length < 2 ? (
-          <SearchEmpty text="输入关键词开始搜索" />
+        {!canSearch ? (
+          <SearchEmpty text={t("search.minChars")} />
+        ) : tab === "messages" ? (
+          results.isLoading ? (
+            <SearchEmpty text={t("search.searching")} />
+          ) : results.data?.items.length ? (
+            results.data.items.map((result) => (
+              <button
+                key={`${result.type}:${result.id}`}
+                type="button"
+                onClick={() => onOpenResult(result)}
+                className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-[13px] border border-line bg-panel2 p-[14px_16px] text-left hover:border-line2 hover:bg-raise"
+              >
+                <span className="min-w-0">
+                  <span className="text-[9.5px] font-[650] tracking-[0.07em] text-accent-strong">
+                    {t("search.tab.messages")}
+                    {" · "}
+                    {result.title}
+                  </span>
+                  <strong className="mt-1.5 block truncate text-[12.5px] font-[620]">
+                    {(result.senderId
+                      ? principalNames.get(result.senderId)
+                      : undefined) ?? t("search.unknownSender")}
+                  </strong>
+                  <HighlightedSnippet snippet={result.snippet} />
+                </span>
+                <time className="text-[9.5px] text-faint">
+                  {result.createdAt
+                    ? `${formatDate(result.createdAt)} ${formatTime(result.createdAt)}`
+                    : formatDate(result.updatedAt)}
+                </time>
+              </button>
+            ))
+          ) : (
+            <SearchEmpty text={t("search.emptyMessages")} />
+          )
         ) : (
           <>
             {contacts.length > 0 ? (
               <div className="mb-3 grid gap-2.5">
                 <strong className="text-[11px] font-[650] tracking-[0.08em] text-faint">
-                  联系人
+                  {t("search.contacts")}
                 </strong>
                 {contacts.map((contact) => (
                   <button
@@ -195,11 +289,11 @@ export function SearchView({
 
             {contacts.length > 0 ? (
               <strong className="text-[11px] font-[650] tracking-[0.08em] text-faint">
-                内容
+                {t("search.content")}
               </strong>
             ) : null}
             {results.isLoading ? (
-              <SearchEmpty text="正在搜索…" />
+              <SearchEmpty text={t("search.searching")} />
             ) : results.data?.items.length ? (
               results.data.items.map((result) => (
                 <button
@@ -210,29 +304,107 @@ export function SearchView({
                 >
                   <span className="min-w-0">
                     <span className="text-[9.5px] font-[650] tracking-[0.07em] text-accent-strong">
-                      {FILTERS.find((item) => item.id === result.type)?.label ??
-                        result.type}
-                      {" · "}
-                      {result.projectName}
+                      {t(
+                        CONTENT_FILTERS.find((item) => item.id === result.type)
+                          ?.label ?? "search.tab.content",
+                      )}
+                      {result.projectName ? ` · ${result.projectName}` : ""}
                     </span>
                     <strong className="mt-1.5 block truncate text-[12.5px] font-[620]">
                       {result.title}
                     </strong>
-                    <span className="mt-1 block line-clamp-2 text-[11px] leading-[1.6] text-ink-muted">
-                      {result.snippet}
-                    </span>
+                    <HighlightedSnippet snippet={result.snippet} />
                   </span>
                   <time className="text-[9.5px] text-faint">
-                    {new Date(result.updatedAt).toLocaleDateString()}
+                    {formatDate(result.updatedAt)}
                   </time>
                 </button>
               ))
             ) : contacts.length === 0 ? (
-              <SearchEmpty text="没有匹配的联系人或授权内容" />
+              <SearchEmpty text={t("search.empty")} />
             ) : null}
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function MessageFilterChips({
+  query,
+  onChange,
+}: {
+  query: string;
+  onChange(next: string): void;
+}) {
+  const { t } = useI18n();
+  const parsed = parseSearchQuery(query);
+  const fromValue = parsed.fromDisplayName ?? parsed.fromPrincipalId ?? "";
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <label className="flex h-7 items-center gap-1.5 rounded-full border border-line bg-panel2 px-2.5 text-[10px] text-faint">
+        {t("search.filter.from")}
+        <input
+          value={fromValue}
+          onChange={(event) =>
+            onChange(
+              event.target.value
+                ? applySearchFilter(query, "from", event.target.value)
+                : stripSearchFilter(query, "from"),
+            )
+          }
+          placeholder={t("search.filter.fromPlaceholder")}
+          className="w-[88px] border-0 bg-transparent text-[10px] text-ink outline-none placeholder:text-faint"
+        />
+      </label>
+      <label className="flex h-7 items-center gap-1.5 rounded-full border border-line bg-panel2 px-2.5 text-[10px] text-faint">
+        {t("search.filter.after")}
+        <input
+          type="date"
+          value={parsed.after ?? ""}
+          onChange={(event) =>
+            onChange(
+              event.target.value
+                ? applySearchFilter(query, "after", event.target.value)
+                : stripSearchFilter(query, "after"),
+            )
+          }
+          className="border-0 bg-transparent text-[10px] text-ink outline-none"
+        />
+      </label>
+      <label className="flex h-7 items-center gap-1.5 rounded-full border border-line bg-panel2 px-2.5 text-[10px] text-faint">
+        {t("search.filter.before")}
+        <input
+          type="date"
+          value={parsed.before ?? ""}
+          onChange={(event) =>
+            onChange(
+              event.target.value
+                ? applySearchFilter(query, "before", event.target.value)
+                : stripSearchFilter(query, "before"),
+            )
+          }
+          className="border-0 bg-transparent text-[10px] text-ink outline-none"
+        />
+      </label>
+      <button
+        type="button"
+        onClick={() =>
+          onChange(
+            parsed.hasAttachment
+              ? stripSearchFilter(query, "has")
+              : applySearchFilter(query, "has", "attachment"),
+          )
+        }
+        className={[
+          "h-7 rounded-full border px-3 text-[10px]",
+          parsed.hasAttachment
+            ? "border-accent-strong bg-accent-soft text-accent-strong"
+            : "border-line bg-panel2 text-faint",
+        ].join(" ")}
+      >
+        {t("search.filter.hasAttachment")}
+      </button>
     </div>
   );
 }

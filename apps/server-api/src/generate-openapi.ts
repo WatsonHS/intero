@@ -12,6 +12,8 @@ import {
   KanbanBoardResponse,
   KanbanCardResponse,
   SpecListResponse,
+  SearchQuery,
+  SearchResponse,
   TeamPulseResponse,
   ThreadResponse,
   UpdateKanbanCardRequest,
@@ -32,6 +34,8 @@ const schemas = {
   KanbanBoardResponse,
   KanbanCardResponse,
   SpecListResponse,
+  SearchQuery,
+  SearchResponse,
   TeamPulseResponse,
   ThreadResponse,
   UpdateKanbanCardRequest,
@@ -213,6 +217,28 @@ const document = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/SpecListResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/search": {
+      get: {
+        operationId: "search",
+        parameters: [
+          {
+            in: "query",
+            name: "q",
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Authorized search results, including messages",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/SearchResponse" },
               },
             },
           },

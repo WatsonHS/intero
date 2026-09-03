@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   boolean,
+  customType,
   date,
   index,
   integer,
@@ -14,6 +15,12 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -349,6 +356,8 @@ export const messages = pgTable(
     replyToMessageId: uuid("reply_to_message_id").references(
       (): AnyPgColumn => messages.id,
     ),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    searchVector: tsvector("search_vector"),
     ...timestamps,
   },
   (table) => [
@@ -372,6 +381,9 @@ export const messages = pgTable(
     index("messages_org_idx").on(table.organizationId),
     index("messages_mentions_idx").using("gin", table.mentionedPrincipalIds),
     index("messages_reply_to_message_idx").on(table.replyToMessageId),
+    index("messages_search_vector_idx")
+      .using("gin", table.searchVector)
+      .where(sql`${table.searchVector} IS NOT NULL`),
   ],
 );
 

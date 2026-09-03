@@ -207,6 +207,8 @@ export const ThreadMessage = z
     revision: z.number().int().positive().optional(),
     /** Aggregated participant reactions; omitted when the message has none. */
     reactions: ThreadMessageReactions.optional(),
+    /** Soft-deleted messages are excluded from history and search. */
+    deletedAt: z.iso.datetime().optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;

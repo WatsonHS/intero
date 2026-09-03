@@ -1699,6 +1699,181 @@ describe("Intero API vertical slice", () => {
       revisions: [{ revision: 1 }, { revision: 2 }],
     });
   });
+
+  it("searches authorized messages and hides other participants, deleted, and encrypted bodies", async () => {
+    const visibleThreadId = uuidv7();
+    const privateThreadId = uuidv7();
+    const encryptedThreadId = uuidv7();
+    const now = "2026-09-01T12:00:00.000Z";
+    const create = (
+      body: Record<string, unknown>,
+      principalId: PrincipalId = ALEX,
+    ) =>
+      app.inject({
+        method: "POST",
+        url: "/v1/threads",
+        headers: auth(principalId),
+        payload: body,
+      });
+    expect(
+      (
+        await create({
+          id: visibleThreadId,
+          kind: "room",
+          title: "Launch room",
+          participantIds: [ALEX, PRIYA],
+          standInIds: [],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          createdAt: now,
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (
+        await create({
+          id: privateThreadId,
+          kind: "human_direct",
+          title: "Alex and Morgan",
+          participantIds: [ALEX, MORGAN],
+          standInIds: [],
+          accessMode: "agent_readable",
+          priorHistoryGranted: false,
+          createdAt: now,
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (
+        await create({
+          id: encryptedThreadId,
+          kind: "human_direct",
+          title: "Encrypted pair",
+          participantIds: [ALEX, PRIYA],
+          standInIds: [],
+          accessMode: "human_only_e2ee",
+          priorHistoryGranted: false,
+          createdAt: now,
+        })
+      ).statusCode,
+    ).toBe(201);
+
+    const visibleMessageId = uuidv7();
+    const deletedMessageId = uuidv7();
+    const privateMessageId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${visibleThreadId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: visibleMessageId,
+        body: "Please deploy the auth rollback tonight.",
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${visibleThreadId}/messages`,
+      headers: auth(PRIYA),
+      payload: {
+        clientMessageId: deletedMessageId,
+        body: "Deleted auth rollback note.",
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${privateThreadId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: privateMessageId,
+        body: "Secret auth rollback with Morgan.",
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${encryptedThreadId}/messages`,
+      headers: auth(ALEX),
+      payload: {
+        clientMessageId: uuidv7(),
+        encryptedBody: "opaque-openmls-ciphertext",
+      },
+    });
+    const deleted = store.messages
+      .get(visibleThreadId as ThreadId)
+      ?.find((message) => message.id === deletedMessageId);
+    expect(deleted).toBeDefined();
+    store.messages.set(
+      visibleThreadId as ThreadId,
+      (store.messages.get(visibleThreadId as ThreadId) ?? []).map((message) =>
+        message.id === deletedMessageId
+          ? { ...message, deletedAt: now }
+          : message,
+      ),
+    );
+
+    const alexHits = await app.inject({
+      method: "GET",
+      url: `/v1/search?q=${encodeURIComponent("auth rollback")}&types=message`,
+      headers: auth(ALEX),
+    });
+    expect(alexHits.statusCode).toBe(200);
+    const alexItems = alexHits.json<{
+      items: Array<{ id: string; snippet: string; threadId: string }>;
+    }>().items;
+    expect(alexItems.map((item) => item.id).sort()).toEqual(
+      [privateMessageId, visibleMessageId].sort(),
+    );
+    expect(
+      alexItems
+        .find((item) => item.id === visibleMessageId)
+        ?.snippet.toLocaleLowerCase(),
+    ).toContain("<b>auth</b>");
+    expect(alexItems.some((item) => item.id === deletedMessageId)).toBe(false);
+
+    const priyaHits = await app.inject({
+      method: "GET",
+      url: `/v1/search?q=${encodeURIComponent("auth rollback")}&types=message`,
+      headers: auth(PRIYA),
+    });
+    expect(
+      priyaHits
+        .json<{ items: Array<{ id: string }> }>()
+        .items.map((item) => item.id),
+    ).toEqual([visibleMessageId]);
+
+    const morganHits = await app.inject({
+      method: "GET",
+      url: `/v1/search?q=${encodeURIComponent("auth rollback")}&types=message`,
+      headers: auth(MORGAN),
+    });
+    expect(
+      morganHits
+        .json<{ items: Array<{ id: string }> }>()
+        .items.map((item) => item.id),
+    ).toEqual([privateMessageId]);
+
+    const encryptedHits = await app.inject({
+      method: "GET",
+      url: `/v1/search?q=${encodeURIComponent("opaque-openmls-ciphertext")}&types=message`,
+      headers: auth(ALEX),
+    });
+    expect(encryptedHits.json<{ items: unknown[] }>().items).toEqual([]);
+
+    const filtered = await app.inject({
+      method: "GET",
+      url: `/v1/search?${new URLSearchParams({
+        q: "rollback",
+        types: "message",
+        in: "Launch room",
+        from: "Alex Rivera",
+      }).toString()}`,
+      headers: auth(PRIYA),
+    });
+    expect(
+      filtered
+        .json<{ items: Array<{ id: string }> }>()
+        .items.map((item) => item.id),
+    ).toEqual([visibleMessageId]);
+  });
 });
 
 async function createWorkstream(
