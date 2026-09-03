@@ -380,6 +380,26 @@ describe("service environment schemas", () => {
     });
   });
 
+  it("derives the LiveKit signaling URL from the public URL in product mode", () => {
+    const config = loadApiServiceConfig({
+      ...postgresEnvironment,
+      INTERO_RUNTIME_MODE: "product",
+      INTERO_AUTH_SECRET:
+        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      INTERO_PUBLIC_URL: "https://intero.example.com",
+      INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
+      INTERO_CENTRIFUGO_TOKEN_SECRET:
+        "realtime-token-secret-at-least-thirty-two-bytes",
+      INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+      INTERO_LIVEKIT_API_KEY: "livekit-key",
+      INTERO_LIVEKIT_API_SECRET: "livekit-secret",
+    });
+    expect(config.calls).toMatchObject({
+      serverUrl: "wss://intero.example.com/rtc",
+      apiKey: "livekit-key",
+    });
+  });
+
   it("requires secure LiveKit signaling in product mode", () => {
     expect(() =>
       loadApiServiceConfig({

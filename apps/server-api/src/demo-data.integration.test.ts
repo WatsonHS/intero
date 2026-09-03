@@ -56,15 +56,20 @@ integration("persisted Demo workspace", () => {
       "019f9a00-0000-7000-8000-00000000dead",
     ]);
 
+    // Seed relative to the real clock: the Demo Capability Grants expire 30
+    // days after `now`, and the capability policy checks expiry against the
+    // wall clock, so a fixed historical date would turn the confirmation
+    // request into an authorization failure once that date is 30 days old.
+    const seedNow = new Date();
     const first = await seedDemoData({
       target: target!,
       providerEncryptionKey: "demo-integration-encryption-key",
-      now: new Date("2026-07-26T08:00:00.000Z"),
+      now: seedNow,
     });
     const second = await seedDemoData({
       target: target!,
       providerEncryptionKey: "demo-integration-encryption-key",
-      now: new Date("2026-07-26T09:00:00.000Z"),
+      now: new Date(seedNow.getTime() + 3_600_000),
     });
     expect(first.status).toBe("seeded");
     expect(second).toEqual({ ...first, status: "already_seeded" });
