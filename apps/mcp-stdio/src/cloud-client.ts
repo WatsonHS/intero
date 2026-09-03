@@ -317,6 +317,44 @@ export class CloudPilotClient {
     });
   }
 
+  async reportLifecycle(input: {
+    clientEventId: string;
+    lifecycle: "session_started" | "session_ended";
+    occurredAt?: string;
+    workstreamKey: string;
+    workstreamTitle: string;
+    evidenceRefs?: string[];
+  }): Promise<unknown> {
+    const response = await fetch(
+      `${this.connection.baseUrl}/v1/pilot/agent/hooks`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.connection.credential}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          clientEventId: input.clientEventId,
+          lifecycle: input.lifecycle,
+          ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
+          workstreamKey: input.workstreamKey,
+          workstreamTitle: input.workstreamTitle,
+          ...(input.evidenceRefs && input.evidenceRefs.length > 0
+            ? { evidenceRefs: input.evidenceRefs }
+            : {}),
+        }),
+        signal: AbortSignal.timeout(3_000),
+      },
+    );
+    const body = (await response.json()) as { message?: string };
+    if (!response.ok) {
+      throw new Error(
+        body.message ?? `Lifecycle delivery failed (${response.status}).`,
+      );
+    }
+    return body;
+  }
+
   async reportCheckpoint(input: CloudCheckpointInput): Promise<unknown> {
     const payload = {
       schemaVersion: 2,

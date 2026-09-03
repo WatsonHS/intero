@@ -61,9 +61,7 @@ test("Web reflects authenticated MCP initialization and functional validation", 
     `pilot-agent-binding-${connection.bindingId}`,
   );
   await expect(status).toContainText("Codex E2E repository");
-  await expect(status).toContainText(
-    "原生 MCP 已验证 · 等待 Codex Hook 首次上报",
-  );
+  await expect(status).toContainText("原生 MCP 已验证 · 等待 Hook 首次上报");
   await expect(page.getByTestId("agent-connection-success")).toHaveCount(0);
   await expect(page.getByTestId("connect-agent-codex")).toHaveText(
     "重新生成 Codex 修复任务",

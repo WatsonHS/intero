@@ -1,4 +1,5 @@
 import { passkey } from "@better-auth/passkey";
+import { passkeyRpIdForHost } from "@intero/config";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { deviceAuthorization, jwt, oneTimeToken } from "better-auth/plugins";
@@ -92,7 +93,7 @@ export function createInteroAuth(config: AuthConfig) {
           `ott_${randomBytes(32).toString("base64url")}`,
       }),
       passkey({
-        rpID: config.rpId,
+        rpID: passkeyRpIdForHost(config.rpId),
         rpName: "Intero",
         origin: config.trustedOrigins ?? [config.publicUrl],
       }),

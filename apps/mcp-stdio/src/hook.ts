@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { promisify } from "node:util";
@@ -17,75 +18,57 @@ export async function runHook(
 ): Promise<void> {
   if (!hookShouldCollect()) return;
   try {
-    const input = await readHookInput();
-    const eventName =
-      stringField(input, "hook_event_name") ?? stringField(input, "event_name");
-    const cwd = stringField(input, "cwd");
-    const sessionId =
-      stringField(input, "session_id") ??
-      stringField(input, "conversation_id") ??
-      stringField(input, "transcript_id");
-    if (
-      !eventName ||
-      !cwd ||
-      !sessionId ||
-      !isSupportedLifecycleEvent(source, eventName) ||
-      cwd.length > 4_096 ||
-      sessionId.length > 240
-    ) {
-      return;
-    }
-
-    const eventId =
-      stringField(input, "hook_event_id") ??
-      stringField(input, "event_id") ??
-      stringField(input, "tool_use_id") ??
-      sessionId;
-    const client = CloudPilotClient.load({ client: source });
-    const preferredLanguage = client.context().preferredLanguage;
-    const chinese = preferredLanguage === "zh-CN";
-    const git = await readGitContext(cwd, preferredLanguage);
-    const ended = isTerminalLifecycleEvent(eventName);
-    await client.reportCheckpoint({
-      eventType: ended ? "work_progressed" : "work_started",
-      clientEventId: `lifecycle:${source}:${eventName}:${eventId}`.slice(
-        0,
-        200,
-      ),
-      workstreamKey: git.repository,
-      workstreamTitle: git.repository,
-      phase: "implementing",
-      narrative: {
-        currentFocus: ended
-          ? chinese
-            ? "Coding Agent 会话已结束，等待下一次有意义的工作更新。"
-            : "The Coding Agent session has ended and is waiting for the next meaningful work update."
-          : chinese
-            ? "Coding Agent 已开始当前项目的工作会话。"
-            : "The Coding Agent started a work session for the current project.",
-        completedOutcome: ended
-          ? chinese
-            ? "本次会话已结束；最终成果以 Agent 的语义检查点为准。"
-            : "The session ended; final outcomes remain represented by the Agent's semantic checkpoints."
-          : chinese
-            ? "已建立当前项目的工作上下文。"
-            : "The current project work context is established.",
-        evidence: git.evidence,
-        nextStep: ended
-          ? chinese
-            ? "如有实际进展、产出、验证或阻塞，由 Agent 上报语义检查点。"
-            : "Report a semantic checkpoint for any actual progress, outcome, validation, or blocker."
-          : chinese
-            ? "在有实际进展、产出、验证或阻塞时上报语义检查点。"
-            : "Report a semantic checkpoint when meaningful progress, an outcome, validation, or a blocker occurs.",
-        collaboration: { needed: false, request: "", requestedFrom: "" },
-      },
-      evidenceRefs: git.refs,
-    });
+    await handleHookEvent(source, await readHookInput());
   } catch {
     // Hooks remain fail-open and silent. They must not block an Agent, expose
     // local paths, or turn a transient cloud failure into a coding failure.
   }
+}
+
+export async function handleHookEvent(
+  source: "codex" | "claude-code" | "opencode",
+  input: Record<string, unknown>,
+  options?: { configDirectory?: string },
+): Promise<void> {
+  const eventName =
+    stringField(input, "hook_event_name") ?? stringField(input, "event_name");
+  const cwd = stringField(input, "cwd");
+  const sessionId =
+    stringField(input, "session_id") ??
+    stringField(input, "conversation_id") ??
+    stringField(input, "transcript_id");
+  if (
+    !eventName ||
+    !cwd ||
+    !sessionId ||
+    !isSupportedLifecycleEvent(source, eventName) ||
+    cwd.length > 4_096 ||
+    sessionId.length > 240
+  ) {
+    return;
+  }
+
+  const client = CloudPilotClient.load({
+    client: source,
+    cwd,
+    ...(options?.configDirectory
+      ? { configDirectory: options.configDirectory }
+      : {}),
+  });
+  const git = await readGitContext(cwd, client.context().preferredLanguage);
+  await client.reportLifecycle({
+    clientEventId: hashedSessionClientEventId(sessionId),
+    lifecycle: isTerminalLifecycleEvent(eventName)
+      ? "session_ended"
+      : "session_started",
+    workstreamKey: git.repository,
+    workstreamTitle: git.repository,
+    ...(git.refs.length > 0 ? { evidenceRefs: git.refs } : {}),
+  });
+}
+
+export function hashedSessionClientEventId(sessionId: string): string {
+  return createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 }
 
 export function hookShouldCollect(

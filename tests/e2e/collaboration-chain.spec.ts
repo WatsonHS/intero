@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { roomInteroPrincipalId, type ThreadId } from "@intero/domain";
+
+import { reportSessionStarted } from "./lifecycle-hook.js";
 import {
   expect,
   test,
@@ -138,6 +140,7 @@ interface OverviewPayload {
     id: string;
     ownerId: string;
     client: AgentClient;
+    activityUpdatedAt?: string;
     disconnectedAt?: string;
   }>;
   privateWorkState: Array<{ id: string }>;
@@ -1549,9 +1552,32 @@ async function connectThroughSettings(
     ],
     cloudDataDir,
   );
-  expect(connected.connected).toBe(true);
-  const context = connected.context as { bindingId?: string };
+  const validation = connected.validation as {
+    mcpConnected?: boolean;
+    configurationCurrent?: boolean;
+    status?: string;
+  };
+  expect(validation).toMatchObject({
+    mcpConnected: true,
+    configurationCurrent: true,
+    status: "lifecycle_pending",
+  });
+  await reportSessionStarted(client!, cloudDataDir);
+  const context = connected.context as {
+    bindingId?: string;
+    projectId?: string;
+  };
   expect(context.bindingId).toBeTruthy();
+  expect(context.projectId).toBeTruthy();
+  await expect
+    .poll(
+      async () =>
+        (await getOverview(page, context.projectId!)).bindings.find(
+          (binding) => binding.id === context.bindingId,
+        )?.activityUpdatedAt,
+      { timeout: 15_000 },
+    )
+    .toBeTruthy();
   return { client: client!, bindingId: context.bindingId! };
 }
 

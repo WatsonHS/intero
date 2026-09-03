@@ -328,7 +328,10 @@ export function loadApiServiceConfig(
             passkeyRpId: z
               .string()
               .min(1)
-              .parse(environment.INTERO_PASSKEY_RP_ID ?? publicUrlHost),
+              .parse(
+                environment.INTERO_PASSKEY_RP_ID ??
+                  passkeyRpIdForHost(publicUrlHost),
+              ),
           },
         }
       : {}),
@@ -362,6 +365,13 @@ function normalizePublicUrl(value: string): string {
     );
   }
   return parsed.origin;
+}
+
+export function passkeyRpIdForHost(hostname: string): string {
+  if (hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+    return "localhost";
+  }
+  return hostname;
 }
 
 function defaultAuthTrustedOrigins(

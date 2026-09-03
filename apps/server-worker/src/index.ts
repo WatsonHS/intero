@@ -615,14 +615,25 @@ const metricsServer = createServer((request, response) => {
   }
   response.writeHead(404).end();
 });
-await new Promise<void>((resolve, reject) => {
-  metricsServer.once("error", reject);
-  metricsServer.listen(
-    serviceConfig.metricsPort,
-    serviceConfig.metricsHost,
-    resolve,
-  );
-});
+try {
+  await new Promise<void>((resolve, reject) => {
+    metricsServer.once("error", reject);
+    metricsServer.listen(
+      serviceConfig.metricsPort,
+      serviceConfig.metricsHost,
+      resolve,
+    );
+  });
+} catch (error) {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("code" in error) ||
+    error.code !== "EADDRINUSE"
+  ) {
+    throw error;
+  }
+}
 
 const heartbeatTimer = setInterval(() => {
   void updateOperationalHealth().catch(() => undefined);

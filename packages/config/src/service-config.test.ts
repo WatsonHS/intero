@@ -134,6 +134,18 @@ describe("service environment schemas", () => {
     ).toThrow("INTERO_PILOT_REALTIME no longer selects an adapter");
   });
 
+  it("maps loopback public URL hosts to the localhost passkey RP ID", () => {
+    expect(
+      loadApiServiceConfig({
+        ...postgresEnvironment,
+        INTERO_AUTH_SECRET:
+          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+        INTERO_PUBLIC_URL: "http://127.0.0.1:4310",
+        INTERO_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1:5183",
+      }).auth?.passkeyRpId,
+    ).toBe("localhost");
+  });
+
   it("configures invite-only credentials without a delivery provider", () => {
     expect(
       loadApiServiceConfig({

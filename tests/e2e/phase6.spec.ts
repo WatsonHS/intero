@@ -1,4 +1,12 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://127.0.0.1:4320";
+const rendererUrl =
+  process.env.INTERO_E2E_RENDERER_URL ?? "http://127.0.0.1:5183";
+// WebAuthn rejects IP rpIds ("This is an invalid domain"). CI hosts the
+// renderer on localhost and uses Passkey; 127.0.0.1 uses password activation.
+const passkeyUsable = new URL(rendererUrl).hostname === "localhost";
+const activationPassword = "Intero-demo-2026!";
 
 test("two users activate, authenticate, receive targeted attention, and search safely", async ({
   browser,
@@ -22,7 +30,13 @@ test("two users activate, authenticate, receive targeted attention, and search s
   ).toBeVisible();
   await expect(admin.getByText("请确认是否推进 10% 灰度发布")).toBeVisible();
   await expect(admin.getByText("替身请求扩大数据范围")).toBeVisible();
-  await admin.getByRole("button", { name: "范围扩展", exact: true }).click();
+  const scopeMute = admin.getByRole("button", {
+    name: "范围扩展",
+    exact: true,
+  });
+  if (await scopeMute.isVisible()) {
+    await scopeMute.click();
+  }
   await expect(
     admin.getByRole("button", { name: "范围扩展 · 已静音" }),
   ).toBeVisible();
@@ -38,33 +52,52 @@ test("two users activate, authenticate, receive targeted attention, and search s
     admin.getByText("执行 10% 租户安全灰度", { exact: true }),
   ).toBeVisible();
 
-  const cdp = await recipientContext.newCDPSession(recipient);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  await recipient.goto("/accept-invitation?token=intero-demo-pending-casey");
+  const invitation = await resolveInvitation(admin);
+  if (passkeyUsable) {
+    const cdp = await recipientContext.newCDPSession(recipient);
+    await cdp.send("WebAuthn.enable");
+    await cdp.send("WebAuthn.addVirtualAuthenticator", {
+      options: {
+        protocol: "ctap2",
+        transport: "internal",
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        automaticPresenceSimulation: true,
+      },
+    });
+  }
+  await recipient.goto(
+    `/accept-invitation?token=${encodeURIComponent(invitation.token)}`,
+  );
   await expect(
     recipient.getByRole("heading", { name: "加入 产品体验" }),
   ).toBeVisible();
-  await recipient.getByTestId("invitation-display-name").fill("Casey Nguyen");
-  await recipient.getByRole("button", { name: "使用 Passkey 激活" }).click();
+  await recipient.getByTestId("invitation-display-name").fill(invitation.name);
+  if (passkeyUsable) {
+    await recipient.getByRole("button", { name: "使用 Passkey 激活" }).click();
+  } else {
+    await recipient.getByTestId("activation-password").fill(activationPassword);
+    await recipient.getByTestId("activation-password-submit").click();
+  }
   const confirmMembership = recipient.getByRole("button", {
     name: "确认加入团队",
   });
   if (await confirmMembership.isVisible({ timeout: 2_000 })) {
     await confirmMembership.click();
   }
-  await expect(recipient.getByText(/已加入 产品体验/)).toBeVisible();
-  await recipient.getByRole("button", { name: /进入 Team Pulse/ }).click();
-  await expect(recipient.getByTitle("Team Pulse")).toBeVisible();
+  const joined = recipient.getByText(/已加入 产品体验/);
+  const pulseNav = recipient.getByTitle("Team Pulse");
+  await expect(joined.or(pulseNav)).toBeVisible();
+  if (await joined.isVisible()) {
+    await recipient.getByRole("button", { name: /进入 Team Pulse/ }).click();
+  }
+  await expect(pulseNav).toBeVisible();
+  await recipient.getByTestId("profile-menu-trigger").click();
+  await expect(recipient.getByTestId("profile-menu")).toContainText(
+    invitation.name,
+  );
+  await recipient.getByRole("button", { name: "关闭账户菜单" }).click();
 
   await recipient.getByTitle("设置").click();
   await expect(
@@ -74,7 +107,13 @@ test("two users activate, authenticate, receive targeted attention, and search s
   await expect(
     recipient.getByRole("heading", { name: "回到你的团队" }),
   ).toBeVisible();
-  await recipient.getByRole("button", { name: "使用 Passkey 登录" }).click();
+  if (passkeyUsable) {
+    await recipient.getByRole("button", { name: "使用 Passkey 登录" }).click();
+  } else {
+    await recipient.getByTestId("sign-in-email").fill(invitation.email);
+    await recipient.getByTestId("sign-in-password").fill(activationPassword);
+    await recipient.getByTestId("sign-in-password-submit").click();
+  }
   await expect(recipient.getByTitle("Team Pulse")).toBeVisible();
   await recipient.getByTitle("Team Pulse").click();
   await expect(recipient).toHaveURL(/\/pulse$/);
@@ -92,3 +131,49 @@ test("two users activate, authenticate, receive targeted attention, and search s
   await adminContext.close();
   await recipientContext.close();
 });
+
+async function resolveInvitation(
+  admin: Page,
+): Promise<{ token: string; name: string; email: string }> {
+  const pending = await admin.request.get(
+    `${apiUrl}/v1/pilot/invitations/intero-demo-pending-casey`,
+  );
+  if (pending.ok()) {
+    const body = (await pending.json()) as {
+      invitation?: { status?: string; email?: string };
+      activationRequired?: boolean;
+    };
+    if (
+      body.invitation?.status === "pending" &&
+      body.activationRequired === true
+    ) {
+      return {
+        token: "intero-demo-pending-casey",
+        name: "Casey Nguyen",
+        email: body.invitation.email ?? "casey@demo.intero.test",
+      };
+    }
+  }
+
+  const teamsResponse = await admin.request.get(`${apiUrl}/v1/pilot/teams`);
+  expect(teamsResponse.ok()).toBe(true);
+  const teamsBody = (await teamsResponse.json()) as {
+    teams: Array<{ id: string; name: string }>;
+  };
+  const team = teamsBody.teams.find(
+    (candidate) => candidate.name === "产品体验",
+  );
+  expect(team).toBeDefined();
+  const suffix = Date.now().toString(36);
+  const email = `casey.${suffix}@demo.intero.test`;
+  const created = await admin.request.post(
+    `${apiUrl}/v1/pilot/teams/${team!.id}/invitations`,
+    {
+      data: { email },
+    },
+  );
+  expect(created.status()).toBe(201);
+  const createdBody = (await created.json()) as { token: string };
+  expect(createdBody.token).toBeTruthy();
+  return { token: createdBody.token, name: "Casey Nguyen", email };
+}

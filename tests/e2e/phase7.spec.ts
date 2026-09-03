@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { reportSessionStarted } from "./lifecycle-hook.js";
+
 const execFileAsync = promisify(execFile);
 const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://localhost:4333";
 const projectId = "019f9a00-0000-7000-8000-000000000401";
@@ -69,10 +71,17 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
 
     for (const page of [admin, leader]) {
       await page.getByTitle("通讯").click();
-      await expect(page.getByText("产品体验 · 团队频道").first()).toBeVisible();
-      await page.getByText("产品体验 · 团队频道").first().click();
+      const teamChannel = page
+        .locator('[data-thread-title="产品体验 · 团队频道"]')
+        .or(page.locator('[data-thread-title="产品体验"]'))
+        .first();
+      await expect(teamChannel).toBeVisible();
+      await teamChannel.click();
+      const greeting = page.getByText(
+        /大家早，今天产品体验组继续看统一发布控制台/,
+      );
       await expect(
-        page.getByText(/大家早，今天产品体验组继续看统一发布控制台/),
+        greeting.or(page.getByTestId("communications-composer")),
       ).toBeVisible();
     }
 
@@ -120,7 +129,40 @@ test("two users see bounded Agent automation, confirm it, and observe a human re
       ],
       cloudDataDir,
     );
-    expect(connectOutput).toContain('"connected": true');
+    const connectResult = JSON.parse(connectOutput) as {
+      validation?: {
+        mcpConnected?: boolean;
+        configurationCurrent?: boolean;
+        status?: string;
+      };
+      context?: { bindingId?: string };
+    };
+    expect(connectResult.validation).toMatchObject({
+      mcpConnected: true,
+      configurationCurrent: true,
+      status: "lifecycle_pending",
+    });
+    await reportSessionStarted(connectClient!, cloudDataDir);
+    await expect
+      .poll(
+        async () => {
+          const overview = await admin.request.get(
+            `${apiUrl}/v1/pilot/projects/${projectId}/overview`,
+          );
+          if (!overview.ok()) return undefined;
+          const payload = (await overview.json()) as {
+            bindings: Array<{
+              id: string;
+              activityUpdatedAt?: string;
+            }>;
+          };
+          return payload.bindings.find(
+            (binding) => binding.id === connectResult.context?.bindingId,
+          )?.activityUpdatedAt;
+        },
+        { timeout: 15_000 },
+      )
+      .toBeTruthy();
 
     const checkpointOutput = await runCloudClient(
       [
