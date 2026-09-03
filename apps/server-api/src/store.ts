@@ -16,6 +16,8 @@ import {
   type KanbanCard,
   type KanbanCardId,
   type MessageSearchPage,
+  extractHttpUrls,
+  type LinkPreview,
   type OperationId,
   type OutboxEntry,
   personalStandInId,
@@ -137,6 +139,7 @@ export class InMemoryPlatformStore {
   readonly envelopes = new Map<OperationId, ActionEnvelope>();
   readonly threads = new Map<ThreadId, ConversationThread>();
   readonly messages = new Map<ThreadId, ThreadMessage[]>();
+  readonly linkPreviews = new Map<string, LinkPreview>();
   /** First message sequence visible to a participant after they join. */
   private readonly threadVisibility = new Map<string, number>();
   /** Keyed `${threadId}:${principalId}` — the read marker per person. */
@@ -603,14 +606,17 @@ export class InMemoryPlatformStore {
     ) {
       throw new Error("Reply message was not found.");
     }
-    const message = buildThreadMessage(thread, {
-      ...input,
-      mentionedPrincipalIds: normalizeMentionIds(
-        thread,
-        input.senderId,
-        input.mentionedPrincipalIds,
-      ),
-    });
+    const message = withExtractedPreviewUrls(
+      thread,
+      buildThreadMessage(thread, {
+        ...input,
+        mentionedPrincipalIds: normalizeMentionIds(
+          thread,
+          input.senderId,
+          input.mentionedPrincipalIds,
+        ),
+      }),
+    );
     const updatedThread = {
       ...thread,
       sequence: message.sequence,
@@ -628,6 +634,7 @@ export class InMemoryPlatformStore {
       "message_appended",
       message.id,
     );
+    this.enqueueUnfurl(updatedThread, message);
     return message;
   }
 
@@ -688,12 +695,12 @@ export class InMemoryPlatformStore {
     ) {
       throw new Error("Completed stream messages are immutable.");
     }
-    const updated: ThreadMessage = {
+    const updated: ThreadMessage = withExtractedPreviewUrls(thread, {
       ...current,
       body: input.body,
       streamState: input.streamState,
       revision: (current.revision ?? 1) + 1,
-    };
+    });
     const next = [...messages];
     next[index] = updated;
     this.messages.set(input.threadId, next);
@@ -704,6 +711,9 @@ export class InMemoryPlatformStore {
       uuidv7(),
       input.messageId,
     );
+    if (updated.streamState === "complete") {
+      this.enqueueUnfurl(thread, updated);
+    }
     return updated;
   }
 
@@ -1179,6 +1189,116 @@ export class InMemoryPlatformStore {
       return false;
     }
     return true;
+  }
+
+  getStoredThreadMessage(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+  ): ThreadMessage | undefined {
+    return (this.messages.get(threadId) ?? []).find(
+      (message) => message.id === messageId,
+    );
+  }
+
+  hideMessagePreviews(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+    principalId: PrincipalId,
+  ): ThreadMessage {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Thread was not found.");
+    const messages = this.messages.get(threadId) ?? [];
+    const index = messages.findIndex((message) => message.id === messageId);
+    const current = messages[index];
+    if (!current) throw new Error("Message was not found.");
+    if (current.senderId !== principalId) {
+      throw new Error("Only the sender can hide link previews.");
+    }
+    if (current.previewsHidden) return current;
+    const updated: ThreadMessage = {
+      ...current,
+      previewsHidden: true,
+      revision: (current.revision ?? 1) + 1,
+    };
+    const next = [...messages];
+    next[index] = updated;
+    this.messages.set(threadId, next);
+    this.recordConversationChange(
+      thread,
+      principalId,
+      "message_updated",
+      uuidv7(),
+      messageId,
+    );
+    return updated;
+  }
+
+  attachMessagePreviewUrls(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+    previewUrls: string[],
+  ): ThreadMessage {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Thread was not found.");
+    const messages = this.messages.get(threadId) ?? [];
+    const index = messages.findIndex((message) => message.id === messageId);
+    const current = messages[index];
+    if (!current) throw new Error("Message was not found.");
+    const updated: ThreadMessage = {
+      ...current,
+      ...(previewUrls.length ? { previewUrls } : {}),
+      revision: (current.revision ?? 1) + 1,
+    };
+    const next = [...messages];
+    next[index] = updated;
+    this.messages.set(threadId, next);
+    this.recordConversationChange(
+      thread,
+      current.senderId,
+      "message_updated",
+      uuidv7(),
+      messageId,
+    );
+    return updated;
+  }
+
+  getLinkPreviews(urls: string[], at = new Date()): LinkPreview[] {
+    const now = at.toISOString();
+    return urls.flatMap((url) => {
+      const preview = this.linkPreviews.get(url);
+      if (!preview || preview.expiresAt <= now) return [];
+      return [preview];
+    });
+  }
+
+  putLinkPreview(preview: LinkPreview): LinkPreview {
+    this.linkPreviews.set(preview.url, preview);
+    return preview;
+  }
+
+  private enqueueUnfurl(
+    thread: ConversationThread,
+    message: ThreadMessage,
+  ): void {
+    if (
+      thread.accessMode === "human_only_e2ee" ||
+      !message.serverReadable ||
+      !message.previewUrls?.length
+    ) {
+      return;
+    }
+    this.outbox.push({
+      operationId: uuidv7() as OperationId,
+      topic: "conversation.unfurl.enqueue",
+      payload: {
+        schemaVersion: 1,
+        organizationId: DEMO_ORGANIZATION_ID,
+        threadId: thread.id,
+        messageId: message.id,
+      },
+      attempts: 0,
+      availableAt: message.createdAt,
+    });
   }
 
   concludeThreadIntoParent(input: {
@@ -1845,6 +1965,31 @@ export function buildThreadMessage(
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     streamState,
     revision: 1,
+  };
+}
+
+export function withExtractedPreviewUrls(
+  thread: ConversationThread,
+  message: ThreadMessage,
+): ThreadMessage {
+  if (thread.accessMode === "human_only_e2ee" || !message.serverReadable) {
+    return message;
+  }
+  const previewUrls = extractHttpUrls(message.body);
+  return previewUrls.length ? { ...message, previewUrls } : message;
+}
+
+export function messageMetadata(
+  message: ThreadMessage,
+): Record<string, unknown> {
+  return {
+    ...(message.coordinationSummary
+      ? { coordinationSummary: message.coordinationSummary }
+      : {}),
+    ...(message.previewUrls?.length
+      ? { previewUrls: message.previewUrls }
+      : {}),
+    ...(message.previewsHidden ? { previewsHidden: true } : {}),
   };
 }
 

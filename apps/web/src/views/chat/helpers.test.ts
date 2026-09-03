@@ -80,6 +80,7 @@ describe("ownerNameFor", () => {
 describe("replyMessageSummary", () => {
   const labels = {
     attachment: "attachment",
+    pdf: "pdf",
     encrypted: "encrypted",
     unavailable: "unavailable",
     deleted: "deleted",
@@ -137,5 +138,18 @@ describe("replyMessageSummary", () => {
         labels,
       ),
     ).toBe("deleted");
+  });
+
+  it("uses the pdf label for PDF-only messages", () => {
+    expect(
+      replyMessageSummary(
+        {
+          serverReadable: true,
+          body: "",
+          attachments: [{ id: "a", contentType: "application/pdf" }],
+        } as Parameters<typeof replyMessageSummary>[0],
+        labels,
+      ),
+    ).toBe("pdf");
   });
 });

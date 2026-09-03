@@ -55,6 +55,11 @@ export interface PlatformStore {
   listThreadMessages: StoreMethod<"listThreadMessages">;
   getThreadMessage: StoreMethod<"getThreadMessage">;
   searchMessages: StoreMethod<"searchMessages">;
+  getStoredThreadMessage: StoreMethod<"getStoredThreadMessage">;
+  hideMessagePreviews: StoreMethod<"hideMessagePreviews">;
+  attachMessagePreviewUrls: StoreMethod<"attachMessagePreviewUrls">;
+  getLinkPreviews: StoreMethod<"getLinkPreviews">;
+  putLinkPreview: StoreMethod<"putLinkPreview">;
   concludeThreadIntoParent: StoreMethod<"concludeThreadIntoParent">;
   concludeCoordinationThread: StoreMethod<"concludeCoordinationThread">;
   createSpec: StoreMethod<"createSpec">;

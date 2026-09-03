@@ -76,6 +76,15 @@ import {
   StandInQuestionOutboxDispatcher,
   type StandInQuestionReference,
 } from "./stand-in-questions.js";
+import {
+  CONVERSATION_UNFURL_DISPATCH_TASK,
+  CONVERSATION_UNFURL_TASK,
+  GraphileUnfurlJobRunner,
+  PostgresUnfurlJobRepository,
+  UnfurlJobHandler,
+  UnfurlJobOutboxDispatcher,
+  type UnfurlJobReference,
+} from "./unfurl-jobs.js";
 
 const serviceConfig = loadWorkerServiceConfig();
 const pilotAdapterConfig = serviceConfig.pilot;
@@ -176,6 +185,15 @@ const standInQuestionOutbox = new StandInQuestionOutboxDispatcher(
   organizationId,
 );
 const graphileJobs = new GraphileJobRunner(workerUtils, organizationId);
+const unfurlJobRepository = new PostgresUnfurlJobRepository(
+  new Pool({ connectionString }),
+  organizationId,
+);
+const unfurlOutbox = new UnfurlJobOutboxDispatcher(
+  unfurlJobRepository,
+  new GraphileUnfurlJobRunner(workerUtils, organizationId),
+);
+const unfurlHandler = new UnfurlJobHandler({ conversations });
 const pilotOutbox = new PilotJobOutboxDispatcher(
   pilotJobRepository,
   graphileJobs,
@@ -224,6 +242,22 @@ const tasks: TaskList = {
         runAt: new Date(Date.now() + 1_000),
         maxAttempts: 25,
         jobKey: "intero-pilot-request-dispatch-loop",
+        jobKeyMode: "replace",
+      },
+    );
+  },
+  [CONVERSATION_UNFURL_TASK]: async (payload: unknown) => {
+    await unfurlHandler.handle(payload as UnfurlJobReference);
+  },
+  [CONVERSATION_UNFURL_DISPATCH_TASK]: async (_payload, helpers) => {
+    await unfurlOutbox.dispatch();
+    await helpers.addJob(
+      CONVERSATION_UNFURL_DISPATCH_TASK,
+      {},
+      {
+        runAt: new Date(Date.now() + 1_000),
+        maxAttempts: 25,
+        jobKey: "intero-conversation-unfurl-dispatch-loop",
         jobKeyMode: "replace",
       },
     );
@@ -436,6 +470,15 @@ await Promise.all([
     },
   ),
   workerUtils.addJob(
+    CONVERSATION_UNFURL_DISPATCH_TASK,
+    {},
+    {
+      maxAttempts: 25,
+      jobKey: "intero-conversation-unfurl-dispatch-loop",
+      jobKeyMode: "replace",
+    },
+  ),
+  workerUtils.addJob(
     AUTOMATION_DETECT_TASK,
     {},
     {
@@ -598,6 +641,7 @@ try {
   await interoJobRepository.close();
   await realtimeOutboxRepository.close();
   await standInQuestionRepository.close();
+  await unfurlJobRepository.close();
   await conversationPool.end();
   await automationStore.close();
   spiceDb?.close();

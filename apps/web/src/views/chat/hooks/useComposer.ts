@@ -20,7 +20,7 @@ import {
 import {
   MAX_MESSAGE_IMAGE_BYTES,
   MAX_MESSAGE_IMAGES,
-  MESSAGE_IMAGE_TYPES,
+  MESSAGE_ATTACHMENT_TYPES,
   type ComposerImage,
 } from "../constants.js";
 import { insertEmojiAtCursor } from "../format.js";
@@ -252,7 +252,7 @@ export function useComposer({
     if (!canAttachImages || !current || !currentSenderId) return;
     for (const file of files) {
       if (reservedImageSlotsRef.current >= MAX_MESSAGE_IMAGES) break;
-      if (!MESSAGE_IMAGE_TYPES.has(file.type)) {
+      if (!MESSAGE_ATTACHMENT_TYPES.has(file.type)) {
         notifications.warning(t("chat.imageTypeUnsupported"));
         continue;
       }

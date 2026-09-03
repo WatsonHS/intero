@@ -3,6 +3,7 @@ import {
   ArrowUpIcon,
   CircleNotchIcon,
   EyeIcon,
+  FilePdfIcon,
   LockSimpleIcon,
   PaperclipIcon,
   PencilSimpleIcon,
@@ -141,7 +142,7 @@ export function Composer({
             <input
               ref={imageInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+              accept="image/jpeg,image/png,image/gif,image/webp,image/avif,application/pdf"
               multiple
               className="hidden"
               onChange={onImageInputChange}
@@ -225,6 +226,7 @@ export function Composer({
                 <span className="block truncate text-[11px] text-ink-muted">
                   {replyMessageSummary(replyingToMessage, {
                     attachment: t("chat.replyAttachment"),
+                    pdf: t("chat.replyPdf"),
                     encrypted: t("chat.encryptedMessage"),
                     unavailable: t("chat.replyUnavailable"),
                     deleted: t("chat.messageDeleted"),
@@ -249,14 +251,25 @@ export function Composer({
                   key={image.id}
                   className="relative h-[72px] w-[88px] shrink-0 overflow-hidden rounded-[9px] bg-raise"
                 >
-                  <img
-                    src={image.previewUrl}
-                    alt={image.fileName}
-                    className={cn(
-                      "h-full w-full object-cover",
-                      image.status === "available" ? "" : "opacity-45",
-                    )}
-                  />
+                  {image.contentType === "application/pdf" ? (
+                    <span
+                      className={cn(
+                        "grid h-full w-full place-items-center",
+                        image.status === "available" ? "" : "opacity-45",
+                      )}
+                    >
+                      <FilePdfIcon size={22} className="text-danger" />
+                    </span>
+                  ) : (
+                    <img
+                      src={image.previewUrl}
+                      alt={image.fileName}
+                      className={cn(
+                        "h-full w-full object-cover",
+                        image.status === "available" ? "" : "opacity-45",
+                      )}
+                    />
+                  )}
                   {image.status === "uploading" ? (
                     <span
                       className="absolute inset-0 grid place-items-center"

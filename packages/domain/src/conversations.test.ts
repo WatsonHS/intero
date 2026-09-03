@@ -6,6 +6,9 @@ import {
   ReactionEmoji,
   ThreadMessage,
   TypingEvent,
+  extractHttpUrls,
+  LinkPreview,
+  normalizePublicHttpUrl,
 } from "./conversations.js";
 
 describe("message reaction emoji", () => {
@@ -86,5 +89,36 @@ describe("message edit and delete fields", () => {
         at: "2026-09-03T12:00:00.000Z",
       }).type,
     ).toBe("typing");
+  });
+});
+
+describe("extractHttpUrls", () => {
+  it("returns the first two unique normalized http(s) URLs", () => {
+    expect(
+      extractHttpUrls(
+        "See https://Example.com/a, then http://example.com/b and https://example.com/a again plus https://other.test/c.",
+      ),
+    ).toEqual(["https://example.com/a", "http://example.com/b"]);
+  });
+
+  it("strips credentials, fragments, and default ports", () => {
+    expect(normalizePublicHttpUrl("https://user:pass@example.com/x")).toBe(
+      undefined,
+    );
+    expect(normalizePublicHttpUrl("https://example.com:443/x#frag")).toBe(
+      "https://example.com/x",
+    );
+    expect(normalizePublicHttpUrl("http://example.com:80/x")).toBe(
+      "http://example.com/x",
+    );
+  });
+
+  it("rejects a link preview without a fetched timestamp", () => {
+    expect(
+      LinkPreview.safeParse({
+        url: "https://example.com",
+        status: "ok",
+      }).success,
+    ).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import {
   KanbanCardResponse,
   PresenceHeartbeatRequest,
   PresenceResponse,
+  LinkPreviewsResponse,
   SpecListResponse,
   SearchQuery,
   SearchResponse,
@@ -36,6 +37,7 @@ const schemas = {
   CreateWorkstreamRequest,
   KanbanBoardResponse,
   KanbanCardResponse,
+  LinkPreviewsResponse,
   SpecListResponse,
   SearchQuery,
   SearchResponse,
@@ -324,6 +326,68 @@ const document = {
                 schema: { $ref: "#/components/schemas/PresenceResponse" },
               },
             },
+          },
+        },
+      },
+    },
+    "/v1/link-previews": {
+      get: {
+        operationId: "listLinkPreviews",
+        parameters: [
+          {
+            in: "query",
+            name: "url",
+            required: true,
+            schema: {
+              oneOf: [
+                { type: "string", format: "uri" },
+                {
+                  type: "array",
+                  items: { type: "string", format: "uri" },
+                  maxItems: 20,
+                },
+              ],
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Cached public link preview metadata",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/LinkPreviewsResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/messages/{messageId}/preview": {
+      delete: {
+        operationId: "hideThreadMessagePreview",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+          {
+            in: "path",
+            name: "messageId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Message with link previews hidden",
+          },
+          "403": {
+            description: "Only the sender can hide previews",
+          },
+          "404": {
+            description: "Message not found or inaccessible",
           },
         },
       },

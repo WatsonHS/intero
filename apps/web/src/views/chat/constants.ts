@@ -26,6 +26,11 @@ export const MESSAGE_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+export const MESSAGE_PDF_TYPE = "application/pdf";
+export const MESSAGE_ATTACHMENT_TYPES = new Set([
+  ...MESSAGE_IMAGE_TYPES,
+  MESSAGE_PDF_TYPE,
+]);
 export type AmbiguousCoordinationScope = Extract<
   NonNullable<NonNullable<ThreadMessage["coordinationSummary"]>["scope"]>,
   { kind: "ambiguous" }

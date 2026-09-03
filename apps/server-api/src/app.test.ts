@@ -1093,7 +1093,251 @@ describe("Intero API vertical slice", () => {
     });
     expect(downloaded.statusCode).toBe(200);
     expect(downloaded.headers["content-type"]).toBe("image/png");
+    expect(downloaded.headers["content-disposition"]).toContain("inline");
+    expect(downloaded.headers["content-security-policy"]).toBe("sandbox");
+    expect(downloaded.headers["x-content-type-options"]).toBe("nosniff");
     expect(downloaded.rawPayload).toEqual(content);
+  });
+
+  it("serves PDF inline and other types as attachments", async () => {
+    await app.close();
+    const pdf = Buffer.from("%PDF-1.4 test");
+    const zip = Buffer.from("PK zip");
+    const threadId = uuidv7();
+    const pdfId = uuidv7();
+    const zipId = uuidv7();
+    const now = new Date().toISOString();
+    const attachmentsById = new Map<string, Attachment>();
+    const attachments = {
+      async createUpload(input: CreateAttachmentUpload) {
+        const reserved: Attachment = {
+          ...input,
+          objectKey: `test/${input.id}`,
+          state: "pending_upload",
+          createdAt: now,
+          expiresAt: now,
+        };
+        attachmentsById.set(input.id, reserved);
+        return {
+          attachment: reserved,
+          uploadUrl: "http://minio.internal/presigned",
+          requiredHeaders: { "content-type": input.contentType },
+        };
+      },
+      async get(id: string) {
+        return attachmentsById.get(id);
+      },
+      async uploadContent() {},
+      async completeUpload(id: string) {
+        return attachmentsById.get(id)!;
+      },
+      async scan(id: string) {
+        return attachmentsById.get(id)!;
+      },
+      async createDownload(id: string) {
+        return {
+          attachment: attachmentsById.get(id)!,
+          downloadUrl: "http://minio.internal/presigned-download",
+        };
+      },
+      async readContent(id: string) {
+        return id === pdfId ? pdf : zip;
+      },
+    };
+    attachmentsById.set(pdfId, {
+      id: pdfId as Attachment["id"],
+      threadId: threadId as ThreadId,
+      ownerId: ALEX,
+      fileName: "spec.pdf",
+      contentType: "application/pdf",
+      byteSize: pdf.byteLength,
+      checksumSha256: "a".repeat(64),
+      encryptionMode: "server_envelope",
+      objectKey: "test/pdf",
+      state: "available",
+      createdAt: now,
+      expiresAt: now,
+      messageId: uuidv7() as MessageId,
+    });
+    attachmentsById.set(zipId, {
+      id: zipId as Attachment["id"],
+      threadId: threadId as ThreadId,
+      ownerId: ALEX,
+      fileName: "bundle.zip",
+      contentType: "application/zip",
+      byteSize: zip.byteLength,
+      checksumSha256: "b".repeat(64),
+      encryptionMode: "server_envelope",
+      objectKey: "test/zip",
+      state: "available",
+      createdAt: now,
+      expiresAt: now,
+      messageId: uuidv7() as MessageId,
+    });
+    store = new InMemoryPlatformStore();
+    app = await buildTestApp({ store, attachments, logger: false });
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(),
+      payload: {
+        id: threadId,
+        kind: "human_group",
+        title: "PDF boundary",
+        participantIds: [ALEX],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: now,
+      },
+    });
+
+    const pdfUpload = await app.inject({
+      method: "POST",
+      url: "/v1/attachments/uploads",
+      headers: auth(),
+      payload: {
+        id: uuidv7(),
+        threadId,
+        ownerId: ALEX,
+        fileName: "spec.pdf",
+        contentType: "application/pdf",
+        byteSize: 12,
+        checksumSha256: "c".repeat(64),
+        encryptionMode: "server_envelope",
+      },
+    });
+    expect(pdfUpload.statusCode).toBe(201);
+
+    const pdfContent = await app.inject({
+      method: "GET",
+      url: `/v1/attachments/${pdfId}/content`,
+      headers: auth(),
+    });
+    expect(pdfContent.statusCode).toBe(200);
+    expect(pdfContent.headers["content-type"]).toBe("application/pdf");
+    expect(pdfContent.headers["content-disposition"]).toContain("inline");
+    expect(pdfContent.headers["content-security-policy"]).toBe("sandbox");
+    expect(pdfContent.headers["x-content-type-options"]).toBe("nosniff");
+
+    const zipContent = await app.inject({
+      method: "GET",
+      url: `/v1/attachments/${zipId}/content`,
+      headers: auth(),
+    });
+    expect(zipContent.statusCode).toBe(200);
+    expect(zipContent.headers["content-disposition"]).toContain("attachment");
+  });
+
+  it("unfurls server-readable URLs and lets the sender hide previews", async () => {
+    const threadId = uuidv7();
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(),
+      payload: {
+        id: threadId,
+        kind: "human_group",
+        title: "Link previews",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const messageId = uuidv7();
+    const sent = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(),
+      payload: {
+        clientMessageId: messageId,
+        body: "Read https://Example.com/docs and https://example.com/docs again.",
+      },
+    });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json()).toMatchObject({
+      previewUrls: ["https://example.com/docs"],
+    });
+    expect(
+      store.outbox.some(
+        (entry) => entry.topic === "conversation.unfurl.enqueue",
+      ),
+    ).toBe(true);
+
+    store.putLinkPreview({
+      url: "https://example.com/docs",
+      status: "ok",
+      title: "Example docs",
+      siteName: "Example",
+      fetchedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const previews = await app.inject({
+      method: "GET",
+      url: "/v1/link-previews?url=https://example.com/docs",
+      headers: auth(PRIYA),
+    });
+    expect(previews.statusCode).toBe(200);
+    expect(previews.json()).toMatchObject({
+      items: [{ url: "https://example.com/docs", title: "Example docs" }],
+    });
+
+    const hiddenByPeer = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${threadId}/messages/${messageId}/preview`,
+      headers: auth(PRIYA),
+    });
+    expect(hiddenByPeer.statusCode).toBe(403);
+
+    const hidden = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${threadId}/messages/${messageId}/preview`,
+      headers: auth(),
+    });
+    expect(hidden.statusCode).toBe(200);
+    expect(hidden.json()).toMatchObject({ previewsHidden: true });
+  });
+
+  it("does not enqueue unfurl jobs for human-only ciphertext", async () => {
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(),
+      payload: {
+        id: threadId,
+        kind: "human_direct",
+        title: "Private",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "human_only_e2ee",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const before = store.outbox.filter(
+      (entry) => entry.topic === "conversation.unfurl.enqueue",
+    ).length;
+    const sent = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(),
+      payload: {
+        clientMessageId: uuidv7(),
+        encryptedBody: "cipher-https://example.com",
+      },
+    });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json().previewUrls).toBeUndefined();
+    expect(
+      store.outbox.filter(
+        (entry) => entry.topic === "conversation.unfurl.enqueue",
+      ),
+    ).toHaveLength(before);
   });
 
   it("reduces a Coding Agent checkpoint into Team Pulse without raw session data", async () => {
