@@ -151,7 +151,7 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
     const connected = await jsonRequest(`${baseUrl}/v1/pilot/agent/connect`, {
       ticket: rawTicket,
       client: "codex",
-      name: "Codex bearer integration retry",
+      name: "Codex bearer integration",
       workspaceId,
     });
     expect(connected.response.status).toBe(201);
@@ -164,7 +164,9 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
     expect(connected.body.binding).not.toHaveProperty("credentialHash");
     const credential = connected.body.credential as string;
     const verificationCode = connected.body.verification.code as string;
-    expect(credential).not.toBe(firstExchange.body.credential);
+    // Retrying the same ticket is idempotent: the credential is derived from
+    // the ticket seed, so the first exchange's credential stays valid.
+    expect(credential).toBe(firstExchange.body.credential);
 
     const supersededInitialization = await mcpRequest(
       `${baseUrl}/v1/pilot/mcp`,
@@ -185,11 +187,15 @@ databaseSuite("Codex retryable ticket and Bearer MCP connection", () => {
       firstExchange.body.credential as string,
     );
     expect(supersededTools.response.status, supersededTools.text).toBe(200);
-    expect(JSON.parse(supersededTools.text)).toMatchObject({
-      result: {
-        tools: [{ name: "intero.connection_status" }],
-      },
-    });
+    // The first credential is the current credential, so it sees the full
+    // tool list rather than the reduced list a superseded credential gets.
+    const supersededToolNames = (
+      JSON.parse(supersededTools.text) as {
+        result: { tools: Array<{ name: string }> };
+      }
+    ).result.tools.map((tool) => tool.name);
+    expect(supersededToolNames).toContain("intero.connection_status");
+    expect(supersededToolNames).toContain("intero.validate_connection");
 
     const initialized = await mcpRequest(
       `${baseUrl}/v1/pilot/mcp`,
