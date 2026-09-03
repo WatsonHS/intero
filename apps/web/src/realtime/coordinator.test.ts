@@ -304,7 +304,10 @@ describe("ConversationRealtimeCoordinator", () => {
         token: "connection-token",
         expiresAt: new Date().toISOString(),
         transports: [
-          { transport: "websocket" as const, endpoint: "wss://example.test/ws" },
+          {
+            transport: "websocket" as const,
+            endpoint: "wss://example.test/ws",
+          },
         ],
         emulationEndpoint: "https://example.test/emulation",
       }),
@@ -340,7 +343,10 @@ describe("ConversationRealtimeCoordinator", () => {
         token: "connection-token",
         expiresAt: new Date().toISOString(),
         transports: [
-          { transport: "websocket" as const, endpoint: "wss://example.test/ws" },
+          {
+            transport: "websocket" as const,
+            endpoint: "wss://example.test/ws",
+          },
         ],
         emulationEndpoint: "https://example.test/emulation",
       }),
