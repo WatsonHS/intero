@@ -20,6 +20,26 @@ export interface SelectableMessageNotification {
   mentioned: boolean;
 }
 
+export function withInferredMentions(
+  message: ThreadMessage,
+  viewerId: string,
+  principals: ReadonlyArray<{ id: string; displayName: string }>,
+): ThreadMessage {
+  const existing = message.mentionedPrincipalIds ?? [];
+  if (existing.includes(viewerId as ThreadMessage["senderId"])) return message;
+  const self = principals.find((principal) => principal.id === viewerId);
+  if (!self?.displayName) return message;
+  const matcher = new RegExp(
+    `@${self.displayName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?=$|[\\s，。！？、,.!?:;；：）)\\]】])`,
+    "u",
+  );
+  if (!matcher.test(message.body)) return message;
+  return {
+    ...message,
+    mentionedPrincipalIds: [...existing, viewerId as ThreadMessage["senderId"]],
+  };
+}
+
 export function selectNewMessageNotifications(input: {
   messages: ThreadMessage[];
   viewerId: string;

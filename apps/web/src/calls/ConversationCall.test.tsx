@@ -6,6 +6,7 @@ import {
   callStageClass,
   ConversationCall,
   mediaDeviceFailureError,
+  shouldKeepOutgoingRing,
 } from "./ConversationCall.js";
 
 describe("ConversationCall", () => {
@@ -44,6 +45,21 @@ describe("ConversationCall", () => {
     expect(mediaDeviceFailureError("PermissionDenied", "audioinput")).toBe(
       "chat.mediaPermissionDenied",
     );
+  });
+
+  it("keeps an outgoing ring when media fails after the invite is sent", () => {
+    expect(shouldKeepOutgoingRing({ outgoing: true, status: "calling" })).toBe(
+      true,
+    );
+    expect(shouldKeepOutgoingRing({ outgoing: true, status: "joining" })).toBe(
+      true,
+    );
+    expect(
+      shouldKeepOutgoingRing({ outgoing: false, status: "incoming" }),
+    ).toBe(false);
+    expect(
+      shouldKeepOutgoingRing({ outgoing: true, status: "connected" }),
+    ).toBe(false);
   });
 
   it("uses a stable in-conversation stage instead of a draggable window", () => {

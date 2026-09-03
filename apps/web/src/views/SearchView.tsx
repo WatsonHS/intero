@@ -138,6 +138,7 @@ export function SearchView({
         <MagnifyingGlassIcon size={16} className="text-faint" />
         <input
           autoFocus
+          data-testid="search-input"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={
@@ -170,6 +171,7 @@ export function SearchView({
           <button
             key={id}
             type="button"
+            data-testid={`search-tab-${id}`}
             onClick={() => setTab(id)}
             className={[
               "h-8 rounded-full border px-3 text-[11px]",
@@ -225,6 +227,9 @@ export function SearchView({
               <button
                 key={`${result.type}:${result.id}`}
                 type="button"
+                data-testid="search-result"
+                data-message-id={result.messageId}
+                data-thread-id={result.threadId}
                 onClick={() => onOpenResult(result)}
                 className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 rounded-[13px] border border-line bg-panel2 p-[14px_16px] text-left hover:border-line2 hover:bg-raise"
               >

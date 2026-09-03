@@ -84,6 +84,7 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
       );
       const sequence = thread.rows[0]?.sequence;
       if (!sequence) throw new Error("Stand-in Thread was not found.");
+      const messageId = uuidv7();
       await client.query(
         `INSERT INTO messages
           (id, organization_id, thread_id, sender_id, client_message_id,
@@ -91,7 +92,7 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
          VALUES ($1, $2, $3, $4, $5, $5, $6, 'message', $7, true)
          ON CONFLICT (organization_id, operation_id) DO NOTHING`,
         [
-          uuidv7(),
+          messageId,
           this.organizationId,
           input.threadId,
           this.standInId,
@@ -115,6 +116,7 @@ export class PostgresPublicStandInRepository implements PublicStandInRepository 
         headSequence: sequence,
         accessVersion: 1,
         reason: "message_appended",
+        messageId,
         occurredAt,
       };
       await client.query(

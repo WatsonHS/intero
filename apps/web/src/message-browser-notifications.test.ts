@@ -5,7 +5,10 @@ import type {
 } from "@intero/domain";
 import { describe, expect, it } from "vitest";
 
-import { selectNewMessageNotifications } from "./message-browser-notifications.js";
+import {
+  selectNewMessageNotifications,
+  withInferredMentions,
+} from "./message-browser-notifications.js";
 
 const viewer = "019f9a00-0000-7000-8000-000000000101" as PrincipalId;
 const other = "019f9a00-0000-7000-8000-000000000102" as PrincipalId;
@@ -106,6 +109,22 @@ describe("message browser notifications", () => {
         now: new Date("2026-09-03T12:00:02.000Z"),
       }),
     ).toEqual([]);
+  });
+
+  it("infers a mention from @displayName when mentionedPrincipalIds is missing", () => {
+    const inferred = withInferredMentions(
+      message({ body: "@Alex Rivera please look" }),
+      viewer,
+      [{ id: viewer, displayName: "Alex Rivera" }],
+    );
+    expect(inferred.mentionedPrincipalIds).toEqual([viewer]);
+    expect(
+      withInferredMentions(
+        message({ body: "Alex Rivera please look" }),
+        viewer,
+        [{ id: viewer, displayName: "Alex Rivera" }],
+      ).mentionedPrincipalIds,
+    ).toBeUndefined();
   });
 
   it("hooks T1b mutedUntil when present and no-ops when absent", () => {

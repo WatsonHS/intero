@@ -93,6 +93,7 @@ export function CommunicationsView({
       directory.selectThread(threadId);
     },
     pilot: directory.pilot,
+    onUnarchiveSuccess: () => directory.setListFilter("active"),
   });
   const composer = useComposer({
     current: directory.current,
@@ -516,11 +517,10 @@ export function CommunicationsView({
         >
           <div className="max-w-[480px] rounded-container border border-amber-soft bg-amber-soft p-6 text-center">
             <strong className="text-[16px] font-[630] text-amber">
-              这条通讯记录不可用
+              {t("chat.recordUnavailable")}
             </strong>
             <p className="mt-2 text-[12px] leading-[1.7] text-ink-muted">
-              它可能来自旧版数据、部分迁移，或你的参与者权限刚被移除。Intero
-              不会自动切换到另一条对话造成误解。
+              {t("chat.recordUnavailableBody")}
             </p>
             <p className="mt-2 font-mono text-[10px] text-amber">
               COMMUNICATION_RECORD_UNAVAILABLE · {directory.selectedThreadId}

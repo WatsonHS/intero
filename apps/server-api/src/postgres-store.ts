@@ -1470,6 +1470,7 @@ export class PostgresPlatformStore implements PlatformStore {
         },
         actorId: input.senderId,
         reason: "message_appended",
+        messageId: stored.id,
       });
       await this.enqueueUnfurl(
         client,
@@ -1996,6 +1997,7 @@ export class PostgresPlatformStore implements PlatformStore {
           },
           actorId: input.askedByPrincipalId,
           reason: "message_appended",
+          messageId: stored.id,
         });
       }
       await this.recordConversationChange(client, {
@@ -2007,6 +2009,7 @@ export class PostgresPlatformStore implements PlatformStore {
         },
         actorId: pendingAnswer.senderId,
         reason: "message_appended",
+        messageId: pendingAnswer.id,
       });
       await client.query(
         `INSERT INTO stand_in_question_jobs
@@ -2527,6 +2530,7 @@ export class PostgresPlatformStore implements PlatformStore {
         },
         actorId: input.actorId,
         reason: "message_appended",
+        messageId: parentMessage.id,
       });
       await this.recordConversationChange(client, {
         eventId: uuidv7() as OperationId,
@@ -3798,7 +3802,6 @@ export class PostgresPlatformStore implements PlatformStore {
             `SELECT * FROM messages
              WHERE thread_id = $1
                AND ($2::integer IS NULL OR sequence >= $2)
-               AND deleted_at IS NULL
              ORDER BY sequence`,
             [threadId, viewer?.visible_from_sequence ?? null],
           )
@@ -3807,7 +3810,6 @@ export class PostgresPlatformStore implements PlatformStore {
                SELECT * FROM messages
                WHERE thread_id = $1
                  AND ($2::integer IS NULL OR sequence >= $2)
-                 AND deleted_at IS NULL
                ORDER BY sequence DESC
                LIMIT $3
              ) tail

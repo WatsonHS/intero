@@ -8,6 +8,9 @@ import {
   buildPrincipalNames,
   collectPrincipals,
   ownerNameFor,
+  removeThreadFromCache,
+  resolveSelectedConversation,
+  restoreUnarchivedThreadInCache,
   threadUnreadPresentation,
 } from "./helpers.js";
 import { replyMessageSummary } from "./format.js";
@@ -200,5 +203,85 @@ describe("threadUnreadPresentation", () => {
         now,
       ),
     ).toEqual({ unreadDot: true, unreadBadge: 0, mentionBadge: 0 });
+  });
+});
+
+describe("resolveSelectedConversation", () => {
+  const selected = { id: "selected" };
+  const fallback = { id: "fallback" };
+
+  it("falls back when nothing is selected", () => {
+    expect(
+      resolveSelectedConversation({
+        selectedThreadId: undefined,
+        selectedItem: undefined,
+        fallback,
+        listReady: true,
+      }),
+    ).toEqual({ current: fallback, selectedRecordMissing: false });
+  });
+
+  it("keeps the selected item when it is in the current list", () => {
+    expect(
+      resolveSelectedConversation({
+        selectedThreadId: "selected",
+        selectedItem: selected,
+        fallback,
+        listReady: true,
+      }),
+    ).toEqual({ current: selected, selectedRecordMissing: false });
+  });
+
+  it("does not mark a selected thread missing while the list is still fetching", () => {
+    expect(
+      resolveSelectedConversation({
+        selectedThreadId: "selected",
+        selectedItem: undefined,
+        fallback,
+        listReady: false,
+      }),
+    ).toEqual({ current: undefined, selectedRecordMissing: false });
+  });
+
+  it("marks the selected thread missing only after the list is ready", () => {
+    expect(
+      resolveSelectedConversation({
+        selectedThreadId: "selected",
+        selectedItem: undefined,
+        fallback,
+        listReady: true,
+      }),
+    ).toEqual({ current: undefined, selectedRecordMissing: true });
+  });
+});
+
+describe("unarchive cache helpers", () => {
+  const payload = {
+    thread: { id: threadId, archivedAt: "2026-09-03T12:00:00.000Z" },
+    messages: [],
+    principals: [],
+  } as unknown as ThreadPayload;
+
+  it("puts an unarchived thread back at the front of the active cache", () => {
+    const restored = restoreUnarchivedThreadInCache(
+      {
+        items: [
+          {
+            thread: { id: "other" },
+            messages: [],
+            principals: [],
+          } as unknown as ThreadPayload,
+        ],
+      },
+      payload,
+    );
+    expect(restored.items[0]?.thread.id).toBe(threadId);
+    expect(restored.items[0]?.thread.archivedAt).toBeUndefined();
+  });
+
+  it("removes a thread from the archived cache", () => {
+    expect(
+      removeThreadFromCache({ items: [payload] }, threadId)?.items,
+    ).toEqual([]);
   });
 });

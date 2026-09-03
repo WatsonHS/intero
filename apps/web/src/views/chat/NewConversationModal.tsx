@@ -85,6 +85,7 @@ export function NewConversationModal({
             <span className="font-mono text-[14px] text-faint">#</span>
             <input
               autoFocus
+              data-testid="new-conversation-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder={t("chat.namePlaceholder")}
@@ -105,6 +106,7 @@ export function NewConversationModal({
                 {teams.map((team) => (
                   <FilterChip
                     key={team.id}
+                    testId={`owning-team-${team.id}`}
                     active={teamId === team.id}
                     onClick={() =>
                       setTeamId((current) =>
@@ -141,12 +143,15 @@ export function NewConversationModal({
         <>
           <button
             type="button"
+            data-testid="new-conversation-create"
             disabled={!ready || busy}
             onClick={() =>
               onCreate({
                 title: title.trim(),
                 memberIds: picked,
-                ...(teamId ? { teamId } : {}),
+                ...((teamId ?? teams[0]?.id)
+                  ? { teamId: teamId ?? teams[0]!.id }
+                  : {}),
               })
             }
             className="h-8 cursor-pointer rounded-inset border-0 bg-accent-strong px-4 text-[12px] font-[620] text-on-accent disabled:cursor-not-allowed disabled:opacity-45"

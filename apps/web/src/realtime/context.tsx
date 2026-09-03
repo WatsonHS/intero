@@ -25,7 +25,10 @@ import {
 } from "../api.js";
 import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
-import { selectNewMessageNotifications } from "../message-browser-notifications.js";
+import {
+  selectNewMessageNotifications,
+  withInferredMentions,
+} from "../message-browser-notifications.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { presentSystemNotification } from "../system-notifications.js";
 import type { ActionInboxSnapshot } from "../action-inbox-browser-notifications.js";
@@ -136,6 +139,26 @@ export function ConversationRealtimeProvider({
             const cached = queryClient.getQueryData<{
               items: ThreadPayload[];
             }>(["threads"]);
+            const archivedCached = queryClient.getQueryData<{
+              items: ThreadPayload[];
+            }>(["threads", "archived"]);
+            const knownPrincipals = [
+              ...(cached?.items ?? []),
+              ...(archivedCached?.items ?? []),
+            ].flatMap((item) => item.principals);
+            const messagesForNotifications = messages.map((message) => {
+              const thread =
+                cached?.items.find(
+                  (item) => item.thread.id === message.threadId,
+                ) ??
+                archivedCached?.items.find(
+                  (item) => item.thread.id === message.threadId,
+                );
+              return withInferredMentions(message, identityId, [
+                ...(thread?.principals ?? []),
+                ...knownPrincipals,
+              ]);
+            });
             const inbox = queryClient.getQueryData<ActionInboxSnapshot>([
               "action-inbox",
             ]);
@@ -154,6 +177,13 @@ export function ConversationRealtimeProvider({
                 },
               ]),
             );
+            for (const message of messagesForNotifications) {
+              if (threadsById.has(message.threadId)) continue;
+              threadsById.set(message.threadId, {
+                title: t("chat.title"),
+                accessMode: "agent_readable",
+              });
+            }
             const windowFocused =
               typeof document === "undefined"
                 ? true
@@ -164,7 +194,7 @@ export function ConversationRealtimeProvider({
               ? pathname.slice("/communications/".length).split("/")[0]
               : undefined;
             for (const selected of selectNewMessageNotifications({
-              messages,
+              messages: messagesForNotifications,
               viewerId: identityId,
               ...(activeThreadId ? { activeThreadId } : {}),
               windowFocused,
@@ -177,9 +207,6 @@ export function ConversationRealtimeProvider({
               if (notifiedMentionIds.current.size > 500) {
                 notifiedMentionIds.current = new Set([selected.message.id]);
               }
-              const archivedCached = queryClient.getQueryData<{
-                items: ThreadPayload[];
-              }>(["threads", "archived"]);
               const thread =
                 cached?.items.find(
                   (item) => item.thread.id === selected.threadId,
@@ -204,7 +231,10 @@ export function ConversationRealtimeProvider({
                     sender: sender?.displayName ?? t("chat.someone"),
                     thread: selected.threadTitle || t("chat.title"),
                   }),
-                  { title: t("chat.mentionNotificationTitle") },
+                  {
+                    title: t("chat.mentionNotificationTitle"),
+                    durationMs: 12_000,
+                  },
                 );
               }
               const copy =
@@ -408,10 +438,8 @@ export function ConversationRealtimeProvider({
       let releaseThread: () => void = () => undefined;
       try {
         releaseThread = await watchThread(threadId);
-      } catch (error) {
-        listeners.delete(listener);
-        if (listeners.size === 0) typingListeners.current.delete(threadId);
-        throw error;
+      } catch {
+        // Typing also arrives on the personal channel; keep the listener.
       }
       return () => {
         releaseThread();

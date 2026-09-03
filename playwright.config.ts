@@ -14,6 +14,10 @@ export default defineConfig({
     screenshot: privacySafeG7 ? "off" : "only-on-failure",
     trace: privacySafeG7 ? "off" : "retain-on-failure",
     channel: "chrome",
+    // Existing suites assert zh-CN copy; the app follows the browser language
+    // since resolveInitialLocale, so pin the default here. Specs that need
+    // English override this with test.use({ locale: "en-US" }).
+    locale: "zh-CN",
   },
   outputDir:
     process.env.INTERO_PLAYWRIGHT_OUTPUT_DIR ??

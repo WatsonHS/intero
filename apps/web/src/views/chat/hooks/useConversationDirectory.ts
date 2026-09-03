@@ -18,6 +18,7 @@ import {
   getPilotStandIn,
 } from "../../../pilot/api.js";
 import { usePilotOptional } from "../../../pilot/context.js";
+import { useConversationRealtime } from "../../../realtime/context.js";
 import { DIRECTORY_REFRESH_INTERVAL_MS, RELEVANT_KINDS } from "../constants.js";
 import {
   buildPrincipalNames,
@@ -28,6 +29,7 @@ import {
   resolveConversationIdentity,
   resolveConversationProjectId,
   resolvePilotCommunicationPrincipal,
+  resolveSelectedConversation,
 } from "../helpers.js";
 import {
   conversationMentionCandidates,
@@ -61,11 +63,16 @@ export function useConversationDirectory({
     PrincipalId | undefined
   >(initialStandInOwnerId as PrincipalId | undefined);
 
+  const realtime = useConversationRealtime();
   const threads = useQuery({
     queryKey: listFilter === "archived" ? ["threads", "archived"] : ["threads"],
     queryFn: ({ signal }) =>
       getThreads(undefined, signal, { archived: listFilter === "archived" }),
     refetchOnWindowFocus: true,
+    refetchInterval:
+      realtime.status === "live" || realtime.status === "disabled"
+        ? false
+        : 2_000,
   });
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
@@ -179,10 +186,12 @@ export function useConversationDirectory({
   const selectedItem = selectedThreadId
     ? items.find((item) => item.thread.id === selectedThreadId)
     : undefined;
-  const selectedRecordMissing = Boolean(selectedThreadId && !selectedItem);
-  const current = selectedRecordMissing
-    ? undefined
-    : (selectedItem ?? items[0]);
+  const { current, selectedRecordMissing } = resolveSelectedConversation({
+    selectedThreadId,
+    selectedItem,
+    fallback: items[0],
+    listReady: Boolean(threads.data) && !threads.isFetching,
+  });
   const currentPilotItem = pilotDms.data?.items.find(
     (item) => item.thread.id === current?.thread.id,
   );

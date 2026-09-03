@@ -119,7 +119,10 @@ export function ThreadHeader({
           {initials(current.thread.title)}
         </span>
         <span className="grid min-w-0 flex-1">
-          <strong className="truncate text-[14.5px] font-[620] tracking-[-0.015em]">
+          <strong
+            data-testid="thread-header-title"
+            className="truncate text-[14.5px] font-[620] tracking-[-0.015em]"
+          >
             {current.thread.title}
           </strong>
           <small className="mt-[3px] truncate text-[11px] text-ink-muted">
@@ -263,6 +266,7 @@ export function ThreadHeader({
                 {muted ? (
                   <button
                     type="button"
+                    data-testid="unmute-thread"
                     className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                     onClick={() => {
                       onUnmute();
@@ -275,6 +279,7 @@ export function ThreadHeader({
                   <>
                     <button
                       type="button"
+                      data-testid="mute-1h"
                       className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                       onClick={() => {
                         onMute({ hours: 1 });
@@ -285,6 +290,7 @@ export function ThreadHeader({
                     </button>
                     <button
                       type="button"
+                      data-testid="mute-8h"
                       className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                       onClick={() => {
                         onMute({ hours: 8 });
@@ -295,6 +301,7 @@ export function ThreadHeader({
                     </button>
                     <button
                       type="button"
+                      data-testid="mute-indefinitely"
                       className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                       onClick={() => {
                         onMute({ indefinitely: true });
@@ -305,6 +312,7 @@ export function ThreadHeader({
                     </button>
                     <button
                       type="button"
+                      data-testid="mute-including-mentions"
                       className="block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                       onClick={() => {
                         onMute({ indefinitely: true, includingMentions: true });
@@ -318,6 +326,9 @@ export function ThreadHeader({
                 {canArchiveRoom || canArchivePersonal ? (
                   <button
                     type="button"
+                    data-testid={
+                      archived ? "unarchive-thread" : "archive-thread"
+                    }
                     className="mt-1 block w-full rounded-[8px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12px] hover:bg-hover-wash"
                     onClick={() => {
                       if (archived) onUnarchive();
@@ -341,7 +352,10 @@ export function ThreadHeader({
         ) : null}
       </header>
       {current.thread.archivedAt ? (
-        <div className="border-b border-line px-[26px] py-2 text-[11px] text-ink-muted">
+        <div
+          data-testid="archived-readonly"
+          className="border-b border-line px-[26px] py-2 text-[11px] text-ink-muted"
+        >
           {t("chat.archivedReadOnly")}
         </div>
       ) : null}

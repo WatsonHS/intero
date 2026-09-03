@@ -85,6 +85,12 @@ describe("thread message edit and delete", () => {
       reason: "message_deleted",
       messageId: message.id,
     });
+    const listed = store.getThread(threadId, PRIYA);
+    expect(
+      listed?.messages.some(
+        (item) => item.id === message.id && Boolean(item.deletedAt),
+      ),
+    ).toBe(true);
   });
 
   it("rejects a non-sender, concluded thread, and non-message kind", () => {

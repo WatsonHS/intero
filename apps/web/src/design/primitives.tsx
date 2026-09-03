@@ -389,7 +389,12 @@ export function SegmentedControl<Id extends string>({
   onChange,
   className,
 }: {
-  items: Array<{ id: Id; label: ReactNode; badge?: ReactNode }>;
+  items: Array<{
+    id: Id;
+    label: ReactNode;
+    badge?: ReactNode;
+    testId?: string;
+  }>;
   value: Id;
   onChange: (id: Id) => void;
   className?: string;
@@ -400,6 +405,7 @@ export function SegmentedControl<Id extends string>({
         <button
           key={item.id}
           type="button"
+          {...(item.testId ? { "data-testid": item.testId } : {})}
           onClick={() => onChange(item.id)}
           aria-pressed={value === item.id}
           className={cn(
@@ -1156,6 +1162,7 @@ export function Modal({
   footer,
   head,
   children,
+  testId,
 }: {
   title: string;
   onClose: () => void;
@@ -1164,6 +1171,7 @@ export function Modal({
   /** Fixed area under the title that does not scroll with the body. */
   head?: ReactNode;
   children: ReactNode;
+  testId?: string;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1180,6 +1188,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        {...(testId ? { "data-testid": testId } : {})}
         className={[
           "animate-card-enter relative grid max-h-[80vh] grid-rows-[auto_minmax(0,1fr)_auto]",
           "rounded-[18px] border border-line2 bg-panel2 px-[22px] pb-4 pt-5",

@@ -4,7 +4,22 @@ import { useMemo } from "react";
 
 import { getPresence } from "../api.js";
 
-const PRESENCE_REFRESH_MS = 30_000;
+// Peers heartbeat every 30 s; polling faster than that keeps a freshly
+// opened page from showing a teammate offline for a full refresh cycle.
+const PRESENCE_REFRESH_MS = 10_000;
+/** GET /v1/presence accepts at most this many principal ids per request. */
+export const PRESENCE_REQUEST_LIMIT = 50;
+
+export function chunkPresenceIds(
+  principalIds: readonly string[],
+  limit = PRESENCE_REQUEST_LIMIT,
+): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < principalIds.length; index += limit) {
+    chunks.push(principalIds.slice(index, index + limit));
+  }
+  return chunks;
+}
 
 export function usePresence(
   principalIds: readonly string[],
@@ -14,7 +29,12 @@ export function usePresence(
   ].toSorted();
   const query = useQuery({
     queryKey: ["presence", uniqueIds],
-    queryFn: ({ signal }) => getPresence(uniqueIds, signal),
+    queryFn: async ({ signal }) => {
+      const pages = await Promise.all(
+        chunkPresenceIds(uniqueIds).map((chunk) => getPresence(chunk, signal)),
+      );
+      return { items: pages.flatMap((page) => page.items) };
+    },
     enabled: uniqueIds.length > 0,
     refetchInterval: PRESENCE_REFRESH_MS,
     staleTime: PRESENCE_REFRESH_MS,

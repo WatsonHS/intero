@@ -492,7 +492,7 @@ async function attachFixtureApi(
 }
 
 async function openEngineeringRoom(page: Page): Promise<void> {
-  await navigate(page, ["通讯", "Communications"]);
+  await navigate(page, ["通讯", "Communications", "Messages"]);
   await page.getByText("#engineering", { exact: true }).first().click();
   await expect(page.getByTestId("communications-composer")).toBeVisible();
 }

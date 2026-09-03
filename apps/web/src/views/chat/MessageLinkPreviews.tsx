@@ -21,7 +21,11 @@ export function MessageLinkPreviews({
     queryKey: ["link-previews", message.id, message.revision ?? 1, urls],
     queryFn: ({ signal }) => getLinkPreviews(urls, signal),
     enabled: urls.length > 0,
-    staleTime: 60_000,
+    staleTime: 5_000,
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some((item) => item.status === "ok") ? false : 2_000;
+    },
   });
   const hide = useMutation({
     mutationFn: () =>
@@ -80,6 +84,7 @@ function LinkPreviewCard({
       href={preview.url}
       target="_blank"
       rel="noreferrer noopener"
+      data-testid="link-preview"
       aria-label={preview.title ?? previewLabel}
       className="relative block overflow-hidden rounded-[10px] border border-line2 bg-raise text-left no-underline"
     >
@@ -110,6 +115,7 @@ function LinkPreviewCard({
       {canHide ? (
         <button
           type="button"
+          data-testid="hide-link-preview"
           aria-label={hideLabel}
           title={hideLabel}
           disabled={hiding}

@@ -80,6 +80,8 @@ function MessagePdf({ attachment }: { attachment: ThreadMessageAttachment }) {
     <>
       <button
         type="button"
+        data-testid="pdf-attachment"
+        data-attachment-id={attachment.id}
         disabled={!src}
         onClick={() => {
           if (src) setOpen(true);

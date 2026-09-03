@@ -159,33 +159,38 @@ export function NotificationSettings() {
         <p className="mt-1 max-w-[520px] text-[10.5px] leading-[1.55] text-ink-muted">
           {t("settings.notifications.messagesLede")}
         </p>
-        <SegmentedControl
-          className="mt-3 w-fit"
-          value={messages}
-          onChange={(next) =>
-            update.mutate({
-              mutedKinds: muted,
-              messages: next,
-              ...(inbox.data?.preferences.muteUntil
-                ? { muteUntil: inbox.data.preferences.muteUntil }
-                : {}),
-            })
-          }
-          items={[
-            {
-              id: "all",
-              label: t("settings.notifications.messagesAll"),
-            },
-            {
-              id: "mentions",
-              label: t("settings.notifications.messagesMentions"),
-            },
-            {
-              id: "none",
-              label: t("settings.notifications.messagesNone"),
-            },
-          ]}
-        />
+        <div data-testid="notification-messages-mode">
+          <SegmentedControl
+            className="mt-3 w-fit"
+            value={messages}
+            onChange={(next) =>
+              update.mutate({
+                mutedKinds: muted,
+                messages: next,
+                ...(inbox.data?.preferences.muteUntil
+                  ? { muteUntil: inbox.data.preferences.muteUntil }
+                  : {}),
+              })
+            }
+            items={[
+              {
+                id: "all",
+                label: t("settings.notifications.messagesAll"),
+                testId: "notification-messages-all",
+              },
+              {
+                id: "mentions",
+                label: t("settings.notifications.messagesMentions"),
+                testId: "notification-messages-mentions",
+              },
+              {
+                id: "none",
+                label: t("settings.notifications.messagesNone"),
+                testId: "notification-messages-none",
+              },
+            ]}
+          />
+        </div>
       </div>
       <div className="mt-3.5 grid grid-cols-2 gap-2 rounded-[13px] border border-line bg-panel2 p-[16px_18px]">
         {OPTIONS.map((option) => {

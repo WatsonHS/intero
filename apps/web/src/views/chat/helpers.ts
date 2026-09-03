@@ -67,6 +67,46 @@ export function threadUnreadPresentation(
   };
 }
 
+export function resolveSelectedConversation<T>(input: {
+  selectedThreadId: string | undefined;
+  selectedItem: T | undefined;
+  fallback: T | undefined;
+  listReady: boolean;
+}): { current: T | undefined; selectedRecordMissing: boolean } {
+  if (!input.selectedThreadId) {
+    return { current: input.fallback, selectedRecordMissing: false };
+  }
+  if (input.selectedItem) {
+    return { current: input.selectedItem, selectedRecordMissing: false };
+  }
+  return {
+    current: undefined,
+    selectedRecordMissing: input.listReady,
+  };
+}
+
+export function restoreUnarchivedThreadInCache(
+  cached: ThreadListCache | undefined,
+  item: ThreadPayload,
+): ThreadListCache {
+  const thread = { ...item.thread };
+  delete thread.archivedAt;
+  delete thread.archivedBy;
+  const items = (cached?.items ?? []).filter(
+    (entry) => entry.thread.id !== item.thread.id,
+  );
+  return { items: [{ ...item, thread }, ...items] };
+}
+
+export function removeThreadFromCache(
+  cached: ThreadListCache | undefined,
+  threadId: string,
+): ThreadListCache | undefined {
+  if (!cached) return cached;
+  const items = cached.items.filter((entry) => entry.thread.id !== threadId);
+  return items.length === cached.items.length ? cached : { ...cached, items };
+}
+
 export function markCachedThreadRead(
   cached: ThreadListCache | undefined,
   threadId: string,

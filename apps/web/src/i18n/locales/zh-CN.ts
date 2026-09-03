@@ -250,6 +250,9 @@ export const zhCN = {
   "chat.searchNext": "下一条",
   "chat.searchPrevious": "上一条",
   "chat.unavailable": "通讯暂不可用。",
+  "chat.recordUnavailable": "这条通讯记录不可用",
+  "chat.recordUnavailableBody":
+    "它可能来自旧版数据、部分迁移，或你的参与者权限刚被移除。Intero 不会自动切换到另一条对话造成误解。",
   "chat.emptyThread": "会话已经建立",
   "chat.emptyThreadDetail": "第一条消息会持久保存在这个 Thread 中。",
   "chat.accessChanged": "会话访问边界发生了可见变化。",

@@ -644,6 +644,7 @@ function InteroApp() {
         <span className="ml-auto flex items-center gap-2 [-webkit-app-region:no-drag]">
           <button
             type="button"
+            data-testid="nav-search"
             onClick={() => void navigate({ to: "/search" })}
             className="inline-flex h-6 items-center gap-[7px] rounded-[7px] border-0 bg-raise px-2.5 text-[11px] text-faint hover:bg-hover-wash hover:text-ink"
           >
@@ -682,6 +683,7 @@ function InteroApp() {
             <button
               key={item.id}
               type="button"
+              data-testid={`nav-${item.id}`}
               title={t(item.label)}
               className={navButtonClass(navOpen, active)}
               aria-current={active ? "page" : undefined}
@@ -719,6 +721,7 @@ function InteroApp() {
             state — it is only separated from the work surfaces above. */}
         <button
           type="button"
+          data-testid="nav-settings"
           title={t("nav.settings")}
           className={navButtonClass(navOpen, activeNav === "settings")}
           aria-current={activeNav === "settings" ? "page" : undefined}

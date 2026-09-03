@@ -193,6 +193,60 @@ describe("conversation cursor repair", () => {
       }>(["threads"])?.items[0]?.messages[0],
     ).toMatchObject({ body: "Edited in place", editedAt: edited.editedAt });
   });
+
+  it("returns an appended message even when the list cache is already at head", async () => {
+    const threadId = uuidv7();
+    const first = message(threadId, 1);
+    const second = message(threadId, 2);
+    queryClient.setQueryData(["threads"], {
+      items: [
+        {
+          thread: {
+            id: threadId,
+            kind: "room",
+            title: "Caught up",
+            participantIds: [first.senderId],
+            standInIds: [],
+            accessMode: "agent_readable",
+            priorHistoryGranted: false,
+            sequence: 2,
+            accessVersion: 1,
+            createdAt: first.createdAt,
+          },
+          messages: [first, second],
+          principals: [],
+          actions: [],
+        },
+      ],
+    });
+    api.getThreadMessage.mockResolvedValue(second);
+
+    const repaired = await repairConversationChange(queryClient, {
+      ...change(threadId, 2, "message_appended"),
+      messageId: second.id,
+    });
+
+    expect(repaired).toEqual([second]);
+    expect(api.getThreadMessages).not.toHaveBeenCalled();
+  });
+
+  it("returns an appended message when the thread is missing from the list cache", async () => {
+    const threadId = uuidv7();
+    const incoming = message(threadId, 4);
+    incoming.mentionedPrincipalIds = [
+      "019b5ac0-7600-7000-8000-000000000009",
+    ] as ThreadMessage["mentionedPrincipalIds"];
+    api.getThreadMessage.mockResolvedValue(incoming);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    const repaired = await repairConversationChange(queryClient, {
+      ...change(threadId, 4, "message_appended"),
+      messageId: incoming.id,
+    });
+
+    expect(repaired).toEqual([incoming]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["threads"] });
+  });
 });
 
 function message(threadId: string, sequence: number): ThreadMessage {

@@ -85,6 +85,7 @@ export function useComposer({
   const [mentionCursor, setMentionCursor] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const mentionOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const pickedMentionIdsRef = useRef<string[]>([]);
 
   const activeMention = conversationMentionQuery(draft, mentionCursor);
   const visibleMentionCandidates = mentionPickerOpen
@@ -210,6 +211,7 @@ export function useComposer({
     },
     onSuccess: async (input) => {
       retryableSendRef.current = undefined;
+      pickedMentionIdsRef.current = [];
       setDraft("");
       setReplyingToMessageId(undefined);
       setMarkdownPreview(false);
@@ -387,6 +389,9 @@ export function useComposer({
             mentionCandidates,
             currentSenderId,
           ),
+          ...pickedMentionIdsRef.current.filter(
+            (principalId) => principalId !== currentSenderId,
+          ),
           ...addressedStandIns.map((standIn) => standIn.principalId),
         ]),
       ],
@@ -411,6 +416,9 @@ export function useComposer({
     setDraft(result.draft);
     setMentionCursor(result.cursor);
     setMentionPickerOpen(false);
+    pickedMentionIdsRef.current = [
+      ...new Set([...pickedMentionIdsRef.current, candidate.principalId]),
+    ];
     if (currentIsPilotStandIn && candidate.standInOwnerId) {
       selectStandIn(candidate.standInOwnerId);
     }

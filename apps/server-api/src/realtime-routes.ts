@@ -59,6 +59,8 @@ export async function registerRealtimeRoutes(
       });
     }
     const issued = await signer.connection(principal!.id);
+    const personalChannel = userChannel(principal!.id);
+    const personal = await signer.subscription(principal!.id, personalChannel);
     return {
       token: issued.token,
       expiresAt: issued.expiresAt,
@@ -67,6 +69,8 @@ export async function registerRealtimeRoutes(
         { transport: "sse" as const, endpoint: endpoints.sse },
       ],
       emulationEndpoint: endpoints.emulation,
+      personalChannel,
+      personalChannelToken: personal.token,
     };
   });
 
@@ -116,10 +120,20 @@ function realtimePublicUrlForOrigin(
     return configuredPublicUrl;
   }
   try {
-    return new URL(requestOrigin).origin;
+    const origin = new URL(requestOrigin);
+    const configured = new URL(configuredPublicUrl);
+    if (originPort(origin) !== originPort(configured)) {
+      return configuredPublicUrl;
+    }
+    return origin.origin;
   } catch {
     return configuredPublicUrl;
   }
+}
+
+function originPort(url: URL): string {
+  if (url.port) return url.port;
+  return url.protocol === "https:" ? "443" : "80";
 }
 
 export interface RealtimeRateLimiter {
@@ -270,8 +284,10 @@ export class RealtimeTokenSigner {
   }
 
   connection(principalId: PrincipalId) {
+    const channel = userChannel(principalId);
     return this.sign(principalId, {
-      channels: [userChannel(principalId)],
+      channels: [channel],
+      subs: { [channel]: {} },
     });
   }
 

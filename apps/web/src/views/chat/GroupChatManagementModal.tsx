@@ -122,6 +122,7 @@ export function GroupChatManagementModal({
               <div className="mt-[9px] flex gap-1.5">
                 <button
                   type="button"
+                  data-testid="visibility-private"
                   aria-pressed={nextVisibility === "private"}
                   onClick={() => setNextVisibility("private")}
                   className={
@@ -134,6 +135,7 @@ export function GroupChatManagementModal({
                 </button>
                 <button
                   type="button"
+                  data-testid="visibility-team"
                   aria-pressed={nextVisibility === "team"}
                   onClick={() => setNextVisibility("team")}
                   className={
@@ -166,6 +168,7 @@ export function GroupChatManagementModal({
                 <button
                   type="button"
                   key={id}
+                  data-testid={`group-member-${id}`}
                   disabled={isStandIn || isProtected}
                   aria-pressed={removed.includes(id)}
                   onClick={() => toggleRemoved(id)}

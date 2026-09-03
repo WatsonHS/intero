@@ -88,6 +88,7 @@ export function MessageReactionBar({
       {canReply ? (
         <button
           type="button"
+          data-testid="message-reply"
           data-message-reply-trigger="true"
           aria-label={t("chat.reply")}
           title={t("chat.reply")}
@@ -108,6 +109,7 @@ export function MessageReactionBar({
         >
           <button
             type="button"
+            data-testid="message-add-reaction"
             aria-label={t("chat.addReaction")}
             title={t("chat.addReaction")}
             aria-haspopup="menu"
@@ -181,6 +183,7 @@ function QuickReactionPicker({
           key={emoji}
           type="button"
           role="menuitem"
+          data-testid={`message-react-${emoji}`}
           aria-label={t("chat.reactWith", { emoji })}
           title={t("chat.reactWith", { emoji })}
           onClick={() => onSelect(emoji)}

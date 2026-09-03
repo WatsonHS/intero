@@ -521,6 +521,7 @@ export function MessageItem({
       )}
       data-message-side={isOwn ? "right" : "left"}
       data-message-id={message.id}
+      data-highlighted={highlighted ? "true" : undefined}
       onTouchStart={
         canMutateOwnMessage
           ? (event) => pinActionsOnLongPress(event.currentTarget)
@@ -529,7 +530,9 @@ export function MessageItem({
       onTouchEnd={() => cancelLongPress()}
       onTouchCancel={() => cancelLongPress()}
       data-testid={
-        currentIsPilot ? `pilot-dm-message-${message.sequence}` : undefined
+        currentIsPilot
+          ? `pilot-dm-message-${message.sequence}`
+          : `conversation-message-${message.id}`
       }
     >
       {isOwn ? (

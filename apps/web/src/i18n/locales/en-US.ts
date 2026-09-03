@@ -260,6 +260,9 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.searchNext": "Next match",
   "chat.searchPrevious": "Previous match",
   "chat.unavailable": "Messages are unavailable.",
+  "chat.recordUnavailable": "This conversation is unavailable",
+  "chat.recordUnavailableBody":
+    "It may be leftover data, a partial migration, or your participant access was just removed. Intero will not silently switch you to another thread.",
   "chat.emptyThread": "The thread is ready",
   "chat.emptyThreadDetail": "The first message will persist in this thread.",
   "chat.accessChanged": "The thread's access boundary changed visibly.",

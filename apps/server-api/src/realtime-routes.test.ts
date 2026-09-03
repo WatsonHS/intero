@@ -42,6 +42,7 @@ describe("Realtime authorization routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
+      personalChannel: `intero:user:${ALEX}`,
       transports: [
         {
           transport: "websocket",
@@ -62,6 +63,7 @@ describe("Realtime authorization routes", () => {
     expect(verified.payload).toMatchObject({
       sub: ALEX,
       channels: [`intero:user:${ALEX}`],
+      subs: { [`intero:user:${ALEX}`]: {} },
     });
     expect(verified.payload.exp! - verified.payload.iat!).toBe(300);
   });
@@ -101,6 +103,43 @@ describe("Realtime authorization routes", () => {
         },
       ],
       emulationEndpoint: "http://localhost:4311/emulation",
+    });
+  });
+
+  it("does not send browser transports to the Vite renderer origin", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      authCorsOrigins: ["http://127.0.0.1:5183"],
+      realtimeConfig: {
+        publicUrl: "http://127.0.0.1:4311",
+        tokenSecret: TOKEN_SECRET,
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/realtime/session",
+      headers: {
+        ...auth(ALEX),
+        origin: "http://127.0.0.1:5183",
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      transports: [
+        {
+          transport: "websocket",
+          endpoint: "ws://127.0.0.1:4311/connection/websocket",
+        },
+        {
+          transport: "sse",
+          endpoint: "http://127.0.0.1:4311/connection/sse",
+        },
+      ],
     });
   });
 

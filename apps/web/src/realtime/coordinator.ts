@@ -88,6 +88,8 @@ const CallEventHint = z
 export type ConversationRealtimeStatus =
   "disabled" | "connecting" | "live" | "degraded" | "offline";
 
+export const REALTIME_CONNECTING_TIMEOUT_MS = 8_000;
+
 export interface ConversationRealtimeDependencies {
   createSession: () => Promise<RealtimeSessionPayload>;
   createSubscription: (
@@ -116,6 +118,7 @@ export class ConversationRealtimeCoordinator {
   #client: Centrifuge | undefined;
   #stopped = false;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #connectingTimer: ReturnType<typeof setTimeout> | undefined;
   #retryAttempt = 0;
 
   constructor(dependencies: ConversationRealtimeDependencies) {
@@ -132,6 +135,7 @@ export class ConversationRealtimeCoordinator {
   stop(): void {
     this.#stopped = true;
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#clearConnectingTimer();
     for (const entry of this.#subscriptions.values()) {
       entry.subscription.unsubscribe();
       this.#client?.removeSubscription(entry.subscription);
@@ -199,8 +203,24 @@ export class ConversationRealtimeCoordinator {
         emulationEndpoint: session.emulationEndpoint,
       });
       this.#client = client;
+      if (session.personalChannel && session.personalChannelToken) {
+        const personal = client.newSubscription(session.personalChannel, {
+          token: session.personalChannelToken,
+          getToken: async () => {
+            const next = await this.#dependencies.createSession();
+            return next.personalChannelToken ?? next.token;
+          },
+        });
+        personal.on("publication", (context) => this.#publication(context));
+        this.#subscriptions.set(session.personalChannel, {
+          subscription: personal,
+          consumers: 1,
+        });
+        personal.subscribe();
+      }
       client.on("connected", () => {
         if (client !== this.#client || this.#stopped) return;
+        this.#clearConnectingTimer();
         if (this.#retryTimer) {
           clearTimeout(this.#retryTimer);
           this.#retryTimer = undefined;
@@ -214,6 +234,7 @@ export class ConversationRealtimeCoordinator {
       });
       client.on("disconnected", () => {
         if (client !== this.#client || this.#stopped) return;
+        this.#clearConnectingTimer();
         this.#client = undefined;
         this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
         this.#scheduleRetry();
@@ -225,11 +246,31 @@ export class ConversationRealtimeCoordinator {
         }
       });
       client.connect();
+      this.#armConnectingTimer();
     } catch {
       if (this.#stopped) return;
+      this.#clearConnectingTimer();
       this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
       this.#scheduleRetry();
     }
+  }
+
+  #armConnectingTimer(): void {
+    this.#clearConnectingTimer();
+    this.#connectingTimer = setTimeout(() => {
+      this.#connectingTimer = undefined;
+      if (this.#stopped || !this.#client) return;
+      this.#client.disconnect();
+      this.#client = undefined;
+      this.#dependencies.onStatus(this.#online() ? "degraded" : "offline");
+      this.#scheduleRetry();
+    }, REALTIME_CONNECTING_TIMEOUT_MS);
+  }
+
+  #clearConnectingTimer(): void {
+    if (!this.#connectingTimer) return;
+    clearTimeout(this.#connectingTimer);
+    this.#connectingTimer = undefined;
   }
 
   #publication(context: PublicationContext): void {

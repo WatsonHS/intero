@@ -31,6 +31,15 @@ import type {
 
 type CallStatus = "idle" | "incoming" | "joining" | "calling" | "connected";
 
+export function shouldKeepOutgoingRing(input: {
+  outgoing: boolean;
+  status: CallStatus;
+}): boolean {
+  return (
+    input.outgoing && (input.status === "calling" || input.status === "joining")
+  );
+}
+
 interface ActiveCall {
   id: string;
   mode: CallMode;
@@ -209,7 +218,18 @@ export function ConversationCall({
   );
 
   useEffect(() => {
-    setStageContainer(document.getElementById(stageContainerId));
+    function find(): HTMLElement | null {
+      return document.getElementById(stageContainerId);
+    }
+    setStageContainer(find());
+    if (find()) return;
+    const timer = window.setInterval(() => {
+      const node = find();
+      if (!node) return;
+      setStageContainer(node);
+      window.clearInterval(timer);
+    }, 50);
+    return () => window.clearInterval(timer);
   }, [stageContainerId]);
 
   useEffect(() => {
@@ -268,8 +288,11 @@ export function ConversationCall({
     } catch {
       if (!call.outgoing) {
         await publish(call.id, { kind: "decline" }).catch(() => undefined);
+        reset();
+      } else {
+        updateStatus("calling");
+        setCredentials(undefined);
       }
-      reset();
       setError(t("chat.callStartFailed"));
     }
   }
@@ -290,6 +313,15 @@ export function ConversationCall({
       outgoing: true,
     };
     updateActiveCall(call);
+    inviteSentRef.current = true;
+    updateStatus("calling");
+    try {
+      await publish(call.id, { kind: "invite", mode });
+    } catch {
+      setError(t("chat.callSignalFailed"));
+      await endCall(false);
+      return;
+    }
     await join(call);
   }
 
@@ -442,6 +474,17 @@ export function ConversationCall({
                         key={activeCall.id}
                         onError={() => {
                           setError(t("chat.callStartFailed"));
+                          if (
+                            shouldKeepOutgoingRing({
+                              outgoing: Boolean(
+                                activeCallRef.current?.outgoing,
+                              ),
+                              status: statusRef.current,
+                            })
+                          ) {
+                            setCredentials(undefined);
+                            return;
+                          }
                           void endCall();
                         }}
                       >
@@ -449,10 +492,34 @@ export function ConversationCall({
                           credentials={credentials}
                           mode={activeCall.mode}
                           onConnected={() => void onConnected()}
-                          onDisconnected={() => void endCall()}
+                          onDisconnected={() => {
+                            if (
+                              shouldKeepOutgoingRing({
+                                outgoing: Boolean(
+                                  activeCallRef.current?.outgoing,
+                                ),
+                                status: statusRef.current,
+                              })
+                            ) {
+                              setCredentials(undefined);
+                              return;
+                            }
+                            void endCall();
+                          }}
                           onError={() => {
                             if (!mediaFailureRef.current) {
                               setError(t("chat.callStartFailed"));
+                            }
+                            if (
+                              shouldKeepOutgoingRing({
+                                outgoing: Boolean(
+                                  activeCallRef.current?.outgoing,
+                                ),
+                                status: statusRef.current,
+                              })
+                            ) {
+                              setCredentials(undefined);
+                              return;
                             }
                             void endCall();
                           }}
@@ -472,6 +539,47 @@ export function ConversationCall({
           )
         : null}
 
+      {status === "incoming" && activeCall && !stageContainer ? (
+        <section
+          role="dialog"
+          aria-label={t("chat.call")}
+          data-testid="conversation-call"
+          className="fixed bottom-5 left-1/2 z-[60] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-[18px] bg-panel2 shadow-[0_12px_34px_rgba(25,20,14,0.14)]"
+        >
+          <CallHeader
+            mode={activeCall.mode}
+            title={title}
+            detail={t("chat.incomingCallFrom", {
+              name:
+                principalNames.get(activeCall.inviterId) ?? t("chat.someone"),
+            })}
+          />
+          <div className="flex items-center justify-center gap-3 px-5 py-7">
+            <button
+              type="button"
+              data-testid="reject-call"
+              onClick={() => void decline()}
+              className="inline-flex h-10 items-center gap-2 rounded-pill border border-line2 bg-transparent px-5 text-[12px] text-ink-muted hover:border-danger hover:text-danger"
+            >
+              <PhoneDisconnectIcon size={16} />
+              {t("chat.declineCall")}
+            </button>
+            <button
+              type="button"
+              data-testid="accept-call"
+              onClick={() => void accept()}
+              className="inline-flex h-10 items-center gap-2 rounded-pill border-0 bg-green px-5 text-[12px] font-[650] text-white"
+            >
+              {activeCall.mode === "video" ? (
+                <VideoCameraIcon size={17} />
+              ) : (
+                <PhoneIcon size={16} />
+              )}
+              {t("chat.acceptCall")}
+            </button>
+          </div>
+        </section>
+      ) : null}
       {status === "joining" && !credentials ? (
         <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-pill border border-line2 bg-panel px-4 py-2 text-[11px] text-ink-muted shadow-lg">
           {t("chat.connectingMedia")}
@@ -480,6 +588,9 @@ export function ConversationCall({
       {error ? (
         <div
           role="alert"
+          data-testid={
+            error === t("chat.callDeclined") ? "call-declined" : "call-error"
+          }
           className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-pill border border-danger-soft bg-panel px-4 py-2 text-[11px] text-danger shadow-lg"
         >
           {error}

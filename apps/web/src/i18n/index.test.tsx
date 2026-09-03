@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { I18nProvider, useI18n } from "./index.js";
+import { I18nProvider, resolveInitialLocale, useI18n } from "./index.js";
 import { enUS } from "./locales/en-US.js";
 import { zhCN } from "./locales/zh-CN.js";
 
@@ -12,6 +12,21 @@ describe("desktop localization", () => {
 
   it("keeps Chinese and English dictionaries in exact key parity", () => {
     expect(Object.keys(enUS).sort()).toEqual(Object.keys(zhCN).sort());
+  });
+
+  it("picks English from the browser locale when nothing is stored", () => {
+    expect(
+      resolveInitialLocale({ stored: null, languages: ["en-US", "en"] }),
+    ).toBe("en-US");
+    expect(resolveInitialLocale({ stored: null, languages: ["zh-CN"] })).toBe(
+      "zh-CN",
+    );
+    expect(
+      resolveInitialLocale({ stored: "zh-CN", languages: ["en-US"] }),
+    ).toBe("zh-CN");
+    expect(resolveInitialLocale({ stored: null, languages: ["fr-FR"] })).toBe(
+      "zh-CN",
+    );
   });
 
   it("renders Chinese by default when no device preference is available", () => {

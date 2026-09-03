@@ -828,7 +828,9 @@ describe("Intero API vertical slice", () => {
       headers: auth(ALEX),
     });
     expect(typing.statusCode).toBe(204);
-    expect(published).toHaveLength(1);
+    expect(published.map((item) => item.channel).sort()).toEqual(
+      [`intero:thread:${threadId}`, `intero:user:${PRIYA}`].sort(),
+    );
     expect(published[0]?.event).toMatchObject({
       type: "typing",
       threadId,
@@ -947,6 +949,50 @@ describe("Intero API vertical slice", () => {
     expect(await countsFor(alex)).toMatchObject({
       unreadCount: 0,
       mentionCount: 0,
+    });
+  });
+
+  it("extracts @mentions from the message body when the client omits ids", async () => {
+    store.upsertPrincipal({
+      id: ALEX,
+      displayName: "Alex Rivera",
+      kind: "human",
+    });
+    store.upsertPrincipal({
+      id: PRIYA,
+      displayName: "Priya Shah",
+      kind: "human",
+    });
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "human_direct",
+        title: "Alex / Priya",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const sent = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(PRIYA),
+      payload: {
+        clientMessageId: uuidv7(),
+        body: "@Alex Rivera please look",
+        mentionedPrincipalIds: [],
+      },
+    });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json()).toMatchObject({
+      body: "@Alex Rivera please look",
+      mentionedPrincipalIds: [ALEX],
     });
   });
 

@@ -118,6 +118,7 @@ import {
   InMemoryRealtimeRateLimiter,
   registerRealtimeRoutes,
   threadChannel,
+  userChannel,
 } from "./realtime-routes.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 import {
@@ -1335,6 +1336,18 @@ export async function buildApp(
           threadChannel(threadId),
           event,
         );
+        for (const participantId of visible.thread.participantIds) {
+          if (
+            participantId === principal!.id ||
+            visible.thread.standInIds.includes(participantId)
+          ) {
+            continue;
+          }
+          await options.callEventPublisher.publish(
+            userChannel(participantId),
+            event,
+          );
+        }
       }
       return reply.status(204).send();
     },
@@ -1808,6 +1821,17 @@ export async function buildApp(
           await ensureRoomIntero(store, threadId);
         }
       }
+      const mentionedFromBody =
+        thread && input.body
+          ? extractMentionIdsFromBody(
+              input.body,
+              principal!.id,
+              await store.listPrincipals(thread.thread.participantIds),
+            )
+          : [];
+      const mentionedPrincipalIds = [
+        ...new Set([...input.mentionedPrincipalIds, ...mentionedFromBody]),
+      ] as PrincipalId[];
       const message = await store.appendMessage(threadId, {
         id: input.clientMessageId as Parameters<
           PlatformStore["appendMessage"]
@@ -1817,7 +1841,7 @@ export async function buildApp(
         ...(input.encryptedBody !== undefined
           ? { encryptedBody: input.encryptedBody }
           : {}),
-        mentionedPrincipalIds: input.mentionedPrincipalIds as PrincipalId[],
+        mentionedPrincipalIds,
         attachmentIds: input.attachmentIds as NonNullable<
           Parameters<PlatformStore["appendMessage"]>[1]["attachmentIds"]
         >,

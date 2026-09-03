@@ -926,6 +926,7 @@ export class InMemoryPlatformStore {
       input.senderId,
       "message_appended",
       message.id,
+      message.id,
     );
     this.enqueueUnfurl(updatedThread, message);
     return message;
@@ -1083,6 +1084,7 @@ export class InMemoryPlatformStore {
       updatedThread,
       input.senderId,
       "message_appended",
+      message.id,
       message.id,
     );
     return message;
@@ -1654,6 +1656,7 @@ export class InMemoryPlatformStore {
       this.threads.get(parent.id)!,
       input.actorId,
       "message_appended",
+      parentMessage.id,
       parentMessage.id,
     );
     this.recordConversationChange(

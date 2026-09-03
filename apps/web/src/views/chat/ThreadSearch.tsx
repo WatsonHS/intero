@@ -63,6 +63,7 @@ export function ThreadSearch({
       <MagnifyingGlassIcon size={14} className="text-faint" />
       <input
         autoFocus
+        data-testid="thread-search-input"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={(event) => {
@@ -94,6 +95,7 @@ export function ThreadSearch({
       </span>
       <button
         type="button"
+        data-testid="thread-search-previous"
         aria-label={t("chat.searchPrevious")}
         disabled={hits.length === 0}
         onClick={() => move(-1)}
@@ -103,6 +105,7 @@ export function ThreadSearch({
       </button>
       <button
         type="button"
+        data-testid="thread-search-next"
         aria-label={t("chat.searchNext")}
         disabled={hits.length === 0}
         onClick={() => move(1)}

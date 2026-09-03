@@ -30,26 +30,45 @@ export async function repairConversationChange(
   const item = cached?.items.find(
     (candidate) => candidate.thread.id === event.threadId,
   );
-  if (!item) {
-    await queryClient.invalidateQueries({ queryKey: ["threads"] });
-    return [];
-  }
   if (
     (event.reason === "message_updated" ||
       event.reason === "message_edited" ||
-      event.reason === "message_deleted") &&
+      event.reason === "message_deleted" ||
+      event.reason === "message_appended") &&
     event.messageId
   ) {
-    const message = await getThreadMessage(event.threadId, event.messageId);
-    mergeThreadMessages(
-      queryClient,
-      event.threadId,
-      [message],
-      event.headSequence,
-      event.accessVersion,
-      viewerId,
-    );
-    return [message];
+    try {
+      const message = await getThreadMessage(event.threadId, event.messageId);
+      if (item) {
+        mergeThreadMessages(
+          queryClient,
+          event.threadId,
+          [message],
+          event.headSequence,
+          event.accessVersion,
+          viewerId,
+        );
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["threads"] });
+      }
+      return [message];
+    } catch {
+      // Fall through to sequence repair when the pointer is stale.
+    }
+  }
+  if (!item) {
+    if (event.reason === "message_appended") {
+      const page = await getThreadMessages(event.threadId, {
+        afterSequence: Math.max(0, event.headSequence - 1),
+        limit: 200,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["threads"] });
+      return page.items.filter(
+        (message) => message.sequence === event.headSequence,
+      );
+    }
+    await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    return [];
   }
   let afterSequence = Math.max(
     item.thread.sequence,
@@ -58,6 +77,27 @@ export async function repairConversationChange(
   if (afterSequence >= event.headSequence) {
     if (event.reason === "read_cursor_changed") {
       await queryClient.invalidateQueries({ queryKey: ["threads"] });
+    }
+    if (event.reason === "message_appended") {
+      const cachedMessage = item.messages.filter(
+        (message) => message.sequence === event.headSequence,
+      );
+      if (cachedMessage.length > 0) return cachedMessage;
+      const page = await getThreadMessages(event.threadId, {
+        afterSequence: Math.max(0, event.headSequence - 1),
+        limit: 200,
+      });
+      mergeThreadMessages(
+        queryClient,
+        event.threadId,
+        page.items,
+        page.headSequence,
+        page.accessVersion,
+        viewerId,
+      );
+      return page.items.filter(
+        (message) => message.sequence === event.headSequence,
+      );
     }
     return [];
   }

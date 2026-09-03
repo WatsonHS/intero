@@ -142,6 +142,7 @@ export function Composer({
             <input
               ref={imageInputRef}
               type="file"
+              data-testid="composer-attach-input"
               accept="image/jpeg,image/png,image/gif,image/webp,image/avif,application/pdf"
               multiple
               className="hidden"
@@ -149,6 +150,7 @@ export function Composer({
             />
             <button
               type="button"
+              data-testid="composer-attach"
               aria-label={t("chat.attachImage")}
               title={t("chat.attachImage")}
               disabled={
@@ -441,6 +443,7 @@ export function Composer({
             )}
             <button
               type="button"
+              data-testid="composer-send"
               disabled={
                 (!draft.trim() &&
                   !composerImages.some(

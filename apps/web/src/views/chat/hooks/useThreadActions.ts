@@ -16,6 +16,11 @@ import {
 import type { PrincipalSummary, ThreadPayload } from "../../../api.js";
 import { useNotifications } from "../../../design/notifications.js";
 import { useI18n } from "../../../i18n/index.js";
+import type { ThreadListCache } from "../constants.js";
+import {
+  removeThreadFromCache,
+  restoreUnarchivedThreadInCache,
+} from "../helpers.js";
 import {
   addPilotStandIn,
   createPilotDm,
@@ -37,6 +42,7 @@ export function useThreadActions({
   profilePrincipal,
   selectThread,
   pilot,
+  onUnarchiveSuccess,
 }: {
   conversationIdentity:
     | { currentPrincipalId: PrincipalId; standInPrincipalId: PrincipalId }
@@ -49,6 +55,7 @@ export function useThreadActions({
   profilePrincipal: PrincipalSummary | undefined;
   selectThread(threadId: string): void;
   pilot: ReturnType<typeof usePilotOptional>;
+  onUnarchiveSuccess?: () => void;
 }) {
   const { t } = useI18n();
   const notifications = useNotifications();
@@ -101,13 +108,14 @@ export function useThreadActions({
     }) => {
       const identity = conversationIdentity;
       if (!identity) throw new Error(t("chat.identityUnavailable"));
+      const teamId = input.teamId ?? (pilot?.teams.data?.teams ?? [])[0]?.id;
       const thread = await createConversationThread(
         buildGroupChatThreadInput({
           ...identity,
           title: input.title || t("chat.defaultRoomTitle"),
           memberIds: input.memberIds,
           ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
-          ...(input.teamId ? { teamId: input.teamId } : {}),
+          ...(teamId ? { teamId } : {}),
         }),
       );
       return { threadId: thread.id };
@@ -286,7 +294,23 @@ export function useThreadActions({
       if (!current) throw new Error(t("chat.identityUnavailable"));
       return unarchiveThread(current.thread.id);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["threads"] }),
+    onSuccess: (result) => {
+      if (current) {
+        const restored = {
+          ...current,
+          thread: { ...current.thread, ...result.thread },
+        };
+        queryClient.setQueryData<ThreadListCache>(["threads"], (cached) =>
+          restoreUnarchivedThreadInCache(cached, restored),
+        );
+        queryClient.setQueryData<ThreadListCache>(
+          ["threads", "archived"],
+          (cached) => removeThreadFromCache(cached, current.thread.id),
+        );
+      }
+      onUnarchiveSuccess?.();
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
   });
 
   return {

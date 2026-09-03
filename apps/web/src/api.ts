@@ -108,6 +108,8 @@ export interface RealtimeSessionPayload {
     endpoint: string;
   }>;
   emulationEndpoint: string;
+  personalChannel?: string;
+  personalChannelToken?: string;
 }
 
 export interface RealtimeSubscriptionPayload {

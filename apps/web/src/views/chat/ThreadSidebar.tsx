@@ -125,6 +125,7 @@ export function ThreadSidebar({
             {canBrowseChannels ? (
               <button
                 type="button"
+                data-testid="browse-channels"
                 aria-label={t("chat.browseChannels")}
                 title={t("chat.browseChannels")}
                 className="grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted"
@@ -135,8 +136,10 @@ export function ThreadSidebar({
             ) : null}
             <button
               type="button"
+              data-testid="archived-filter"
               aria-label={t("chat.archivedFilter")}
               title={t("chat.archivedFilter")}
+              aria-pressed={listFilter === "archived"}
               className={
                 listFilter === "archived"
                   ? "grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-sel text-accent-strong"
@@ -160,6 +163,7 @@ export function ThreadSidebar({
             </button>
             <button
               type="button"
+              data-testid="new-conversation"
               aria-label={t("chat.new")}
               className="grid h-[26px] w-[26px] cursor-pointer place-items-center rounded-quiet border-0 bg-raise text-ink-muted"
               onClick={onToggleCreate}
@@ -347,8 +351,11 @@ function SidebarThreadItem({
       data-testid={
         item.thread.kind === "stand_in"
           ? "personal-stand-in-conversation"
-          : undefined
+          : `thread-row-${item.thread.id}`
       }
+      data-thread-id={item.thread.id}
+      data-thread-kind={item.thread.kind}
+      data-thread-title={item.thread.title}
       onClick={onSelect}
       className={
         active
@@ -385,6 +392,7 @@ function SidebarThreadItem({
           {muted ? (
             <BellSlashIcon
               size={11}
+              data-testid="thread-muted"
               className="shrink-0 text-faint"
               aria-label={t("chat.muted")}
             />
@@ -447,11 +455,15 @@ function SidebarThreadItem({
           </span>
         ) : null}
         {unread.unreadBadge > 0 ? (
-          <span className="animate-badge-bounce grid h-[17px] min-w-[17px] place-items-center rounded-[9px] bg-accent-strong px-[5px] font-mono text-[9.5px] text-on-accent">
+          <span
+            data-testid="thread-unread-badge"
+            className="animate-badge-bounce grid h-[17px] min-w-[17px] place-items-center rounded-[9px] bg-accent-strong px-[5px] font-mono text-[9.5px] text-on-accent"
+          >
             {unread.unreadBadge > 99 ? "99+" : unread.unreadBadge}
           </span>
         ) : unread.unreadDot ? (
           <span
+            data-testid="thread-unread-dot"
             className="mt-0.5 h-2 w-2 rounded-full bg-accent-strong"
             aria-label={t("chat.muted")}
           />

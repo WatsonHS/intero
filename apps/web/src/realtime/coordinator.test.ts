@@ -33,6 +33,7 @@ const fakeTransport = vi.hoisted(() => {
 
   class Centrifuge extends Emitter {
     static instances: Centrifuge[] = [];
+    static autoConnect = true;
     subscriptions: Subscription[] = [];
     disconnected = false;
 
@@ -42,6 +43,7 @@ const fakeTransport = vi.hoisted(() => {
     }
 
     connect() {
+      if (!Centrifuge.autoConnect) return;
       this.emit("connected", {
         client: "test-client",
         transport: "websocket",
@@ -72,11 +74,15 @@ vi.mock("centrifuge", () => ({
   Centrifuge: fakeTransport.Centrifuge,
 }));
 
-import { ConversationRealtimeCoordinator } from "./coordinator.js";
+import {
+  ConversationRealtimeCoordinator,
+  REALTIME_CONNECTING_TIMEOUT_MS,
+} from "./coordinator.js";
 
 describe("ConversationRealtimeCoordinator", () => {
   beforeEach(() => {
     fakeTransport.Centrifuge.instances = [];
+    fakeTransport.Centrifuge.autoConnect = true;
   });
 
   it("deduplicates content-free hints across personal and thread channels", async () => {
@@ -287,6 +293,71 @@ describe("ConversationRealtimeCoordinator", () => {
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(fakeTransport.Centrifuge.instances).toHaveLength(2);
     expect(statuses).toEqual(["connecting", "live", "degraded", "live"]);
+    coordinator.stop();
+  });
+
+  it("delivers typing hints from the personal channel", async () => {
+    const typing: unknown[] = [];
+    const threadId = uuidv7();
+    const coordinator = new ConversationRealtimeCoordinator({
+      createSession: async () => ({
+        token: "connection-token",
+        expiresAt: new Date().toISOString(),
+        transports: [
+          { transport: "websocket" as const, endpoint: "wss://example.test/ws" },
+        ],
+        emulationEndpoint: "https://example.test/emulation",
+      }),
+      createSubscription: vi.fn(),
+      onStatus: vi.fn(),
+      onChange: vi.fn(),
+      onTyping: (event) => typing.push(event),
+      onRecoveryGap: vi.fn(),
+    });
+    coordinator.start();
+    await vi.waitFor(() =>
+      expect(fakeTransport.Centrifuge.instances).toHaveLength(1),
+    );
+    const event = {
+      type: "typing" as const,
+      threadId,
+      principalId: uuidv7(),
+      at: new Date().toISOString(),
+    };
+    fakeTransport.Centrifuge.instances[0]!.emit("publication", {
+      channel: "intero:user:test",
+      data: event,
+    });
+    expect(typing).toEqual([event]);
+    coordinator.stop();
+  });
+
+  it("falls back to degraded when the websocket stays connecting", async () => {
+    fakeTransport.Centrifuge.autoConnect = false;
+    const statuses: string[] = [];
+    const coordinator = new ConversationRealtimeCoordinator({
+      createSession: async () => ({
+        token: "connection-token",
+        expiresAt: new Date().toISOString(),
+        transports: [
+          { transport: "websocket" as const, endpoint: "wss://example.test/ws" },
+        ],
+        emulationEndpoint: "https://example.test/emulation",
+      }),
+      createSubscription: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+      onChange: vi.fn(),
+      onRecoveryGap: vi.fn(),
+    });
+
+    vi.useFakeTimers();
+    coordinator.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fakeTransport.Centrifuge.instances).toHaveLength(1);
+    expect(statuses[0]).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(REALTIME_CONNECTING_TIMEOUT_MS);
+    expect(statuses).toContain("degraded");
+    vi.useRealTimers();
     coordinator.stop();
   });
 });

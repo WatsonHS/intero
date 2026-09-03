@@ -16,6 +16,19 @@ export type { TranslationKey } from "./locales/zh-CN.js";
 const STORAGE_KEY = "intero:locale";
 const dictionaries = { "zh-CN": zhCN, "en-US": enUS };
 
+export function resolveInitialLocale(input: {
+  stored?: string | null;
+  languages?: readonly string[];
+}): Locale {
+  if (input.stored === "en-US" || input.stored === "zh-CN") return input.stored;
+  for (const language of input.languages ?? []) {
+    const lower = language.toLowerCase();
+    if (lower.startsWith("en")) return "en-US";
+    if (lower.startsWith("zh")) return "zh-CN";
+  }
+  return "zh-CN";
+}
+
 interface I18nValue {
   locale: Locale;
   setLocale(locale: Locale): void;
@@ -27,14 +40,24 @@ interface I18nValue {
 
 const I18nContext = createContext<I18nValue | undefined>(undefined);
 
+function navigatorLanguages(): string[] {
+  if (typeof navigator === "undefined") return [];
+  if (navigator.languages?.length) return [...navigator.languages];
+  return navigator.language ? [navigator.language] : [];
+}
+
 function initialLocale(): Locale {
   if (typeof window === "undefined") return "zh-CN";
+  let stored: string | null = null;
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return stored === "en-US" || stored === "zh-CN" ? stored : "zh-CN";
+    stored = window.localStorage.getItem(STORAGE_KEY);
   } catch {
-    return "zh-CN";
+    stored = null;
   }
+  return resolveInitialLocale({
+    stored,
+    languages: navigatorLanguages(),
+  });
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {

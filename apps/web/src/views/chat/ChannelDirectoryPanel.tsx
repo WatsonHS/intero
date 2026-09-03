@@ -23,11 +23,12 @@ export function ChannelDirectoryPanel({
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [teamId, setTeamId] = useState(teams[0]?.id);
+  const resolvedTeamId = teamId ?? teams[0]?.id;
   const rooms = useQuery({
-    queryKey: ["team-rooms", teamId],
+    queryKey: ["team-rooms", resolvedTeamId],
     queryFn: ({ signal }) =>
-      getTeamRooms(teamId!, { includeJoined: true }, signal),
-    enabled: Boolean(teamId),
+      getTeamRooms(resolvedTeamId!, { includeJoined: true }, signal),
+    enabled: Boolean(resolvedTeamId),
   });
   const join = useMutation({
     mutationFn: joinThread,
@@ -55,16 +56,22 @@ export function ChannelDirectoryPanel({
   );
 
   return (
-    <Modal title={t("chat.channelDirectory")} onClose={onClose} width={480}>
+    <Modal
+      title={t("chat.channelDirectory")}
+      onClose={onClose}
+      width={480}
+      testId="channel-directory"
+    >
       {teams.length > 1 ? (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {teams.map((team) => (
             <button
               key={team.id}
               type="button"
+              data-testid={`channel-team-${team.id}`}
               onClick={() => setTeamId(team.id)}
               className={
-                teamId === team.id
+                resolvedTeamId === team.id
                   ? "h-7 rounded-pill border-0 bg-sel px-2.5 text-[11px]"
                   : "h-7 rounded-pill border border-line2 bg-transparent px-2.5 text-[11px] text-ink-muted"
               }
@@ -136,7 +143,11 @@ function ChannelDirectoryRow({
   onLeave(): void;
 }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-inset px-[9px] py-2">
+    <div
+      data-testid={`channel-row-${item.thread.id}`}
+      data-channel-title={item.thread.title}
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-inset px-[9px] py-2"
+    >
       <div className="grid min-w-0 gap-0.5">
         <strong className="truncate text-[12.5px] font-[570]">
           #{item.thread.title.replace(/^#/, "")}
@@ -151,6 +162,7 @@ function ChannelDirectoryRow({
       {item.joined ? (
         <button
           type="button"
+          data-testid="channel-leave"
           disabled={busy}
           onClick={onLeave}
           className="h-7 rounded-btn border border-line2 bg-transparent px-2.5 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
@@ -160,6 +172,7 @@ function ChannelDirectoryRow({
       ) : (
         <button
           type="button"
+          data-testid="channel-join"
           disabled={busy}
           onClick={onJoin}
           className="h-7 rounded-btn border-0 bg-accent-strong px-2.5 text-[11px] font-[620] text-on-accent disabled:opacity-50"

@@ -61,6 +61,7 @@ export function PdfViewer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        data-testid="pdf-viewer"
         className="relative grid h-[min(90vh,860px)] w-[min(920px,100%)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[18px] border border-line2 bg-panel2 shadow-[0_40px_90px_rgba(0,0,0,0.5)]"
       >
         <div className="flex items-center gap-2 px-4 py-3">

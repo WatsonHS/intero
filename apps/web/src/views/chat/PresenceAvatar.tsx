@@ -54,7 +54,10 @@ export function PresenceAvatar({
   className?: string;
 }) {
   return (
-    <span className={cn("relative inline-grid shrink-0", className)}>
+    <span
+      data-presence-principal={id}
+      className={cn("relative inline-grid shrink-0", className)}
+    >
       <Avatar id={id} name={name} size={size} />
       <PresenceDot state={state} />
     </span>
