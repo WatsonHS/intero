@@ -1,5 +1,7 @@
 import type { ActionInboxItem, NotificationPreferences } from "@intero/domain";
 
+import { presentSystemNotification } from "./system-notifications.js";
+
 export type BrowserNotificationPermission =
   NotificationPermission | "unsupported";
 
@@ -49,27 +51,11 @@ export function showActionInboxBrowserNotification(
   item: ActionInboxItem,
   onOpen: () => void,
 ): boolean {
-  if (
-    typeof Notification === "undefined" ||
-    Notification.permission !== "granted"
-  ) {
-    return false;
-  }
-  try {
-    const notification = new Notification(item.title, {
-      body: item.detail,
-      tag: `intero-action-inbox-${item.id}`,
-      data: {
-        itemId: item.id,
-        sourceRef: item.sourceRef,
-      },
-    });
-    notification.onclick = () => {
-      onOpen();
-      notification.close();
-    };
-    return true;
-  } catch {
-    return false;
-  }
+  return presentSystemNotification({
+    title: item.title,
+    body: item.detail,
+    tag: `intero-action-inbox-${item.id}`,
+    data: { itemId: item.id },
+    onOpen,
+  });
 }

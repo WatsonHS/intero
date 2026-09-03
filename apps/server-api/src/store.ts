@@ -27,6 +27,8 @@ import {
   type ThreadMessageAttachment,
   type ThreadMessageReaction,
   type ThreadMessageStreamState,
+  type UpsertWebPushSubscriptionRequest,
+  type WebPushSubscription,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -138,6 +140,7 @@ export class InMemoryPlatformStore {
   readonly reviews = new Map<SpecId, SpecReviewResponse[]>();
   readonly decisions = new Map<DecisionRecord["id"], DecisionRecord>();
   readonly inbox = new Map<string, ActionInboxItem>();
+  readonly webPushSubscriptions = new Map<string, WebPushSubscription>();
   readonly principals = new Map<PrincipalId, PrincipalSummary>();
   readonly activities: ActivityEvent[] = [];
   readonly outbox: OutboxEntry[] = [];
@@ -1273,6 +1276,80 @@ export class InMemoryPlatformStore {
     return thread?.participantIds.includes(principalId)
       ? (thread.accessVersion ?? 1)
       : undefined;
+  }
+
+  getMessageAtSequence(
+    threadId: ThreadId,
+    sequence: number,
+  ): { thread: ConversationThread; message: ThreadMessage } | undefined {
+    const thread = this.threads.get(threadId);
+    const message = (this.messages.get(threadId) ?? []).find(
+      (item) => item.sequence === sequence,
+    );
+    if (!thread || !message) return undefined;
+    return { thread, message };
+  }
+
+  upsertWebPushSubscription(
+    principalId: PrincipalId,
+    input: UpsertWebPushSubscriptionRequest,
+  ): WebPushSubscription {
+    const now = new Date().toISOString();
+    const existing = [...this.webPushSubscriptions.values()].find(
+      (item) => item.endpoint === input.endpoint,
+    );
+    const subscription: WebPushSubscription = {
+      id: existing?.id ?? uuidv7(),
+      principalId,
+      endpoint: input.endpoint,
+      keys: input.keys,
+      ...(input.userAgent ? { userAgent: input.userAgent } : {}),
+      createdAt: existing?.createdAt ?? now,
+      lastSeenAt: now,
+    };
+    this.webPushSubscriptions.set(subscription.id, subscription);
+    return subscription;
+  }
+
+  deleteWebPushSubscription(
+    principalId: PrincipalId,
+    endpoint: string,
+  ): boolean {
+    for (const [id, subscription] of this.webPushSubscriptions) {
+      if (
+        subscription.principalId === principalId &&
+        subscription.endpoint === endpoint
+      ) {
+        this.webPushSubscriptions.delete(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  deleteWebPushSubscriptionByEndpoint(endpoint: string): boolean {
+    for (const [id, subscription] of this.webPushSubscriptions) {
+      if (subscription.endpoint === endpoint) {
+        this.webPushSubscriptions.delete(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  listWebPushSubscriptions(principalId: PrincipalId): WebPushSubscription[] {
+    return [...this.webPushSubscriptions.values()].filter(
+      (item) => item.principalId === principalId,
+    );
+  }
+
+  listWebPushSubscriptionsForPrincipals(
+    principalIds: PrincipalId[],
+  ): WebPushSubscription[] {
+    const allowed = new Set(principalIds);
+    return [...this.webPushSubscriptions.values()].filter((item) =>
+      allowed.has(item.principalId),
+    );
   }
 
   private recordConversationChange(

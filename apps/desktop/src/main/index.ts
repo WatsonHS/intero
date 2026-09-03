@@ -32,6 +32,15 @@ import {
 } from "electron";
 
 import {
+  attachWindowCloseBehavior,
+  createDesktopTray,
+  disposeDesktopTray,
+  loadDesktopSettings,
+  markDesktopQuitting,
+  registerDesktopNotificationBridge,
+} from "./notifications.js";
+
+import {
   buildGitAwarenessCheckpoint,
   readGitAwarenessSnapshot,
   watchGitMetadata,
@@ -524,6 +533,9 @@ function registerDesktopIntegrationBridge() {
       return presentGitAwareness();
     },
   );
+  registerDesktopNotificationBridge({
+    assertTrustedRenderer,
+  });
 }
 
 function gitAwarenessConfigPath(): string {
@@ -1415,15 +1427,18 @@ function createWindow() {
   trustedRendererUrl = rendererUrl;
   window.webContents.session.setPermissionCheckHandler(
     (webContents, permission) =>
-      permission === "media" && webContents?.id === window.webContents.id,
+      (permission === "media" || permission === "notifications") &&
+      webContents?.id === window.webContents.id,
   );
   window.webContents.session.setPermissionRequestHandler(
     (webContents, permission, callback) => {
       callback(
-        permission === "media" && webContents.id === window.webContents.id,
+        (permission === "media" || permission === "notifications") &&
+          webContents.id === window.webContents.id,
       );
     },
   );
+  attachWindowCloseBehavior(window);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     const protocol = new URL(url).protocol;
@@ -1455,8 +1470,10 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   await loadGitAwareness();
+  await loadDesktopSettings();
   await reconcileGitAwarenessSubscriptions();
   registerDesktopIntegrationBridge();
+  createDesktopTray();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1464,6 +1481,8 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => {
+  markDesktopQuitting();
+  disposeDesktopTray();
   stopGitAwarenessSubscriptions();
 });
 

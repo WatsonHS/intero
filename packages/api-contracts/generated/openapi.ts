@@ -127,6 +127,38 @@ export interface paths {
     patch: operations["updateThread"];
     trace?: never;
   };
+  "/v1/config/web-push": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getWebPushConfig"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/me/push-subscriptions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["upsertPushSubscription"];
+    delete: operations["deletePushSubscription"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/specs": {
     parameters: {
       query?: never;
@@ -795,6 +827,42 @@ export interface components {
       /** @default [] */
       removeParticipantIds: string[];
     };
+    UpsertWebPushSubscriptionRequest: {
+      /** Format: uri */
+      endpoint: string;
+      keys: {
+        p256dh: string;
+        auth: string;
+      };
+      userAgent?: string;
+    };
+    DeleteWebPushSubscriptionRequest: {
+      /** Format: uri */
+      endpoint: string;
+    };
+    WebPushConfigResponse: {
+      enabled: boolean;
+      publicKey?: string;
+    };
+    WebPushSubscriptionResponse: {
+      subscription: {
+        /** Format: uuid */
+        id: string;
+        /** Format: uuid */
+        principalId: string;
+        /** Format: uri */
+        endpoint: string;
+        keys: {
+          p256dh: string;
+          auth: string;
+        };
+        userAgent?: string;
+        /** Format: date-time */
+        createdAt: string;
+        /** Format: date-time */
+        lastSeenAt: string;
+      };
+    };
   };
   responses: never;
   parameters: never;
@@ -977,6 +1045,79 @@ export interface operations {
         content?: never;
       };
       /** @description Thread not found or inaccessible */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  getWebPushConfig: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Whether Web Push is enabled and the VAPID public key */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WebPushConfigResponse"];
+        };
+      };
+    };
+  };
+  upsertPushSubscription: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpsertWebPushSubscriptionRequest"];
+      };
+    };
+    responses: {
+      /** @description Stored Web Push subscription */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WebPushSubscriptionResponse"];
+        };
+      };
+    };
+  };
+  deletePushSubscription: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DeleteWebPushSubscriptionRequest"];
+      };
+    };
+    responses: {
+      /** @description Subscription removed */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Subscription not found */
       404: {
         headers: {
           [name: string]: unknown;

@@ -262,11 +262,15 @@ export class OutboxDispatcher {
     private readonly organizationId: string,
     private readonly repository: OutboxRepository,
     private readonly realtime: RealtimePublisher,
+    private readonly onConversationChanged?: (
+      event: Record<string, unknown>,
+    ) => Promise<void>,
   ) {}
 
   async dispatch(limit = 50): Promise<number> {
     const publications = await this.repository.claim(limit);
     let firstError: Error | undefined;
+    const enqueuedConversationEvents = new Set<string>();
     for (const publication of publications) {
       try {
         const projectId =
@@ -288,6 +292,14 @@ export class OutboxDispatcher {
               : `intero:organization:${this.organizationId}`),
           event,
         );
+        if (
+          publication.topic === "conversation.changed" &&
+          this.onConversationChanged &&
+          !enqueuedConversationEvents.has(publication.operationId)
+        ) {
+          enqueuedConversationEvents.add(publication.operationId);
+          await this.onConversationChanged(event);
+        }
         await this.repository.markCompleted(
           publication.operationId,
           publication.channel,

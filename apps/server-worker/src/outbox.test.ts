@@ -132,6 +132,44 @@ describe("Outbox dispatcher", () => {
     expect(publish.mock.calls[0]?.[1]).not.toHaveProperty("operationId");
   });
 
+  it("enqueues one conversation.changed callback per operation", async () => {
+    const event = {
+      schemaVersion: 1,
+      eventId: "019b5ac0-7600-7000-8000-000000000201",
+      type: "conversation.changed",
+      threadId: "019b5ac0-7600-7000-8000-000000000202",
+      headSequence: 4,
+      accessVersion: 1,
+      reason: "message_appended",
+      occurredAt: "2026-07-28T08:00:00.000Z",
+    };
+    const onConversationChanged = vi.fn(async () => undefined);
+    const dispatcher = new OutboxDispatcher(
+      "organization-1",
+      new MemoryOutbox([
+        {
+          operationId: event.eventId,
+          channel: `intero:thread:${event.threadId}`,
+          topic: "conversation.changed",
+          payload: event,
+          attempts: 1,
+        },
+        {
+          operationId: event.eventId,
+          channel: `intero:user:principal-1`,
+          topic: "conversation.changed",
+          payload: event,
+          attempts: 1,
+        },
+      ]),
+      { async publish() {} },
+      onConversationChanged,
+    );
+    await expect(dispatcher.dispatch()).resolves.toBe(2);
+    expect(onConversationChanged).toHaveBeenCalledTimes(1);
+    expect(onConversationChanged).toHaveBeenCalledWith(event);
+  });
+
   it("retains failed publications for retry", async () => {
     const repository = new MemoryOutbox([
       {

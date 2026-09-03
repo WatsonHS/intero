@@ -519,6 +519,43 @@ export const zhCN = {
   "settings.english": "English",
   "settings.footer":
     "Intero 只在授权的组织、团队和项目范围内处理结构化 Work State。撤销项目协作或 Agent 授权后，后续同步会停止；原始 prompt、文件、diff 与终端输出不会自动进入团队可见范围。",
+  "settings.notifications.title": "通知",
+  "settings.notifications.lede":
+    "选择哪些定向事项显示未读提醒。静音不删除 Inbox 内容；允许系统通知后，页面在后台时也能提醒你。",
+  "settings.notifications.browser": "浏览器通知",
+  "settings.notifications.browserGranted":
+    "已允许；只在页面位于后台或当前未打开该会话时提醒。",
+  "settings.notifications.browserDenied":
+    "浏览器已拒绝通知。请在站点权限中重新允许。",
+  "settings.notifications.browserUnsupported":
+    "当前浏览器或运行环境不支持系统通知。",
+  "settings.notifications.browserPrompt":
+    "需要你明确允许，Intero 不会自动弹出权限请求。",
+  "settings.notifications.browserPending": "正在请求…",
+  "settings.notifications.browserOn": "已开启",
+  "settings.notifications.browserEnable": "开启浏览器通知",
+  "settings.notifications.messages": "消息通知",
+  "settings.notifications.messagesLede":
+    "默认只提醒 @提及。加密会话永远只显示「有新消息」，不会带出正文。",
+  "settings.notifications.messagesAll": "全部消息",
+  "settings.notifications.messagesMentions": "仅提及",
+  "settings.notifications.messagesNone": "关闭",
+  "settings.notifications.kind.review_request": "定向评审",
+  "settings.notifications.kind.human_decision": "确认与协调决定",
+  "settings.notifications.kind.scope_expansion": "范围扩展",
+  "settings.notifications.kind.consequential_commitment": "重要承诺",
+  "settings.notifications.kind.high_impact_contradiction": "高影响冲突",
+  "settings.notifications.kind.imminent_blocker": "临近阻塞",
+  "settings.notifications.webPush": "关闭标签页后推送",
+  "settings.notifications.webPushLede":
+    "把订阅交给浏览器的推送服务。标签页关闭后仍可收到新消息提醒。",
+  "settings.notifications.webPushUnavailable": "此部署未配置 Web Push。",
+  "settings.notifications.webPushOn": "已订阅推送",
+  "settings.notifications.webPushOff": "开启推送",
+  "settings.notifications.webPushPending": "正在更新…",
+  "settings.notifications.closeToTray": "关闭窗口时保持在托盘",
+  "settings.notifications.closeToTrayLede":
+    "默认关闭。打开后，关闭窗口只会藏到托盘，而不会退出 Intero。",
 
   "setup.cloudUnavailable.title": "尚未连接 Intero 云服务",
   "setup.cloudUnavailable.body":
@@ -824,6 +861,9 @@ export const zhCN = {
   "chat.mentionNotificationTitle": "有人提到了你",
   "chat.mentionNotificationBody": "{sender} 在“{thread}”中 @ 了你。",
   "chat.mentionNotificationNativeBody": "你在“{thread}”中有一条新提及。",
+  "chat.messageNotificationEncrypted": "「{thread}」中有新消息",
+  "chat.messageNotificationTitle": "「{thread}」中有新消息",
+  "chat.messageNotificationBody": "{preview}",
   "chat.someone": "一位成员",
   "chat.markdownPreview": "预览 Markdown",
   "chat.markdownWrite": "继续编辑",

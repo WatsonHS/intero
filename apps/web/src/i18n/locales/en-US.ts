@@ -538,6 +538,45 @@ export const enUS: Record<TranslationKey, string> = {
   "settings.english": "English",
   "settings.footer":
     "Intero processes structured Work State only within authorized organization, team, and project scopes. Revoking project collaboration or agent access stops future synchronization; raw prompts, files, diffs, and terminal output never become team-visible automatically.",
+  "settings.notifications.title": "Notifications",
+  "settings.notifications.lede":
+    "Choose which directed items show unread reminders. Muting does not delete Inbox content. After you allow system notifications, Intero can remind you when the page is in the background.",
+  "settings.notifications.browser": "Browser notifications",
+  "settings.notifications.browserGranted":
+    "Allowed. Reminders fire when the page is in the background or the thread is not open.",
+  "settings.notifications.browserDenied":
+    "The browser blocked notifications. Re-enable them in site permissions.",
+  "settings.notifications.browserUnsupported":
+    "This browser or runtime does not support system notifications.",
+  "settings.notifications.browserPrompt":
+    "Intero waits for an explicit allow. It never prompts automatically.",
+  "settings.notifications.browserPending": "Requesting…",
+  "settings.notifications.browserOn": "On",
+  "settings.notifications.browserEnable": "Enable browser notifications",
+  "settings.notifications.messages": "Message notifications",
+  "settings.notifications.messagesLede":
+    "Mentions only by default. Encrypted threads always show “New message in <thread>” and never include the body.",
+  "settings.notifications.messagesAll": "All messages",
+  "settings.notifications.messagesMentions": "Mentions only",
+  "settings.notifications.messagesNone": "Off",
+  "settings.notifications.kind.review_request": "Directed review",
+  "settings.notifications.kind.human_decision": "Confirmations and decisions",
+  "settings.notifications.kind.scope_expansion": "Scope expansion",
+  "settings.notifications.kind.consequential_commitment": "Commitment",
+  "settings.notifications.kind.high_impact_contradiction":
+    "High-impact conflict",
+  "settings.notifications.kind.imminent_blocker": "Imminent blocker",
+  "settings.notifications.webPush": "Push when the tab is closed",
+  "settings.notifications.webPushLede":
+    "Store a subscription with the browser push service so new messages can still arrive after this tab closes.",
+  "settings.notifications.webPushUnavailable":
+    "This deployment has not configured Web Push.",
+  "settings.notifications.webPushOn": "Push subscribed",
+  "settings.notifications.webPushOff": "Enable push",
+  "settings.notifications.webPushPending": "Updating…",
+  "settings.notifications.closeToTray": "Keep running in the tray on close",
+  "settings.notifications.closeToTrayLede":
+    "Off by default. When on, closing the window hides Intero to the tray instead of quitting.",
 
   "setup.cloudUnavailable.title": "Intero cloud service is not connected",
   "setup.cloudUnavailable.body":
@@ -871,6 +910,9 @@ export const enUS: Record<TranslationKey, string> = {
   "chat.mentionNotificationTitle": "You were mentioned",
   "chat.mentionNotificationBody": "{sender} mentioned you in “{thread}”.",
   "chat.mentionNotificationNativeBody": "You have a new mention in “{thread}”.",
+  "chat.messageNotificationEncrypted": "New message in {thread}",
+  "chat.messageNotificationTitle": "New message in {thread}",
+  "chat.messageNotificationBody": "{preview}",
   "chat.someone": "Someone",
   "chat.markdownPreview": "Preview Markdown",
   "chat.markdownWrite": "Continue editing",

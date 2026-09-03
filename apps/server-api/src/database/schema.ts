@@ -550,12 +550,50 @@ export const notificationPreferences = pgTable(
       .references(() => principals.id),
     mutedKinds: jsonb("muted_kinds").notNull().default([]),
     muteUntil: timestamp("mute_until", { withTimezone: true }),
+    messages: text("messages", {
+      enum: ["all", "mentions", "none"],
+    })
+      .notNull()
+      .default("mentions"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.organizationId, table.principalId] }),
+  ],
+);
+
+export const webPushSubscriptions = pgTable(
+  "web_push_subscriptions",
+  {
+    id: uuid("id").primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("web_push_subscriptions_endpoint_idx").on(
+      table.organizationId,
+      table.endpoint,
+    ),
+    index("web_push_subscriptions_principal_idx").on(
+      table.organizationId,
+      table.principalId,
+    ),
   ],
 );
 

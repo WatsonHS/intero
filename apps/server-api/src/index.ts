@@ -237,6 +237,9 @@ const app = await buildApp({
     : {}),
   attachments: attachmentService,
   realtimeConfig: serviceConfig.realtime,
+  ...(serviceConfig.webPush
+    ? { webPushPublicKey: serviceConfig.webPush.publicKey }
+    : {}),
   ...(serviceConfig.calls
     ? {
         callTokenIssuer: new LiveKitCallTokenIssuer(

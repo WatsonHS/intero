@@ -30,9 +30,12 @@ import {
   PrivacySafeMetrics,
 } from "@intero/config";
 import {
+  DeleteWebPushSubscriptionRequest,
+  defaultNotificationPreferences,
   personalStandInId,
   roomInteroPrincipalId,
   ThreadKind,
+  UpsertWebPushSubscriptionRequest,
   type MessageId,
   type KanbanCard,
   type KanbanCardId,
@@ -199,6 +202,7 @@ export interface BuildAppOptions {
   };
   callTokenIssuer?: CallTokenIssuer;
   callEventPublisher?: CallEventPublisher;
+  webPushPublicKey?: string;
 }
 
 export async function buildApp(
@@ -860,11 +864,7 @@ export async function buildApp(
       : await store.listInbox(principal!.id);
     const preferences = informationStore
       ? await informationStore.getPreferences(principal!.id)
-      : {
-          principalId: principal!.id,
-          mutedKinds: [],
-          updatedAt: new Date(0).toISOString(),
-        };
+      : defaultNotificationPreferences(principal!.id);
     const muteActive =
       preferences.muteUntil && preferences.muteUntil > new Date().toISOString();
     const unreadCount = items.filter(
@@ -1005,6 +1005,7 @@ export async function buildApp(
             ]),
           ),
           muteUntil: z.iso.datetime().optional(),
+          messages: z.enum(["all", "mentions", "none"]).optional(),
         })
         .strict(),
       request.body,
@@ -1013,8 +1014,35 @@ export async function buildApp(
       preferences: await informationStore.setPreferences(principal!.id, {
         mutedKinds: input.mutedKinds,
         ...(input.muteUntil ? { muteUntil: input.muteUntil } : {}),
+        ...(input.messages ? { messages: input.messages } : {}),
       }),
     };
+  });
+
+  app.get("/v1/config/web-push", async (request) => {
+    await requestAuth.resolve(request);
+    return options.webPushPublicKey
+      ? { enabled: true, publicKey: options.webPushPublicKey }
+      : { enabled: false };
+  });
+
+  app.post("/v1/me/push-subscriptions", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
+    const input = parse(UpsertWebPushSubscriptionRequest, request.body);
+    return reply.status(201).send({
+      subscription: await store.upsertWebPushSubscription(principal!.id, input),
+    });
+  });
+
+  app.delete("/v1/me/push-subscriptions", async (request, reply) => {
+    const principal = await requestAuth.resolve(request);
+    const input = parse(DeleteWebPushSubscriptionRequest, request.body);
+    const removed = await store.deleteWebPushSubscription(
+      principal!.id,
+      input.endpoint,
+    );
+    if (!removed) return notFound(reply, "Push subscription");
+    return { deleted: true };
   });
 
   app.get("/v1/search", async (request) => {

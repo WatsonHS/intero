@@ -63,6 +63,12 @@ const MinioObjectStorageConfig = z
 export const ObjectStorageConfig = MinioObjectStorageConfig;
 export type ObjectStorageConfig = z.infer<typeof ObjectStorageConfig>;
 
+export interface WebPushConfig {
+  publicKey: string;
+  privateKey: string;
+  subject: string;
+}
+
 export interface ApiServiceConfig {
   runtime: RuntimeConfig;
   runtimeMode: RuntimeMode;
@@ -84,6 +90,7 @@ export interface ApiServiceConfig {
     apiKey: string;
     apiSecret: string;
   };
+  webPush?: WebPushConfig;
   auth?: {
     publicUrl: string;
     secret: string;
@@ -101,6 +108,7 @@ export interface WorkerServiceConfig {
   metricsPort: number;
   spiceDbInsecure: boolean;
   spiceDbCaPath?: string;
+  webPush?: WebPushConfig;
 }
 
 export interface MigratorServiceConfig {
@@ -280,6 +288,7 @@ export function loadApiServiceConfig(
       "Product Centrifugo realtime requires INTERO_CENTRIFUGO_API_KEY.",
     );
   }
+  const webPush = loadWebPushConfig(environment);
   return {
     runtime,
     runtimeMode,
@@ -306,6 +315,7 @@ export function loadApiServiceConfig(
       rolloutPercent: realtimeRolloutPercent,
     },
     ...(calls ? { calls } : {}),
+    ...(webPush ? { webPush } : {}),
     ...(authSecret
       ? {
           auth: {
@@ -405,6 +415,7 @@ export function loadWorkerServiceConfig(
       "server-worker requires transactional-outbox Stand-in jobs.",
     );
   }
+  const webPush = loadWebPushConfig(environment);
   return {
     pilot,
     organizationId: OrganizationId.parse(
@@ -434,6 +445,34 @@ export function loadWorkerServiceConfig(
     ...(environment.INTERO_SPICEDB_CA_PATH
       ? { spiceDbCaPath: environment.INTERO_SPICEDB_CA_PATH }
       : {}),
+    ...(webPush ? { webPush } : {}),
+  };
+}
+
+export function loadWebPushConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+): WebPushConfig | undefined {
+  const publicKey = environment.INTERO_WEB_PUSH_PUBLIC_KEY;
+  const privateKey = environment.INTERO_WEB_PUSH_PRIVATE_KEY;
+  const subject = environment.INTERO_WEB_PUSH_SUBJECT;
+  const values = [publicKey, privateKey, subject];
+  if (values.every((value) => !value)) return undefined;
+  if (values.some((value) => !value)) {
+    throw new Error(
+      "Web Push requires INTERO_WEB_PUSH_PUBLIC_KEY, INTERO_WEB_PUSH_PRIVATE_KEY, and INTERO_WEB_PUSH_SUBJECT together.",
+    );
+  }
+  return {
+    publicKey: z.string().min(16).parse(publicKey),
+    privateKey: z.string().min(16).parse(privateKey),
+    subject: z
+      .string()
+      .min(3)
+      .refine(
+        (value) => value.startsWith("mailto:") || value.startsWith("https://"),
+        "INTERO_WEB_PUSH_SUBJECT must be a mailto: or https: URI.",
+      )
+      .parse(subject),
   };
 }
 
