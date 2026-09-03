@@ -127,6 +127,38 @@ export interface paths {
     patch: operations["updateThread"];
     trace?: never;
   };
+  "/v1/link-previews": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listLinkPreviews"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/messages/{messageId}/preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["hideThreadMessagePreview"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/specs": {
     parameters: {
       query?: never;
@@ -433,6 +465,23 @@ export interface components {
       /** Format: date-time */
       updatedAt: string;
     };
+    LinkPreviewsResponse: {
+      items: {
+        /** Format: uri */
+        url: string;
+        /** @enum {string} */
+        status: "ok" | "failed" | "blocked";
+        title?: string;
+        description?: string;
+        siteName?: string;
+        /** Format: uri */
+        image?: string;
+        /** Format: date-time */
+        fetchedAt: string;
+        /** Format: date-time */
+        expiresAt: string;
+      }[];
+    };
     SpecListResponse: {
       items: {
         spec: {
@@ -708,6 +757,8 @@ export interface components {
           emoji: string;
           principalIds: string[];
         }[];
+        previewUrls?: string[];
+        previewsHidden?: boolean;
       }[];
       /** @default 0 */
       unreadCount: number;
@@ -977,6 +1028,63 @@ export interface operations {
         content?: never;
       };
       /** @description Thread not found or inaccessible */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  listLinkPreviews: {
+    parameters: {
+      query: {
+        url: string | string[];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Cached public link preview metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LinkPreviewsResponse"];
+        };
+      };
+    };
+  };
+  hideThreadMessagePreview: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Message with link previews hidden */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Only the sender can hide previews */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Message not found or inaccessible */
       404: {
         headers: {
           [name: string]: unknown;

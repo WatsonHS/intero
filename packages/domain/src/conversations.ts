@@ -207,9 +207,71 @@ export const ThreadMessage = z
     revision: z.number().int().positive().optional(),
     /** Aggregated participant reactions; omitted when the message has none. */
     reactions: ThreadMessageReactions.optional(),
+    /** Normalized http(s) URLs the server attempted to unfurl. At most two. */
+    previewUrls: z.array(z.url().max(2_048)).max(2).optional(),
+    /** Sender hid link preview cards on this message. */
+    previewsHidden: z.boolean().optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;
+
+export const LinkPreviewStatus = z.enum(["ok", "failed", "blocked"]);
+export type LinkPreviewStatus = z.infer<typeof LinkPreviewStatus>;
+
+/**
+ * Public page metadata cached from Open Graph / Twitter card / `<title>`.
+ * The cache is not tenant data: it never stores message bodies or cookies.
+ */
+export const LinkPreview = z
+  .object({
+    url: z.url().max(2_048),
+    status: LinkPreviewStatus,
+    title: z.string().min(1).max(300).optional(),
+    description: z.string().min(1).max(1_000).optional(),
+    siteName: z.string().min(1).max(200).optional(),
+    /** https image URL only; the client loads it directly and never via Intero. */
+    image: z.url().max(2_048).optional(),
+    fetchedAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime(),
+  })
+  .strict();
+export type LinkPreview = z.infer<typeof LinkPreview>;
+
+const HTTP_URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]]+/giu;
+const TRAILING_URL_PUNCTUATION = /[.,;:!?]+$/u;
+
+export function normalizePublicHttpUrl(raw: string): string | undefined {
+  try {
+    const url = new URL(raw.replace(TRAILING_URL_PUNCTUATION, ""));
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    if (url.username || url.password) return undefined;
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+    if (
+      (url.protocol === "http:" && url.port === "80") ||
+      (url.protocol === "https:" && url.port === "443")
+    ) {
+      url.port = "";
+    }
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+/** First `limit` unique http(s) URLs in a server-readable message body. */
+export function extractHttpUrls(body: string, limit = 2): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const match of body.matchAll(HTTP_URL_IN_TEXT)) {
+    const normalized = normalizePublicHttpUrl(match[0] ?? "");
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    found.push(normalized);
+    if (found.length >= limit) break;
+  }
+  return found;
+}
 
 export const ConversationChangeReason = z.enum([
   "thread_created",

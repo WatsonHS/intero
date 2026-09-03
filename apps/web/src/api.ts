@@ -29,6 +29,7 @@ import type {
   SpecRevision,
   SpecReviewResponse,
   ThreadMessage,
+  LinkPreview,
   Sprint,
   WorkCodeReference,
   WorkComment,
@@ -794,6 +795,31 @@ export async function getAttachmentDownload(
   signal?: AbortSignal,
 ): Promise<{ attachment: ConversationAttachment; downloadUrl: string }> {
   return getJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, signal);
+}
+
+export async function getLinkPreviews(
+  urls: string[],
+  signal?: AbortSignal,
+): Promise<{ items: LinkPreview[] }> {
+  const query = new URLSearchParams();
+  for (const url of urls) query.append("url", url);
+  return getJson(`/v1/link-previews?${query.toString()}`, signal);
+}
+
+export async function hideThreadMessagePreview(input: {
+  threadId: string;
+  messageId: string;
+}): Promise<ThreadMessage> {
+  const response = await fetch(
+    `${API_URL}/v1/threads/${encodeURIComponent(input.threadId)}/messages/${encodeURIComponent(input.messageId)}/preview`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: developmentIdentityHeaders(),
+    },
+  );
+  await ensureResponseOk(response);
+  return (await response.json()) as ThreadMessage;
 }
 
 export async function getThreadMessages(

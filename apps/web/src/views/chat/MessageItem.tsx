@@ -19,6 +19,7 @@ import { CoordinationCard } from "./CoordinationCard.js";
 import { isBubblelessEmojiMessage } from "./format.js";
 import { ownerNameFor, resolveStandInAvatarIdentity } from "./helpers.js";
 import { MessageAttachments } from "./MessageAttachments.js";
+import { MessageLinkPreviews } from "./MessageLinkPreviews.js";
 import { MessageReactionBar } from "./MessageReactionBar.js";
 import type { ConversationMentionCandidate } from "./mentions.js";
 import { splitConversationMentions } from "./mentions.js";
@@ -231,6 +232,10 @@ export function MessageItem({
               </p>
             ) : null}
             <MessageAttachments attachments={message.attachments ?? []} />
+            <MessageLinkPreviews
+              message={message}
+              canHide={message.senderId === currentSenderId}
+            />
             {groundedExchange?.structuredAnswer ? (
               <StandInAnswerContent
                 answer={groundedExchange.structuredAnswer}
@@ -391,6 +396,7 @@ export function MessageItem({
           </p>
         )}
         <MessageAttachments attachments={message.attachments ?? []} />
+        <MessageLinkPreviews message={message} canHide={isOwn} />
       </div>
       <MessageReactionBar
         message={message}

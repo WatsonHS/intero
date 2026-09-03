@@ -164,6 +164,64 @@
         }
       }
     },
+    "/v1/link-previews": {
+      "get": {
+        "operationId": "listLinkPreviews",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "url",
+            "required": true,
+            "schema": {
+              "oneOf": [
+                { "type": "string", "format": "uri" },
+                {
+                  "type": "array",
+                  "items": { "type": "string", "format": "uri" },
+                  "maxItems": 20
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cached public link preview metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkPreviewsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/messages/{messageId}/preview": {
+      "delete": {
+        "operationId": "hideThreadMessagePreview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "threadId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "in": "path",
+            "name": "messageId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Message with link previews hidden" },
+          "403": { "description": "Only the sender can hide previews" },
+          "404": { "description": "Message not found or inaccessible" }
+        }
+      }
+    },
     "/v1/specs": {
       "get": {
         "operationId": "listSpecs",
@@ -1011,6 +1069,55 @@
           "createdAt",
           "updatedAt"
         ],
+        "additionalProperties": false
+      },
+      "LinkPreviewsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": { "type": "string", "maxLength": 2048, "format": "uri" },
+                "status": {
+                  "type": "string",
+                  "enum": ["ok", "failed", "blocked"]
+                },
+                "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "siteName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "image": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "format": "uri"
+                },
+                "fetchedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": ["url", "status", "fetchedAt", "expiresAt"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["items"],
         "additionalProperties": false
       },
       "SpecListResponse": {
@@ -1968,7 +2075,17 @@
                     "required": ["emoji", "principalIds"],
                     "additionalProperties": false
                   }
-                }
+                },
+                "previewUrls": {
+                  "maxItems": 2,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "format": "uri"
+                  }
+                },
+                "previewsHidden": { "type": "boolean" }
               },
               "required": [
                 "id",

@@ -19,6 +19,7 @@ import {
   SpecRevision,
   SpecReviewResponse,
   ThreadMessage,
+  LinkPreview,
   Workstream,
 } from "@intero/domain";
 import { z } from "zod";
@@ -225,6 +226,19 @@ export const ThreadResponse = z.object({
     }),
   ),
 });
+export const LinkPreviewsQuery = z
+  .object({
+    url: z.union([
+      z.string().max(2_048),
+      z.array(z.string().max(2_048)).min(1).max(20),
+    ]),
+  })
+  .strict();
+export const LinkPreviewsResponse = z
+  .object({
+    items: z.array(LinkPreview).max(20),
+  })
+  .strict();
 
 export const CreateSpecRevisionRequest = SpecRevision.omit({
   id: true,

@@ -40,6 +40,7 @@ export function replyMessageSummary(
   message: ThreadMessage | undefined,
   labels: {
     attachment: string;
+    pdf: string;
     encrypted: string;
     unavailable: string;
   },
@@ -48,5 +49,8 @@ export function replyMessageSummary(
   if (!message.serverReadable) return labels.encrypted;
   const body = message.body.replaceAll(/\s+/gu, " ").trim();
   if (body) return body;
-  return message.attachments?.length ? labels.attachment : labels.unavailable;
+  if (!message.attachments?.length) return labels.unavailable;
+  return message.attachments[0]?.contentType === "application/pdf"
+    ? labels.pdf
+    : labels.attachment;
 }

@@ -32,6 +32,7 @@ export function QuotedMessagePreview({
       <span className="truncate text-[11px] leading-[1.45] text-ink-muted">
         {replyMessageSummary(message, {
           attachment: t("chat.replyAttachment"),
+          pdf: t("chat.replyPdf"),
           encrypted: t("chat.encryptedMessage"),
           unavailable: t("chat.replyUnavailable"),
         })}

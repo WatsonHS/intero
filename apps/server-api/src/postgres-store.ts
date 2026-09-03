@@ -10,6 +10,7 @@ import {
   type DecisionRecord,
   type KanbanCard,
   type KanbanCardId,
+  type LinkPreview,
   type OperationId,
   type OrganizationId,
   type OutboxEntry,
@@ -46,6 +47,7 @@ import {
   buildThreadMessage,
   claimFromEvent,
   type KanbanCardUpdate,
+  messageMetadata,
   type MutationResult,
   normalizeMentionIds,
   sameCoordinationSummaryIdentity,
@@ -54,6 +56,7 @@ import {
   type ThreadMessagePage,
   type ThreadMessagePageQuery,
   updateMessageReactions,
+  withExtractedPreviewUrls,
 } from "./store.js";
 
 export class PostgresPlatformStore implements PlatformStore {
@@ -867,15 +870,26 @@ export class PostgresPlatformStore implements PlatformStore {
           existing.replyToMessageId === input.replyToMessageId &&
           !input.attachmentIds?.length
         ) {
+          const nextMessage = withExtractedPreviewUrls(current.thread, {
+            ...existing,
+            body: input.body,
+            streamState: "complete",
+          });
           const finalized = await client.query(
             `UPDATE messages
              SET body = $3,
                  stream_state = 'complete',
+                 metadata = $4,
                  revision = revision + 1,
                  updated_at = now()
              WHERE thread_id = $1 AND id = $2
              RETURNING *`,
-            [threadId, input.id, input.body],
+            [
+              threadId,
+              input.id,
+              input.body,
+              json(messageMetadata(nextMessage)),
+            ],
           );
           const completed = messageFromRow(finalized.rows[0]!);
           await this.recordConversationChange(client, {
@@ -885,6 +899,7 @@ export class PostgresPlatformStore implements PlatformStore {
             reason: "message_updated",
             messageId: completed.id,
           });
+          await this.enqueueUnfurl(client, current.thread, completed);
           return completed;
         }
         if (
@@ -930,11 +945,14 @@ export class PostgresPlatformStore implements PlatformStore {
         input.id,
         input.attachmentIds ?? [],
       );
-      const message = buildThreadMessage(current.thread, {
-        ...input,
-        mentionedPrincipalIds,
-        attachments,
-      });
+      const message = withExtractedPreviewUrls(
+        current.thread,
+        buildThreadMessage(current.thread, {
+          ...input,
+          mentionedPrincipalIds,
+          attachments,
+        }),
+      );
       const updated = await client.query<{
         sequence: number;
         access_version: number;
@@ -975,6 +993,16 @@ export class PostgresPlatformStore implements PlatformStore {
         actorId: input.senderId,
         reason: "message_appended",
       });
+      await this.enqueueUnfurl(
+        client,
+        {
+          ...current.thread,
+          sequence: stored.sequence,
+          accessVersion: updated.rows[0]!.access_version,
+          latestMessageAt: stored.createdAt,
+        },
+        stored,
+      );
       return stored;
     });
   }
@@ -1008,17 +1036,6 @@ export class PostgresPlatformStore implements PlatformStore {
       ) {
         throw new Error("Completed stream messages are immutable.");
       }
-      const result = await client.query(
-        `UPDATE messages
-         SET body = $3,
-             stream_state = $4,
-             revision = revision + 1,
-             updated_at = now()
-         WHERE thread_id = $1 AND id = $2
-         RETURNING *`,
-        [input.threadId, input.messageId, input.body, input.streamState],
-      );
-      const updated = messageFromRow(result.rows[0]!);
       const thread = await this.getThreadInTransaction(
         client,
         input.threadId,
@@ -1026,6 +1043,29 @@ export class PostgresPlatformStore implements PlatformStore {
         0,
       );
       if (!thread) throw new Error("Thread was not found.");
+      const nextMessage = withExtractedPreviewUrls(thread.thread, {
+        ...message,
+        body: input.body,
+        streamState: input.streamState,
+      });
+      const result = await client.query(
+        `UPDATE messages
+         SET body = $3,
+             stream_state = $4,
+             metadata = $5,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [
+          input.threadId,
+          input.messageId,
+          input.body,
+          input.streamState,
+          json(messageMetadata(nextMessage)),
+        ],
+      );
+      const updated = messageFromRow(result.rows[0]!);
       await this.recordConversationChange(client, {
         eventId: uuidv7() as OperationId,
         thread: thread.thread,
@@ -1033,6 +1073,9 @@ export class PostgresPlatformStore implements PlatformStore {
         reason: "message_updated",
         messageId: input.messageId,
       });
+      if (updated.streamState === "complete") {
+        await this.enqueueUnfurl(client, thread.thread, updated);
+      }
       return updated;
     });
   }
@@ -1577,6 +1620,177 @@ export class PostgresPlatformStore implements PlatformStore {
         [threadId, principalId, messageId],
       );
       return result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
+    });
+  }
+
+  async getStoredThreadMessage(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+  ): Promise<ThreadMessage | undefined> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        "SELECT * FROM messages WHERE thread_id = $1 AND id = $2",
+        [threadId, messageId],
+      );
+      return result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
+    });
+  }
+
+  async hideMessagePreviews(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+    principalId: PrincipalId,
+  ): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `SELECT m.*
+         FROM messages m
+         JOIN thread_participants viewer
+           ON viewer.thread_id = m.thread_id
+          AND viewer.principal_id = $2
+          AND viewer.revoked_at IS NULL
+         WHERE m.thread_id = $1
+           AND m.id = $3
+           AND m.sequence >= viewer.visible_from_sequence
+         FOR UPDATE OF m`,
+        [threadId, principalId, messageId],
+      );
+      const current = result.rows[0]
+        ? messageFromRow(result.rows[0])
+        : undefined;
+      if (!current) throw new Error("Message was not found.");
+      if (current.senderId !== principalId) {
+        throw new Error("Only the sender can hide link previews.");
+      }
+      if (current.previewsHidden) return current;
+      const updated = await client.query(
+        `UPDATE messages
+         SET metadata = $3,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [
+          threadId,
+          messageId,
+          json(messageMetadata({ ...current, previewsHidden: true })),
+        ],
+      );
+      const message = messageFromRow(updated.rows[0]!);
+      const thread = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: thread.thread,
+        actorId: principalId,
+        reason: "message_updated",
+        messageId,
+      });
+      return message;
+    });
+  }
+
+  async attachMessagePreviewUrls(
+    threadId: ThreadId,
+    messageId: ThreadMessage["id"],
+    previewUrls: string[],
+  ): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM messages
+         WHERE thread_id = $1 AND id = $2
+         FOR UPDATE`,
+        [threadId, messageId],
+      );
+      const current = result.rows[0]
+        ? messageFromRow(result.rows[0])
+        : undefined;
+      if (!current) throw new Error("Message was not found.");
+      const next = {
+        ...current,
+        ...(previewUrls.length ? { previewUrls } : {}),
+      };
+      const updated = await client.query(
+        `UPDATE messages
+         SET metadata = $3,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [threadId, messageId, json(messageMetadata(next))],
+      );
+      const message = messageFromRow(updated.rows[0]!);
+      const thread = await this.getThreadInTransaction(
+        client,
+        threadId,
+        undefined,
+        0,
+      );
+      if (!thread) throw new Error("Thread was not found.");
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: thread.thread,
+        actorId: current.senderId,
+        reason: "message_updated",
+        messageId,
+      });
+      return message;
+    });
+  }
+
+  async getLinkPreviews(
+    urls: string[],
+    at = new Date(),
+  ): Promise<LinkPreview[]> {
+    if (urls.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT url, status, title, description, site_name, image,
+                fetched_at, expires_at
+         FROM link_previews
+         WHERE url = ANY($1::text[])
+           AND expires_at > $2`,
+        [urls, at.toISOString()],
+      );
+      return result.rows.map(linkPreviewFromRow);
+    });
+  }
+
+  async putLinkPreview(preview: LinkPreview): Promise<LinkPreview> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `INSERT INTO link_previews
+           (url, status, title, description, site_name, image,
+            fetched_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (url) DO UPDATE SET
+           status = EXCLUDED.status,
+           title = EXCLUDED.title,
+           description = EXCLUDED.description,
+           site_name = EXCLUDED.site_name,
+           image = EXCLUDED.image,
+           fetched_at = EXCLUDED.fetched_at,
+           expires_at = EXCLUDED.expires_at,
+           updated_at = now()
+         RETURNING url, status, title, description, site_name, image,
+                   fetched_at, expires_at`,
+        [
+          preview.url,
+          preview.status,
+          preview.title ?? null,
+          preview.description ?? null,
+          preview.siteName ?? null,
+          preview.image ?? null,
+          preview.fetchedAt,
+          preview.expiresAt,
+        ],
+      );
+      return linkPreviewFromRow(result.rows[0]!);
     });
   }
 
@@ -2672,11 +2886,7 @@ export class PostgresPlatformStore implements PlatformStore {
         message.serverReadable,
         message.mentionedPrincipalIds ?? [],
         json(message.attachments ?? []),
-        json(
-          message.coordinationSummary
-            ? { coordinationSummary: message.coordinationSummary }
-            : {},
-        ),
+        json(messageMetadata(message)),
         message.streamState ?? "complete",
         message.revision ?? 1,
         message.replyToMessageId ?? null,
@@ -2728,8 +2938,10 @@ export class PostgresPlatformStore implements PlatformStore {
       ) {
         throw new Error("An attachment is not available for this message.");
       }
-      if (!row.content_type.startsWith("image/")) {
-        throw new Error("Conversation attachments must be images.");
+      if (!isConversationAttachmentType(row.content_type)) {
+        throw new Error(
+          "Conversation attachments must be images or PDF files.",
+        );
       }
       return {
         id: row.id,
@@ -2885,6 +3097,36 @@ export class PostgresPlatformStore implements PlatformStore {
         [input.eventId, this.organizationId, channel, occurredAt],
       );
     }
+  }
+
+  private async enqueueUnfurl(
+    client: PoolClient,
+    thread: ConversationThread,
+    message: ThreadMessage,
+  ): Promise<void> {
+    if (
+      thread.accessMode === "human_only_e2ee" ||
+      !message.serverReadable ||
+      !message.previewUrls?.length
+    ) {
+      return;
+    }
+    await client.query(
+      `INSERT INTO outbox
+        (operation_id, organization_id, topic, payload, attempts, available_at)
+       VALUES ($1, $2, 'conversation.unfurl.enqueue', $3, 0, $4)`,
+      [
+        uuidv7(),
+        this.organizationId,
+        json({
+          schemaVersion: 1,
+          organizationId: this.organizationId,
+          threadId: thread.id,
+          messageId: message.id,
+        }),
+        new Date().toISOString(),
+      ],
+    );
   }
 
   private async commit<T extends object>(
@@ -3048,7 +3290,11 @@ function claimFromRow(row: QueryResultRow): Claim {
 function messageFromRow(row: QueryResultRow): ThreadMessage {
   const metadata =
     (row.metadata as
-      | { coordinationSummary?: ThreadMessage["coordinationSummary"] }
+      | {
+          coordinationSummary?: ThreadMessage["coordinationSummary"];
+          previewUrls?: string[];
+          previewsHidden?: boolean;
+        }
       | undefined) ?? {};
   return {
     id: row.id,
@@ -3079,7 +3325,37 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     ...((row.reactions as ThreadMessage["reactions"] | undefined)?.length
       ? { reactions: row.reactions as NonNullable<ThreadMessage["reactions"]> }
       : {}),
+    ...(metadata.previewUrls?.length
+      ? { previewUrls: metadata.previewUrls }
+      : {}),
+    ...(metadata.previewsHidden ? { previewsHidden: true } : {}),
   };
+}
+
+function linkPreviewFromRow(row: QueryResultRow): LinkPreview {
+  return {
+    url: row.url,
+    status: row.status,
+    ...(row.title ? { title: row.title } : {}),
+    ...(row.description ? { description: row.description } : {}),
+    ...(row.site_name ? { siteName: row.site_name } : {}),
+    ...(row.image ? { image: row.image } : {}),
+    fetchedAt: asIso(row.fetched_at),
+    expiresAt: asIso(row.expires_at),
+  };
+}
+
+const CONVERSATION_ATTACHMENT_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+
+function isConversationAttachmentType(contentType: string): boolean {
+  return CONVERSATION_ATTACHMENT_TYPES.has(contentType);
 }
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {

@@ -16,6 +16,7 @@ import {
   CreateWorkstreamRequest,
   CursorQuery,
   IngestEventRequest,
+  LinkPreviewsQuery,
   MarkThreadReadRequest,
   SendThreadMessageRequest,
   SetMessageReactionRequest,
@@ -30,6 +31,7 @@ import {
   PrivacySafeMetrics,
 } from "@intero/config";
 import {
+  normalizePublicHttpUrl,
   personalStandInId,
   roomInteroPrincipalId,
   ThreadKind,
@@ -141,7 +143,12 @@ const CONVERSATION_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
-const CONVERSATION_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+const CONVERSATION_PDF_TYPE = "application/pdf";
+const CONVERSATION_ATTACHMENT_TYPES = new Set([
+  ...CONVERSATION_IMAGE_TYPES,
+  CONVERSATION_PDF_TYPE,
+]);
+const CONVERSATION_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 
 export type ConversationAttachmentService = Pick<
   AttachmentService,
@@ -214,10 +221,10 @@ export async function buildApp(
     options.allowDevelopmentOrigins ?? process.env.NODE_ENV === "test";
   const enableLegacyApi =
     options.enableLegacyApi ?? process.env.NODE_ENV === "test";
-  for (const contentType of CONVERSATION_IMAGE_TYPES) {
+  for (const contentType of CONVERSATION_ATTACHMENT_TYPES) {
     app.addContentTypeParser(
       contentType,
-      { parseAs: "buffer", bodyLimit: CONVERSATION_IMAGE_MAX_BYTES },
+      { parseAs: "buffer", bodyLimit: CONVERSATION_ATTACHMENT_MAX_BYTES },
       (_request, body, done) => done(null, body),
     );
   }
@@ -585,11 +592,11 @@ export async function buildApp(
         "Attachments can only be uploaded as the current principal.",
       );
     }
-    if (!CONVERSATION_IMAGE_TYPES.has(input.contentType)) {
+    if (!CONVERSATION_ATTACHMENT_TYPES.has(input.contentType)) {
       throw new PilotStoreError(
         "ATTACHMENT_TYPE_UNSUPPORTED",
         415,
-        "Conversation attachments must be JPEG, PNG, GIF, WebP, or AVIF images.",
+        "Conversation attachments must be JPEG, PNG, GIF, WebP, AVIF, or PDF.",
       );
     }
     if (!(await store.hasThreadAccess(input.threadId, principal!.id))) {
@@ -611,7 +618,7 @@ export async function buildApp(
 
   app.put<{ Params: { attachmentId: string } }>(
     "/v1/attachments/:attachmentId/content",
-    { bodyLimit: CONVERSATION_IMAGE_MAX_BYTES },
+    { bodyLimit: CONVERSATION_ATTACHMENT_MAX_BYTES },
     async (request, reply) => {
       const principal = await requestAuth.resolve(request);
       const attachment = await attachments.get(request.params.attachmentId);
@@ -709,6 +716,15 @@ export async function buildApp(
       const content = await attachments.readContent(attachment.id);
       return reply
         .header("content-type", attachment.contentType)
+        .header(
+          "content-disposition",
+          attachmentContentDisposition(
+            attachment.contentType,
+            attachment.fileName,
+          ),
+        )
+        .header("content-security-policy", "sandbox")
+        .header("x-content-type-options", "nosniff")
         .header("cache-control", "private, no-store")
         .send(Buffer.from(content));
     },
@@ -1290,6 +1306,46 @@ export async function buildApp(
     },
   );
 
+  app.get("/v1/link-previews", async (request) => {
+    await requestAuth.resolve(request);
+    const input = parse(LinkPreviewsQuery, request.query);
+    const requested = Array.isArray(input.url) ? input.url : [input.url];
+    const urls = [
+      ...new Set(
+        requested.flatMap((value) => {
+          const normalized = normalizePublicHttpUrl(value);
+          return normalized ? [normalized] : [];
+        }),
+      ),
+    ].slice(0, 20);
+    return { items: await store.getLinkPreviews(urls) };
+  });
+
+  app.delete<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId/preview",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const message = await store.getThreadMessage(
+        request.params.threadId as ThreadId,
+        principal!.id,
+        request.params.messageId as MessageId,
+      );
+      if (!message) return notFound(reply, "Message");
+      if (message.senderId !== principal!.id) {
+        throw new PilotStoreError(
+          "PREVIEW_HIDE_FORBIDDEN",
+          403,
+          "Only the sender can remove link previews.",
+        );
+      }
+      return store.hideMessagePreviews(
+        request.params.threadId as ThreadId,
+        request.params.messageId as MessageId,
+        principal!.id,
+      );
+    },
+  );
+
   app.get<{ Params: { threadId: string; messageId: string } }>(
     "/v1/threads/:threadId/messages/:messageId",
     async (request, reply) => {
@@ -1687,6 +1743,17 @@ function presentAttachment<T extends { objectKey: string }>(
 ): Omit<T, "objectKey"> {
   const { objectKey: _objectKey, ...safe } = attachment;
   return safe;
+}
+
+function attachmentContentDisposition(
+  contentType: string,
+  fileName: string,
+): string {
+  const inline =
+    contentType.startsWith("image/") || contentType === CONVERSATION_PDF_TYPE;
+  const fallback =
+    fileName.replaceAll(/[^\w.\- ]+/gu, "_").slice(0, 180) || "file";
+  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 function attachmentContentUrl(

@@ -375,6 +375,22 @@ export const messages = pgTable(
   ],
 );
 
+export const linkPreviews = pgTable(
+  "link_previews",
+  {
+    url: text("url").primaryKey(),
+    status: text("status", { enum: ["ok", "failed", "blocked"] }).notNull(),
+    title: text("title"),
+    description: text("description"),
+    siteName: text("site_name"),
+    image: text("image"),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [index("link_previews_expires_idx").on(table.expiresAt)],
+);
+
 export const attachments = pgTable(
   "attachments",
   {
