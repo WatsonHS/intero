@@ -212,15 +212,23 @@ export function loadApiServiceConfig(
     .parse(environment.INTERO_REALTIME_ROLLOUT_PERCENT ?? 100);
   const developmentIdentityRequested =
     environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
-  const callConfigValues = [
-    environment.INTERO_LIVEKIT_URL,
+  const configuredLiveKitUrl =
+    environment.INTERO_LIVEKIT_URL?.trim() || undefined;
+  // The production stack runs its own LiveKit behind Caddy at /rtc, so the
+  // signaling URL follows the public URL unless an external server is set.
+  const derivedLiveKitUrl =
+    runtimeMode === "product" && environment.INTERO_PUBLIC_URL
+      ? `wss://${new URL(environment.INTERO_PUBLIC_URL).host}/rtc`
+      : undefined;
+  const liveKitCredentials = [
     environment.INTERO_LIVEKIT_API_KEY,
     environment.INTERO_LIVEKIT_API_SECRET,
   ];
-  const callsRequested = callConfigValues.some(Boolean);
-  if (callsRequested && callConfigValues.some((value) => !value)) {
+  const callsRequested =
+    Boolean(configuredLiveKitUrl) || liveKitCredentials.some(Boolean);
+  if (callsRequested && liveKitCredentials.some((value) => !value)) {
     throw new Error(
-      "LiveKit calling requires INTERO_LIVEKIT_URL, INTERO_LIVEKIT_API_KEY, and INTERO_LIVEKIT_API_SECRET together.",
+      "LiveKit calling requires INTERO_LIVEKIT_API_KEY and INTERO_LIVEKIT_API_SECRET together; INTERO_LIVEKIT_URL defaults to wss://<public host>/rtc in product mode.",
     );
   }
   const calls =
@@ -228,7 +236,11 @@ export function loadApiServiceConfig(
       ? {
           serverUrl: z
             .url()
-            .parse(environment.INTERO_LIVEKIT_URL ?? DevelopmentLiveKitUrl),
+            .parse(
+              configuredLiveKitUrl ??
+                derivedLiveKitUrl ??
+                DevelopmentLiveKitUrl,
+            ),
           apiKey: z
             .string()
             .min(1)
