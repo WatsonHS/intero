@@ -1,6 +1,8 @@
 import { CircleNotchIcon } from "@phosphor-icons/react";
 import type { PrincipalId, ThreadMessage } from "@intero/domain";
+import { Modal } from "../design/primitives.js";
 import { useI18n } from "../i18n/index.js";
+import { usePresence } from "../realtime/usePresence.js";
 import { ConversationProfileModal } from "./chat/ConversationProfileModal.js";
 import { Composer } from "./chat/Composer.js";
 import { GroupChatManagementModal } from "./chat/GroupChatManagementModal.js";
@@ -9,6 +11,8 @@ import { useConversationDirectory } from "./chat/hooks/useConversationDirectory.
 import { useThreadActions } from "./chat/hooks/useThreadActions.js";
 import { useThreadMessages } from "./chat/hooks/useThreadMessages.js";
 import { useThreadRealtime } from "./chat/hooks/useThreadRealtime.js";
+import { typingLabelFor } from "./chat/helpers.js";
+import { useThreadTyping } from "./chat/hooks/useThreadTyping.js";
 import { MessageList } from "./chat/MessageList.js";
 import { ThreadHeader } from "./chat/ThreadHeader.js";
 import { ThreadSidebar } from "./chat/ThreadSidebar.js";
@@ -76,6 +80,24 @@ export function CommunicationsView({
     currentIsPilot: directory.currentIsPilot,
     currentIsPilotStandIn: directory.currentIsPilotStandIn,
   });
+  const typing = useThreadTyping({
+    threadId: directory.current?.thread.id,
+    currentPrincipalId: directory.currentSenderId,
+    enabled:
+      Boolean(directory.current) &&
+      !directory.currentIsPilot &&
+      !directory.currentIsPilotStandIn,
+  });
+  const presenceIds = [
+    ...new Set(
+      directory.items.flatMap((item) =>
+        item.thread.participantIds.filter(
+          (id) => !item.thread.standInIds.includes(id),
+        ),
+      ),
+    ),
+  ];
+  const presence = usePresence(presenceIds);
 
   const current = directory.current;
   const profilePrincipal = actions.profilePrincipalId
@@ -114,6 +136,12 @@ export function CommunicationsView({
     composer.beginReply(message);
   }
 
+  const typingLabel = typingLabelFor(
+    typing.typists,
+    directory.principalNames,
+    t,
+  );
+
   return (
     <div className="grid h-full grid-cols-[292px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] animate-view-enter">
       <ThreadSidebar
@@ -149,6 +177,7 @@ export function CommunicationsView({
         onCloseCreate={() => actions.setShowCreate(false)}
         onCreate={(input) => actions.create.mutate(input)}
         onRetryThreads={() => void directory.threads.refetch()}
+        presence={presence}
         onSelectThread={selectThread}
         onSelectStandIn={directory.selectStandIn}
         onCreateStandIn={() => actions.createStandIn.mutate()}
@@ -185,6 +214,7 @@ export function CommunicationsView({
               participantIds={current.thread.participantIds}
               standInIds={current.thread.standInIds}
               principalNames={directory.principalNames}
+              presence={presence}
               candidates={directory.conversationCandidates}
               protectedParticipantId={directory.currentSenderId}
               busy={actions.updateGroupChat.isPending}
@@ -240,6 +270,7 @@ export function CommunicationsView({
             onCancelConclude={() => actions.setConcluding(false)}
             onConclusionChange={actions.setConclusion}
             onConclude={(input) => actions.conclude.mutate(input)}
+            presence={presence}
           />
           <MessageList
             current={current}
@@ -279,6 +310,19 @@ export function CommunicationsView({
             onNavigateToMessage={messages.navigateToMessage}
             onOpenProfile={actions.setProfilePrincipalId}
             onOpenCoordination={onOpenCoordination}
+            editingMessageId={messages.editingMessageId}
+            editPending={messages.edit.isPending}
+            onBeginEdit={(message) => messages.setEditingMessageId(message.id)}
+            onCancelEdit={() => messages.setEditingMessageId(undefined)}
+            onSaveEdit={(message, body) =>
+              messages.edit.mutate({
+                threadId: message.threadId,
+                messageId: message.id,
+                body,
+              })
+            }
+            onDelete={(message) => messages.setDeletingMessage(message)}
+            typingLabel={typingLabel}
           />
           <Composer
             currentAccessMode={current.thread.accessMode}
@@ -325,6 +369,7 @@ export function CommunicationsView({
             onCancelReply={() => composer.setReplyingToMessageId(undefined)}
             onRemoveImage={composer.removeComposerImage}
             onDraftChange={composer.setDraft}
+            onTyping={typing.notifyTyping}
             onSetMentionCursor={composer.setMentionCursor}
             onResetMentionIndex={() => composer.setActiveMentionIndex(0)}
             onSetMentionPickerOpen={composer.setMentionPickerOpen}
@@ -332,6 +377,42 @@ export function CommunicationsView({
             onMoveMentionIndex={composer.setActiveMentionIndex}
             onSubmit={composer.submit}
           />
+          {messages.deletingMessage ? (
+            <Modal
+              title={t("chat.deleteConfirmTitle")}
+              onClose={() => messages.setDeletingMessage(undefined)}
+              width={420}
+              footer={
+                <>
+                  <button
+                    type="button"
+                    className="ml-auto h-8 cursor-pointer rounded-btn border border-line2 bg-transparent px-3 text-[12px]"
+                    onClick={() => messages.setDeletingMessage(undefined)}
+                  >
+                    {t("general.close")}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="message-delete-confirm"
+                    disabled={messages.remove.isPending}
+                    className="h-8 cursor-pointer rounded-btn border-0 bg-danger px-3 text-[12px] font-[620] text-white disabled:opacity-55"
+                    onClick={() =>
+                      messages.remove.mutate({
+                        threadId: messages.deletingMessage!.threadId,
+                        messageId: messages.deletingMessage!.id,
+                      })
+                    }
+                  >
+                    {t("chat.deleteConfirm")}
+                  </button>
+                </>
+              }
+            >
+              <p className="py-2 text-[13px] leading-[1.6] text-ink-muted">
+                {t("chat.deleteConfirmBody")}
+              </p>
+            </Modal>
+          ) : null}
         </div>
       ) : directory.selectedRecordMissing ? (
         <div

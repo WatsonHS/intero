@@ -712,6 +712,159 @@ describe("Intero API vertical slice", () => {
     expect(hidden.statusCode).toBe(404);
   });
 
+  it("edits and deletes own messages and rejects non-sender or concluded threads", async () => {
+    const threadId = uuidv7();
+    const messageId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "room",
+        title: "Edit room",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(ALEX),
+      payload: { clientMessageId: messageId, body: "Original" },
+    });
+
+    const edited = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}/messages/${messageId}`,
+      headers: auth(ALEX),
+      payload: { body: "Edited body" },
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json()).toMatchObject({
+      body: "Edited body",
+      id: messageId,
+    });
+    expect(edited.json().editedAt).toBeTruthy();
+
+    const forbidden = await app.inject({
+      method: "PATCH",
+      url: `/v1/threads/${threadId}/messages/${messageId}`,
+      headers: auth(PRIYA),
+      payload: { body: "Hijack" },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${threadId}/messages/${messageId}`,
+      headers: auth(ALEX),
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    const otherId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/messages`,
+      headers: auth(ALEX),
+      payload: { clientMessageId: otherId, body: "Still here" },
+    });
+    const thread = store.threads.get(threadId as ThreadId)!;
+    store.threads.set(threadId as ThreadId, {
+      ...thread,
+      concludedAt: new Date().toISOString(),
+      concludedBy: ALEX,
+    });
+    const concluded = await app.inject({
+      method: "DELETE",
+      url: `/v1/threads/${threadId}/messages/${otherId}`,
+      headers: auth(ALEX),
+    });
+    expect(concluded.statusCode).toBe(409);
+  });
+
+  it("publishes typing to the thread channel and hides presence from strangers", async () => {
+    const published: Array<{
+      channel: string;
+      event: Record<string, unknown>;
+    }> = [];
+    await app.close();
+    app = await buildTestApp({
+      store,
+      logger: false,
+      pilotIdentities: [
+        { id: ALEX, displayName: "Alex Rivera", kind: "human" },
+        { id: PRIYA, displayName: "Priya Shah", kind: "human" },
+        { id: MORGAN, displayName: "Morgan Chen", kind: "human" },
+      ],
+      callEventPublisher: {
+        async publish(channel, event) {
+          published.push({ channel, event });
+        },
+      },
+    });
+    const threadId = uuidv7();
+    await app.inject({
+      method: "POST",
+      url: "/v1/threads",
+      headers: auth(ALEX),
+      payload: {
+        id: threadId,
+        kind: "human_direct",
+        title: "Alex / Priya",
+        participantIds: [ALEX, PRIYA],
+        standInIds: [],
+        accessMode: "agent_readable",
+        priorHistoryGranted: false,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const typing = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/typing`,
+      headers: auth(ALEX),
+    });
+    expect(typing.statusCode).toBe(204);
+    expect(published).toHaveLength(1);
+    expect(published[0]?.event).toMatchObject({
+      type: "typing",
+      threadId,
+      principalId: ALEX,
+    });
+
+    const hiddenTyping = await app.inject({
+      method: "POST",
+      url: `/v1/threads/${threadId}/typing`,
+      headers: auth(MORGAN),
+    });
+    expect(hiddenTyping.statusCode).toBe(404);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/presence/heartbeat",
+      headers: auth(ALEX),
+      payload: { active: true },
+    });
+    const visible = await app.inject({
+      method: "GET",
+      url: `/v1/presence?principalIds=${ALEX}`,
+      headers: auth(PRIYA),
+    });
+    expect(visible.statusCode).toBe(200);
+    expect(visible.json().items).toEqual([
+      expect.objectContaining({ principalId: ALEX, state: "online" }),
+    ]);
+    const stranger = await app.inject({
+      method: "GET",
+      url: `/v1/presence?principalIds=${ALEX}`,
+      headers: auth(MORGAN),
+    });
+    expect(stranger.json().items).toEqual([]);
+  });
+
   it("counts unread as other people's messages past your read marker", async () => {
     // Unread is per viewer, so both people must be resolvable identities —
     // an unauthenticated caller has no read marker and sees zero.

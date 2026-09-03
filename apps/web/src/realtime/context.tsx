@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PrincipalId } from "@intero/domain";
+import type { PrincipalId, TypingEvent } from "@intero/domain";
 import {
   createContext,
   useCallback,
@@ -15,6 +15,7 @@ import {
   createRealtimeSession,
   createRealtimeSubscription,
   getBootstrap,
+  sendPresenceHeartbeat,
 } from "../api.js";
 import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
@@ -33,6 +34,10 @@ interface ConversationRealtimeContextValue {
     threadId: string,
     listener: (event: CallEventEnvelope) => void,
   ) => Promise<() => void>;
+  watchTyping: (
+    threadId: string,
+    listener: (event: TypingEvent) => void,
+  ) => Promise<() => void>;
 }
 
 const ConversationRealtimeContext =
@@ -40,6 +45,7 @@ const ConversationRealtimeContext =
     status: "disabled",
     watchThread: async () => () => undefined,
     watchCallEvents: async () => () => undefined,
+    watchTyping: async () => () => undefined,
   });
 
 export function ConversationRealtimeProvider({
@@ -59,7 +65,11 @@ export function ConversationRealtimeProvider({
   const callEventListeners = useRef(
     new Map<string, Set<(event: CallEventEnvelope) => void>>(),
   );
+  const typingListeners = useRef(
+    new Map<string, Set<(event: TypingEvent) => void>>(),
+  );
   const pendingCallInvites = useRef(new Map<string, CallEventEnvelope>());
+  const lastActivityAt = useRef(Date.now());
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
     queryFn: ({ signal }) => getBootstrap(signal),
@@ -89,16 +99,26 @@ export function ConversationRealtimeProvider({
       createSession: createRealtimeSession,
       createSubscription: createRealtimeSubscription,
       onStatus: setStatus,
+      onTyping: (event) => {
+        const listeners = typingListeners.current.get(event.threadId);
+        if (!listeners) return;
+        for (const listener of listeners) listener(event);
+      },
       onChange: (event) => {
         void repairConversationChange(queryClient, event, identityId)
           .then((messages) => {
+            const inPlaceRevision =
+              event.reason === "message_updated" ||
+              event.reason === "message_edited" ||
+              event.reason === "message_deleted";
             if (
-              event.reason !== "message_updated" ||
-              messages.some(
-                (message) =>
-                  message.streamState === "complete" ||
-                  message.streamState === "failed",
-              )
+              !inPlaceRevision ||
+              (event.reason === "message_updated" &&
+                messages.some(
+                  (message) =>
+                    message.streamState === "complete" ||
+                    message.streamState === "failed",
+                ))
             ) {
               void queryClient.invalidateQueries({
                 queryKey: ["pilot", "stand_in"],
@@ -244,6 +264,30 @@ export function ConversationRealtimeProvider({
     };
   }, [enabled, identityId, notifications, queryClient, t]);
 
+  useEffect(() => {
+    if (!identityId) return;
+    const markActivity = () => {
+      lastActivityAt.current = Date.now();
+    };
+    window.addEventListener("pointerdown", markActivity);
+    window.addEventListener("keydown", markActivity);
+    const beat = () => {
+      const visible =
+        typeof document === "undefined" ||
+        document.visibilityState === "visible";
+      void sendPresenceHeartbeat({
+        active: visible && Date.now() - lastActivityAt.current < 30_000,
+      }).catch(() => undefined);
+    };
+    beat();
+    const timer = window.setInterval(beat, 30_000);
+    return () => {
+      window.removeEventListener("pointerdown", markActivity);
+      window.removeEventListener("keydown", markActivity);
+      window.clearInterval(timer);
+    };
+  }, [identityId]);
+
   const watchThread = useCallback(async (threadId: string) => {
     const coordinator = coordinatorRef.current;
     if (!coordinator) return () => undefined;
@@ -280,9 +324,33 @@ export function ConversationRealtimeProvider({
     [watchThread],
   );
 
+  const watchTyping = useCallback(
+    async (threadId: string, listener: (event: TypingEvent) => void) => {
+      const listeners =
+        typingListeners.current.get(threadId) ??
+        new Set<(event: TypingEvent) => void>();
+      listeners.add(listener);
+      typingListeners.current.set(threadId, listeners);
+      let releaseThread: () => void = () => undefined;
+      try {
+        releaseThread = await watchThread(threadId);
+      } catch (error) {
+        listeners.delete(listener);
+        if (listeners.size === 0) typingListeners.current.delete(threadId);
+        throw error;
+      }
+      return () => {
+        releaseThread();
+        listeners.delete(listener);
+        if (listeners.size === 0) typingListeners.current.delete(threadId);
+      };
+    },
+    [watchThread],
+  );
+
   const value = useMemo(
-    () => ({ status, watchThread, watchCallEvents }),
-    [status, watchCallEvents, watchThread],
+    () => ({ status, watchThread, watchCallEvents, watchTyping }),
+    [status, watchCallEvents, watchThread, watchTyping],
   );
   return (
     <ConversationRealtimeContext.Provider value={value}>

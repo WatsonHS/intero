@@ -40,6 +40,13 @@ export function MessageList({
   onNavigateToMessage,
   onOpenProfile,
   onOpenCoordination,
+  editingMessageId,
+  editPending = false,
+  onBeginEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onDelete,
+  typingLabel,
 }: {
   current: ThreadPayload;
   currentPilotStandInJoined: boolean;
@@ -69,6 +76,13 @@ export function MessageList({
   onNavigateToMessage(messageId: string): void;
   onOpenProfile(principalId: PrincipalId): void;
   onOpenCoordination?: ((threadId: string) => void) | undefined;
+  editingMessageId?: string | undefined;
+  editPending?: boolean;
+  onBeginEdit?(message: ThreadMessage): void;
+  onCancelEdit?(): void;
+  onSaveEdit?(message: ThreadMessage, body: string): void;
+  onDelete?(message: ThreadMessage): void;
+  typingLabel?: string | undefined;
 }) {
   const { t } = useI18n();
   return (
@@ -151,10 +165,24 @@ export function MessageList({
                   onNavigateToMessage={onNavigateToMessage}
                   onOpenProfile={onOpenProfile}
                   onOpenCoordination={onOpenCoordination}
+                  editing={editingMessageId === message.id}
+                  editPending={editPending}
+                  {...(onBeginEdit ? { onBeginEdit } : {})}
+                  {...(onCancelEdit ? { onCancelEdit } : {})}
+                  {...(onSaveEdit ? { onSaveEdit } : {})}
+                  {...(onDelete ? { onDelete } : {})}
                 />
               </div>
             ))
           )}
+          {typingLabel ? (
+            <p
+              data-testid="typing-indicator"
+              className="px-1 text-[11.5px] italic text-ink-muted"
+            >
+              {typingLabel}
+            </p>
+          ) : null}
           <div ref={messagesEndRef} aria-hidden="true" />
         </div>
       </div>

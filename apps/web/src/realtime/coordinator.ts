@@ -1,4 +1,7 @@
-import type { ConversationChangedEvent as ConversationChangedEventPayload } from "@intero/domain";
+import type {
+  ConversationChangedEvent as ConversationChangedEventPayload,
+  TypingEvent,
+} from "@intero/domain";
 import {
   Centrifuge,
   type PublicationContext,
@@ -26,6 +29,8 @@ const ConversationChangedHint = z
       "thread_updated",
       "message_appended",
       "message_updated",
+      "message_edited",
+      "message_deleted",
       "read_cursor_changed",
       "access_changed",
       "thread_concluded",
@@ -35,14 +40,28 @@ const ConversationChangedHint = z
   })
   .strict()
   .superRefine((event, context) => {
-    if (event.reason === "message_updated" && !event.messageId) {
+    if (
+      (event.reason === "message_updated" ||
+        event.reason === "message_edited" ||
+        event.reason === "message_deleted") &&
+      !event.messageId
+    ) {
       context.addIssue({
         code: "custom",
         path: ["messageId"],
-        message: "message_updated events require a messageId pointer.",
+        message: `${event.reason} events require a messageId pointer.`,
       });
     }
   });
+
+const TypingHint = z
+  .object({
+    type: z.literal("typing"),
+    threadId: z.string().uuid(),
+    principalId: z.string().uuid(),
+    at: z.string().datetime(),
+  })
+  .strict();
 
 const CallEventHint = z
   .object({
@@ -75,6 +94,7 @@ export interface ConversationRealtimeDependencies {
     threadId: string,
   ) => Promise<RealtimeSubscriptionPayload>;
   onChange: (event: ConversationChangedEventPayload) => void;
+  onTyping?: (event: TypingEvent) => void;
   onCallEvent?: (event: CallEventEnvelope) => void;
   onRecoveryGap: (threadId?: string) => void;
   onStatus: (status: ConversationRealtimeStatus) => void;
@@ -215,6 +235,11 @@ export class ConversationRealtimeCoordinator {
   #publication(context: PublicationContext): void {
     const parsed = ConversationChangedHint.safeParse(context.data);
     if (!parsed.success) {
+      const typing = TypingHint.safeParse(context.data);
+      if (typing.success) {
+        this.#dependencies.onTyping?.(typing.data as TypingEvent);
+        return;
+      }
       const callEvent = CallEventHint.safeParse(context.data);
       if (!callEvent.success || this.#seenEventIds.has(callEvent.data.eventId))
         return;

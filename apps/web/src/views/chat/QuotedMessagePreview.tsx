@@ -34,6 +34,7 @@ export function QuotedMessagePreview({
           attachment: t("chat.replyAttachment"),
           encrypted: t("chat.encryptedMessage"),
           unavailable: t("chat.replyUnavailable"),
+          deleted: t("chat.messageDeleted"),
         })}
       </span>
     </button>

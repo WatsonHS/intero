@@ -9,8 +9,11 @@ import {
   CreateKanbanCardRequest,
   CreateSpecRequest,
   CreateWorkstreamRequest,
+  EditThreadMessageRequest,
   KanbanBoardResponse,
   KanbanCardResponse,
+  PresenceHeartbeatRequest,
+  PresenceResponse,
   SpecListResponse,
   TeamPulseResponse,
   ThreadResponse,
@@ -36,6 +39,9 @@ const schemas = {
   ThreadResponse,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
+  EditThreadMessageRequest,
+  PresenceHeartbeatRequest,
+  PresenceResponse,
 };
 
 const document = {
@@ -200,6 +206,120 @@ const document = {
           },
           "404": {
             description: "Thread not found or inaccessible",
+          },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/messages/{messageId}": {
+      patch: {
+        operationId: "editThreadMessage",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+          {
+            in: "path",
+            name: "messageId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/EditThreadMessageRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Edited message" },
+          "403": { description: "Caller is not the sender" },
+          "409": { description: "Message cannot be edited" },
+        },
+      },
+      delete: {
+        operationId: "deleteThreadMessage",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+          {
+            in: "path",
+            name: "messageId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "204": { description: "Message deleted" },
+          "403": { description: "Caller is not the sender" },
+          "409": { description: "Message cannot be deleted" },
+        },
+      },
+    },
+    "/v1/threads/{threadId}/typing": {
+      post: {
+        operationId: "publishTyping",
+        parameters: [
+          {
+            in: "path",
+            name: "threadId",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "204": { description: "Typing hint accepted" },
+        },
+      },
+    },
+    "/v1/presence/heartbeat": {
+      post: {
+        operationId: "presenceHeartbeat",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/PresenceHeartbeatRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Current presence for the caller",
+          },
+        },
+      },
+    },
+    "/v1/presence": {
+      get: {
+        operationId: "listPresence",
+        parameters: [
+          {
+            in: "query",
+            name: "principalIds",
+            required: true,
+            schema: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Presence visible to the caller",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/PresenceResponse" },
+              },
+            },
           },
         },
       },

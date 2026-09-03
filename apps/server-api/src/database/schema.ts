@@ -349,6 +349,8 @@ export const messages = pgTable(
     replyToMessageId: uuid("reply_to_message_id").references(
       (): AnyPgColumn => messages.id,
     ),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [

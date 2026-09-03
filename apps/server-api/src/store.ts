@@ -23,6 +23,7 @@ import {
   type SpecRevision,
   type SpecReviewResponse,
   type ThreadId,
+  type ConversationChangeReason,
   type ThreadMessage,
   type ThreadMessageAttachment,
   type ThreadMessageReaction,
@@ -41,6 +42,7 @@ import {
 } from "@intero/stand-in-core";
 
 import type { PrincipalSummary } from "./platform-store.js";
+import { PilotStoreError } from "./pilot-store.js";
 
 const DEMO_ORGANIZATION_ID =
   "019b5ac0-7600-7000-8000-000000000001" as ActivityEvent["organizationId"];
@@ -794,6 +796,13 @@ export class InMemoryPlatformStore {
     );
     const current = messages[messageIndex];
     if (!current) throw new Error("Message was not found.");
+    if (current.deletedAt) {
+      throw new PilotStoreError(
+        "MESSAGE_DELETED",
+        409,
+        "Deleted messages cannot be changed.",
+      );
+    }
 
     const reactionUpdate = updateMessageReactions(current.reactions ?? [], {
       principalId: input.principalId,
@@ -822,6 +831,110 @@ export class InMemoryPlatformStore {
       input.messageId,
     );
     return updated;
+  }
+
+  editThreadMessage(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+    body: string;
+    mentionedPrincipalIds?: PrincipalId[];
+  }): ThreadMessage {
+    const thread = this.threads.get(input.threadId);
+    const visibleFrom =
+      this.threadVisibility.get(`${input.threadId}:${input.principalId}`) ?? 1;
+    if (!thread?.participantIds.includes(input.principalId)) {
+      throw new Error("Thread was not found.");
+    }
+    const messages = this.messages.get(input.threadId) ?? [];
+    const messageIndex = messages.findIndex(
+      (message) =>
+        message.id === input.messageId && message.sequence >= visibleFrom,
+    );
+    const current = messages[messageIndex];
+    if (!current) throw new Error("Message was not found.");
+    assertMutableThreadMessage({
+      thread,
+      message: current,
+      actorId: input.principalId,
+    });
+    if (!current.serverReadable || current.encryptedBody) {
+      throw new PilotStoreError(
+        "MESSAGE_NOT_MUTABLE",
+        409,
+        "Encrypted messages cannot be edited.",
+      );
+    }
+    const trimmed = input.body.trim();
+    if (!trimmed && !(current.attachments?.length ?? 0)) {
+      throw new Error("Edited messages require a non-empty body.");
+    }
+    const mentionedPrincipalIds = normalizeMentionIds(
+      thread,
+      input.principalId,
+      input.mentionedPrincipalIds,
+    );
+    const editedAt = new Date().toISOString();
+    const updated: ThreadMessage = {
+      ...current,
+      body: trimmed,
+      editedAt,
+      revision: (current.revision ?? 1) + 1,
+    };
+    if (mentionedPrincipalIds.length > 0) {
+      updated.mentionedPrincipalIds = mentionedPrincipalIds;
+    } else {
+      delete updated.mentionedPrincipalIds;
+    }
+    const nextMessages = [...messages];
+    nextMessages[messageIndex] = updated;
+    this.messages.set(input.threadId, nextMessages);
+    this.recordConversationChange(
+      thread,
+      input.principalId,
+      "message_edited",
+      uuidv7(),
+      input.messageId,
+    );
+    return updated;
+  }
+
+  deleteThreadMessage(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+  }): void {
+    const thread = this.threads.get(input.threadId);
+    const visibleFrom =
+      this.threadVisibility.get(`${input.threadId}:${input.principalId}`) ?? 1;
+    if (!thread?.participantIds.includes(input.principalId)) {
+      throw new Error("Thread was not found.");
+    }
+    const messages = this.messages.get(input.threadId) ?? [];
+    const messageIndex = messages.findIndex(
+      (message) =>
+        message.id === input.messageId && message.sequence >= visibleFrom,
+    );
+    const current = messages[messageIndex];
+    if (!current) throw new Error("Message was not found.");
+    assertMutableThreadMessage({
+      thread,
+      message: current,
+      actorId: input.principalId,
+    });
+    const nextMessages = [...messages];
+    nextMessages[messageIndex] = tombstoneThreadMessage(
+      current,
+      new Date().toISOString(),
+    );
+    this.messages.set(input.threadId, nextMessages);
+    this.recordConversationChange(
+      thread,
+      input.principalId,
+      "message_deleted",
+      uuidv7(),
+      input.messageId,
+    );
   }
 
   /** Read markers only move forward; see the Postgres store for why. */
@@ -1265,6 +1378,22 @@ export class InMemoryPlatformStore {
     );
   }
 
+  listVisiblePeerPrincipalIds(
+    viewerId: PrincipalId,
+    candidateIds: readonly PrincipalId[],
+  ): PrincipalId[] {
+    const wanted = new Set(candidateIds);
+    const visible = new Set<PrincipalId>();
+    if (wanted.has(viewerId)) visible.add(viewerId);
+    for (const thread of this.threads.values()) {
+      if (!thread.participantIds.includes(viewerId)) continue;
+      for (const principalId of thread.participantIds) {
+        if (wanted.has(principalId)) visible.add(principalId);
+      }
+    }
+    return candidateIds.filter((principalId) => visible.has(principalId));
+  }
+
   getThreadAccessVersion(
     threadId: ThreadId,
     principalId: PrincipalId,
@@ -1278,14 +1407,7 @@ export class InMemoryPlatformStore {
   private recordConversationChange(
     thread: ConversationThread,
     actorId: PrincipalId,
-    reason:
-      | "thread_created"
-      | "thread_updated"
-      | "message_appended"
-      | "message_updated"
-      | "read_cursor_changed"
-      | "access_changed"
-      | "thread_concluded",
+    reason: ConversationChangeReason,
     eventId: string,
     messageId?: ThreadMessage["id"],
   ): void {
@@ -1613,6 +1735,115 @@ export function updateMessageReactions(
     });
   }
   return { changed: true, reactions };
+}
+
+export function assertMutableThreadMessage(input: {
+  thread: ConversationThread;
+  message: ThreadMessage;
+  actorId: PrincipalId;
+}): void {
+  if (input.thread.concludedAt) {
+    throw new PilotStoreError(
+      "THREAD_CONCLUDED",
+      409,
+      "Concluded threads cannot be edited.",
+    );
+  }
+  if (input.message.deletedAt) {
+    throw new PilotStoreError(
+      "MESSAGE_DELETED",
+      409,
+      "Deleted messages cannot be changed.",
+    );
+  }
+  if (input.message.kind !== "message") {
+    throw new PilotStoreError(
+      "MESSAGE_NOT_MUTABLE",
+      409,
+      "Only ordinary messages can be edited or deleted.",
+    );
+  }
+  if (
+    input.message.streamState === "pending" ||
+    input.message.streamState === "streaming"
+  ) {
+    throw new PilotStoreError(
+      "MESSAGE_NOT_MUTABLE",
+      409,
+      "Only ordinary messages can be edited or deleted.",
+    );
+  }
+  if (input.thread.standInIds.includes(input.message.senderId)) {
+    throw new PilotStoreError(
+      "MESSAGE_NOT_MUTABLE",
+      409,
+      "Stand-in messages cannot be edited or deleted.",
+    );
+  }
+  if (input.message.senderId !== input.actorId) {
+    throw new PilotStoreError(
+      "MESSAGE_FORBIDDEN",
+      403,
+      "Only the sender can edit or delete this message.",
+    );
+  }
+}
+
+export function tombstoneThreadMessage(
+  message: ThreadMessage,
+  deletedAt: string,
+): ThreadMessage {
+  const tombstone: ThreadMessage = {
+    id: message.id,
+    threadId: message.threadId,
+    senderId: message.senderId,
+    sequence: message.sequence,
+    kind: message.kind,
+    body: "",
+    createdAt: message.createdAt,
+    serverReadable: message.serverReadable,
+    deletedAt,
+    revision: (message.revision ?? 1) + 1,
+  };
+  if (message.replyToMessageId) {
+    tombstone.replyToMessageId = message.replyToMessageId;
+  }
+  if (message.streamState) tombstone.streamState = message.streamState;
+  if (message.editedAt) tombstone.editedAt = message.editedAt;
+  if (message.operationId) tombstone.operationId = message.operationId;
+  return tombstone;
+}
+
+export function extractMentionIdsFromBody(
+  body: string,
+  senderId: PrincipalId,
+  principals: readonly { id: PrincipalId; displayName: string }[],
+): PrincipalId[] {
+  const byName = new Map(
+    principals
+      .filter((principal) => principal.displayName.trim().length > 0)
+      .map((principal) => [principal.displayName, principal.id]),
+  );
+  const names = [...byName.keys()].toSorted(
+    (left, right) => right.length - left.length,
+  );
+  if (names.length === 0) return [];
+  const matcher = new RegExp(
+    `@(${names.map(escapeRegularExpression).join("|")})(?=$|[\\s，。！？、,.!?:;；：）)\\]】])`,
+    "gu",
+  );
+  const ids: PrincipalId[] = [];
+  for (const match of body.matchAll(matcher)) {
+    const principalId = byName.get(match[1] ?? "");
+    if (principalId && principalId !== senderId && !ids.includes(principalId)) {
+      ids.push(principalId);
+    }
+  }
+  return ids;
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 export function normalizeMentionIds(

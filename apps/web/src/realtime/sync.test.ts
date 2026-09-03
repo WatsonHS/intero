@@ -147,6 +147,52 @@ describe("conversation cursor repair", () => {
       }>(["threads"])?.items[0]?.messages[0],
     ).toMatchObject({ body: streamed.body, revision: 3 });
   });
+
+  it("patches an edited message in place from the message pointer", async () => {
+    const threadId = uuidv7();
+    const first = message(threadId, 1);
+    queryClient.setQueryData(["threads"], {
+      items: [
+        {
+          thread: {
+            id: threadId,
+            kind: "room",
+            title: "Edit",
+            participantIds: [first.senderId],
+            standInIds: [],
+            accessMode: "agent_readable",
+            priorHistoryGranted: false,
+            sequence: 1,
+            accessVersion: 1,
+            createdAt: first.createdAt,
+          },
+          messages: [first],
+          principals: [],
+          actions: [],
+        },
+      ],
+    });
+    const edited = {
+      ...first,
+      body: "Edited in place",
+      editedAt: "2026-09-03T12:01:00.000Z",
+      revision: 2,
+    };
+    api.getThreadMessage.mockResolvedValue(edited);
+
+    const repaired = await repairConversationChange(queryClient, {
+      ...change(threadId, 1, "message_edited"),
+      messageId: first.id,
+    });
+
+    expect(repaired).toEqual([edited]);
+    expect(api.getThreadMessages).not.toHaveBeenCalled();
+    expect(
+      queryClient.getQueryData<{
+        items: Array<{ messages: ThreadMessage[] }>;
+      }>(["threads"])?.items[0]?.messages[0],
+    ).toMatchObject({ body: "Edited in place", editedAt: edited.editedAt });
+  });
 });
 
 function message(threadId: string, sequence: number): ThreadMessage {

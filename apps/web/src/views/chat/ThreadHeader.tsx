@@ -7,12 +7,13 @@ import {
   RobotIcon,
   UserPlusIcon,
 } from "@phosphor-icons/react";
-import type { PrincipalId } from "@intero/domain";
+import type { PresenceState, PrincipalId } from "@intero/domain";
 
 import type { ThreadPayload } from "../../api.js";
 import { ConversationCall } from "../../calls/ConversationCall.js";
 import { initials } from "../../design/utils.js";
 import { useI18n } from "../../i18n/index.js";
+import { PresenceAvatar } from "./PresenceAvatar.js";
 
 export function ThreadHeader({
   current,
@@ -43,6 +44,7 @@ export function ThreadHeader({
   onCancelConclude,
   onConclusionChange,
   onConclude,
+  presence,
 }: {
   current: ThreadPayload;
   currentSenderId: PrincipalId | undefined;
@@ -76,6 +78,7 @@ export function ThreadHeader({
   onCancelConclude(): void;
   onConclusionChange(value: string): void;
   onConclude(input: { threadId: string; conclusion: string }): void;
+  presence: Map<string, PresenceState>;
 }) {
   const { t } = useI18n();
   return (
@@ -98,6 +101,23 @@ export function ThreadHeader({
                     standIns: current.thread.standInIds.length,
                   })}
           </small>
+          {!currentIsPilot && !currentIsPilotStandIn ? (
+            <span className="mt-1.5 flex items-center">
+              {current.thread.participantIds
+                .filter((id) => !current.thread.standInIds.includes(id))
+                .slice(0, 6)
+                .map((id, index) => (
+                  <PresenceAvatar
+                    key={id}
+                    id={id}
+                    name={principalNames.get(id)}
+                    state={presence.get(id) ?? "offline"}
+                    size="xs"
+                    className={index > 0 ? "-ml-[5px]" : ""}
+                  />
+                ))}
+            </span>
+          ) : null}
         </span>
         {currentSenderId &&
         current.thread.kind !== "stand_in" &&

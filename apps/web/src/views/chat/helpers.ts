@@ -3,6 +3,7 @@ import type {
   PrincipalId,
   ThreadMessage,
 } from "@intero/domain";
+import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
@@ -14,6 +15,22 @@ import type {
 import type { ThreadListCache } from "./constants.js";
 
 export type { ThreadListCache };
+
+export function typingLabelFor(
+  typists: readonly string[],
+  principalNames: Map<string, string>,
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+): string | undefined {
+  const names = typists.map(
+    (principalId) => principalNames.get(principalId) ?? principalId.slice(0, 8),
+  );
+  if (names.length === 0) return undefined;
+  if (names.length === 1) return t("chat.typingOne", { name: names[0]! });
+  if (names.length === 2) {
+    return t("chat.typingTwo", { a: names[0]!, b: names[1]! });
+  }
+  return t("chat.typingMany", { names: names.join("、") });
+}
 
 export function markCachedThreadRead(
   cached: ThreadListCache | undefined,

@@ -28,6 +28,7 @@ import type {
   SpecReviewPolicy,
   SpecRevision,
   SpecReviewResponse,
+  PresenceSnapshot,
   ThreadMessage,
   Sprint,
   WorkCodeReference,
@@ -742,6 +743,57 @@ export async function setThreadMessageReaction(input: {
   );
 }
 
+export async function editThreadMessage(input: {
+  threadId: string;
+  messageId: string;
+  body: string;
+}): Promise<ThreadMessage> {
+  return patchJson(
+    `/v1/threads/${encodeURIComponent(input.threadId)}/messages/${encodeURIComponent(
+      input.messageId,
+    )}`,
+    { body: input.body },
+  );
+}
+
+export async function deleteThreadMessage(input: {
+  threadId: string;
+  messageId: string;
+}): Promise<void> {
+  return deleteJson(
+    `/v1/threads/${encodeURIComponent(input.threadId)}/messages/${encodeURIComponent(
+      input.messageId,
+    )}`,
+  );
+}
+
+export async function publishThreadTyping(threadId: string): Promise<void> {
+  return postNoContent(
+    `/v1/threads/${encodeURIComponent(threadId)}/typing`,
+    {},
+  );
+}
+
+export async function sendPresenceHeartbeat(
+  input: {
+    active?: boolean;
+  } = {},
+): Promise<PresenceSnapshot> {
+  return postJson("/v1/presence/heartbeat", input);
+}
+
+export async function getPresence(
+  principalIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<{ items: PresenceSnapshot[] }> {
+  if (principalIds.length === 0) return { items: [] };
+  const query = new URLSearchParams();
+  for (const principalId of principalIds) {
+    query.append("principalIds", principalId);
+  }
+  return getJson(`/v1/presence?${query.toString()}`, signal);
+}
+
 export async function createAttachmentUpload(input: {
   id: string;
   threadId: string;
@@ -1097,6 +1149,19 @@ async function deleteJson(path: string): Promise<void> {
     method: "DELETE",
     credentials: "include",
     headers: developmentIdentityHeaders(),
+  });
+  await ensureResponseOk(response);
+}
+
+async function postNoContent(path: string, body: unknown): Promise<void> {
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      ...developmentIdentityHeaders(),
+    },
+    body: JSON.stringify(body),
   });
   await ensureResponseOk(response);
 }

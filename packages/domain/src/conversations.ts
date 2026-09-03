@@ -207,6 +207,13 @@ export const ThreadMessage = z
     revision: z.number().int().positive().optional(),
     /** Aggregated participant reactions; omitted when the message has none. */
     reactions: ThreadMessageReactions.optional(),
+    /** Set when the sender last edited a `kind: "message"` body. */
+    editedAt: z.iso.datetime().optional(),
+    /**
+     * Tombstone timestamp. The row and sequence stay; body, attachments,
+     * reactions, and encryptedBody are cleared.
+     */
+    deletedAt: z.iso.datetime().optional(),
   })
   .strict();
 export type ThreadMessage = z.infer<typeof ThreadMessage>;
@@ -216,6 +223,8 @@ export const ConversationChangeReason = z.enum([
   "thread_updated",
   "message_appended",
   "message_updated",
+  "message_edited",
+  "message_deleted",
   "read_cursor_changed",
   "access_changed",
   "thread_concluded",
@@ -241,12 +250,40 @@ export const ConversationChangedEvent = z
   })
   .strict()
   .superRefine((event, context) => {
-    if (event.reason === "message_updated" && !event.messageId) {
+    if (
+      (event.reason === "message_updated" ||
+        event.reason === "message_edited" ||
+        event.reason === "message_deleted") &&
+      !event.messageId
+    ) {
       context.addIssue({
         code: "custom",
         path: ["messageId"],
-        message: "message_updated events require a messageId pointer.",
+        message: `${event.reason} events require a messageId pointer.`,
       });
     }
   });
 export type ConversationChangedEvent = z.infer<typeof ConversationChangedEvent>;
+
+/** Ephemeral typing hint. Never persisted and never carries message content. */
+export const TypingEvent = z
+  .object({
+    type: z.literal("typing"),
+    threadId: ThreadId,
+    principalId: PrincipalId,
+    at: z.iso.datetime(),
+  })
+  .strict();
+export type TypingEvent = z.infer<typeof TypingEvent>;
+
+export const PresenceState = z.enum(["online", "away", "offline"]);
+export type PresenceState = z.infer<typeof PresenceState>;
+
+export const PresenceSnapshot = z
+  .object({
+    principalId: PrincipalId,
+    state: PresenceState,
+    lastSeenAt: z.iso.datetime().optional(),
+  })
+  .strict();
+export type PresenceSnapshot = z.infer<typeof PresenceSnapshot>;

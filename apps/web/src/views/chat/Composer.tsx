@@ -61,6 +61,7 @@ export function Composer({
   onCancelReply,
   onRemoveImage,
   onDraftChange,
+  onTyping,
   onSetMentionCursor,
   onResetMentionIndex,
   onSetMentionPickerOpen,
@@ -226,6 +227,7 @@ export function Composer({
                     attachment: t("chat.replyAttachment"),
                     encrypted: t("chat.encryptedMessage"),
                     unavailable: t("chat.replyUnavailable"),
+                    deleted: t("chat.messageDeleted"),
                   })}
                 </span>
               </div>
@@ -319,6 +321,7 @@ export function Composer({
                       event.currentTarget.selectionStart ??
                       event.currentTarget.value.length;
                     onDraftChange(event.currentTarget.value);
+                    if (event.currentTarget.value.trim()) onTyping?.();
                     onSetMentionCursor(cursor);
                     onResetMentionIndex();
                     onCloseEmoji();

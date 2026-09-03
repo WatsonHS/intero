@@ -5,10 +5,14 @@ import {
   RobotIcon,
   ArrowBendDownRightIcon,
 } from "@phosphor-icons/react";
-import type { ConversationThread, PrincipalId } from "@intero/domain";
+import type {
+  ConversationThread,
+  PresenceState,
+  PrincipalId,
+} from "@intero/domain";
 
 import type { ThreadPayload } from "../../api.js";
-import { Avatar, cn } from "../../design/primitives.js";
+import { cn } from "../../design/primitives.js";
 import { initials, tintFor } from "../../design/utils.js";
 import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
@@ -23,6 +27,7 @@ import {
   resolveStandInAvatarIdentity,
 } from "./helpers.js";
 import { RealtimeDeliveryStatus } from "./RealtimeDeliveryStatus.js";
+import { PresenceAvatar, PresenceBadge } from "./PresenceAvatar.js";
 import { StandInAvatar } from "./StandInAvatar.js";
 
 export function ThreadSidebar({
@@ -55,6 +60,7 @@ export function ThreadSidebar({
   onSelectThread,
   onSelectStandIn,
   onCreateStandIn,
+  presence,
 }: {
   realtimeStatus: ConversationRealtimeStatus;
   search: string;
@@ -91,6 +97,7 @@ export function ThreadSidebar({
   onSelectThread(threadId: string): void;
   onSelectStandIn(ownerId: PrincipalId): void;
   onCreateStandIn(): void;
+  presence: Map<string, PresenceState>;
 }) {
   const { formatRelative, t } = useI18n();
   return (
@@ -192,6 +199,7 @@ export function ThreadSidebar({
                         standInOwnerIds={standInOwnerIds}
                         teamNames={teamNames}
                         threadTitles={threadTitles}
+                        presence={presence}
                         formatRelative={formatRelative}
                         t={t}
                         onSelect={() => {
@@ -249,6 +257,7 @@ function SidebarThreadItem({
   standInOwnerIds,
   teamNames,
   threadTitles,
+  presence,
   formatRelative,
   t,
   onSelect,
@@ -259,6 +268,7 @@ function SidebarThreadItem({
   standInOwnerIds: Map<PrincipalId, PrincipalId>;
   teamNames: Map<string, string>;
   threadTitles: Map<string, string>;
+  presence: Map<string, PresenceState>;
   formatRelative: (value: string) => string;
   t: (key: TranslationKey, values?: Record<string, string | number>) => string;
   onSelect: () => void;
@@ -305,6 +315,7 @@ function SidebarThreadItem({
         thread={item.thread}
         principalNames={principalNames}
         standInOwnerIds={standInOwnerIds}
+        presence={presence}
       />
       <span className="grid min-w-0 gap-[3px]">
         <span className="flex min-w-0 items-center gap-1.5">
@@ -349,12 +360,13 @@ function SidebarThreadItem({
         {humanParticipants.length > 1 ? (
           <span className="mt-0.5 flex items-center">
             {humanParticipants.slice(0, 4).map((id, index) => (
-              <Avatar
+              <PresenceAvatar
                 key={id}
                 id={id}
                 name={principalNames.get(id)}
+                state={presence.get(id) ?? "offline"}
                 size="xs"
-                className={index > 0 ? "-ml-[5px] ring-1 ring-panel" : ""}
+                className={index > 0 ? "-ml-[5px]" : ""}
               />
             ))}
             {humanParticipants.length > 4 ? (
@@ -430,10 +442,12 @@ function ThreadGlyph({
   thread,
   principalNames,
   standInOwnerIds,
+  presence,
 }: {
   thread: ConversationThread;
   principalNames: Map<string, string>;
   standInOwnerIds: Map<PrincipalId, PrincipalId>;
+  presence: Map<string, PresenceState>;
 }) {
   if (thread.kind === "stand_in") {
     const standInId = thread.standInIds[0];
@@ -470,7 +484,7 @@ function ThreadGlyph({
     (id) => !thread.standInIds.includes(id),
   );
   const name = humanId ? principalNames.get(humanId) : undefined;
-  return (
+  const face = (
     <span
       className={
         humanId
@@ -481,5 +495,12 @@ function ThreadGlyph({
     >
       {initials(name)}
     </span>
+  );
+  return humanId ? (
+    <PresenceBadge state={presence.get(humanId) ?? "offline"}>
+      {face}
+    </PresenceBadge>
+  ) : (
+    face
   );
 }

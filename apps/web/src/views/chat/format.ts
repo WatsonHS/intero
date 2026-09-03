@@ -42,9 +42,11 @@ export function replyMessageSummary(
     attachment: string;
     encrypted: string;
     unavailable: string;
+    deleted: string;
   },
 ): string {
   if (!message) return labels.unavailable;
+  if (message.deletedAt) return labels.deleted;
   if (!message.serverReadable) return labels.encrypted;
   const body = message.body.replaceAll(/\s+/gu, " ").trim();
   if (body) return body;

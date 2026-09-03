@@ -164,6 +164,120 @@
         }
       }
     },
+    "/v1/threads/{threadId}/messages/{messageId}": {
+      "patch": {
+        "operationId": "editThreadMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "threadId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "in": "path",
+            "name": "messageId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditThreadMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Edited message" },
+          "403": { "description": "Caller is not the sender" },
+          "409": { "description": "Message cannot be edited" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteThreadMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "threadId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "in": "path",
+            "name": "messageId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Message deleted" },
+          "403": { "description": "Caller is not the sender" },
+          "409": { "description": "Message cannot be deleted" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/typing": {
+      "post": {
+        "operationId": "publishTyping",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "threadId",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": { "204": { "description": "Typing hint accepted" } }
+      }
+    },
+    "/v1/presence/heartbeat": {
+      "post": {
+        "operationId": "presenceHeartbeat",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresenceHeartbeatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Current presence for the caller" }
+        }
+      }
+    },
+    "/v1/presence": {
+      "get": {
+        "operationId": "listPresence",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "principalIds",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": { "type": "string", "format": "uuid" }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Presence visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PresenceResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/specs": {
       "get": {
         "operationId": "listSpecs",
@@ -1968,6 +2082,16 @@
                     "required": ["emoji", "principalIds"],
                     "additionalProperties": false
                   }
+                },
+                "editedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "deletedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
                 }
               },
               "required": [
@@ -2232,6 +2356,48 @@
           }
         },
         "required": ["addParticipantIds", "removeParticipantIds"],
+        "additionalProperties": false
+      },
+      "EditThreadMessageRequest": {
+        "type": "object",
+        "properties": { "body": { "type": "string", "maxLength": 16000 } },
+        "required": ["body"],
+        "additionalProperties": false
+      },
+      "PresenceHeartbeatRequest": {
+        "type": "object",
+        "properties": { "active": { "type": "boolean" } },
+        "additionalProperties": false
+      },
+      "PresenceResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "principalId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": ["online", "away", "offline"]
+                },
+                "lastSeenAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": ["principalId", "state"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["items"],
         "additionalProperties": false
       }
     }

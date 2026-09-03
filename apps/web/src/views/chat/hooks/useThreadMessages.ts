@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import {
+  deleteThreadMessage,
+  editThreadMessage,
   getThreadMessages,
   markThreadRead,
   setThreadMessageReaction,
@@ -38,6 +40,12 @@ export function useThreadMessages({
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState<
     string | undefined
   >();
+  const [editingMessageId, setEditingMessageId] = useState<
+    string | undefined
+  >();
+  const [deletingMessage, setDeletingMessage] = useState<
+    ThreadMessage | undefined
+  >();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [historyExhausted, setHistoryExhausted] = useState<Set<string>>(
     () => new Set(),
@@ -45,6 +53,8 @@ export function useThreadMessages({
 
   useEffect(() => {
     setReactionPickerMessageId(undefined);
+    setEditingMessageId(undefined);
+    setDeletingMessage(undefined);
   }, [current?.thread.id]);
 
   const markRead = useMutation({
@@ -159,6 +169,59 @@ export function useThreadMessages({
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
+  const edit = useMutation({
+    mutationFn: editThreadMessage,
+    onSuccess: (updated) => {
+      queryClient.setQueryData<ThreadListCache>(["threads"], (cached) =>
+        replaceCachedThreadMessage(cached, updated),
+      );
+      setEditingMessageId(undefined);
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.editFailed"),
+        { title: t("chat.editFailed") },
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: deleteThreadMessage,
+    onSuccess: (_result, input) => {
+      queryClient.setQueryData<ThreadListCache>(["threads"], (cached) => {
+        if (!cached) return cached;
+        const current = cached.items
+          .find((item) => item.thread.id === input.threadId)
+          ?.messages.find((message) => message.id === input.messageId);
+        if (!current) return cached;
+        const {
+          attachments: _attachments,
+          reactions: _reactions,
+          encryptedBody: _encryptedBody,
+          mentionedPrincipalIds: _mentions,
+          ...rest
+        } = current;
+        return replaceCachedThreadMessage(cached, {
+          ...rest,
+          body: "",
+          deletedAt: new Date().toISOString(),
+          revision: (current.revision ?? 1) + 1,
+        });
+      });
+      setDeletingMessage(undefined);
+    },
+    onError: (error) => {
+      notifications.error(
+        error instanceof Error ? error.message : t("chat.deleteFailed"),
+        { title: t("chat.deleteFailed") },
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
   // Opening a thread is what marks it read; nothing else moves the marker.
   const currentUnread = current?.unreadCount ?? 0;
   const currentHeadSequence = current?.thread.sequence ?? 0;
@@ -245,6 +308,12 @@ export function useThreadMessages({
     failedReadKey,
     reactionPickerMessageId,
     setReactionPickerMessageId,
+    editingMessageId,
+    setEditingMessageId,
+    deletingMessage,
+    setDeletingMessage,
+    edit,
+    remove,
     expanded,
     historyExhausted,
     markRead,

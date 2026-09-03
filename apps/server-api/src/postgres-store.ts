@@ -5,6 +5,7 @@ import {
   type CanonicalWorkEvent,
   type CapabilityGrant,
   type Claim,
+  type ConversationChangeReason,
   type ConversationThread,
   type CoordinationResult,
   type DecisionRecord,
@@ -42,7 +43,9 @@ import {
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 import type { PlatformStore, PrincipalSummary } from "./platform-store.js";
+import { PilotStoreError } from "./pilot-store.js";
 import {
+  assertMutableThreadMessage,
   buildThreadMessage,
   claimFromEvent,
   type KanbanCardUpdate,
@@ -53,6 +56,7 @@ import {
   type StandInQuestionInput,
   type ThreadMessagePage,
   type ThreadMessagePageQuery,
+  tombstoneThreadMessage,
   updateMessageReactions,
 } from "./store.js";
 
@@ -1171,6 +1175,13 @@ export class PostgresPlatformStore implements PlatformStore {
         ? messageFromRow(result.rows[0])
         : undefined;
       if (!current) throw new Error("Message was not found.");
+      if (current.deletedAt) {
+        throw new PilotStoreError(
+          "MESSAGE_DELETED",
+          409,
+          "Deleted messages cannot be changed.",
+        );
+      }
 
       const reactionUpdate = updateMessageReactions(
         current.reactions ?? [],
@@ -1203,6 +1214,93 @@ export class PostgresPlatformStore implements PlatformStore {
         messageId: input.messageId,
       });
       return updated;
+    });
+  }
+
+  async editThreadMessage(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+    body: string;
+    mentionedPrincipalIds?: PrincipalId[];
+  }): Promise<ThreadMessage> {
+    return this.write(async (client) => {
+      const loaded = await this.loadMutableMessage(client, input);
+      if (!loaded.current.serverReadable || loaded.current.encryptedBody) {
+        throw new PilotStoreError(
+          "MESSAGE_NOT_MUTABLE",
+          409,
+          "Encrypted messages cannot be edited.",
+        );
+      }
+      const trimmed = input.body.trim();
+      if (!trimmed && !(loaded.current.attachments?.length ?? 0)) {
+        throw new Error("Edited messages require a non-empty body.");
+      }
+      const mentionedPrincipalIds = normalizeMentionIds(
+        loaded.thread,
+        input.principalId,
+        input.mentionedPrincipalIds,
+      );
+      const editedAt = new Date().toISOString();
+      const updatedRow = await client.query(
+        `UPDATE messages
+         SET body = $3,
+             mentioned_principal_ids = $4,
+             edited_at = $5,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2
+         RETURNING *`,
+        [
+          input.threadId,
+          input.messageId,
+          trimmed,
+          mentionedPrincipalIds,
+          editedAt,
+        ],
+      );
+      const updated = messageFromRow(updatedRow.rows[0]!);
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: loaded.thread,
+        actorId: input.principalId,
+        reason: "message_edited",
+        messageId: input.messageId,
+      });
+      return updated;
+    });
+  }
+
+  async deleteThreadMessage(input: {
+    threadId: ThreadId;
+    messageId: ThreadMessage["id"];
+    principalId: PrincipalId;
+  }): Promise<void> {
+    await this.write(async (client) => {
+      const loaded = await this.loadMutableMessage(client, input);
+      const deletedAt = new Date().toISOString();
+      const tombstone = tombstoneThreadMessage(loaded.current, deletedAt);
+      await client.query(
+        `UPDATE messages
+         SET body = '',
+             encrypted_body = NULL,
+             attachments = '[]'::jsonb,
+             reactions = '[]'::jsonb,
+             mentioned_principal_ids = '{}'::uuid[],
+             deleted_at = $3,
+             revision = $4,
+             updated_at = now()
+         WHERE thread_id = $1 AND id = $2`,
+        [input.threadId, input.messageId, deletedAt, tombstone.revision ?? 1],
+      );
+      await this.recordConversationChange(client, {
+        eventId: uuidv7() as OperationId,
+        thread: loaded.thread,
+        actorId: input.principalId,
+        reason: "message_deleted",
+        messageId: input.messageId,
+      });
     });
   }
 
@@ -2244,6 +2342,29 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async listVisiblePeerPrincipalIds(
+    viewerId: PrincipalId,
+    candidateIds: readonly PrincipalId[],
+  ): Promise<PrincipalId[]> {
+    if (candidateIds.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query<{ principal_id: PrincipalId }>(
+        `SELECT DISTINCT peer.principal_id
+         FROM thread_participants viewer
+         JOIN thread_participants peer
+           ON peer.thread_id = viewer.thread_id
+          AND peer.revoked_at IS NULL
+         WHERE viewer.principal_id = $1
+           AND viewer.revoked_at IS NULL
+           AND peer.principal_id = ANY($2::uuid[])`,
+        [viewerId, [...new Set(candidateIds)]],
+      );
+      const visible = new Set(result.rows.map((row) => row.principal_id));
+      if (candidateIds.includes(viewerId)) visible.add(viewerId);
+      return candidateIds.filter((principalId) => visible.has(principalId));
+    });
+  }
+
   async getThreadAccessVersion(
     threadId: ThreadId,
     principalId: PrincipalId,
@@ -2502,6 +2623,47 @@ export class PostgresPlatformStore implements PlatformStore {
       workstream: next,
       ...(projection ? { projection } : {}),
     });
+  }
+
+  private async loadMutableMessage(
+    client: PoolClient,
+    input: {
+      threadId: ThreadId;
+      messageId: ThreadMessage["id"];
+      principalId: PrincipalId;
+    },
+  ): Promise<{
+    thread: ConversationThread;
+    current: ThreadMessage;
+  }> {
+    const result = await client.query(
+      `SELECT m.*
+       FROM messages m
+       JOIN thread_participants viewer
+         ON viewer.thread_id = m.thread_id
+        AND viewer.principal_id = $2
+        AND viewer.revoked_at IS NULL
+       WHERE m.thread_id = $1
+         AND m.id = $3
+         AND m.sequence >= viewer.visible_from_sequence
+       FOR UPDATE OF m`,
+      [input.threadId, input.principalId, input.messageId],
+    );
+    const current = result.rows[0] ? messageFromRow(result.rows[0]) : undefined;
+    if (!current) throw new Error("Message was not found.");
+    const thread = await this.getThreadInTransaction(
+      client,
+      input.threadId,
+      undefined,
+      0,
+    );
+    if (!thread) throw new Error("Thread was not found.");
+    assertMutableThreadMessage({
+      thread: thread.thread,
+      message: current,
+      actorId: input.principalId,
+    });
+    return { thread: thread.thread, current };
   }
 
   private async getThreadInTransaction(
@@ -2815,14 +2977,7 @@ export class PostgresPlatformStore implements PlatformStore {
       eventId: OperationId;
       thread: ConversationThread;
       actorId: PrincipalId;
-      reason:
-        | "thread_created"
-        | "thread_updated"
-        | "message_appended"
-        | "message_updated"
-        | "read_cursor_changed"
-        | "access_changed"
-        | "thread_concluded";
+      reason: ConversationChangeReason;
       channels?: string[];
       messageId?: ThreadMessage["id"];
     },
@@ -3079,6 +3234,8 @@ function messageFromRow(row: QueryResultRow): ThreadMessage {
     ...((row.reactions as ThreadMessage["reactions"] | undefined)?.length
       ? { reactions: row.reactions as NonNullable<ThreadMessage["reactions"]> }
       : {}),
+    ...(row.edited_at ? { editedAt: asIso(row.edited_at) } : {}),
+    ...(row.deleted_at ? { deletedAt: asIso(row.deleted_at) } : {}),
   };
 }
 

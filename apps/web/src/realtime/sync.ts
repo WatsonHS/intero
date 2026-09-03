@@ -34,7 +34,12 @@ export async function repairConversationChange(
     await queryClient.invalidateQueries({ queryKey: ["threads"] });
     return [];
   }
-  if (event.reason === "message_updated" && event.messageId) {
+  if (
+    (event.reason === "message_updated" ||
+      event.reason === "message_edited" ||
+      event.reason === "message_deleted") &&
+    event.messageId
+  ) {
     const message = await getThreadMessage(event.threadId, event.messageId);
     mergeThreadMessages(
       queryClient,

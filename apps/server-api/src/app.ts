@@ -15,8 +15,11 @@ import {
   CreateThreadRequest,
   CreateWorkstreamRequest,
   CursorQuery,
+  EditThreadMessageRequest,
   IngestEventRequest,
   MarkThreadReadRequest,
+  PresenceHeartbeatRequest,
+  PresenceResponse,
   SendThreadMessageRequest,
   SetMessageReactionRequest,
   ThreadMessagesQuery,
@@ -42,6 +45,7 @@ import {
   type ProjectId,
   type SpecId,
   type ThreadId,
+  TypingEvent,
 } from "@intero/domain";
 import cors from "@fastify/cors";
 import Fastify, {
@@ -98,7 +102,12 @@ import {
 } from "./pilot-ports.js";
 import { registerPilotRoutes } from "./pilot-routes.js";
 import { registerProjectWorkRoutes } from "./project-work-routes.js";
-import { registerRealtimeRoutes } from "./realtime-routes.js";
+import { InMemoryPresenceDirectory } from "./presence.js";
+import {
+  InMemoryRealtimeRateLimiter,
+  registerRealtimeRoutes,
+  threadChannel,
+} from "./realtime-routes.js";
 import type { PostgresProjectWorkStore } from "./project-work-store.js";
 import {
   PilotCheckpointService,
@@ -115,7 +124,7 @@ import {
   type ReadinessDependency,
 } from "./ports.js";
 import { AesGcmProviderSecretCipher } from "./provider-secrets.js";
-import { InMemoryPlatformStore } from "./store.js";
+import { extractMentionIdsFromBody, InMemoryPlatformStore } from "./store.js";
 import type { KanbanCardUpdate } from "./store.js";
 import { VercelAiModelGateway } from "./vercel-model-gateway.js";
 
@@ -199,6 +208,7 @@ export interface BuildAppOptions {
   };
   callTokenIssuer?: CallTokenIssuer;
   callEventPublisher?: CallEventPublisher;
+  presenceDirectory?: InMemoryPresenceDirectory;
 }
 
 export async function buildApp(
@@ -235,6 +245,9 @@ export async function buildApp(
   );
   const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
+  const presenceDirectory =
+    options.presenceDirectory ?? new InMemoryPresenceDirectory();
+  const typingLimiter = new InMemoryRealtimeRateLimiter();
   const organization = options.organization ?? {
     id: "019b5ac0-7600-7000-8000-000000000001",
     name: "Intero Development",
@@ -1166,6 +1179,126 @@ export async function buildApp(
     },
   );
 
+  app.patch<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const input = parse(EditThreadMessageRequest, request.body);
+      const threadId = request.params.threadId as ThreadId;
+      const messageId = request.params.messageId as MessageId;
+      const visible = await store.getThread(threadId, principal!.id);
+      if (!visible) return notFound(reply, "Thread");
+      const current = await store.getThreadMessage(
+        threadId,
+        principal!.id,
+        messageId,
+      );
+      if (!current) return notFound(reply, "Message");
+      const principals = await store.listPrincipals(
+        visible.thread.participantIds,
+      );
+      return store.editThreadMessage({
+        threadId,
+        messageId,
+        principalId: principal!.id,
+        body: input.body,
+        mentionedPrincipalIds: extractMentionIdsFromBody(
+          input.body,
+          principal!.id,
+          principals,
+        ),
+      });
+    },
+  );
+
+  app.delete<{ Params: { threadId: string; messageId: string } }>(
+    "/v1/threads/:threadId/messages/:messageId",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const messageId = request.params.messageId as MessageId;
+      const current = await store.getThreadMessage(
+        threadId,
+        principal!.id,
+        messageId,
+      );
+      if (!current) return notFound(reply, "Message");
+      await store.deleteThreadMessage({
+        threadId,
+        messageId,
+        principalId: principal!.id,
+      });
+      return reply.status(204).send();
+    },
+  );
+
+  app.post<{ Params: { threadId: string } }>(
+    "/v1/threads/:threadId/typing",
+    async (request, reply) => {
+      const principal = await requestAuth.resolve(request);
+      const threadId = request.params.threadId as ThreadId;
+      const visible = await store.hasThreadAccess(threadId, principal!.id);
+      if (!visible) return notFound(reply, "Thread");
+      const retryAfter = await typingLimiter.consume(
+        `typing:${threadId}:${principal!.id}`,
+        1,
+        3_000,
+      );
+      if (retryAfter === undefined && options.callEventPublisher) {
+        const event = TypingEvent.parse({
+          type: "typing",
+          threadId,
+          principalId: principal!.id,
+          at: new Date().toISOString(),
+        });
+        await options.callEventPublisher.publish(
+          threadChannel(threadId),
+          event,
+        );
+      }
+      return reply.status(204).send();
+    },
+  );
+
+  app.post("/v1/presence/heartbeat", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    const input = parse(PresenceHeartbeatRequest, request.body ?? {});
+    return presenceDirectory.heartbeat(principal!.id, {
+      ...(input.active === undefined ? {} : { active: input.active }),
+    });
+  });
+
+  app.get("/v1/presence", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    const queried = parsePresencePrincipalIds(request.query);
+    const threadPeers = await store.listVisiblePeerPrincipalIds(
+      principal!.id,
+      queried,
+    );
+    const teamPeerIds = new Set<PrincipalId>(threadPeers);
+    const teams = await pilotStore.listTeams(principal!.id);
+    await Promise.all(
+      teams.map(async (team) => {
+        const members = await pilotStore.listTeamMembers(
+          team.id,
+          principal!.id,
+        );
+        for (const member of members) {
+          if (queried.includes(member.principalId)) {
+            teamPeerIds.add(member.principalId);
+          }
+        }
+      }),
+    );
+    const visible = queried.filter(
+      (principalId) =>
+        principalId === principal!.id || teamPeerIds.has(principalId),
+    );
+    return PresenceResponse.parse({
+      items: presenceDirectory.list(visible),
+    });
+  });
+
   app.post<{ Params: { threadId: string } }>(
     "/v1/threads/:threadId/conclusion",
     async (request, reply) => {
@@ -1661,6 +1794,19 @@ async function presentSpec(
 
 function parse<T>(schema: ZodType<T>, input: unknown): T {
   return schema.parse(input);
+}
+
+function parsePresencePrincipalIds(query: unknown): PrincipalId[] {
+  const raw =
+    query && typeof query === "object"
+      ? (query as { principalIds?: unknown }).principalIds
+      : undefined;
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(",").filter(Boolean)
+      : [];
+  return z.array(z.uuid()).max(50).parse(values) as PrincipalId[];
 }
 
 function assertCurrentPrincipal(

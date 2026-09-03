@@ -6,7 +6,10 @@ import {
 } from "@phosphor-icons/react";
 import { useState } from "react";
 
+import type { PresenceState } from "@intero/domain";
+
 import { Avatar, Modal, SectionLabel, cn } from "../../design/primitives.js";
+import { PresenceBadge } from "./PresenceAvatar.js";
 import { useI18n } from "../../i18n/index.js";
 import type { ConversationCandidate } from "./NewConversationModal.js";
 
@@ -15,6 +18,7 @@ export function GroupChatManagementModal({
   participantIds,
   standInIds,
   principalNames,
+  presence,
   candidates,
   protectedParticipantId,
   busy,
@@ -26,6 +30,7 @@ export function GroupChatManagementModal({
   participantIds: string[];
   standInIds: string[];
   principalNames: Map<string, string>;
+  presence: Map<string, PresenceState>;
   candidates: ConversationCandidate[];
   protectedParticipantId?: string | undefined;
   busy: boolean;
@@ -138,7 +143,9 @@ export function GroupChatManagementModal({
                       <RobotIcon size={11} />
                     </span>
                   ) : (
-                    <Avatar id={id} name={name} size="sm" />
+                    <PresenceBadge state={presence.get(id) ?? "offline"}>
+                      <Avatar id={id} name={name} size="sm" />
+                    </PresenceBadge>
                   )}
                   {name}
                   {!isStandIn && !isProtected ? (

@@ -82,6 +82,7 @@ describe("replyMessageSummary", () => {
     attachment: "attachment",
     encrypted: "encrypted",
     unavailable: "unavailable",
+    deleted: "deleted",
   };
 
   it("returns unavailable when the quoted message is missing", () => {
@@ -123,5 +124,18 @@ describe("replyMessageSummary", () => {
         labels,
       ),
     ).toBe("attachment");
+  });
+
+  it("uses the deleted label for tombstoned messages", () => {
+    expect(
+      replyMessageSummary(
+        {
+          serverReadable: true,
+          body: "",
+          deletedAt: "2026-09-03T12:00:00.000Z",
+        } as Parameters<typeof replyMessageSummary>[0],
+        labels,
+      ),
+    ).toBe("deleted");
   });
 });

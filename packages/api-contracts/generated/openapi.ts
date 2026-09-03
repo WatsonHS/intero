@@ -127,6 +127,70 @@ export interface paths {
     patch: operations["updateThread"];
     trace?: never;
   };
+  "/v1/threads/{threadId}/messages/{messageId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["deleteThreadMessage"];
+    options?: never;
+    head?: never;
+    patch: operations["editThreadMessage"];
+    trace?: never;
+  };
+  "/v1/threads/{threadId}/typing": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["publishTyping"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/presence/heartbeat": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["presenceHeartbeat"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/presence": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listPresence"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/specs": {
     parameters: {
       query?: never;
@@ -708,6 +772,10 @@ export interface components {
           emoji: string;
           principalIds: string[];
         }[];
+        /** Format: date-time */
+        editedAt?: string;
+        /** Format: date-time */
+        deletedAt?: string;
       }[];
       /** @default 0 */
       unreadCount: number;
@@ -794,6 +862,22 @@ export interface components {
       addParticipantIds: string[];
       /** @default [] */
       removeParticipantIds: string[];
+    };
+    EditThreadMessageRequest: {
+      body: string;
+    };
+    PresenceHeartbeatRequest: {
+      active?: boolean;
+    };
+    PresenceResponse: {
+      items: {
+        /** Format: uuid */
+        principalId: string;
+        /** @enum {string} */
+        state: "online" | "away" | "offline";
+        /** Format: date-time */
+        lastSeenAt?: string;
+      }[];
     };
   };
   responses: never;
@@ -982,6 +1066,144 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+    };
+  };
+  deleteThreadMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Message deleted */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Caller is not the sender */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Message cannot be deleted */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  editThreadMessage: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+        messageId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EditThreadMessageRequest"];
+      };
+    };
+    responses: {
+      /** @description Edited message */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Caller is not the sender */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Message cannot be edited */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  publishTyping: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        threadId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Typing hint accepted */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  presenceHeartbeat: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["PresenceHeartbeatRequest"];
+      };
+    };
+    responses: {
+      /** @description Current presence for the caller */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  listPresence: {
+    parameters: {
+      query: {
+        principalIds: string[];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Presence visible to the caller */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PresenceResponse"];
+        };
       };
     };
   };

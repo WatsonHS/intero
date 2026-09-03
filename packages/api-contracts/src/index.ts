@@ -18,6 +18,7 @@ import {
   Spec,
   SpecRevision,
   SpecReviewResponse,
+  PresenceSnapshot,
   ThreadMessage,
   Workstream,
 } from "@intero/domain";
@@ -158,6 +159,25 @@ export const SetMessageReactionRequest = z
   .object({
     emoji: ReactionEmoji,
     reacted: z.boolean(),
+  })
+  .strict();
+export const EditThreadMessageRequest = z
+  .object({
+    body: z.string().max(16_000),
+  })
+  .strict()
+  .refine(
+    (input) => input.body.trim().length > 0,
+    "Edited messages require a non-empty body.",
+  );
+export const PresenceHeartbeatRequest = z
+  .object({
+    active: z.boolean().optional(),
+  })
+  .strict();
+export const PresenceResponse = z
+  .object({
+    items: z.array(PresenceSnapshot),
   })
   .strict();
 export const AddStandInRequest = z.object({}).strict();

@@ -40,6 +40,7 @@ export interface ComposerProps {
   onCancelReply(): void;
   onRemoveImage(id: string): void;
   onDraftChange(value: string): void;
+  onTyping?(): void;
   onSetMentionCursor(cursor: number): void;
   onResetMentionIndex(): void;
   onSetMentionPickerOpen(open: boolean): void;

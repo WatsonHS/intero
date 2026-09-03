@@ -47,6 +47,8 @@ export interface PlatformStore {
   updateMessageStream: StoreMethod<"updateMessageStream">;
   upsertCoordinationSummary: StoreMethod<"upsertCoordinationSummary">;
   setMessageReaction: StoreMethod<"setMessageReaction">;
+  editThreadMessage: StoreMethod<"editThreadMessage">;
+  deleteThreadMessage: StoreMethod<"deleteThreadMessage">;
   addStandInToThread: StoreMethod<"addStandInToThread">;
   markThreadRead: StoreMethod<"markThreadRead">;
   listThreadReads: StoreMethod<"listThreadReads">;
@@ -64,6 +66,7 @@ export interface PlatformStore {
   listInbox(principalId?: PrincipalId): Awaitable<ActionInboxItem[]>;
   listThreads: StoreMethod<"listThreads">;
   hasThreadAccess: StoreMethod<"hasThreadAccess">;
+  listVisiblePeerPrincipalIds: StoreMethod<"listVisiblePeerPrincipalIds">;
   getThreadAccessVersion: StoreMethod<"getThreadAccessVersion">;
   getThread: StoreMethod<"getThread">;
   getSpec: StoreMethod<"getSpec">;

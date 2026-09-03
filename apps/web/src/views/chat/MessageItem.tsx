@@ -2,7 +2,10 @@ import {
   CheckCircleIcon,
   GitBranchIcon,
   HandTapIcon,
+  PencilSimpleIcon,
+  TrashIcon,
 } from "@phosphor-icons/react";
+import { useState } from "react";
 import type {
   PilotStandInExchange,
   PrincipalId,
@@ -16,7 +19,7 @@ import { initials, tintFor } from "../../design/utils.js";
 import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { CoordinationCard } from "./CoordinationCard.js";
-import { isBubblelessEmojiMessage } from "./format.js";
+import { isBubblelessEmojiMessage, shouldSubmitComposerKey } from "./format.js";
 import { ownerNameFor, resolveStandInAvatarIdentity } from "./helpers.js";
 import { MessageAttachments } from "./MessageAttachments.js";
 import { MessageReactionBar } from "./MessageReactionBar.js";
@@ -50,6 +53,12 @@ export function MessageItem({
   onNavigateToMessage,
   onOpenProfile,
   onOpenCoordination,
+  editing = false,
+  editPending = false,
+  onBeginEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onDelete,
 }: {
   message: ThreadMessage;
   current: ThreadPayload;
@@ -74,14 +83,32 @@ export function MessageItem({
   onNavigateToMessage(messageId: string): void;
   onOpenProfile(principalId: PrincipalId): void;
   onOpenCoordination?: ((threadId: string) => void) | undefined;
+  editing?: boolean;
+  editPending?: boolean;
+  onBeginEdit?(message: ThreadMessage): void;
+  onCancelEdit?(): void;
+  onSaveEdit?(message: ThreadMessage, body: string): void;
+  onDelete?(message: ThreadMessage): void;
 }) {
-  const { formatRelative, formatTime, t } = useI18n();
+  const { formatDate, formatRelative, formatTime, t } = useI18n();
   const thread = current.thread;
+  const isOwn = message.senderId === currentSenderId;
   const canReply =
     Boolean(currentSenderId) &&
     !currentIsPilot &&
     !currentIsPilotStandIn &&
-    thread.accessMode !== "human_only_e2ee";
+    thread.accessMode !== "human_only_e2ee" &&
+    !message.deletedAt;
+  const canMutateOwnMessage =
+    Boolean(onBeginEdit && onDelete) &&
+    isOwn &&
+    message.kind === "message" &&
+    !message.deletedAt &&
+    !thread.concludedAt &&
+    !currentIsPilot &&
+    !currentIsPilotStandIn &&
+    message.serverReadable &&
+    !thread.standInIds.includes(message.senderId);
 
   if (message.kind === "system_access_change") {
     return (
@@ -192,7 +219,14 @@ export function MessageItem({
                 onNavigate={onNavigateToMessage}
               />
             ) : null}
-            {message.streamState === "pending" && !message.body ? (
+            {message.deletedAt ? (
+              <p
+                data-testid="message-deleted"
+                className="text-[13px] italic text-ink-muted"
+              >
+                {t("chat.messageDeleted")}
+              </p>
+            ) : message.streamState === "pending" && !message.body ? (
               <div
                 data-testid={`stand-in-stream-${message.id}`}
                 className="flex items-center gap-2 py-1 text-[12px] text-ink-muted"
@@ -230,7 +264,9 @@ export function MessageItem({
                 {t("chat.standInStreamFailed")}
               </p>
             ) : null}
-            <MessageAttachments attachments={message.attachments ?? []} />
+            {message.deletedAt ? null : (
+              <MessageAttachments attachments={message.attachments ?? []} />
+            )}
             {groundedExchange?.structuredAnswer ? (
               <StandInAnswerContent
                 answer={groundedExchange.structuredAnswer}
@@ -284,30 +320,33 @@ export function MessageItem({
               </div>
             ) : null}
           </div>
-          <MessageReactionBar
-            message={message}
-            currentPrincipalId={currentSenderId}
-            principalNames={principalNames}
-            canReact={
-              Boolean(currentSenderId) &&
-              !currentIsPilot &&
-              !currentIsPilotStandIn
-            }
-            canReply={canReply}
-            pickerOpen={reactionPickerMessageId === message.id}
-            pending={reactionPending && reactionPendingMessageId === message.id}
-            align="left"
-            onToggle={(emoji) => onToggleReaction(message, emoji)}
-            onTogglePicker={() => onToggleReactionPicker(message.id)}
-            onClosePicker={() => onCloseReactionPicker()}
-            onReply={() => onReply(message)}
-          />
+          {message.deletedAt ? null : (
+            <MessageReactionBar
+              message={message}
+              currentPrincipalId={currentSenderId}
+              principalNames={principalNames}
+              canReact={
+                Boolean(currentSenderId) &&
+                !currentIsPilot &&
+                !currentIsPilotStandIn
+              }
+              canReply={canReply}
+              pickerOpen={reactionPickerMessageId === message.id}
+              pending={
+                reactionPending && reactionPendingMessageId === message.id
+              }
+              align="left"
+              onToggle={(emoji) => onToggleReaction(message, emoji)}
+              onTogglePicker={() => onToggleReactionPicker(message.id)}
+              onClosePicker={() => onCloseReactionPicker()}
+              onReply={() => onReply(message)}
+            />
+          )}
         </div>
       </div>
     );
   }
 
-  const isOwn = message.senderId === currentSenderId;
   const bubblelessEmoji = isBubblelessEmojiMessage(message);
   const canOpenProfile =
     currentIsCanonicalGroup &&
@@ -355,12 +394,23 @@ export function MessageItem({
         <time className="font-mono text-[9.5px] text-faint">
           {formatTime(message.createdAt)}
         </time>
+        {message.editedAt && !message.deletedAt ? (
+          <span
+            data-testid="message-edited"
+            title={`${formatDate(message.editedAt)} ${formatTime(message.editedAt)}`}
+            className="font-mono text-[9.5px] text-faint"
+          >
+            {t("chat.edited")}
+          </span>
+        ) : null}
       </div>
       <div
-        data-emoji-bubbleless={bubblelessEmoji ? "true" : undefined}
+        data-emoji-bubbleless={
+          bubblelessEmoji && !message.deletedAt && !editing ? "true" : undefined
+        }
         className={cn(
           "mt-[7px] w-fit max-w-[560px] text-left",
-          bubblelessEmoji
+          bubblelessEmoji && !message.deletedAt && !editing
             ? "bg-transparent p-0"
             : cn(
                 "rounded-card p-[12px_15px]",
@@ -377,7 +427,21 @@ export function MessageItem({
             onNavigate={onNavigateToMessage}
           />
         ) : null}
-        {message.serverReadable ? (
+        {message.deletedAt ? (
+          <p
+            data-testid="message-deleted"
+            className="text-[13px] italic text-ink-muted"
+          >
+            {t("chat.messageDeleted")}
+          </p>
+        ) : editing ? (
+          <MessageEditForm
+            body={message.body}
+            pending={editPending}
+            onCancel={() => onCancelEdit?.()}
+            onSave={(body) => onSaveEdit?.(message, body)}
+          />
+        ) : message.serverReadable ? (
           <ChatMarkdown
             markdown={message.body}
             enlargeEmojiOnly={(message.attachments?.length ?? 0) === 0}
@@ -390,24 +454,43 @@ export function MessageItem({
             {t("chat.encryptedMessage")}
           </p>
         )}
-        <MessageAttachments attachments={message.attachments ?? []} />
+        {message.deletedAt ? null : (
+          <MessageAttachments attachments={message.attachments ?? []} />
+        )}
       </div>
-      <MessageReactionBar
-        message={message}
-        currentPrincipalId={currentSenderId}
-        principalNames={principalNames}
-        canReact={
-          Boolean(currentSenderId) && !currentIsPilot && !currentIsPilotStandIn
-        }
-        canReply={canReply}
-        pickerOpen={reactionPickerMessageId === message.id}
-        pending={reactionPending && reactionPendingMessageId === message.id}
-        align={isOwn ? "right" : "left"}
-        onToggle={(emoji) => onToggleReaction(message, emoji)}
-        onTogglePicker={() => onToggleReactionPicker(message.id)}
-        onClosePicker={() => onCloseReactionPicker()}
-        onReply={() => onReply(message)}
-      />
+      {message.deletedAt ? null : (
+        <div
+          className={cn(
+            "flex items-center gap-1",
+            isOwn ? "flex-row-reverse" : undefined,
+          )}
+        >
+          <MessageReactionBar
+            message={message}
+            currentPrincipalId={currentSenderId}
+            principalNames={principalNames}
+            canReact={
+              Boolean(currentSenderId) &&
+              !currentIsPilot &&
+              !currentIsPilotStandIn
+            }
+            canReply={canReply}
+            pickerOpen={reactionPickerMessageId === message.id}
+            pending={reactionPending && reactionPendingMessageId === message.id}
+            align={isOwn ? "right" : "left"}
+            onToggle={(emoji) => onToggleReaction(message, emoji)}
+            onTogglePicker={() => onToggleReactionPicker(message.id)}
+            onClosePicker={() => onCloseReactionPicker()}
+            onReply={() => onReply(message)}
+          />
+          {canMutateOwnMessage && !editing ? (
+            <MessageOwnActions
+              onEdit={() => onBeginEdit?.(message)}
+              onDelete={() => onDelete?.(message)}
+            />
+          ) : null}
+        </div>
+      )}
     </div>
   );
   return (
@@ -420,6 +503,13 @@ export function MessageItem({
       )}
       data-message-side={isOwn ? "right" : "left"}
       data-message-id={message.id}
+      onTouchStart={
+        canMutateOwnMessage
+          ? (event) => pinActionsOnLongPress(event.currentTarget)
+          : undefined
+      }
+      onTouchEnd={() => cancelLongPress()}
+      onTouchCancel={() => cancelLongPress()}
       data-testid={
         currentIsPilot ? `pilot-dm-message-${message.sequence}` : undefined
       }
@@ -437,6 +527,99 @@ export function MessageItem({
       )}
     </div>
   );
+}
+
+function MessageOwnActions({
+  onEdit,
+  onDelete,
+}: {
+  onEdit(): void;
+  onDelete(): void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="mt-1.5 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100 group-data-[actions=open]/message:opacity-100">
+      <button
+        type="button"
+        data-testid="message-edit"
+        aria-label={t("chat.edit")}
+        title={t("chat.edit")}
+        onClick={onEdit}
+        className="grid h-6 w-6 cursor-pointer place-items-center rounded-full border border-line2 bg-transparent text-ink-muted hover:border-accent-strong hover:text-accent-strong"
+      >
+        <PencilSimpleIcon size={13} />
+      </button>
+      <button
+        type="button"
+        data-testid="message-delete"
+        aria-label={t("chat.delete")}
+        title={t("chat.delete")}
+        onClick={onDelete}
+        className="grid h-6 w-6 cursor-pointer place-items-center rounded-full border border-line2 bg-transparent text-ink-muted hover:border-danger hover:text-danger"
+      >
+        <TrashIcon size={13} />
+      </button>
+    </div>
+  );
+}
+
+function MessageEditForm({
+  body,
+  pending,
+  onCancel,
+  onSave,
+}: {
+  body: string;
+  pending: boolean;
+  onCancel(): void;
+  onSave(body: string): void;
+}) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState(body);
+  return (
+    <textarea
+      data-testid="message-edit-input"
+      autoFocus
+      rows={3}
+      disabled={pending}
+      value={draft}
+      aria-label={t("chat.edit")}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+          return;
+        }
+        if (
+          shouldSubmitComposerKey({
+            key: event.key,
+            shiftKey: event.shiftKey,
+            isComposing: event.nativeEvent.isComposing,
+          })
+        ) {
+          event.preventDefault();
+          const next = draft.trim();
+          if (next) onSave(next);
+        }
+      }}
+      className="w-full min-w-[220px] resize-y rounded-[8px] border border-line2 bg-panel px-2.5 py-2 text-[13px] leading-[1.6] text-ink outline-none"
+    />
+  );
+}
+
+let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+
+function pinActionsOnLongPress(target: HTMLElement) {
+  cancelLongPress();
+  longPressTimer = setTimeout(() => {
+    target.dataset.actions = "open";
+  }, 500);
+}
+
+function cancelLongPress() {
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = undefined;
 }
 
 export function MentionText({
