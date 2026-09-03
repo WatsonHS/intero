@@ -74,6 +74,12 @@ export interface PlatformStore {
   hasThreadAccess: StoreMethod<"hasThreadAccess">;
   listVisiblePeerPrincipalIds: StoreMethod<"listVisiblePeerPrincipalIds">;
   getThreadAccessVersion: StoreMethod<"getThreadAccessVersion">;
+  getMessageAtSequence: StoreMethod<"getMessageAtSequence">;
+  upsertWebPushSubscription: StoreMethod<"upsertWebPushSubscription">;
+  deleteWebPushSubscription: StoreMethod<"deleteWebPushSubscription">;
+  deleteWebPushSubscriptionByEndpoint: StoreMethod<"deleteWebPushSubscriptionByEndpoint">;
+  listWebPushSubscriptions: StoreMethod<"listWebPushSubscriptions">;
+  listWebPushSubscriptionsForPrincipals: StoreMethod<"listWebPushSubscriptionsForPrincipals">;
   getThread: StoreMethod<"getThread">;
   getSpec: StoreMethod<"getSpec">;
   listSpecs: StoreMethod<"listSpecs">;

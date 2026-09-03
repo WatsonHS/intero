@@ -22,6 +22,10 @@ import {
   PresenceSnapshot,
   ThreadMessage,
   LinkPreview,
+  UpsertWebPushSubscriptionRequest as UpsertWebPushSubscriptionRequestSchema,
+  DeleteWebPushSubscriptionRequest as DeleteWebPushSubscriptionRequestSchema,
+  NotificationPreferences,
+  WebPushSubscription,
   Workstream,
 } from "@intero/domain";
 import { z } from "zod";
@@ -337,6 +341,27 @@ export const CursorPage = <T extends z.ZodType>(item: T) =>
     nextCursor: z.number().int().nonnegative(),
     hasMore: z.boolean(),
   });
+
+export const WebPushConfigResponse = z
+  .object({
+    enabled: z.boolean(),
+    publicKey: z.string().min(16).optional(),
+  })
+  .strict();
+export const UpsertWebPushSubscriptionRequest =
+  UpsertWebPushSubscriptionRequestSchema;
+export const DeleteWebPushSubscriptionRequest =
+  DeleteWebPushSubscriptionRequestSchema;
+export const WebPushSubscriptionResponse = z
+  .object({
+    subscription: WebPushSubscription,
+  })
+  .strict();
+export const NotificationPreferencesResponse = z
+  .object({
+    preferences: NotificationPreferences,
+  })
+  .strict();
 
 export const StandInToolName = z.enum([
   "stand_in.lookup_team_context",

@@ -336,6 +336,67 @@
         }
       }
     },
+    "/v1/config/web-push": {
+      "get": {
+        "operationId": "getWebPushConfig",
+        "responses": {
+          "200": {
+            "description": "Whether Web Push is enabled and the VAPID public key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPushConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/push-subscriptions": {
+      "post": {
+        "operationId": "upsertPushSubscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertWebPushSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored Web Push subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPushSubscriptionResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePushSubscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteWebPushSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Subscription removed" },
+          "404": { "description": "Subscription not found" }
+        }
+      }
+    },
     "/v1/specs": {
       "get": {
         "operationId": "listSpecs",
@@ -2642,6 +2703,101 @@
           }
         },
         "required": ["items"],
+        "additionalProperties": false
+      },
+      "UpsertWebPushSubscriptionRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": { "type": "string", "maxLength": 2048, "format": "uri" },
+          "keys": {
+            "type": "object",
+            "properties": {
+              "p256dh": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "auth": { "type": "string", "minLength": 1, "maxLength": 200 }
+            },
+            "required": ["p256dh", "auth"],
+            "additionalProperties": false
+          },
+          "userAgent": { "type": "string", "maxLength": 400 }
+        },
+        "required": ["endpoint", "keys"],
+        "additionalProperties": false
+      },
+      "DeleteWebPushSubscriptionRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": { "type": "string", "maxLength": 2048, "format": "uri" }
+        },
+        "required": ["endpoint"],
+        "additionalProperties": false
+      },
+      "WebPushConfigResponse": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "publicKey": { "type": "string", "minLength": 16 }
+        },
+        "required": ["enabled"],
+        "additionalProperties": false
+      },
+      "WebPushSubscriptionResponse": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "principalId": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "endpoint": {
+                "type": "string",
+                "maxLength": 2048,
+                "format": "uri"
+              },
+              "keys": {
+                "type": "object",
+                "properties": {
+                  "p256dh": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "auth": { "type": "string", "minLength": 1, "maxLength": 200 }
+                },
+                "required": ["p256dh", "auth"],
+                "additionalProperties": false
+              },
+              "userAgent": { "type": "string", "maxLength": 400 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "lastSeenAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              }
+            },
+            "required": [
+              "id",
+              "principalId",
+              "endpoint",
+              "keys",
+              "createdAt",
+              "lastSeenAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["subscription"],
         "additionalProperties": false
       }
     }

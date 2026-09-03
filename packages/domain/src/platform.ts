@@ -94,11 +94,15 @@ export const ActionInboxItem = z
   .strict();
 export type ActionInboxItem = z.infer<typeof ActionInboxItem>;
 
+export const MessageNotificationMode = z.enum(["all", "mentions", "none"]);
+export type MessageNotificationMode = z.infer<typeof MessageNotificationMode>;
+
 export const NotificationPreferences = z
   .object({
     principalId: PrincipalId,
     mutedKinds: z.array(ActionInboxItem.shape.kind),
     muteUntil: z.iso.datetime().optional(),
+    messages: MessageNotificationMode.default("mentions"),
     updatedAt: z.iso.datetime(),
   })
   .strict();

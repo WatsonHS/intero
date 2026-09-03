@@ -34,6 +34,8 @@ import {
   type ThreadMessage,
   type ThreadMessageAttachment,
   type ThreadMessageStreamState,
+  type UpsertWebPushSubscriptionRequest,
+  type WebPushSubscription,
   type Workstream,
   type WorkstreamId,
   uuidv7,
@@ -2773,6 +2775,105 @@ export class PostgresPlatformStore implements PlatformStore {
     });
   }
 
+  async getMessageAtSequence(
+    threadId: ThreadId,
+    sequence: number,
+  ): Promise<
+    { thread: ConversationThread; message: ThreadMessage } | undefined
+  > {
+    return this.read(async (client) => {
+      const item = await this.getThreadInTransaction(client, threadId);
+      if (!item) return undefined;
+      const message = item.messages.find((row) => row.sequence === sequence);
+      return message ? { thread: item.thread, message } : undefined;
+    });
+  }
+
+  async upsertWebPushSubscription(
+    principalId: PrincipalId,
+    input: UpsertWebPushSubscriptionRequest,
+  ): Promise<WebPushSubscription> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `INSERT INTO web_push_subscriptions
+          (id, organization_id, principal_id, endpoint, p256dh, auth, user_agent)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (organization_id, endpoint) DO UPDATE SET
+           principal_id = EXCLUDED.principal_id,
+           p256dh = EXCLUDED.p256dh,
+           auth = EXCLUDED.auth,
+           user_agent = EXCLUDED.user_agent,
+           last_seen_at = now()
+         RETURNING *`,
+        [
+          uuidv7(),
+          this.organizationId,
+          principalId,
+          input.endpoint,
+          input.keys.p256dh,
+          input.keys.auth,
+          input.userAgent ?? null,
+        ],
+      );
+      return webPushSubscriptionFromRow(result.rows[0]);
+    });
+  }
+
+  async deleteWebPushSubscription(
+    principalId: PrincipalId,
+    endpoint: string,
+  ): Promise<boolean> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `DELETE FROM web_push_subscriptions
+         WHERE principal_id = $1 AND endpoint = $2`,
+        [principalId, endpoint],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+
+  async deleteWebPushSubscriptionByEndpoint(
+    endpoint: string,
+  ): Promise<boolean> {
+    return this.write(async (client) => {
+      const result = await client.query(
+        `DELETE FROM web_push_subscriptions WHERE endpoint = $1`,
+        [endpoint],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+
+  async listWebPushSubscriptions(
+    principalId: PrincipalId,
+  ): Promise<WebPushSubscription[]> {
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM web_push_subscriptions
+         WHERE principal_id = $1
+         ORDER BY last_seen_at DESC`,
+        [principalId],
+      );
+      return result.rows.map(webPushSubscriptionFromRow);
+    });
+  }
+
+  async listWebPushSubscriptionsForPrincipals(
+    principalIds: PrincipalId[],
+  ): Promise<WebPushSubscription[]> {
+    if (principalIds.length === 0) return [];
+    return this.read(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM web_push_subscriptions
+         WHERE principal_id = ANY($1::uuid[])
+         ORDER BY last_seen_at DESC`,
+        [principalIds],
+      );
+      return result.rows.map(webPushSubscriptionFromRow);
+    });
+  }
+
   async getSpec(specId: SpecId) {
     return this.read((client) => this.getSpecInTransaction(client, specId));
   }
@@ -3616,6 +3717,21 @@ function claimFromRow(row: QueryResultRow): Claim {
     evidenceRefs: row.evidence_refs,
     ...(row.supersedes ? { supersedes: row.supersedes } : {}),
     ...(row.withdrawn_at ? { withdrawnAt: asIso(row.withdrawn_at) } : {}),
+  };
+}
+
+function webPushSubscriptionFromRow(row: QueryResultRow): WebPushSubscription {
+  return {
+    id: String(row.id),
+    principalId: row.principal_id as PrincipalId,
+    endpoint: String(row.endpoint),
+    keys: {
+      p256dh: String(row.p256dh),
+      auth: String(row.auth),
+    },
+    ...(row.user_agent ? { userAgent: String(row.user_agent) } : {}),
+    createdAt: asIso(row.created_at),
+    lastSeenAt: asIso(row.last_seen_at),
   };
 }
 

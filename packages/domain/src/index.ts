@@ -3,6 +3,7 @@ export * from "./conversations.js";
 export * from "./coordination.js";
 export * from "./events.js";
 export * from "./ids.js";
+export * from "./notifications.js";
 export * from "./platform.js";
 export * from "./search.js";
 export * from "./pilot.js";

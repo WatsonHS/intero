@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import type { PrincipalId, TypingEvent } from "@intero/domain";
+import {
+  defaultNotificationPreferences,
+  type PrincipalId,
+  type TypingEvent,
+} from "@intero/domain";
 import {
   createContext,
   useCallback,
@@ -19,7 +23,10 @@ import {
 } from "../api.js";
 import { useNotifications } from "../design/notifications.js";
 import { useI18n } from "../i18n/index.js";
+import { selectNewMessageNotifications } from "../message-browser-notifications.js";
 import { usePilotOptional } from "../pilot/context.js";
+import { presentSystemNotification } from "../system-notifications.js";
+import type { ActionInboxSnapshot } from "../action-inbox-browser-notifications.js";
 import {
   ConversationRealtimeCoordinator,
   type ConversationRealtimeStatus,
@@ -124,56 +131,114 @@ export function ConversationRealtimeProvider({
                 queryKey: ["pilot", "stand_in"],
               });
             }
-            for (const message of messages) {
-              if (
-                message.senderId === identityId ||
-                !message.mentionedPrincipalIds?.includes(
-                  identityId as PrincipalId,
-                ) ||
-                notifiedMentionIds.current.has(message.id)
-              ) {
-                continue;
-              }
-              notifiedMentionIds.current.add(message.id);
+            const cached = queryClient.getQueryData<{
+              items: Array<{
+                thread: {
+                  id: string;
+                  title: string;
+                  accessMode: "human_only_e2ee" | "agent_readable";
+                  mutedUntil?: string;
+                };
+                principals: Array<{ id: string; displayName: string }>;
+              }>;
+            }>(["threads"]);
+            const inbox = queryClient.getQueryData<ActionInboxSnapshot>([
+              "action-inbox",
+            ]);
+            const preferences =
+              inbox?.preferences ??
+              defaultNotificationPreferences(identityId as PrincipalId);
+            const threadsById = new Map(
+              (cached?.items ?? []).map((item) => [
+                item.thread.id,
+                {
+                  title: item.thread.title,
+                  accessMode: item.thread.accessMode,
+                  ...(item.thread.mutedUntil
+                    ? { mutedUntil: item.thread.mutedUntil }
+                    : {}),
+                },
+              ]),
+            );
+            const windowFocused =
+              typeof document === "undefined"
+                ? true
+                : document.visibilityState === "visible" && document.hasFocus();
+            const pathname =
+              typeof window === "undefined" ? "" : window.location.pathname;
+            const activeThreadId = pathname.startsWith("/communications/")
+              ? pathname.slice("/communications/".length).split("/")[0]
+              : undefined;
+            for (const selected of selectNewMessageNotifications({
+              messages,
+              viewerId: identityId,
+              ...(activeThreadId ? { activeThreadId } : {}),
+              windowFocused,
+              preferences,
+              threadsById,
+              occurredAt: event.occurredAt,
+            })) {
+              if (notifiedMentionIds.current.has(selected.message.id)) continue;
+              notifiedMentionIds.current.add(selected.message.id);
               if (notifiedMentionIds.current.size > 500) {
-                notifiedMentionIds.current = new Set([message.id]);
+                notifiedMentionIds.current = new Set([selected.message.id]);
               }
-              const cached = queryClient.getQueryData<{
-                items: Array<{
-                  thread: { id: string; title: string };
-                  principals: Array<{ id: string; displayName: string }>;
-                }>;
-              }>(["threads"]);
               const thread = cached?.items.find(
-                (item) => item.thread.id === message.threadId,
+                (item) => item.thread.id === selected.threadId,
               );
               const sender = thread?.principals.find(
-                (principal) => principal.id === message.senderId,
+                (principal) => principal.id === selected.message.senderId,
               );
-              notifications.info(
-                t("chat.mentionNotificationBody", {
-                  sender: sender?.displayName ?? t("chat.someone"),
-                  thread: thread?.thread.title ?? t("chat.title"),
-                }),
-                { title: t("chat.mentionNotificationTitle") },
-              );
-              if (
-                typeof Notification !== "undefined" &&
-                Notification.permission === "granted" &&
-                document.visibilityState === "hidden"
-              ) {
-                try {
-                  new Notification(t("chat.mentionNotificationTitle"), {
-                    body: t("chat.mentionNotificationNativeBody", {
-                      thread: thread?.thread.title ?? t("chat.title"),
-                    }),
-                    tag: `intero-mention-${message.id}`,
-                  });
-                } catch {
-                  // The in-app reminder remains authoritative when the host
-                  // declines a native notification despite granted permission.
-                }
+              if (selected.mentioned) {
+                notifications.info(
+                  t("chat.mentionNotificationBody", {
+                    sender: sender?.displayName ?? t("chat.someone"),
+                    thread: selected.threadTitle || t("chat.title"),
+                  }),
+                  { title: t("chat.mentionNotificationTitle") },
+                );
               }
+              const copy =
+                selected.accessMode === "human_only_e2ee"
+                  ? {
+                      title: t("chat.messageNotificationEncrypted", {
+                        thread: selected.threadTitle || t("chat.title"),
+                      }),
+                    }
+                  : selected.mentioned
+                    ? {
+                        title: t("chat.mentionNotificationTitle"),
+                        body: t("chat.mentionNotificationNativeBody", {
+                          thread: selected.threadTitle || t("chat.title"),
+                        }),
+                      }
+                    : {
+                        title: t("chat.messageNotificationTitle", {
+                          thread: selected.threadTitle || t("chat.title"),
+                        }),
+                        ...(selected.message.body.trim()
+                          ? {
+                              body: t("chat.messageNotificationBody", {
+                                preview: selected.message.body
+                                  .replace(/\s+/g, " ")
+                                  .trim()
+                                  .slice(0, 140),
+                              }),
+                            }
+                          : {}),
+                      };
+              presentSystemNotification({
+                title: copy.title,
+                ...(copy.body ? { body: copy.body } : {}),
+                tag: `intero-message-${selected.message.id}`,
+                data: { threadId: selected.threadId },
+                onOpen: () => {
+                  window.focus();
+                  window.location.assign(
+                    `/communications/${selected.threadId}`,
+                  );
+                },
+              });
             }
           })
           .catch(() => {

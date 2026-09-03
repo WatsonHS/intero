@@ -45,6 +45,19 @@ interface Window {
       enabled: boolean;
     }): Promise<GitAwarenessStatus[]>;
     removeGitAwareness(repositoryPath: string): Promise<GitAwarenessStatus[]>;
+    notify(input: {
+      title: string;
+      body?: string;
+      tag?: string;
+      threadId?: string;
+      itemId?: string;
+    }): Promise<void>;
+    setBadgeCount(count: number): Promise<void>;
+    setCloseToTray(enabled: boolean): Promise<{ closeToTray: boolean }>;
+    getDesktopSettings(): Promise<{ closeToTray: boolean }>;
+    onNotifyClicked?(
+      handler: (data: { threadId?: string; itemId?: string }) => void,
+    ): () => void;
   };
 }
 

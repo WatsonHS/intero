@@ -30,6 +30,7 @@ function preferences(
   return {
     principalId,
     mutedKinds,
+    messages: "mentions",
     updatedAt: "2026-07-29T01:00:00.000Z",
   };
 }

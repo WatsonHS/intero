@@ -563,11 +563,45 @@ export async function updateActionInbox(
 export async function setNotificationPreferences(input: {
   mutedKinds: ActionInboxItem["kind"][];
   muteUntil?: string;
+  messages?: NotificationPreferences["messages"];
 }) {
   return putJson<{ preferences: NotificationPreferences }>(
     "/v1/notification-preferences",
     input,
   );
+}
+
+export async function getWebPushConfig(
+  signal?: AbortSignal,
+): Promise<{ enabled: boolean; publicKey?: string }> {
+  return getJson("/v1/config/web-push", signal);
+}
+
+export async function upsertPushSubscription(input: {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  userAgent?: string;
+}) {
+  return postJson<{
+    subscription: {
+      id: string;
+      endpoint: string;
+    };
+  }>("/v1/me/push-subscriptions", input);
+}
+
+export async function deletePushSubscription(endpoint: string) {
+  const response = await fetch(`${API_URL}/v1/me/push-subscriptions`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      ...developmentIdentityHeaders(),
+    },
+    body: JSON.stringify({ endpoint }),
+  });
+  await ensureResponseOk(response);
+  return (await response.json()) as { deleted: boolean };
 }
 
 export async function searchAuthorizedContent(

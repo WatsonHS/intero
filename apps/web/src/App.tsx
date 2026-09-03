@@ -36,6 +36,7 @@ import {
 import {
   getActionInbox,
   getBootstrap,
+  getThreads,
   streamActionInboxEvents,
 } from "./api.js";
 import { useI18n } from "./i18n/index.js";
@@ -276,6 +277,38 @@ function InteroApp() {
     refetchOnWindowFocus: true,
     enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
   });
+  const threads = useQuery({
+    queryKey: ["threads"],
+    queryFn: ({ signal }) => getThreads(undefined, signal),
+    enabled: !pilot?.enabled || Boolean(pilot.effectiveIdentity),
+  });
+  const sidebarUnread = (threads.data?.items ?? []).reduce(
+    (total, item) => total + (item.unreadCount ?? 0),
+    0,
+  );
+
+  useEffect(() => {
+    void window.interoDesktop?.setBadgeCount?.(sidebarUnread);
+  }, [sidebarUnread]);
+
+  useEffect(() => {
+    return window.interoDesktop?.onNotifyClicked?.((data) => {
+      window.focus();
+      if (data.threadId) {
+        void navigate({
+          to: "/communications/$threadId",
+          params: { threadId: data.threadId },
+        });
+        return;
+      }
+      if (data.itemId) {
+        void navigate({
+          to: "/attention",
+          search: { itemId: data.itemId },
+        });
+      }
+    });
+  }, [navigate]);
   const inboxEventsEnabled =
     !pilot?.enabled || Boolean(pilot.effectiveIdentity);
 

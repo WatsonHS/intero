@@ -43,4 +43,28 @@ contextBridge.exposeInMainWorld("interoDesktop", {
   }) => ipcRenderer.invoke("intero:git-awareness-configure", input),
   removeGitAwareness: (repositoryPath: string) =>
     ipcRenderer.invoke("intero:git-awareness-remove", repositoryPath),
+  notify: (input: {
+    title: string;
+    body?: string;
+    tag?: string;
+    threadId?: string;
+    itemId?: string;
+  }) => ipcRenderer.invoke("intero:notify", input),
+  setBadgeCount: (count: number) =>
+    ipcRenderer.invoke("intero:badge-count", count),
+  setCloseToTray: (enabled: boolean) =>
+    ipcRenderer.invoke("intero:set-close-to-tray", enabled),
+  getDesktopSettings: () => ipcRenderer.invoke("intero:desktop-settings"),
+  onNotifyClicked: (
+    handler: (data: { threadId?: string; itemId?: string }) => void,
+  ) => {
+    const listener = (
+      _event: unknown,
+      data: { threadId?: string; itemId?: string },
+    ) => handler(data);
+    ipcRenderer.on("intero:notify-clicked", listener);
+    return () => {
+      ipcRenderer.off("intero:notify-clicked", listener);
+    };
+  },
 });

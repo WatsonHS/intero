@@ -22,6 +22,10 @@ import {
   ThreadResponse,
   UpdateKanbanCardRequest,
   UpdateThreadRequest,
+  UpsertWebPushSubscriptionRequest,
+  DeleteWebPushSubscriptionRequest,
+  WebPushConfigResponse,
+  WebPushSubscriptionResponse,
 } from "@intero/api-contracts";
 import openapiTS, { astToString } from "openapi-typescript";
 import { format } from "prettier";
@@ -48,6 +52,10 @@ const schemas = {
   EditThreadMessageRequest,
   PresenceHeartbeatRequest,
   PresenceResponse,
+  UpsertWebPushSubscriptionRequest,
+  DeleteWebPushSubscriptionRequest,
+  WebPushConfigResponse,
+  WebPushSubscriptionResponse,
 };
 
 const document = {
@@ -389,6 +397,65 @@ const document = {
           "404": {
             description: "Message not found or inaccessible",
           },
+        },
+      },
+    },
+    "/v1/config/web-push": {
+      get: {
+        operationId: "getWebPushConfig",
+        responses: {
+          "200": {
+            description: "Whether Web Push is enabled and the VAPID public key",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/WebPushConfigResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/me/push-subscriptions": {
+      post: {
+        operationId: "upsertPushSubscription",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/UpsertWebPushSubscriptionRequest",
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Stored Web Push subscription",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/WebPushSubscriptionResponse",
+                },
+              },
+            },
+          },
+        },
+      },
+      delete: {
+        operationId: "deletePushSubscription",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/DeleteWebPushSubscriptionRequest",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Subscription removed" },
+          "404": { description: "Subscription not found" },
         },
       },
     },

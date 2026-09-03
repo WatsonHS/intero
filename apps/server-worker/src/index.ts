@@ -19,6 +19,7 @@ import {
 import { CoordinationKernel } from "../../server-api/src/coordination-kernel.js";
 import { PilotInteroRequestProcessor } from "../../server-api/src/intero-request-service.js";
 import { assertDatabaseMigrationReadiness } from "../../server-api/src/database/migration-readiness.js";
+import { PostgresInformationStore } from "../../server-api/src/information-store.js";
 import { PostgresPlatformStore } from "../../server-api/src/postgres-store.js";
 import {
   InstrumentedModelGateway,
@@ -85,6 +86,14 @@ import {
   UnfurlJobOutboxDispatcher,
   type UnfurlJobReference,
 } from "./unfurl-jobs.js";
+import {
+  conversationEventToWebPushPayload,
+  createWebPushLibSender,
+  deliverConversationWebPush,
+  GraphileWebPushJobRunner,
+  WEB_PUSH_TASK,
+  WebPushNotifyPayload,
+} from "./web-push-jobs.js";
 
 const serviceConfig = loadWorkerServiceConfig();
 const pilotAdapterConfig = serviceConfig.pilot;
@@ -147,6 +156,13 @@ const conversations = new PostgresPlatformStore(
   conversationPool,
   organizationId,
 );
+const informationStore = new PostgresInformationStore(
+  conversationPool,
+  organizationId,
+);
+const webPushSender = serviceConfig.webPush
+  ? createWebPushLibSender(serviceConfig.webPush)
+  : undefined;
 const coordinationKernel = new CoordinationKernel(pilotStore, conversations);
 const standInHandler = new PilotStandInJobHandler(
   pilotStore,
@@ -168,6 +184,7 @@ const pilotJobRepository = new PostgresPilotJobRepository(
 const workerUtils = await makeWorkerUtils({
   connectionString: queueConnectionString,
 });
+const webPushJobs = new GraphileWebPushJobRunner(workerUtils, organizationId);
 const standInQuestionRepository = new PostgresStandInQuestionRepository(
   new Pool({ connectionString }),
   organizationId,
@@ -228,6 +245,16 @@ const portfolioSummaryOutbox = new PortfolioSummaryOutboxDispatcher(
 );
 
 const tasks: TaskList = {
+  [WEB_PUSH_TASK]: async (payload: unknown) => {
+    if (!webPushSender) return;
+    await deliverConversationWebPush({
+      payload: WebPushNotifyPayload.parse(payload),
+      store: conversations,
+      getPreferences: (principalId) =>
+        informationStore.getPreferences(principalId),
+      sender: webPushSender,
+    });
+  },
   [PILOT_INTERO_TASK]: async (payload: unknown) => {
     await interoRequestProcessor.handle(
       payload as import("../../server-api/src/intero-request-service.js").PilotInteroJobReference,
@@ -424,11 +451,24 @@ const centrifugoRealtime = new CentrifugoRealtime(
   centrifugoApiUrl,
   pilotAdapterConfig.centrifugoApiKey,
 );
-const realtimeOutbox = new OutboxDispatcher(
-  organizationId,
-  realtimeOutboxRepository,
-  centrifugoRealtime,
-);
+const enqueueWebPush = webPushSender
+  ? async (event: Record<string, unknown>) => {
+      const payload = conversationEventToWebPushPayload(organizationId, event);
+      if (payload) await webPushJobs.enqueue(payload);
+    }
+  : undefined;
+const realtimeOutbox = enqueueWebPush
+  ? new OutboxDispatcher(
+      organizationId,
+      realtimeOutboxRepository,
+      centrifugoRealtime,
+      enqueueWebPush,
+    )
+  : new OutboxDispatcher(
+      organizationId,
+      realtimeOutboxRepository,
+      centrifugoRealtime,
+    );
 tasks.dispatch_outbox = async (_payload, helpers) => {
   await realtimeOutbox.dispatch();
   await helpers.addJob(

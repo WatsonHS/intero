@@ -1,6 +1,8 @@
 import {
   type ActionInboxItem,
   type AuthorizedSearchResult,
+  defaultNotificationPreferences,
+  type MessageNotificationMode,
   type NotificationPreferences,
   type OrganizationId,
   type PrincipalId,
@@ -115,11 +117,7 @@ export class PostgresInformationStore {
       );
       return result.rows[0]
         ? preferencesFromRow(result.rows[0])
-        : {
-            principalId,
-            mutedKinds: [],
-            updatedAt: new Date(0).toISOString(),
-          };
+        : defaultNotificationPreferences(principalId);
     });
   }
 
@@ -128,16 +126,18 @@ export class PostgresInformationStore {
     input: {
       mutedKinds: ActionInboxItem["kind"][];
       muteUntil?: string;
+      messages?: MessageNotificationMode;
     },
   ): Promise<NotificationPreferences> {
     return this.write(async (client) => {
       const result = await client.query(
         `INSERT INTO notification_preferences
-          (organization_id, principal_id, muted_kinds, mute_until)
-         VALUES ($1,$2,$3::jsonb,$4)
+          (organization_id, principal_id, muted_kinds, mute_until, messages)
+         VALUES ($1,$2,$3::jsonb,$4,COALESCE($5,'mentions'))
          ON CONFLICT (organization_id, principal_id) DO UPDATE SET
            muted_kinds = EXCLUDED.muted_kinds,
            mute_until = EXCLUDED.mute_until,
+           messages = COALESCE($5, notification_preferences.messages),
            updated_at = now()
          RETURNING *`,
         [
@@ -145,6 +145,7 @@ export class PostgresInformationStore {
           principalId,
           JSON.stringify([...new Set(input.mutedKinds)]),
           input.muteUntil ?? null,
+          input.messages ?? null,
         ],
       );
       return preferencesFromRow(result.rows[0]);
@@ -351,6 +352,7 @@ function attentionFromRow(row: Record<string, unknown>): ActionInboxItem {
 function preferencesFromRow(
   row: Record<string, unknown>,
 ): NotificationPreferences {
+  const messages = row.messages;
   return {
     principalId: String(row.principal_id) as PrincipalId,
     mutedKinds: Array.isArray(row.muted_kinds)
@@ -359,6 +361,10 @@ function preferencesFromRow(
     ...(row.mute_until
       ? { muteUntil: new Date(String(row.mute_until)).toISOString() }
       : {}),
+    messages:
+      messages === "all" || messages === "mentions" || messages === "none"
+        ? messages
+        : "mentions",
     updatedAt: new Date(String(row.updated_at)).toISOString(),
   };
 }
