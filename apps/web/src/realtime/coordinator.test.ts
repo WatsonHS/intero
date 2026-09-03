@@ -197,6 +197,62 @@ describe("ConversationRealtimeCoordinator", () => {
     coordinator.stop();
   });
 
+  it("routes ephemeral call events without treating them as message changes", async () => {
+    const onCallEvent = vi.fn();
+    const onChange = vi.fn();
+    const threadId = uuidv7();
+    const coordinator = new ConversationRealtimeCoordinator({
+      createSession: async () => ({
+        token: "connection-token",
+        expiresAt: new Date().toISOString(),
+        transports: [
+          { transport: "websocket", endpoint: "wss://example.test/ws" },
+        ],
+        emulationEndpoint: "https://example.test/emulation",
+      }),
+      createSubscription: async () => ({
+        channel: `intero:thread:${threadId}`,
+        token: "subscription-token",
+        expiresAt: new Date().toISOString(),
+        accessVersion: 1,
+      }),
+      onStatus: vi.fn(),
+      onChange,
+      onCallEvent,
+      onRecoveryGap: vi.fn(),
+    });
+    coordinator.start();
+    await vi.waitFor(() =>
+      expect(fakeTransport.Centrifuge.instances).toHaveLength(1),
+    );
+    const firstRelease = await coordinator.subscribeThread(threadId);
+    const secondRelease = await coordinator.subscribeThread(threadId);
+    const subscription =
+      fakeTransport.Centrifuge.instances[0]!.subscriptions[0]!;
+    const event = {
+      schemaVersion: 1,
+      type: "conversation.call.event",
+      eventId: uuidv7(),
+      threadId,
+      callId: uuidv7(),
+      senderId: uuidv7(),
+      event: { kind: "invite", mode: "audio" },
+      occurredAt: new Date().toISOString(),
+    };
+
+    subscription.emit("publication", { data: event });
+    subscription.emit("publication", { data: event });
+
+    expect(onCallEvent).toHaveBeenCalledTimes(1);
+    expect(onCallEvent).toHaveBeenCalledWith(event);
+    expect(onChange).not.toHaveBeenCalled();
+    firstRelease();
+    expect(subscription.subscribed).toBe(true);
+    secondRelease();
+    expect(subscription.subscribed).toBe(false);
+    coordinator.stop();
+  });
+
   it("creates a fresh Centrifugo session after a terminal disconnect", async () => {
     const statuses: string[] = [];
     const createSession = vi.fn(async () => ({

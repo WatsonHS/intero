@@ -1413,6 +1413,17 @@ function createWindow() {
       pathToFileURL(join(mainDirectory, "../renderer/index.html")).href,
   ).href;
   trustedRendererUrl = rendererUrl;
+  window.webContents.session.setPermissionCheckHandler(
+    (webContents, permission) =>
+      permission === "media" && webContents?.id === window.webContents.id,
+  );
+  window.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      callback(
+        permission === "media" && webContents.id === window.webContents.id,
+      );
+    },
+  );
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     const protocol = new URL(url).protocol;

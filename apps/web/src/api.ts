@@ -45,6 +45,7 @@ import { INTERO_API_URL } from "./api-url.js";
 import { createClientUuid } from "./client-id.js";
 import { consumeServerSentEvents } from "./sse.js";
 import type { WorkspaceChangedEvent } from "./workspace-events.js";
+import type { CallTokenPayload, OutgoingCallEvent } from "./calls/types.js";
 
 const API_URL = INTERO_API_URL;
 type ConversationAttachment = Omit<Attachment, "objectKey">;
@@ -68,7 +69,8 @@ export interface BootstrapPayload {
   currentPrincipal: PrincipalSummary;
   standInPrincipal: PrincipalSummary;
   adapters?: {
-    realtime: "centrifugo";
+    realtime?: "centrifugo";
+    calls?: "livekit";
   };
 }
 
@@ -603,6 +605,22 @@ export async function createRealtimeSubscription(
   threadId: string,
 ): Promise<RealtimeSubscriptionPayload> {
   return postJson("/v1/realtime/subscriptions", { threadId });
+}
+
+export async function requestCallToken(input: {
+  threadId: string;
+  callId: string;
+}): Promise<CallTokenPayload> {
+  return postJson("/v1/calls/token", input);
+}
+
+export async function sendCallEvent(input: {
+  eventId: string;
+  threadId: string;
+  callId: string;
+  event: OutgoingCallEvent;
+}): Promise<{ accepted: true }> {
+  return postJson("/v1/calls/events", input);
 }
 
 export async function getKanban(

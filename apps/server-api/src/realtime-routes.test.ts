@@ -66,6 +66,81 @@ describe("Realtime authorization routes", () => {
     expect(verified.payload.exp! - verified.payload.iat!).toBe(300);
   });
 
+  it("uses an allowlisted request origin for browser transports", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      authCorsOrigins: ["http://localhost:4311"],
+      realtimeConfig: {
+        publicUrl: "http://10.20.30.40:4311",
+        tokenSecret: TOKEN_SECRET,
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/realtime/session",
+      headers: {
+        ...auth(ALEX),
+        origin: "http://localhost:4311",
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      transports: [
+        {
+          transport: "websocket",
+          endpoint: "ws://localhost:4311/connection/websocket",
+        },
+        {
+          transport: "sse",
+          endpoint: "http://localhost:4311/connection/sse",
+        },
+      ],
+      emulationEndpoint: "http://localhost:4311/emulation",
+    });
+  });
+
+  it("keeps the configured transport origin for an untrusted request", async () => {
+    await app.close();
+    app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      authCorsOrigins: ["http://localhost:4311"],
+      realtimeConfig: {
+        publicUrl: "http://10.20.30.40:4311",
+        tokenSecret: TOKEN_SECRET,
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/realtime/session",
+      headers: {
+        ...auth(ALEX),
+        origin: "http://attacker.example",
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      transports: [
+        {
+          transport: "websocket",
+          endpoint: "ws://10.20.30.40:4311/connection/websocket",
+        },
+        {
+          transport: "sse",
+          endpoint: "http://10.20.30.40:4311/connection/sse",
+        },
+      ],
+    });
+  });
+
   it("authorizes a thread subscription at mint time and hides inaccessible threads", async () => {
     const threadId = uuidv7();
     await app.inject({

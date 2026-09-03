@@ -13,6 +13,12 @@
     "appId": "com.intero.desktop",
     "productName": "Intero",
     "asar": true,
+    "mac": {
+      "extendInfo": {
+        "NSCameraUsageDescription": "Intero uses the camera when you join a video call.",
+        "NSMicrophoneUsageDescription": "Intero uses the microphone when you join a voice or video call."
+      }
+    },
     "files": [
       "out/**/*",
       "package.json"

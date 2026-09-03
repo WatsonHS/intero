@@ -907,6 +907,12 @@ export function RoutedWorkspace() {
             params: { threadId },
           })
         }
+        onOpenPerson={(personId) =>
+          void navigate({
+            to: "/people/$personId",
+            params: { personId },
+          })
+        }
       />
     );
   }

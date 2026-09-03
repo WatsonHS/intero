@@ -62,6 +62,11 @@ import {
   type RequestAuth,
 } from "./auth.js";
 import {
+  registerCallRoutes,
+  type CallEventPublisher,
+  type CallTokenIssuer,
+} from "./call-routes.js";
+import {
   type ActionInboxEventSource,
   NoopActionInboxEventSource,
 } from "./action-inbox-events.js";
@@ -192,6 +197,8 @@ export interface BuildAppOptions {
   realtimeAccessRevoker?: {
     revoke(principalId: PrincipalId, threadId: ThreadId): Promise<void>;
   };
+  callTokenIssuer?: CallTokenIssuer;
+  callEventPublisher?: CallEventPublisher;
 }
 
 export async function buildApp(
@@ -223,6 +230,9 @@ export async function buildApp(
     tokenSecret: "intero-development-realtime-token-secret-v1",
   };
   const realtimeEnabled = realtimeConfig.enabled ?? true;
+  const callsEnabled = Boolean(
+    realtimeEnabled && options.callTokenIssuer && options.callEventPublisher,
+  );
   const requestStartedAt = new WeakMap<object, number>();
   const store = options.store ?? new InMemoryPlatformStore();
   const organization = options.organization ?? {
@@ -432,7 +442,10 @@ export async function buildApp(
     const resolvedPrincipal = await requestAuth.resolve(request, false);
     return {
       organization,
-      adapters: realtimeEnabled ? { realtime: "centrifugo" as const } : {},
+      adapters: {
+        ...(realtimeEnabled ? { realtime: "centrifugo" as const } : {}),
+        ...(callsEnabled ? { calls: "livekit" as const } : {}),
+      },
       ...(resolvedPrincipal
         ? {
             currentPrincipal: resolvedPrincipal,
@@ -494,6 +507,9 @@ export async function buildApp(
       store,
       requestAuth,
       ...realtimeConfig,
+      ...(options.authCorsOrigins
+        ? { publicOrigins: options.authCorsOrigins }
+        : {}),
       ...(options.authDatabase
         ? {
             rateLimitDatabase: options.authDatabase,
@@ -502,6 +518,16 @@ export async function buildApp(
         : {}),
     });
   }
+  await registerCallRoutes(app, {
+    store,
+    requestAuth,
+    ...(options.callTokenIssuer
+      ? { tokenIssuer: options.callTokenIssuer }
+      : {}),
+    ...(options.callEventPublisher
+      ? { eventPublisher: options.callEventPublisher }
+      : {}),
+  });
   if (options.projectWorkStore) {
     await registerProjectWorkRoutes(app, {
       store: options.projectWorkStore,

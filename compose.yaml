@@ -39,6 +39,14 @@ services:
     ports:
       - "8000:8000"
 
+  livekit:
+    image: livekit/livekit-server:v1.13.1
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z
     command: server /data --console-address ":9001"

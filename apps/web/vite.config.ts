@@ -22,6 +22,7 @@ export function createWebViteConfig(options?: {
     build: {
       outDir: options?.outDir ?? resolve(webRoot, "dist"),
       emptyOutDir: true,
+      chunkSizeWarningLimit: 550,
       rollupOptions: {
         ...(options?.input ? { input: options.input } : {}),
         output: {
@@ -33,6 +34,18 @@ export function createWebViteConfig(options?: {
             }
             if (id.includes("/@lezer/")) return "vendor-editor-parser";
             if (id.includes("/@codemirror/")) return "vendor-editor-core";
+            if (id.includes("/@livekit/components-react/")) {
+              return "vendor-livekit-react";
+            }
+            if (id.includes("/livekit-client/")) {
+              return "vendor-livekit-client";
+            }
+            if (
+              id.includes("/@livekit/protocol/") ||
+              id.includes("/@bufbuild/protobuf/")
+            ) {
+              return "vendor-livekit-protocol";
+            }
             if (
               id.includes("@phosphor-icons/") ||
               id.includes("/phosphor-react/")

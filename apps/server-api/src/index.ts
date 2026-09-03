@@ -15,6 +15,10 @@ import { Pool } from "pg";
 import { PostgresActionInboxEventSource } from "./action-inbox-events.js";
 import { buildApp } from "./app.js";
 import { createInteroAuth } from "./auth.js";
+import {
+  CentrifugoCallEventPublisher,
+  LiveKitCallTokenIssuer,
+} from "./call-routes.js";
 import { assertDatabaseMigrationReadiness } from "./database/migration-readiness.js";
 import { NormalizedPostgresPilotStore } from "./normalized-postgres-pilot-store.js";
 import type { PlatformStore } from "./platform-store.js";
@@ -233,9 +237,22 @@ const app = await buildApp({
     : {}),
   attachments: attachmentService,
   realtimeConfig: serviceConfig.realtime,
+  ...(serviceConfig.calls
+    ? {
+        callTokenIssuer: new LiveKitCallTokenIssuer(
+          serviceConfig.calls.serverUrl,
+          serviceConfig.calls.apiKey,
+          serviceConfig.calls.apiSecret,
+        ),
+      }
+    : {}),
   ...(pilotAdapterConfig.centrifugoApiUrl && pilotAdapterConfig.centrifugoApiKey
     ? {
         realtimeAccessRevoker: new CentrifugoAccessRevoker(
+          pilotAdapterConfig.centrifugoApiUrl,
+          pilotAdapterConfig.centrifugoApiKey,
+        ),
+        callEventPublisher: new CentrifugoCallEventPublisher(
           pilotAdapterConfig.centrifugoApiUrl,
           pilotAdapterConfig.centrifugoApiKey,
         ),

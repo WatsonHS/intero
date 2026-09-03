@@ -20,6 +20,9 @@ x-app-environment: &app-environment
   INTERO_CENTRIFUGO_API_KEY: ${INTERO_CENTRIFUGO_API_KEY:?Set INTERO_CENTRIFUGO_API_KEY}
   INTERO_CENTRIFUGO_PUBLIC_URL: ${INTERO_PUBLIC_URL:?Set INTERO_PUBLIC_URL}
   INTERO_CENTRIFUGO_TOKEN_SECRET: ${INTERO_CENTRIFUGO_TOKEN_SECRET:?Set INTERO_CENTRIFUGO_TOKEN_SECRET}
+  INTERO_LIVEKIT_URL: ${INTERO_LIVEKIT_URL:?Set INTERO_LIVEKIT_URL}
+  INTERO_LIVEKIT_API_KEY: ${INTERO_LIVEKIT_API_KEY:?Set INTERO_LIVEKIT_API_KEY}
+  INTERO_LIVEKIT_API_SECRET: ${INTERO_LIVEKIT_API_SECRET:?Set INTERO_LIVEKIT_API_SECRET}
   INTERO_OBJECT_STORAGE: minio
   INTERO_OBJECT_STORAGE_ENDPOINT: http://minio:9000
   INTERO_OBJECT_STORAGE_REGION: us-east-1
@@ -126,6 +129,23 @@ services:
     volumes:
       - ./infra/centrifugo/config.production.json:/centrifugo/config.json:ro
 
+  livekit:
+    image: livekit/livekit-server:v1.13.1
+    command: ["--bind", "0.0.0.0"]
+    restart: unless-stopped
+    environment:
+      LIVEKIT_KEYS: "${INTERO_LIVEKIT_API_KEY:?Set INTERO_LIVEKIT_API_KEY}: ${INTERO_LIVEKIT_API_SECRET:?Set INTERO_LIVEKIT_API_SECRET}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: true
+    ports:
+      - "${INTERO_LIVEKIT_TCP_PORT:-7881}:7881"
+      - "${INTERO_LIVEKIT_UDP_PORT:-7882}:7882/udp"
+
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z
     command: ["server", "/data"]
@@ -187,6 +207,8 @@ services:
       spicedb:
         condition: service_healthy
       centrifugo:
+        condition: service_started
+      livekit:
         condition: service_started
     healthcheck:
       test:
@@ -253,6 +275,8 @@ services:
       api:
         condition: service_healthy
       centrifugo:
+        condition: service_started
+      livekit:
         condition: service_started
 
 volumes:
