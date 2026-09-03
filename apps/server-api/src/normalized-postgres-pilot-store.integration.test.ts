@@ -766,6 +766,8 @@ type PilotJoinLinkWithHash = {
   codeHash: string;
 };
 
+const BINDING_WORKSPACE_ID = "019d0000-0000-7000-8000-000000000002";
+
 function binding(
   id: string,
   projectId: ProjectId,
@@ -778,9 +780,14 @@ function binding(
     ownerId: adminId,
     client: "codex",
     name: "Codex validation",
-    workspaceId: uuidv7(),
+    workspaceId: BINDING_WORKSPACE_ID,
     preferredLanguage: "en-US",
     credentialHash,
+    // A new seed per credential makes the retry rotate instead of returning
+    // the existing binding idempotently.
+    credentialSeedHash: createHash("sha256")
+      .update(`seed:${credentialHash}`)
+      .digest("hex"),
     verificationCodeHash: createHash("sha256")
       .update("verify-normalized-store")
       .digest("hex"),
