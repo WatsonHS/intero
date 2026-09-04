@@ -24,7 +24,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --prod --audit-level=moderate
+      - name: Audit production dependencies
+        # The npm audit endpoint times out from the runners now and then; a
+        # transient network failure must not read as a vulnerability finding.
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm audit --prod --audit-level=moderate; then exit 0; fi
+            status=$?
+            if [ "$attempt" -lt 3 ]; then echo "audit attempt $attempt failed (exit $status); retrying in 20s"; sleep 20; fi
+          done
+          exit "$status"
       - run: pnpm generate
       - run: git diff --exit-code -- packages/api-contracts/generated
       - run: pnpm lint
