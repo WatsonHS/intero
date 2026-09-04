@@ -580,6 +580,7 @@ async function signIn(page: Page, principal: Principal): Promise<void> {
         .isVisible()
         .catch(() => false)
     ) {
+      await ensureEnglishUi(page);
       return;
     }
     await page.getByTestId("sign-in-email").fill(principal.email);
@@ -589,6 +590,7 @@ async function signIn(page: Page, principal: Principal): Promise<void> {
       await expect(page.getByTestId("nav-pulse")).toBeVisible({
         timeout: 15_000,
       });
+      await ensureEnglishUi(page);
       return;
     } catch (error) {
       if (attempt === 3) throw error;
@@ -606,6 +608,17 @@ async function waitForRealtime(page: Page): Promise<void> {
   await expect(
     page.getByTestId("conversation-realtime-status"),
   ).toHaveAttribute("data-status", "live", { timeout: 30_000 });
+}
+
+// The server-side locale preference wins after login (demo users are seeded
+// zh-CN), and this spec asserts English copy, so pin the preference first.
+async function ensureEnglishUi(page: Page): Promise<void> {
+  const response = await page.request.put(`${apiUrl}/v1/me/preferences`, {
+    data: { locale: "en-US" },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  await page.reload();
+  await expect(page.getByTestId("nav-pulse")).toBeVisible({ timeout: 15_000 });
 }
 
 async function openThread(page: Page, threadId: string): Promise<void> {
