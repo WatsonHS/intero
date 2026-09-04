@@ -5,7 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 
 import { NotificationProvider } from "./design/notifications.js";
 import { ThemeProvider } from "./design/theme.js";
-import { I18nProvider } from "./i18n/index.js";
+import { I18nProvider, ServerLocaleSync } from "./i18n/index.js";
 import { PilotProvider } from "./pilot/context.js";
 import { router } from "./router.js";
 import { ConversationRealtimeProvider } from "./realtime/context.js";
@@ -26,6 +26,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <PilotProvider>
         <I18nProvider>
+          <ServerLocaleSync />
           <ThemeProvider>
             <NotificationProvider>
               <ConversationRealtimeProvider>

@@ -507,6 +507,48 @@
         }
       }
     },
+    "/v1/me/preferences": {
+      "get": {
+        "operationId": "getMePreferences",
+        "responses": {
+          "200": {
+            "description": "Signed-in person's persisted preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MePreferencesResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateMePreferences",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMePreferencesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MePreferencesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/me/push-subscriptions": {
       "post": {
         "operationId": "upsertPushSubscription",
@@ -3156,6 +3198,21 @@
           "endpoint": { "type": "string", "maxLength": 2048, "format": "uri" }
         },
         "required": ["endpoint"],
+        "additionalProperties": false
+      },
+      "MePreferencesResponse": {
+        "type": "object",
+        "properties": {
+          "locale": { "type": "string", "enum": ["zh-CN", "en-US"] }
+        },
+        "additionalProperties": false
+      },
+      "UpdateMePreferencesRequest": {
+        "type": "object",
+        "properties": {
+          "locale": { "type": "string", "enum": ["zh-CN", "en-US"] }
+        },
+        "required": ["locale"],
         "additionalProperties": false
       },
       "WebPushConfigResponse": {

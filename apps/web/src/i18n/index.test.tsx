@@ -29,6 +29,38 @@ describe("desktop localization", () => {
     );
   });
 
+  it("prefers the server locale over stored and navigator values", () => {
+    expect(
+      resolveInitialLocale({
+        server: "en-US",
+        stored: "zh-CN",
+        languages: ["zh-CN"],
+      }),
+    ).toBe("en-US");
+    expect(
+      resolveInitialLocale({
+        server: "zh-CN",
+        stored: "en-US",
+        languages: ["en-US"],
+      }),
+    ).toBe("zh-CN");
+    expect(
+      resolveInitialLocale({
+        stored: "en-US",
+        languages: ["zh-CN"],
+      }),
+    ).toBe("en-US");
+    expect(
+      resolveInitialLocale({
+        stored: null,
+        languages: ["en-GB"],
+      }),
+    ).toBe("en-US");
+    expect(resolveInitialLocale({ stored: null, languages: ["de"] })).toBe(
+      "zh-CN",
+    );
+  });
+
   it("renders Chinese by default when no device preference is available", () => {
     function Probe() {
       const { locale, t } = useI18n();

@@ -93,6 +93,7 @@ export interface ApiServiceConfig {
 }
 
 export interface WorkerServiceConfig {
+  runtimeMode: RuntimeMode;
   pilot: PilotAdapterConfig;
   organizationId: string;
   workerDatabaseUrl: string;
@@ -433,6 +434,7 @@ export function loadWorkerServiceConfig(
     environment.INTERO_PUBLIC_URL ?? `http://localhost:${runtime.port}`,
   );
   return {
+    runtimeMode,
     pilot,
     organizationId: OrganizationId.parse(
       environment.INTERO_ORGANIZATION_ID ??

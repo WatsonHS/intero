@@ -49,6 +49,12 @@ cp .env.production.example .env.production
 chmod 600 .env.production
 ```
 
+Calling needs `INTERO_LIVEKIT_API_KEY` and `INTERO_LIVEKIT_API_SECRET` (any two
+distinct random strings; the bundled LiveKit server and the API share them). The signaling URL is
+derived from `INTERO_PUBLIC_URL` as `wss://<host>/rtc`; set `INTERO_LIVEKIT_URL`
+only for an external LiveKit deployment. `pnpm production:deploy` refuses to start
+while any key from `.env.production.example` is missing from `.env.production`.
+
 Generate independent hex secrets:
 
 ```bash

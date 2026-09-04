@@ -103,10 +103,25 @@ export const NotificationPreferences = z
     mutedKinds: z.array(ActionInboxItem.shape.kind),
     muteUntil: z.iso.datetime().optional(),
     messages: MessageNotificationMode.default("mentions"),
+    locale: PreferredLanguage.optional(),
     updatedAt: z.iso.datetime(),
   })
   .strict();
 export type NotificationPreferences = z.infer<typeof NotificationPreferences>;
+
+export const MePreferences = z
+  .object({
+    locale: PreferredLanguage.optional(),
+  })
+  .strict();
+export type MePreferences = z.infer<typeof MePreferences>;
+
+export const MePreferencesUpdate = z
+  .object({
+    locale: PreferredLanguage,
+  })
+  .strict();
+export type MePreferencesUpdate = z.infer<typeof MePreferencesUpdate>;
 
 export const ProjectAutomationSignalKind = z.enum([
   "blocker",

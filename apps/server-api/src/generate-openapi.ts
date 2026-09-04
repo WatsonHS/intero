@@ -27,6 +27,8 @@ import {
   UpdateThreadRequest,
   UpsertWebPushSubscriptionRequest,
   DeleteWebPushSubscriptionRequest,
+  MePreferencesResponse,
+  UpdateMePreferencesRequest,
   WebPushConfigResponse,
   WebPushSubscriptionResponse,
 } from "@intero/api-contracts";
@@ -60,6 +62,8 @@ const schemas = {
   PresenceResponse,
   UpsertWebPushSubscriptionRequest,
   DeleteWebPushSubscriptionRequest,
+  MePreferencesResponse,
+  UpdateMePreferencesRequest,
   WebPushConfigResponse,
   WebPushSubscriptionResponse,
 };
@@ -571,6 +575,44 @@ const document = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/WebPushConfigResponse" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/me/preferences": {
+      get: {
+        operationId: "getMePreferences",
+        responses: {
+          "200": {
+            description: "Signed-in person's persisted preferences",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MePreferencesResponse" },
+              },
+            },
+          },
+        },
+      },
+      put: {
+        operationId: "updateMePreferences",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/UpdateMePreferencesRequest",
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Updated preferences",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MePreferencesResponse" },
               },
             },
           },

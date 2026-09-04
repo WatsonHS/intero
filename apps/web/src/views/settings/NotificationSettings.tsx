@@ -20,6 +20,7 @@ import { useI18n } from "../../i18n/index.js";
 import type { TranslationKey } from "../../i18n/locales/zh-CN.js";
 import { usePilotOptional } from "../../pilot/context.js";
 import {
+  browserSupportsWebPush,
   currentPushSubscription,
   subscribeWebPush,
   unsubscribeWebPush,
@@ -48,6 +49,21 @@ const OPTIONS: Array<{
     label: "settings.notifications.kind.imminent_blocker",
   },
 ];
+
+export function webPushDescriptionKey(input: {
+  pushSupported: boolean;
+  config?: { enabled: boolean };
+  permission: BrowserNotificationPermission;
+  subscribed: boolean;
+}): TranslationKey {
+  if (!input.pushSupported || input.config?.enabled === false) {
+    return "settings.notifications.webPushUnavailable";
+  }
+  if (input.permission === "denied") {
+    return "settings.notifications.webPushDenied";
+  }
+  return "settings.notifications.webPushLede";
+}
 
 export function NotificationSettings() {
   const { t } = useI18n();
@@ -96,6 +112,13 @@ export function NotificationSettings() {
     });
   }, [desktop]);
 
+  const pushSupported = browserSupportsWebPush();
+  const webPushStatusKey = webPushDescriptionKey({
+    pushSupported,
+    ...(webPush.data ? { config: { enabled: webPush.data.enabled } } : {}),
+    permission: browserPermission,
+    subscribed: pushSubscribed,
+  });
   const browserStatusKey: TranslationKey =
     browserPermission === "granted"
       ? "settings.notifications.browserGranted"
@@ -222,16 +245,18 @@ export function NotificationSettings() {
           <strong className="text-[11.5px] font-[620]">
             {t("settings.notifications.webPush")}
           </strong>
-          <small className="text-[10.5px] leading-[1.55] text-ink-muted">
-            {webPush.data?.enabled
-              ? t("settings.notifications.webPushLede")
-              : t("settings.notifications.webPushUnavailable")}
+          <small
+            className="text-[10.5px] leading-[1.55] text-ink-muted"
+            data-testid="web-push-status"
+          >
+            {t(webPushStatusKey)}
           </small>
         </span>
         <button
           type="button"
           disabled={
             pushPending ||
+            !pushSupported ||
             !webPush.data?.enabled ||
             !webPush.data.publicKey ||
             browserPermission !== "granted"

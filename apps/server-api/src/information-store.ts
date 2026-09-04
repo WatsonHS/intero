@@ -5,6 +5,7 @@ import {
   type MessageNotificationMode,
   type NotificationPreferences,
   type OrganizationId,
+  type PreferredLanguage,
   type PrincipalId,
   type ProjectId,
   uuidv7,
@@ -127,17 +128,19 @@ export class PostgresInformationStore {
       mutedKinds: ActionInboxItem["kind"][];
       muteUntil?: string;
       messages?: MessageNotificationMode;
+      locale?: PreferredLanguage;
     },
   ): Promise<NotificationPreferences> {
     return this.write(async (client) => {
       const result = await client.query(
         `INSERT INTO notification_preferences
-          (organization_id, principal_id, muted_kinds, mute_until, messages)
-         VALUES ($1,$2,$3::jsonb,$4,COALESCE($5,'mentions'))
+          (organization_id, principal_id, muted_kinds, mute_until, messages, locale)
+         VALUES ($1,$2,$3::jsonb,$4,COALESCE($5,'mentions'),$6)
          ON CONFLICT (organization_id, principal_id) DO UPDATE SET
            muted_kinds = EXCLUDED.muted_kinds,
            mute_until = EXCLUDED.mute_until,
            messages = COALESCE($5, notification_preferences.messages),
+           locale = COALESCE($6, notification_preferences.locale),
            updated_at = now()
          RETURNING *`,
         [
@@ -146,6 +149,7 @@ export class PostgresInformationStore {
           JSON.stringify([...new Set(input.mutedKinds)]),
           input.muteUntil ?? null,
           input.messages ?? null,
+          input.locale ?? null,
         ],
       );
       return preferencesFromRow(result.rows[0]);
@@ -365,6 +369,9 @@ function preferencesFromRow(
       messages === "all" || messages === "mentions" || messages === "none"
         ? messages
         : "mentions",
+    ...(row.locale === "zh-CN" || row.locale === "en-US"
+      ? { locale: row.locale }
+      : {}),
     updatedAt: new Date(String(row.updated_at)).toISOString(),
   };
 }

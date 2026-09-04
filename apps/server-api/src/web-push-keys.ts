@@ -31,6 +31,33 @@ export async function ensureWebPushKeyPair(
   return stored;
 }
 
+export interface OrganizationWebPushKeyStore {
+  listOrganizationIds(): Promise<readonly string[]>;
+  read(organizationId: string): Promise<WebPushKeyPair | undefined>;
+  insertIfAbsent(organizationId: string, keys: WebPushKeyPair): Promise<void>;
+}
+
+export async function ensureWebPushKeysForOrganizations(
+  store: OrganizationWebPushKeyStore,
+  generate: () => WebPushKeyPair = generateWebPushKeyPair,
+): Promise<Map<string, WebPushKeyPair>> {
+  const organizationIds = await store.listOrganizationIds();
+  const pairs = new Map<string, WebPushKeyPair>();
+  for (const organizationId of organizationIds) {
+    pairs.set(
+      organizationId,
+      await ensureWebPushKeyPair(
+        {
+          read: () => store.read(organizationId),
+          insertIfAbsent: (keys) => store.insertIfAbsent(organizationId, keys),
+        },
+        generate,
+      ),
+    );
+  }
+  return pairs;
+}
+
 export function webPushSubjectFromPublicUrl(publicUrl: string): string {
   const url = new URL(publicUrl);
   if (url.protocol === "https:") return url.origin;

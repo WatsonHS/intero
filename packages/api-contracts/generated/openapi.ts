@@ -335,6 +335,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/me/preferences": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getMePreferences"];
+    put: operations["updateMePreferences"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/me/push-subscriptions": {
     parameters: {
       query?: never;
@@ -1229,6 +1245,14 @@ export interface components {
       /** Format: uri */
       endpoint: string;
     };
+    MePreferencesResponse: {
+      /** @enum {string} */
+      locale?: "zh-CN" | "en-US";
+    };
+    UpdateMePreferencesRequest: {
+      /** @enum {string} */
+      locale: "zh-CN" | "en-US";
+    };
     WebPushConfigResponse: {
       enabled: boolean;
       publicKey?: string;
@@ -1840,6 +1864,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WebPushConfigResponse"];
+        };
+      };
+    };
+  };
+  getMePreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Signed-in person's persisted preferences */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MePreferencesResponse"];
+        };
+      };
+    };
+  };
+  updateMePreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateMePreferencesRequest"];
+      };
+    };
+    responses: {
+      /** @description Updated preferences */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MePreferencesResponse"];
         };
       };
     };
