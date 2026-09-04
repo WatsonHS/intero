@@ -88,6 +88,10 @@ import {
   type UnfurlJobReference,
 } from "./unfurl-jobs.js";
 import {
+  isListenAddressInUse,
+  metricsPortConflictDecision,
+} from "./metrics-port.js";
+import {
   conversationEventToWebPushPayload,
   createWebPushLibSender,
   deliverConversationWebPush,
@@ -625,14 +629,15 @@ try {
     );
   });
 } catch (error) {
-  if (
-    !error ||
-    typeof error !== "object" ||
-    !("code" in error) ||
-    error.code !== "EADDRINUSE"
-  ) {
+  if (!isListenAddressInUse(error)) {
     throw error;
   }
+  if (metricsPortConflictDecision(serviceConfig.runtimeMode) === "rethrow") {
+    throw error;
+  }
+  console.warn(
+    `Worker metrics port ${serviceConfig.metricsPort} already in use; continuing without a metrics server.`,
+  );
 }
 
 const heartbeatTimer = setInterval(() => {

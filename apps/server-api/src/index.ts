@@ -91,6 +91,9 @@ let actionInboxEvents: PostgresActionInboxEventSource;
       : undefined,
   );
   await postgresStore.initializeOrganization(organizationName);
+  if (providerEncryptionSecret) {
+    await postgresStore.ensureWebPushKeys();
+  }
   if (
     demoSeedingEnabled(process.env.INTERO_SEED_DEMO) &&
     (await postgresStore.listProjections()).length === 0

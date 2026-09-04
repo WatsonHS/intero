@@ -616,6 +616,9 @@ export const notificationPreferences = pgTable(
     })
       .notNull()
       .default("mentions"),
+    locale: text("locale", {
+      enum: ["zh-CN", "en-US"],
+    }),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

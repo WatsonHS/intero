@@ -3,10 +3,19 @@ export interface BrowserPushSubscription {
   keys: { p256dh: string; auth: string };
 }
 
+export function browserSupportsWebPush(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    "serviceWorker" in navigator &&
+    typeof window !== "undefined" &&
+    "PushManager" in window
+  );
+}
+
 export async function currentPushSubscription(): Promise<
   BrowserPushSubscription | undefined
 > {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+  if (!browserSupportsWebPush()) {
     return undefined;
   }
   const registration = await navigator.serviceWorker.getRegistration();

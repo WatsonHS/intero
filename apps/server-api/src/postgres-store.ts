@@ -100,6 +100,9 @@ export class PostgresPlatformStore implements PlatformStore {
         [this.organizationId, name],
       );
     });
+    if (this.secrets) {
+      await this.ensureWebPushKeys();
+    }
   }
 
   async ensureProject(project: Project): Promise<Project> {

@@ -27,6 +27,8 @@ import {
   LinkPreview,
   UpsertWebPushSubscriptionRequest as UpsertWebPushSubscriptionRequestSchema,
   DeleteWebPushSubscriptionRequest as DeleteWebPushSubscriptionRequestSchema,
+  MePreferences,
+  MePreferencesUpdate,
   NotificationPreferences,
   WebPushSubscription,
   Workstream,
@@ -405,6 +407,8 @@ export const NotificationPreferencesResponse = z
     preferences: NotificationPreferences,
   })
   .strict();
+export const MePreferencesResponse = MePreferences;
+export const UpdateMePreferencesRequest = MePreferencesUpdate;
 
 export const StandInToolName = z.enum([
   "stand_in.lookup_team_context",

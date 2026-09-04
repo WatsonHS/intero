@@ -610,6 +610,8 @@ export const enUS: Record<TranslationKey, string> = {
     "Store a subscription with the browser push service so new messages can still arrive after this tab closes.",
   "settings.notifications.webPushUnavailable":
     "This deployment has not configured Web Push.",
+  "settings.notifications.webPushDenied":
+    "The browser blocked notifications, so push cannot be subscribed. Re-enable them in site permissions.",
   "settings.notifications.webPushOn": "Push subscribed",
   "settings.notifications.webPushOff": "Enable push",
   "settings.notifications.webPushPending": "Updating…",

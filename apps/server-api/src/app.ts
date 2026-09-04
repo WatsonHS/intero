@@ -43,6 +43,7 @@ import {
   normalizePublicHttpUrl,
   DeleteWebPushSubscriptionRequest,
   defaultNotificationPreferences,
+  MePreferencesUpdate,
   personalStandInId,
   roomInteroPrincipalId,
   ThreadKind,
@@ -1049,6 +1050,33 @@ export async function buildApp(
         ...(input.messages ? { messages: input.messages } : {}),
       }),
     };
+  });
+
+  app.get("/v1/me/preferences", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    const stored = informationStore
+      ? (await informationStore.getPreferences(principal!.id)).locale
+      : undefined;
+    const locale = stored ?? principal!.preferredLanguage;
+    return { ...(locale ? { locale } : {}) };
+  });
+
+  app.put("/v1/me/preferences", async (request) => {
+    const principal = await requestAuth.resolve(request);
+    const input = parse(MePreferencesUpdate, request.body);
+    await principalDirectory.updateProfile(principal!.id, {
+      preferredLanguage: input.locale,
+    });
+    if (informationStore) {
+      const current = await informationStore.getPreferences(principal!.id);
+      await informationStore.setPreferences(principal!.id, {
+        mutedKinds: current.mutedKinds,
+        ...(current.muteUntil ? { muteUntil: current.muteUntil } : {}),
+        ...(current.messages ? { messages: current.messages } : {}),
+        locale: input.locale,
+      });
+    }
+    return { locale: input.locale };
   });
 
   app.get("/v1/config/web-push", async (request) => {

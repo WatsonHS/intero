@@ -1,12 +1,16 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 
+import { getBootstrap, getMePreferences } from "../api.js";
+import { usePilotOptional } from "../pilot/context.js";
 import { enUS } from "./locales/en-US.js";
 import { zhCN, type TranslationKey } from "./locales/zh-CN.js";
 
@@ -19,7 +23,9 @@ const dictionaries = { "zh-CN": zhCN, "en-US": enUS };
 export function resolveInitialLocale(input: {
   stored?: string | null;
   languages?: readonly string[];
+  server?: string | null;
 }): Locale {
+  if (input.server === "en-US" || input.server === "zh-CN") return input.server;
   if (input.stored === "en-US" || input.stored === "zh-CN") return input.stored;
   for (const language of input.languages ?? []) {
     const lower = language.toLowerCase();
@@ -136,4 +142,31 @@ export function useI18n(): I18nValue {
   const context = useContext(I18nContext);
   if (!context) throw new Error("useI18n must be used inside I18nProvider.");
   return context;
+}
+
+export function ServerLocaleSync() {
+  const { setLocale } = useI18n();
+  const pilot = usePilotOptional();
+  const bootstrap = useQuery({
+    queryKey: ["bootstrap"],
+    queryFn: ({ signal }) => getBootstrap(signal),
+  });
+  const signedIn = Boolean(
+    pilot?.bootstrap.data?.currentPrincipal ?? bootstrap.data?.currentPrincipal,
+  );
+  const preferences = useQuery({
+    queryKey: ["me-preferences"],
+    queryFn: ({ signal }) => getMePreferences(signal),
+    enabled: signedIn,
+  });
+  const serverLocale =
+    preferences.data?.locale ??
+    pilot?.bootstrap.data?.currentPrincipal?.preferredLanguage ??
+    bootstrap.data?.currentPrincipal?.preferredLanguage;
+  useEffect(() => {
+    if (serverLocale === "zh-CN" || serverLocale === "en-US") {
+      setLocale(serverLocale);
+    }
+  }, [serverLocale, setLocale]);
+  return null;
 }

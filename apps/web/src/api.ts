@@ -577,6 +577,16 @@ export async function setNotificationPreferences(input: {
   );
 }
 
+export async function getMePreferences(
+  signal?: AbortSignal,
+): Promise<{ locale?: "zh-CN" | "en-US" }> {
+  return getJson("/v1/me/preferences", signal);
+}
+
+export async function putMePreferences(input: { locale: "zh-CN" | "en-US" }) {
+  return putJson<{ locale: "zh-CN" | "en-US" }>("/v1/me/preferences", input);
+}
+
 export async function getWebPushConfig(
   signal?: AbortSignal,
 ): Promise<{ enabled: boolean; publicKey?: string }> {

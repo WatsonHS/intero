@@ -14,8 +14,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { ACCENTS, lum, useTheme } from "../design/theme.js";
+import { putMePreferences } from "../api.js";
 import { type Locale, useI18n } from "../i18n/index.js";
-import { updatePilotProfile } from "../pilot/api.js";
 import { usePilotOptional } from "../pilot/context.js";
 import { AgentConnectionsSettings } from "./AgentConnectionsSettings.js";
 import { OnboardingAdminSettings } from "./settings/OnboardingAdminSettings.js";
@@ -104,15 +104,10 @@ export function SettingsView({
   const pilotProject = pilot?.projects.data?.projects.find(
     (project) => project.id === pilot.selectedProjectId,
   );
-  const developmentIdentityId =
-    pilot?.bootstrap.data?.authMode === "development_identity"
-      ? pilot.identityId
-      : undefined;
-
   const updatePreferredLanguage = useMutation({
-    mutationFn: (preferredLanguage: Locale) =>
-      updatePilotProfile({ preferredLanguage }, developmentIdentityId),
+    mutationFn: (locale: Locale) => putMePreferences({ locale }),
     onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["me-preferences"] });
       await queryClient.invalidateQueries({ queryKey: ["pilot", "profile"] });
       await queryClient.invalidateQueries({ queryKey: ["pilot", "bootstrap"] });
     },
@@ -142,9 +137,7 @@ export function SettingsView({
 
   function selectLanguage(next: Locale) {
     setLocale(next);
-    if (pilot?.enabled && pilot.identityId) {
-      updatePreferredLanguage.mutate(next);
-    }
+    updatePreferredLanguage.mutate(next);
   }
 
   return (

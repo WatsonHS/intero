@@ -589,6 +589,8 @@ export const zhCN = {
   "settings.notifications.webPushLede":
     "把订阅交给浏览器的推送服务。标签页关闭后仍可收到新消息提醒。",
   "settings.notifications.webPushUnavailable": "此部署未配置 Web Push。",
+  "settings.notifications.webPushDenied":
+    "浏览器已拒绝通知，无法订阅推送。请在站点权限中重新允许。",
   "settings.notifications.webPushOn": "已订阅推送",
   "settings.notifications.webPushOff": "开启推送",
   "settings.notifications.webPushPending": "正在更新…",
