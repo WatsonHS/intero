@@ -27,6 +27,7 @@
     "test:e2e:golden-case": "playwright test tests/e2e/golden-case.spec.ts",
     "test:e2e:agent-connection": "playwright test tests/e2e/coding-agent-connection.spec.ts",
     "test:e2e:routes": "playwright test tests/e2e/routes.spec.ts",
+    "test:e2e:chat": "playwright test tests/e2e/chat-baseline.spec.ts",
     "test:realtime:capacity": "vitest run apps/server-worker/src/outbox.integration.test.ts",
     "test:realtime:release": "INTERO_REALTIME_CAPACITY_CLIENTS=10000 INTERO_REALTIME_CONNECT_CONCURRENCY=128 INTERO_REALTIME_CAPACITY_PUBLICATIONS=1000 vitest run apps/server-worker/src/outbox.integration.test.ts",
     "test:r0:production-like": "scripts/validation/r0-production-like-gate.sh",

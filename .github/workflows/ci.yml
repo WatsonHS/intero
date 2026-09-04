@@ -143,6 +143,11 @@ jobs:
           INTERO_E2E_RENDERER_URL: http://localhost:5173
           INTERO_E2E_API_URL: http://localhost:4310
           DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero_demo_ci
+      - name: Browser acceptance — chat baseline
+        run: pnpm test:e2e:chat
+        env:
+          INTERO_E2E_RENDERER_URL: http://localhost:5173
+          INTERO_E2E_API_URL: http://localhost:4310
       - name: Upload browser failure evidence
         if: failure()
         uses: actions/upload-artifact@v4
