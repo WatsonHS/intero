@@ -232,10 +232,7 @@ export async function buildApp(
   options: BuildAppOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger:
-      options.logger === false
-        ? false
-        : loggerOptions(process.env.INTERO_LOG_LEVEL),
+    logger: options.logger === false ? false : loggerOptions(),
   });
   const allowDevelopmentOrigins =
     options.allowDevelopmentOrigins ?? process.env.NODE_ENV === "test";

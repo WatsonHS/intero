@@ -15,6 +15,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+umask 077
 compose=(
   docker compose
   --env-file "$env_file"

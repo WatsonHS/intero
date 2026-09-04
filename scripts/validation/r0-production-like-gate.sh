@@ -98,13 +98,9 @@ printf '%s\n' \
   "INTERO_SPICEDB_KEY_FILE=$state_dir/spicedb-server.key" \
   "INTERO_CENTRIFUGO_API_KEY=$centrifugo_api_key" \
   "INTERO_CENTRIFUGO_TOKEN_SECRET=$centrifugo_token_secret" \
-  "INTERO_REALTIME_ROLLOUT_PERCENT=100" \
-  "INTERO_MINIO_ACCESS_KEY=intero-r0-validation" \
   "INTERO_MINIO_SECRET_KEY=$minio_secret" \
   "INTERO_MINIO_KMS_KEY=$minio_kms_key" \
   "INTERO_OBJECT_STORAGE_BUCKET=intero-r0-validation" \
-  "INTERO_WORKER_CONCURRENCY=8" \
-  "INTERO_LOG_LEVEL=info" \
   "INTERO_R0_CENTRIFUGO_PORT=$centrifugo_port" \
   >"$env_file"
 chmod 600 "$env_file"

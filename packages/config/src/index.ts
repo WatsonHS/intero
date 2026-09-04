@@ -35,8 +35,7 @@ export const PilotAdapterConfig = z
         context.addIssue({
           code: "custom",
           path: ["databaseUrl"],
-          message:
-            "INTERO_DATABASE_URL is required when INTERO_PILOT_PERSISTENCE=postgres.",
+          message: "PostgreSQL persistence requires INTERO_DATABASE_URL.",
         });
       }
       if (!value.providerEncryptionKey) {
@@ -44,7 +43,7 @@ export const PilotAdapterConfig = z
           code: "custom",
           path: ["providerEncryptionKey"],
           message:
-            "INTERO_PROVIDER_ENCRYPTION_KEY is required when INTERO_PILOT_PERSISTENCE=postgres.",
+            "PostgreSQL persistence requires INTERO_PROVIDER_ENCRYPTION_KEY.",
         });
       }
     }
@@ -64,49 +63,29 @@ export const PilotAdapterConfig = z
           code: "custom",
           path: ["authorization"],
           message:
-            "INTERO_SPICEDB_ENDPOINT and INTERO_SPICEDB_TOKEN are required when INTERO_PILOT_AUTHORIZATION=spicedb.",
+            "INTERO_SPICEDB_ENDPOINT and INTERO_SPICEDB_TOKEN must be configured together.",
         });
       }
     }
   });
 export type PilotAdapterConfig = z.infer<typeof PilotAdapterConfig>;
 
-export function loadRuntimeConfig(
-  environment: NodeJS.ProcessEnv = process.env,
-): RuntimeConfig {
-  return RuntimeConfig.parse({
-    host: environment.INTERO_API_HOST,
-    port: environment.INTERO_API_PORT,
-    logLevel: environment.INTERO_LOG_LEVEL,
-  });
+export function loadRuntimeConfig(): RuntimeConfig {
+  return RuntimeConfig.parse({});
 }
 
 export function loadPilotAdapterConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): PilotAdapterConfig {
-  if (
-    environment.INTERO_PILOT_REALTIME &&
-    environment.INTERO_PILOT_REALTIME !== "centrifugo"
-  ) {
-    throw new Error(
-      "INTERO_PILOT_REALTIME no longer selects an adapter; Centrifugo is required.",
-    );
-  }
   const databaseUrl = environment.INTERO_DATABASE_URL;
-  const persistence =
-    environment.INTERO_PILOT_PERSISTENCE ??
-    (databaseUrl ? "postgres" : "memory");
+  const persistence = databaseUrl ? "postgres" : "memory";
   const spiceDbEndpoint = environment.INTERO_SPICEDB_ENDPOINT;
   const spiceDbToken = environment.INTERO_SPICEDB_TOKEN;
   const centrifugoApiUrl = environment.INTERO_CENTRIFUGO_API_URL;
   return PilotAdapterConfig.parse({
     persistence,
-    authorization:
-      environment.INTERO_PILOT_AUTHORIZATION ??
-      (spiceDbEndpoint || spiceDbToken ? "spicedb" : "membership"),
-    standInJobs:
-      environment.INTERO_PILOT_STAND_IN_JOBS ??
-      (persistence === "postgres" ? "transactional-outbox" : "inline"),
+    authorization: spiceDbEndpoint || spiceDbToken ? "spicedb" : "membership",
+    standInJobs: persistence === "postgres" ? "transactional-outbox" : "inline",
     databaseUrl,
     providerEncryptionKey: environment.INTERO_PROVIDER_ENCRYPTION_KEY,
     spiceDbEndpoint,

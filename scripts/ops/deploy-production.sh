@@ -12,7 +12,7 @@ if [[ ! -f "$env_file" ]]; then
   exit 1
 fi
 # Every non-comment key in .env.production.example must be present, so a new
-# required variable (for example the LiveKit key pair) fails here with a clear
+# required variable (for example the LiveKit secret) fails here with a clear
 # list instead of inside `docker compose` interpolation.
 missing_keys=()
 while IFS= read -r key; do

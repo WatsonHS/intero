@@ -2770,10 +2770,6 @@ export function messageSearchResult(
 
 export const systemPrincipalId = SYSTEM_PRINCIPAL_ID;
 
-export function demoSeedingEnabled(value: string | undefined): boolean {
-  return value === "true";
-}
-
 export function seedDemoStore(store: InMemoryPlatformStore): void {
   const workspaceId =
     "019b5ac0-7600-7000-8000-000000000010" as Workstream["workspaceId"];

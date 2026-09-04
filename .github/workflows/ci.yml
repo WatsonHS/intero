@@ -42,7 +42,7 @@ jobs:
       - run: docker compose up -d --wait
       - run: DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero pnpm --filter @intero/server-api migrate
       - run: DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero pnpm --filter @intero/server-worker migrate
-      - run: INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development INTERO_SPICEDB_INSECURE=true pnpm --filter @intero/server-api migrate:spicedb
+      - run: INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development pnpm --filter @intero/server-api migrate:spicedb
       - name: Create disposable Demo acceptance database
         run: |
           docker compose exec -T postgres createdb -U intero intero_demo_ci
@@ -100,18 +100,12 @@ jobs:
           INTERO_DEMO_DATA: "true"
           INTERO_DEMO_CONFIRM: INTERO_DEMO_DISPOSABLE:127.0.0.1:5432/intero_demo_ci
           INTERO_PROVIDER_ENCRYPTION_KEY: ci-provider-encryption-key
-          INTERO_PILOT_PERSISTENCE: postgres
-          INTERO_PILOT_STAND_IN_JOBS: transactional-outbox
-          INTERO_PILOT_AUTHORIZATION: spicedb
           INTERO_SPICEDB_ENDPOINT: 127.0.0.1:50051
           INTERO_SPICEDB_TOKEN: intero-development
-          INTERO_SPICEDB_INSECURE: "true"
-          INTERO_OBJECT_STORAGE: minio
           INTERO_OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:29000
           INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: intero
           INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: intero-development
           INTERO_OBJECT_STORAGE_BUCKET: intero-objects
-          INTERO_OBJECT_STORAGE_ENCRYPTION: AES256
       - name: Browser acceptance — Phase 6
         run: pnpm test:e2e:phase6
         env:

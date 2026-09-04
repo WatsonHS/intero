@@ -8,16 +8,11 @@ import {
 
 describe("runtime configuration", () => {
   it("listens on every IPv4 interface by default", () => {
-    expect(loadRuntimeConfig({})).toMatchObject({
+    expect(loadRuntimeConfig()).toMatchObject({
       host: "0.0.0.0",
       port: 4310,
+      logLevel: "info",
     });
-  });
-
-  it("keeps an explicit loopback binding available", () => {
-    expect(loadRuntimeConfig({ INTERO_API_HOST: "127.0.0.1" }).host).toBe(
-      "127.0.0.1",
-    );
   });
 });
 
@@ -69,7 +64,6 @@ describe("pilot adapter configuration", () => {
   it("rejects incomplete PostgreSQL adapter configuration", () => {
     expect(() =>
       loadPilotAdapterConfig({
-        INTERO_PILOT_PERSISTENCE: "postgres",
         INTERO_DATABASE_URL: "postgres://intero.test/intero",
         INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
@@ -96,16 +90,10 @@ describe("pilot adapter configuration", () => {
   it("rejects incomplete Phase 2 adapter configuration", () => {
     expect(() =>
       loadPilotAdapterConfig({
-        INTERO_PILOT_AUTHORIZATION: "spicedb",
+        INTERO_SPICEDB_ENDPOINT: "spicedb.internal:50051",
         INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
       }),
     ).toThrow("INTERO_SPICEDB_ENDPOINT");
     expect(() => loadPilotAdapterConfig({})).toThrow();
-    expect(() =>
-      loadPilotAdapterConfig({
-        INTERO_PILOT_STAND_IN_JOBS: "transactional-outbox",
-        INTERO_CENTRIFUGO_API_URL: "http://localhost:8000",
-      }),
-    ).toThrow("PostgreSQL");
   });
 });

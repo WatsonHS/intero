@@ -145,23 +145,8 @@ export class PilotApiError extends Error {
   }
 }
 
-export function pilotClientIsEnabled(input: {
-  hasDesktopBridge: boolean;
-  developmentBuild: boolean;
-  pilotFlag: boolean;
-}): boolean {
-  return input.hasDesktopBridge || input.developmentBuild || input.pilotFlag;
-}
-
 export function isPilotBrowser(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    pilotClientIsEnabled({
-      hasDesktopBridge: Boolean(window.interoDesktop),
-      developmentBuild: import.meta.env.DEV,
-      pilotFlag: import.meta.env.VITE_INTERO_PILOT === "true",
-    })
-  );
+  return typeof window !== "undefined";
 }
 
 export function getPilotBootstrap(signal?: AbortSignal) {

@@ -54,7 +54,6 @@ deployment-only provider encryption key:
 export DATABASE_URL='postgresql://migration-user:...@host/intero'
 export INTERO_DATABASE_URL='postgresql://intero_app:...@host/intero'
 export INTERO_WORKER_DATABASE_URL='postgresql://intero_worker:...@host/intero'
-export INTERO_PILOT_PERSISTENCE='postgres'
 export INTERO_PROVIDER_ENCRYPTION_KEY='replace-with-a-long-random-secret'
 pnpm --filter @intero/server-api migrate
 pnpm dev:pilot
@@ -87,12 +86,8 @@ export DATABASE_URL='postgres://intero:intero@127.0.0.1:5432/intero'
 export INTERO_DATABASE_URL='postgres://intero_app:intero_app@127.0.0.1:5432/intero'
 export INTERO_WORKER_DATABASE_URL='postgres://intero_worker:intero_worker@127.0.0.1:5432/intero'
 export INTERO_PROVIDER_ENCRYPTION_KEY='replace-with-a-long-random-secret'
-export INTERO_PILOT_PERSISTENCE='postgres'
-export INTERO_PILOT_STAND_IN_JOBS='transactional-outbox'
-export INTERO_PILOT_AUTHORIZATION='spicedb'
 export INTERO_SPICEDB_ENDPOINT='127.0.0.1:50051'
 export INTERO_SPICEDB_TOKEN='intero-development'
-export INTERO_SPICEDB_INSECURE='true'
 export INTERO_CENTRIFUGO_API_URL='http://127.0.0.1:8000'
 
 pnpm --filter @intero/server-api migrate
@@ -137,9 +132,8 @@ The API exposes:
 ### Validation-stage initialization and reset
 
 Migrations `0012_normalized_pilot_state.sql` and
-`0013_rainy_gunslinger.sql` are additive. Apply both before starting an API
-configured with `INTERO_PILOT_PERSISTENCE=postgres`; `0013` adds durable
-Stand-in jobs and worker heartbeats.
+`0013_rainy_gunslinger.sql` are additive. Apply both before starting the
+persistent API; `0013` adds durable Stand-in jobs and worker heartbeats.
 
 Previous validation-stage Pilot data is intentionally not migrated. Validation
 resets must use a newly created, disposable loopback database whose name starts
@@ -218,25 +212,16 @@ regression checks; they are not additional user-facing acceptance scenarios.
 ### Phase 4 invite-only onboarding validation
 
 Production access is session-based and invite-only. Start the API with a stable
-Better Auth secret, a delivery webhook, and the exact renderer origin:
+Better Auth secret and the exact renderer origin:
 
 ```bash
 export INTERO_AUTH_SECRET='replace-with-at-least-32-random-characters'
 export INTERO_PUBLIC_URL='http://intero-host.local:4311'
-export INTERO_MAGIC_LINK_WEBHOOK='https://operator.example/magic-link'
-export INTERO_AUTH_TRUSTED_ORIGINS='http://intero-host.local:4311'
 pnpm dev:pilot
 ```
 
-For local browser validation only, the webhook may be replaced by the explicit
-development-link switch:
-
-```bash
-export INTERO_AUTH_DEVELOPMENT_LINKS='true'
-```
-
-Do not enable `INTERO_ALLOW_DEVELOPMENT_IDENTITY` for this test. It is an
-explicit development fallback, not the normal onboarding path.
+Configuring `INTERO_AUTH_SECRET` automatically disables the development
+identity fallback, so this path uses normal session authentication.
 
 Use two isolated browser contexts against the same renderer and API:
 

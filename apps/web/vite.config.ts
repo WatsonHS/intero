@@ -18,6 +18,7 @@ export function createWebViteConfig(options?: {
       host: "0.0.0.0",
       port: 5173,
       strictPort: true,
+      allowedHosts: ["intero.everaways.com"],
     },
     build: {
       outDir: options?.outDir ?? resolve(webRoot, "dist"),

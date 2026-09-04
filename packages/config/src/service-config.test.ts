@@ -5,63 +5,63 @@ import {
   loadMigratorServiceConfig,
   loadObjectStorageConfig,
   loadWorkerServiceConfig,
-  realtimeEnabledForOrganization,
 } from "./service-config.js";
 
 const postgresEnvironment = {
   INTERO_DATABASE_URL: "postgres://intero_app:secret@db.internal/intero",
   INTERO_PROVIDER_ENCRYPTION_KEY: "provider-encryption-secret",
-  INTERO_PILOT_PERSISTENCE: "postgres",
-  INTERO_PILOT_STAND_IN_JOBS: "transactional-outbox",
-  INTERO_OBJECT_STORAGE: "minio",
   INTERO_OBJECT_STORAGE_ENDPOINT: "http://minio.internal:9000",
   INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: "intero",
   INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: "server-only-minio-secret",
   INTERO_OBJECT_STORAGE_BUCKET: "intero-objects",
 } as const;
 
+const productEnvironment = {
+  ...postgresEnvironment,
+  NODE_ENV: "production",
+  INTERO_PUBLIC_URL: "https://intero.example.com",
+  INTERO_AUTH_SECRET: "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+  INTERO_CENTRIFUGO_API_URL: "http://centrifugo.internal:8000",
+  INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+  INTERO_CENTRIFUGO_TOKEN_SECRET:
+    "realtime-token-secret-at-least-thirty-two-bytes",
+} as const;
+
 describe("service environment schemas", () => {
-  it("requires MinIO object storage", () => {
+  it("requires MinIO connection settings and fixes storage policy", () => {
     expect(() => loadObjectStorageConfig({})).toThrow();
     expect(() =>
-      loadObjectStorageConfig({ INTERO_OBJECT_STORAGE: "disabled" }),
-    ).toThrow();
-  });
-
-  it("requires all server-only MinIO settings", () => {
-    expect(() =>
-      loadObjectStorageConfig({ INTERO_OBJECT_STORAGE: "minio" }),
-    ).toThrow();
-    expect(
       loadObjectStorageConfig({
-        INTERO_OBJECT_STORAGE: "minio",
         INTERO_OBJECT_STORAGE_ENDPOINT: "http://minio.internal:9000",
-        INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: "intero",
-        INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: "server-only-minio-secret",
-        INTERO_OBJECT_STORAGE_BUCKET: "intero-objects",
       }),
-    ).toMatchObject({
-      mode: "minio",
+    ).toThrow();
+    expect(loadObjectStorageConfig(postgresEnvironment)).toMatchObject({
       bucket: "intero-objects",
+      region: "us-east-1",
       encryption: "AES256",
       tenantPrefix: "tenants",
+      maxObjectBytes: 25 * 1024 * 1024,
+      pendingUploadTtlSeconds: 3_600,
+      quarantineRetentionDays: 30,
+      abortIncompleteMultipartDays: 1,
     });
   });
 
-  it("loads typed API and worker settings", () => {
+  it("derives development services from available connections", () => {
     expect(loadApiServiceConfig(postgresEnvironment)).toMatchObject({
-      objectStorage: { mode: "minio", bucket: "intero-objects" },
-      metricsEnabled: true,
+      runtime: { host: "0.0.0.0", port: 4310, logLevel: "info" },
+      runtimeMode: "development",
+      allowDevelopmentIdentity: true,
       pilot: {
         persistence: "postgres",
+        authorization: "membership",
+        standInJobs: "transactional-outbox",
         centrifugoApiUrl: "http://localhost:8000",
         centrifugoApiKey: "intero-development-realtime-api-key-v1",
       },
       realtime: {
-        publicUrl: "http://localhost:4311",
+        publicUrl: "http://localhost:4310",
         tokenSecret: "intero-development-realtime-token-secret-v1",
-        enabled: true,
-        rolloutPercent: 100,
       },
       calls: {
         serverUrl: "ws://localhost:7880",
@@ -79,256 +79,104 @@ describe("service environment schemas", () => {
       concurrency: 8,
       metricsHost: "127.0.0.1",
       metricsPort: 9464,
-      pilot: {
-        centrifugoApiUrl: "http://localhost:8000",
-        centrifugoApiKey: "intero-development-realtime-api-key-v1",
-      },
     });
   });
 
-  it("uses a stable Organization bucket for staged realtime rollout", () => {
-    const organizationId = "019b5ac0-7600-7000-8000-000000000001";
-    expect(realtimeEnabledForOrganization(organizationId, 0)).toBe(false);
-    expect(realtimeEnabledForOrganization(organizationId, 100)).toBe(true);
-    expect(realtimeEnabledForOrganization(organizationId, 10)).toBe(
-      realtimeEnabledForOrganization(organizationId, 10),
-    );
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_REALTIME_ROLLOUT_PERCENT: "0",
-      }).realtime,
-    ).toMatchObject({ enabled: false, rolloutPercent: 0 });
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_REALTIME_ROLLOUT_PERCENT: "101",
-      }),
-    ).toThrow();
-  });
-
-  it("loads the worker public URL from INTERO_PUBLIC_URL", () => {
-    expect(
-      loadWorkerServiceConfig({
-        ...postgresEnvironment,
-        INTERO_WORKER_DATABASE_URL:
-          "postgres://intero_worker:secret@db.internal/intero",
-      }).publicUrl,
-    ).toBe("http://localhost:4310");
-    expect(
-      loadWorkerServiceConfig({
-        ...postgresEnvironment,
-        INTERO_WORKER_DATABASE_URL:
-          "postgres://intero_worker:secret@db.internal/intero",
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-      }).publicUrl,
-    ).toBe("https://intero.example.com");
-  });
-
-  it("rejects the removed realtime mode switch", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_PILOT_REALTIME: "polling",
-      }),
-    ).toThrow("INTERO_PILOT_REALTIME no longer selects an adapter");
-  });
-
-  it("maps loopback public URL hosts to the localhost passkey RP ID", () => {
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "http://127.0.0.1:4310",
-        INTERO_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1:5183",
-      }).auth?.passkeyRpId,
-    ).toBe("localhost");
-  });
-
-  it("configures invite-only credentials without a delivery provider", () => {
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "http://127.0.0.1:4310",
-        INTERO_AUTH_TRUSTED_ORIGINS: "http://127.0.0.1:5183",
-        INTERO_PASSKEY_RP_ID: "127.0.0.1",
-      }),
-    ).toMatchObject({
+  it("derives browser-facing auth settings from the public URL", () => {
+    const loopback = loadApiServiceConfig({
+      ...postgresEnvironment,
+      INTERO_AUTH_SECRET:
+        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
+      INTERO_PUBLIC_URL: "http://127.0.0.1:4310",
+    });
+    expect(loopback).toMatchObject({
+      allowDevelopmentIdentity: false,
       auth: {
         publicUrl: "http://127.0.0.1:4310",
-        passkeyRpId: "127.0.0.1",
+        passkeyRpId: "localhost",
         trustedOrigins: expect.arrayContaining([
           "http://127.0.0.1:4310",
-          "http://127.0.0.1:5183",
-          "http://127.0.0.1:5173",
-        ]),
-      },
-    });
-  });
-
-  it("keeps the public auth URL on localhost when binding all interfaces", () => {
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-      }),
-    ).toMatchObject({
-      runtime: { host: "0.0.0.0", port: 4310 },
-      auth: {
-        publicUrl: "http://localhost:4310",
-        trustedOrigins: expect.arrayContaining([
-          "http://localhost:4310",
-          "http://localhost:4311",
-          "http://127.0.0.1:5173",
           "http://127.0.0.1:4311",
-          "http://0.0.0.0:4311",
+          "http://127.0.0.1:5173",
         ]),
       },
     });
-  });
 
-  it("does not add local development origins to a public deployment", () => {
-    const config = loadApiServiceConfig({
+    const publicDeployment = loadApiServiceConfig({
       ...postgresEnvironment,
       INTERO_AUTH_SECRET:
         "intero-auth-secret-that-is-at-least-thirty-two-bytes",
       INTERO_PUBLIC_URL: "https://intero.example.com",
     });
-    expect(config.auth?.trustedOrigins).toEqual(["https://intero.example.com"]);
-    expect(config.auth?.passkeyRpId).toBe("intero.example.com");
+    expect(publicDeployment.auth?.trustedOrigins).toEqual([
+      "https://intero.example.com",
+    ]);
+    expect(publicDeployment.auth?.passkeyRpId).toBe("intero.example.com");
   });
 
-  it("allows a LAN HTTP address as the canonical pilot origin", () => {
-    expect(
+  it("requires the product secrets and canonical HTTPS origin", () => {
+    const { INTERO_AUTH_SECRET: _authSecret, ...withoutAuthSecret } =
+      productEnvironment;
+    expect(() => loadApiServiceConfig(withoutAuthSecret)).toThrow(
+      "INTERO_AUTH_SECRET",
+    );
+
+    expect(() =>
       loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "http://10.20.30.40:4311/",
+        ...productEnvironment,
+        INTERO_PUBLIC_URL: "http://intero.example.com",
       }),
-    ).toMatchObject({
-      auth: {
-        publicUrl: "http://10.20.30.40:4311",
-        passkeyRpId: "10.20.30.40",
-        trustedOrigins: expect.arrayContaining([
-          "http://10.20.30.40:4311",
-          "http://localhost:4311",
-          "http://127.0.0.1:4311",
-        ]),
+    ).toThrow("HTTPS INTERO_PUBLIC_URL");
+  });
+
+  it("derives the production topology without feature selectors", () => {
+    const config = loadApiServiceConfig({
+      ...productEnvironment,
+      INTERO_SPICEDB_ENDPOINT: "spicedb.internal:50051",
+      INTERO_SPICEDB_TOKEN: "server-only-spicedb-token",
+      INTERO_LIVEKIT_API_SECRET: "livekit-secret",
+    });
+
+    expect(config).toMatchObject({
+      runtimeMode: "product",
+      allowDevelopmentIdentity: false,
+      spiceDbInsecure: false,
+      pilot: {
+        persistence: "postgres",
+        authorization: "spicedb",
+        standInJobs: "transactional-outbox",
+      },
+      realtime: { publicUrl: "https://intero.example.com" },
+      calls: {
+        serverUrl: "wss://intero.example.com/rtc",
+        apiKey: "intero",
+        apiSecret: "livekit-secret",
       },
     });
-  });
-
-  it("allows development identity simulation only in development mode", () => {
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "development",
-        INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
-      }),
-    ).toMatchObject({
-      runtimeMode: "development",
-      allowDevelopmentIdentity: true,
-    });
-  });
-
-  it("rejects development identity behavior in product mode", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "product",
-        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-        INTERO_ALLOW_DEVELOPMENT_IDENTITY: "true",
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-      }),
-    ).toThrow(
-      "Product runtime cannot enable INTERO_ALLOW_DEVELOPMENT_IDENTITY.",
-    );
-  });
-
-  it("requires persistent session authentication in product mode", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "product",
-        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-        INTERO_SEED_DEMO: "true",
-      }),
-    ).toThrow("Product runtime requires INTERO_AUTH_SECRET");
 
     expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "product",
-        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-        INTERO_SEED_DEMO: "true",
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "https://intero.internal.example",
-        INTERO_CENTRIFUGO_TOKEN_SECRET:
-          "realtime-token-secret-at-least-thirty-two-bytes",
-        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
+      loadWorkerServiceConfig({
+        ...productEnvironment,
+        INTERO_WORKER_DATABASE_URL:
+          "postgres://intero_worker:secret@db.internal/intero",
       }),
     ).toMatchObject({
       runtimeMode: "product",
-      allowDevelopmentIdentity: false,
-      auth: {},
+      concurrency: 8,
+      metricsHost: "0.0.0.0",
+      metricsPort: 9464,
+      spiceDbInsecure: false,
     });
   });
 
-  it("rejects plaintext browser and SpiceDB transport in product mode", () => {
-    const product = {
-      ...postgresEnvironment,
-      INTERO_RUNTIME_MODE: "product",
-      INTERO_AUTH_SECRET:
-        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-      INTERO_CENTRIFUGO_TOKEN_SECRET:
-        "realtime-token-secret-at-least-thirty-two-bytes",
-      INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
-    } as const;
-
-    expect(() =>
-      loadApiServiceConfig({
-        ...product,
-        INTERO_PUBLIC_URL: "http://intero.example.com",
-      }),
-    ).toThrow("Product runtime requires an HTTPS INTERO_PUBLIC_URL");
-
-    expect(() =>
-      loadApiServiceConfig({
-        ...product,
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-        INTERO_SPICEDB_INSECURE: "true",
-      }),
-    ).toThrow("Product runtime cannot enable INTERO_SPICEDB_INSECURE");
-
-    expect(() =>
-      loadWorkerServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "product",
-        INTERO_WORKER_DATABASE_URL:
-          "postgres://intero_worker:secret@db.internal/intero",
-        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
-        INTERO_SPICEDB_INSECURE: "true",
-      }),
-    ).toThrow("Product runtime cannot enable INTERO_SPICEDB_INSECURE");
-  });
-
-  it("carries a private SpiceDB CA path into service and migrator config", () => {
+  it("carries a private SpiceDB CA path into every service", () => {
     const caPath = "/run/intero/spicedb/ca.crt";
     expect(
       loadApiServiceConfig({
         ...postgresEnvironment,
         INTERO_SPICEDB_CA_PATH: caPath,
       }),
-    ).toMatchObject({ spiceDbCaPath: caPath });
+    ).toMatchObject({ spiceDbCaPath: caPath, spiceDbInsecure: false });
     expect(
       loadMigratorServiceConfig({
         DATABASE_URL: "postgres://admin:secret@db.internal/intero",
@@ -336,99 +184,23 @@ describe("service environment schemas", () => {
         INTERO_SPICEDB_TOKEN: "server-only-spicedb-token",
         INTERO_SPICEDB_CA_PATH: caPath,
       }),
-    ).toMatchObject({ spiceDb: { caPath } });
+    ).toMatchObject({ spiceDb: { caPath, insecure: false } });
   });
 
-  it("requires both browser-token and publish credentials for product realtime", () => {
-    const productRealtime = {
-      ...postgresEnvironment,
-      INTERO_RUNTIME_MODE: "product",
-      INTERO_AUTH_SECRET:
-        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-      INTERO_PUBLIC_URL: "https://intero.example.com",
-      INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-    } as const;
-    expect(() => loadApiServiceConfig(productRealtime)).toThrow(
+  it("requires both Centrifugo credentials in product mode", () => {
+    const { INTERO_CENTRIFUGO_API_KEY: _apiKey, ...withoutApiKey } =
+      productEnvironment;
+    expect(() => loadApiServiceConfig(withoutApiKey)).toThrow(
+      "INTERO_CENTRIFUGO_API_KEY",
+    );
+
+    const {
+      INTERO_CENTRIFUGO_TOKEN_SECRET: _tokenSecret,
+      ...withoutTokenSecret
+    } = productEnvironment;
+    expect(() => loadApiServiceConfig(withoutTokenSecret)).toThrow(
       "INTERO_CENTRIFUGO_TOKEN_SECRET",
     );
-    expect(() =>
-      loadApiServiceConfig({
-        ...productRealtime,
-        INTERO_CENTRIFUGO_TOKEN_SECRET:
-          "realtime-token-secret-at-least-thirty-two-bytes",
-      }),
-    ).toThrow("INTERO_CENTRIFUGO_API_KEY");
-    expect(
-      loadApiServiceConfig({
-        ...productRealtime,
-        INTERO_CENTRIFUGO_TOKEN_SECRET:
-          "realtime-token-secret-at-least-thirty-two-bytes",
-        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
-      }).realtime,
-    ).toMatchObject({
-      publicUrl: "https://intero.example.com",
-    });
-  });
-
-  it("requires LiveKit settings to be configured together", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_LIVEKIT_URL: "wss://calls.example.com",
-      }),
-    ).toThrow("INTERO_LIVEKIT");
-
-    expect(
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_LIVEKIT_URL: "wss://calls.example.com",
-        INTERO_LIVEKIT_API_KEY: "livekit-key",
-        INTERO_LIVEKIT_API_SECRET: "livekit-secret",
-      }).calls,
-    ).toEqual({
-      serverUrl: "wss://calls.example.com",
-      apiKey: "livekit-key",
-      apiSecret: "livekit-secret",
-    });
-  });
-
-  it("derives the LiveKit signaling URL from the public URL in product mode", () => {
-    const config = loadApiServiceConfig({
-      ...postgresEnvironment,
-      INTERO_RUNTIME_MODE: "product",
-      INTERO_AUTH_SECRET:
-        "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-      INTERO_PUBLIC_URL: "https://intero.example.com",
-      INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-      INTERO_CENTRIFUGO_TOKEN_SECRET:
-        "realtime-token-secret-at-least-thirty-two-bytes",
-      INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
-      INTERO_LIVEKIT_API_KEY: "livekit-key",
-      INTERO_LIVEKIT_API_SECRET: "livekit-secret",
-    });
-    expect(config.calls).toMatchObject({
-      serverUrl: "wss://intero.example.com/rtc",
-      apiKey: "livekit-key",
-    });
-  });
-
-  it("requires secure LiveKit signaling in product mode", () => {
-    expect(() =>
-      loadApiServiceConfig({
-        ...postgresEnvironment,
-        INTERO_RUNTIME_MODE: "product",
-        INTERO_AUTH_SECRET:
-          "intero-auth-secret-that-is-at-least-thirty-two-bytes",
-        INTERO_PUBLIC_URL: "https://intero.example.com",
-        INTERO_CENTRIFUGO_API_URL: "https://centrifugo.internal",
-        INTERO_CENTRIFUGO_TOKEN_SECRET:
-          "realtime-token-secret-at-least-thirty-two-bytes",
-        INTERO_CENTRIFUGO_API_KEY: "centrifugo-publish-api-key",
-        INTERO_LIVEKIT_URL: "ws://calls.example.com",
-        INTERO_LIVEKIT_API_KEY: "livekit-key",
-        INTERO_LIVEKIT_API_SECRET: "livekit-secret",
-      }),
-    ).toThrow("WSS INTERO_LIVEKIT_URL");
   });
 
   it("validates ordered migrator dependencies", () => {
@@ -440,7 +212,7 @@ describe("service environment schemas", () => {
       }),
     ).toMatchObject({
       workerDatabaseUrl: "postgres://admin:secret@db.internal/intero",
-      spiceDb: { endpoint: "spicedb.internal:50051" },
+      spiceDb: { endpoint: "spicedb.internal:50051", insecure: true },
     });
     expect(() =>
       loadMigratorServiceConfig({

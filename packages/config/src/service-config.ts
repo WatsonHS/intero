@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { createHash } from "node:crypto";
 
 import {
   loadPilotAdapterConfig,
@@ -10,55 +9,41 @@ import {
 
 const ServerSecret = z.string().min(16);
 const OrganizationId = z.uuid();
-const RuntimeMode = z.enum(["development", "product"]);
-export type RuntimeMode = z.infer<typeof RuntimeMode>;
+export type RuntimeMode = "development" | "product";
 const DevelopmentRealtimeTokenSecret =
   "intero-development-realtime-token-secret-v1";
 const DevelopmentRealtimeApiKey = "intero-development-realtime-api-key-v1";
 const DevelopmentCentrifugoApiUrl = "http://localhost:8000";
-const DevelopmentCentrifugoPublicUrl = "http://localhost:4311";
 const DevelopmentLiveKitUrl = "ws://localhost:7880";
 const DevelopmentLiveKitApiKey = "devkey";
 const DevelopmentLiveKitApiSecret = "secret";
+const ProductLiveKitApiKey = "intero";
 
-const MinioObjectStorageConfig = z
-  .object({
-    mode: z.literal("minio"),
-    endpoint: z.url(),
-    region: z.string().min(1),
-    accessKeyId: z.string().min(1),
-    secretAccessKey: ServerSecret,
-    bucket: z
-      .string()
-      .min(3)
-      .max(63)
-      .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/),
-    tenantPrefix: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-z0-9][a-z0-9/_-]*$/),
-    maxObjectBytes: z
-      .number()
-      .int()
-      .positive()
-      .max(25 * 1024 * 1024),
-    pendingUploadTtlSeconds: z.number().int().min(60).max(86_400),
-    quarantineRetentionDays: z.number().int().min(1).max(365),
-    abortIncompleteMultipartDays: z.number().int().min(1).max(30),
-    encryption: z.enum(["AES256", "aws:kms"]),
-    kmsKeyId: z.string().min(1).optional(),
-  })
-  .superRefine((value, context) => {
-    if (value.encryption === "aws:kms" && !value.kmsKeyId) {
-      context.addIssue({
-        code: "custom",
-        path: ["kmsKeyId"],
-        message:
-          "INTERO_OBJECT_STORAGE_KMS_KEY_ID is required for aws:kms encryption.",
-      });
-    }
-  });
+const MinioObjectStorageConfig = z.object({
+  endpoint: z.url(),
+  region: z.string().min(1),
+  accessKeyId: z.string().min(1),
+  secretAccessKey: ServerSecret,
+  bucket: z
+    .string()
+    .min(3)
+    .max(63)
+    .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/),
+  tenantPrefix: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z0-9][a-z0-9/_-]*$/),
+  maxObjectBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(25 * 1024 * 1024),
+  pendingUploadTtlSeconds: z.number().int().min(60).max(86_400),
+  quarantineRetentionDays: z.number().int().min(1).max(365),
+  abortIncompleteMultipartDays: z.number().int().min(1).max(30),
+  encryption: z.literal("AES256"),
+});
 
 export const ObjectStorageConfig = MinioObjectStorageConfig;
 export type ObjectStorageConfig = z.infer<typeof ObjectStorageConfig>;
@@ -69,15 +54,12 @@ export interface ApiServiceConfig {
   pilot: PilotAdapterConfig;
   organizationId: string;
   objectStorage: ObjectStorageConfig;
-  metricsEnabled: boolean;
   spiceDbInsecure: boolean;
   spiceDbCaPath?: string;
   allowDevelopmentIdentity: boolean;
   realtime: {
     publicUrl: string;
     tokenSecret: string;
-    enabled: boolean;
-    rolloutPercent: number;
   };
   calls?: {
     serverUrl: string;
@@ -124,27 +106,17 @@ export function loadObjectStorageConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ObjectStorageConfig {
   return ObjectStorageConfig.parse({
-    mode: environment.INTERO_OBJECT_STORAGE,
     endpoint: environment.INTERO_OBJECT_STORAGE_ENDPOINT,
-    region: environment.INTERO_OBJECT_STORAGE_REGION ?? "us-east-1",
+    region: "us-east-1",
     accessKeyId: environment.INTERO_OBJECT_STORAGE_ACCESS_KEY_ID,
     secretAccessKey: environment.INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY,
     bucket: environment.INTERO_OBJECT_STORAGE_BUCKET,
-    tenantPrefix: environment.INTERO_OBJECT_STORAGE_TENANT_PREFIX ?? "tenants",
-    maxObjectBytes: Number(
-      environment.INTERO_OBJECT_STORAGE_MAX_BYTES ?? 25 * 1024 * 1024,
-    ),
-    pendingUploadTtlSeconds: Number(
-      environment.INTERO_OBJECT_STORAGE_PENDING_TTL_SECONDS ?? 3_600,
-    ),
-    quarantineRetentionDays: Number(
-      environment.INTERO_OBJECT_STORAGE_QUARANTINE_DAYS ?? 30,
-    ),
-    abortIncompleteMultipartDays: Number(
-      environment.INTERO_OBJECT_STORAGE_ABORT_MULTIPART_DAYS ?? 1,
-    ),
-    encryption: environment.INTERO_OBJECT_STORAGE_ENCRYPTION ?? "AES256",
-    kmsKeyId: environment.INTERO_OBJECT_STORAGE_KMS_KEY_ID,
+    tenantPrefix: "tenants",
+    maxObjectBytes: 25 * 1024 * 1024,
+    pendingUploadTtlSeconds: 3_600,
+    quarantineRetentionDays: 30,
+    abortIncompleteMultipartDays: 1,
+    encryption: "AES256",
   });
 }
 
@@ -152,28 +124,19 @@ export function loadApiServiceConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ApiServiceConfig {
   const authSecret = environment.INTERO_AUTH_SECRET;
-  const runtime = loadRuntimeConfig(environment);
-  const runtimeMode = RuntimeMode.parse(
-    environment.INTERO_RUNTIME_MODE ??
-      (environment.NODE_ENV === "production" ? "product" : "development"),
-  );
+  const runtime = loadRuntimeConfig();
+  const runtimeMode = runtimeModeFor(environment);
   const publicUrl = normalizePublicUrl(
     environment.INTERO_PUBLIC_URL ?? `http://localhost:${runtime.port}`,
   );
-  const spiceDbInsecure = environment.INTERO_SPICEDB_INSECURE === "true";
+  const spiceDbCaPath = environment.INTERO_SPICEDB_CA_PATH;
+  const spiceDbInsecure = runtimeMode === "development" && !spiceDbCaPath;
   if (runtimeMode === "product" && new URL(publicUrl).protocol !== "https:") {
     throw new Error(
       "Product runtime requires an HTTPS INTERO_PUBLIC_URL for secure sessions, passkeys, and realtime connections.",
     );
   }
-  if (runtimeMode === "product" && spiceDbInsecure) {
-    throw new Error("Product runtime cannot enable INTERO_SPICEDB_INSECURE.");
-  }
   const publicUrlHost = new URL(publicUrl).hostname;
-  const configuredTrustedOrigins =
-    environment.INTERO_AUTH_TRUSTED_ORIGINS?.split(",").map((origin) =>
-      z.url().parse(origin.trim()),
-    ) ?? [];
   const trustedOrigins = Array.from(
     new Set([
       ...defaultAuthTrustedOrigins(publicUrl, runtime.port),
@@ -181,7 +144,6 @@ export function loadApiServiceConfig(
       new URL(publicUrl).protocol === "http:"
         ? localDevelopmentOrigins(runtime.port)
         : []),
-      ...configuredTrustedOrigins,
     ]),
   );
   const pilotEnvironment = withDevelopmentCentrifugoDefaults(
@@ -194,81 +156,28 @@ export function loadApiServiceConfig(
     (runtimeMode === "development"
       ? DevelopmentRealtimeTokenSecret
       : undefined);
-  const realtimePublicUrl =
-    environment.INTERO_CENTRIFUGO_PUBLIC_URL ??
-    (runtimeMode === "development"
-      ? environment.INTERO_PUBLIC_URL
-        ? publicUrl
-        : DevelopmentCentrifugoPublicUrl
-      : undefined);
   const organizationId = OrganizationId.parse(
     environment.INTERO_ORGANIZATION_ID ??
       "019b5ac0-7600-7000-8000-000000000001",
   );
-  const realtimeRolloutPercent = z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(100)
-    .parse(environment.INTERO_REALTIME_ROLLOUT_PERCENT ?? 100);
-  const developmentIdentityRequested =
-    environment.INTERO_ALLOW_DEVELOPMENT_IDENTITY === "true";
-  const configuredLiveKitUrl =
-    environment.INTERO_LIVEKIT_URL?.trim() || undefined;
-  // The production stack runs its own LiveKit behind Caddy at /rtc, so the
-  // signaling URL follows the public URL unless an external server is set.
-  const derivedLiveKitUrl =
-    runtimeMode === "product" && environment.INTERO_PUBLIC_URL
-      ? `wss://${new URL(environment.INTERO_PUBLIC_URL).host}/rtc`
-      : undefined;
-  const liveKitCredentials = [
-    environment.INTERO_LIVEKIT_API_KEY,
-    environment.INTERO_LIVEKIT_API_SECRET,
-  ];
-  const callsRequested =
-    Boolean(configuredLiveKitUrl) || liveKitCredentials.some(Boolean);
-  if (callsRequested && liveKitCredentials.some((value) => !value)) {
-    throw new Error(
-      "LiveKit calling requires INTERO_LIVEKIT_API_KEY and INTERO_LIVEKIT_API_SECRET together; INTERO_LIVEKIT_URL defaults to wss://<public host>/rtc in product mode.",
-    );
-  }
+  const liveKitSecret = environment.INTERO_LIVEKIT_API_SECRET;
   const calls =
-    callsRequested || runtimeMode === "development"
+    liveKitSecret || runtimeMode === "development"
       ? {
-          serverUrl: z
-            .url()
-            .parse(
-              configuredLiveKitUrl ??
-                derivedLiveKitUrl ??
-                DevelopmentLiveKitUrl,
-            ),
-          apiKey: z
-            .string()
-            .min(1)
-            .parse(
-              environment.INTERO_LIVEKIT_API_KEY ?? DevelopmentLiveKitApiKey,
-            ),
+          serverUrl:
+            runtimeMode === "product"
+              ? `wss://${new URL(publicUrl).host}/rtc`
+              : DevelopmentLiveKitUrl,
+          apiKey:
+            runtimeMode === "product"
+              ? ProductLiveKitApiKey
+              : DevelopmentLiveKitApiKey,
           apiSecret: z
             .string()
             .min(1)
-            .parse(
-              environment.INTERO_LIVEKIT_API_SECRET ??
-                DevelopmentLiveKitApiSecret,
-            ),
+            .parse(liveKitSecret ?? DevelopmentLiveKitApiSecret),
         }
       : undefined;
-  if (
-    runtimeMode === "product" &&
-    calls &&
-    new URL(calls.serverUrl).protocol !== "wss:"
-  ) {
-    throw new Error("Product runtime requires a WSS INTERO_LIVEKIT_URL.");
-  }
-  if (runtimeMode === "product" && developmentIdentityRequested) {
-    throw new Error(
-      "Product runtime cannot enable INTERO_ALLOW_DEVELOPMENT_IDENTITY.",
-    );
-  }
   if (runtimeMode === "product" && !authSecret) {
     throw new Error(
       "Product runtime requires INTERO_AUTH_SECRET for session authentication.",
@@ -300,24 +209,12 @@ export function loadApiServiceConfig(
     pilot,
     organizationId,
     objectStorage: loadObjectStorageConfig(environment),
-    metricsEnabled: environment.INTERO_METRICS_ENABLED !== "false",
     spiceDbInsecure,
-    ...(environment.INTERO_SPICEDB_CA_PATH
-      ? { spiceDbCaPath: environment.INTERO_SPICEDB_CA_PATH }
-      : {}),
-    allowDevelopmentIdentity:
-      runtimeMode === "development" && developmentIdentityRequested,
+    ...(spiceDbCaPath ? { spiceDbCaPath } : {}),
+    allowDevelopmentIdentity: runtimeMode === "development" && !authSecret,
     realtime: {
-      publicUrl: z
-        .url()
-        .parse(realtimePublicUrl ?? publicUrl)
-        .replace(/\/+$/, ""),
+      publicUrl,
       tokenSecret: z.string().min(32).parse(realtimeTokenSecret),
-      enabled: realtimeEnabledForOrganization(
-        organizationId,
-        realtimeRolloutPercent,
-      ),
-      rolloutPercent: realtimeRolloutPercent,
     },
     ...(calls ? { calls } : {}),
     ...(authSecret
@@ -326,29 +223,15 @@ export function loadApiServiceConfig(
             publicUrl: z.url().parse(publicUrl),
             secret: z.string().min(32).parse(authSecret),
             trustedOrigins,
-            passkeyRpId: z
-              .string()
-              .min(1)
-              .parse(
-                environment.INTERO_PASSKEY_RP_ID ??
-                  passkeyRpIdForHost(publicUrlHost),
-              ),
+            passkeyRpId: passkeyRpIdForHost(publicUrlHost),
           },
         }
       : {}),
   };
 }
 
-export function realtimeEnabledForOrganization(
-  organizationId: string,
-  rolloutPercent: number,
-): boolean {
-  if (rolloutPercent <= 0) return false;
-  if (rolloutPercent >= 100) return true;
-  const bucket =
-    createHash("sha256").update(organizationId).digest().readUInt32BE(0) %
-    10_000;
-  return bucket < rolloutPercent * 100;
+function runtimeModeFor(environment: NodeJS.ProcessEnv): RuntimeMode {
+  return environment.NODE_ENV === "production" ? "product" : "development";
 }
 
 function normalizePublicUrl(value: string): string {
@@ -405,14 +288,9 @@ function localDevelopmentOrigins(apiPort: number): string[] {
 export function loadWorkerServiceConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): WorkerServiceConfig {
-  const runtimeMode = RuntimeMode.parse(
-    environment.INTERO_RUNTIME_MODE ??
-      (environment.NODE_ENV === "production" ? "product" : "development"),
-  );
-  const spiceDbInsecure = environment.INTERO_SPICEDB_INSECURE === "true";
-  if (runtimeMode === "product" && spiceDbInsecure) {
-    throw new Error("Product runtime cannot enable INTERO_SPICEDB_INSECURE.");
-  }
+  const runtimeMode = runtimeModeFor(environment);
+  const spiceDbCaPath = environment.INTERO_SPICEDB_CA_PATH;
+  const spiceDbInsecure = runtimeMode === "development" && !spiceDbCaPath;
   const pilot = loadPilotAdapterConfig(
     withDevelopmentCentrifugoDefaults(environment, runtimeMode),
   );
@@ -429,7 +307,7 @@ export function loadWorkerServiceConfig(
       "server-worker requires transactional-outbox Stand-in jobs.",
     );
   }
-  const runtime = loadRuntimeConfig(environment);
+  const runtime = loadRuntimeConfig();
   const publicUrl = normalizePublicUrl(
     environment.INTERO_PUBLIC_URL ?? `http://localhost:${runtime.port}`,
   );
@@ -441,29 +319,12 @@ export function loadWorkerServiceConfig(
         "019b5ac0-7600-7000-8000-000000000001",
     ),
     workerDatabaseUrl: z.url().parse(environment.INTERO_WORKER_DATABASE_URL),
-    concurrency: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(64)
-      .default(8)
-      .parse(environment.INTERO_WORKER_CONCURRENCY),
-    metricsHost: z
-      .string()
-      .default("127.0.0.1")
-      .parse(environment.INTERO_WORKER_METRICS_HOST),
-    metricsPort: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(65_535)
-      .default(9464)
-      .parse(environment.INTERO_WORKER_METRICS_PORT),
+    concurrency: 8,
+    metricsHost: runtimeMode === "product" ? "0.0.0.0" : "127.0.0.1",
+    metricsPort: 9464,
     spiceDbInsecure,
     publicUrl,
-    ...(environment.INTERO_SPICEDB_CA_PATH
-      ? { spiceDbCaPath: environment.INTERO_SPICEDB_CA_PATH }
-      : {}),
+    ...(spiceDbCaPath ? { spiceDbCaPath } : {}),
   };
 }
 
@@ -489,6 +350,7 @@ export function loadMigratorServiceConfig(
   const databaseUrl = z.url().parse(environment.DATABASE_URL);
   const endpoint = environment.INTERO_SPICEDB_ENDPOINT;
   const token = environment.INTERO_SPICEDB_TOKEN;
+  const caPath = environment.INTERO_SPICEDB_CA_PATH;
   if (Boolean(endpoint) !== Boolean(token)) {
     throw new Error(
       "INTERO_SPICEDB_ENDPOINT and INTERO_SPICEDB_TOKEN must be configured together.",
@@ -504,10 +366,8 @@ export function loadMigratorServiceConfig(
           spiceDb: {
             endpoint,
             token,
-            insecure: environment.INTERO_SPICEDB_INSECURE === "true",
-            ...(environment.INTERO_SPICEDB_CA_PATH
-              ? { caPath: environment.INTERO_SPICEDB_CA_PATH }
-              : {}),
+            insecure: !caPath,
+            ...(caPath ? { caPath } : {}),
           },
         }
       : {}),
@@ -519,12 +379,11 @@ export function loadSpiceDbMigratorConfig(
 ): SpiceDbMigratorConfig {
   const endpoint = z.string().min(1).parse(environment.INTERO_SPICEDB_ENDPOINT);
   const token = ServerSecret.parse(environment.INTERO_SPICEDB_TOKEN);
+  const caPath = environment.INTERO_SPICEDB_CA_PATH;
   return {
     endpoint,
     token,
-    insecure: environment.INTERO_SPICEDB_INSECURE === "true",
-    ...(environment.INTERO_SPICEDB_CA_PATH
-      ? { caPath: environment.INTERO_SPICEDB_CA_PATH }
-      : {}),
+    insecure: !caPath,
+    ...(caPath ? { caPath } : {}),
   };
 }

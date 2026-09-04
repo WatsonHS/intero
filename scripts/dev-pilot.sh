@@ -6,12 +6,6 @@ filters=(
   "--filter=@intero/server-api"
 )
 
-if [[ "${INTERO_OBJECT_STORAGE:-minio}" != "minio" ]]; then
-  echo "INTERO_OBJECT_STORAGE must be minio." >&2
-  exit 1
-fi
-export INTERO_OBJECT_STORAGE="minio"
-
 if [[ -z "${INTERO_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
   export INTERO_MINIO_API_PORT="${INTERO_MINIO_API_PORT:-29000}"
   export INTERO_MINIO_CONSOLE_PORT="${INTERO_MINIO_CONSOLE_PORT:-29001}"
@@ -23,18 +17,10 @@ if [[ -z "${INTERO_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
     --project-name "${INTERO_DEV_COMPOSE_PROJECT:-intero-codex}" \
     up -d --wait minio
 fi
-export INTERO_OBJECT_STORAGE_REGION="${INTERO_OBJECT_STORAGE_REGION:-us-east-1}"
 export INTERO_OBJECT_STORAGE_BUCKET="${INTERO_OBJECT_STORAGE_BUCKET:-intero-objects}"
-export INTERO_OBJECT_STORAGE_ENCRYPTION="${INTERO_OBJECT_STORAGE_ENCRYPTION:-AES256}"
 
-if [[ "${INTERO_RUNTIME_MODE:-development}" == "development" ]]; then
-  export INTERO_CENTRIFUGO_API_URL="${INTERO_CENTRIFUGO_API_URL:-http://localhost:8000}"
-  export INTERO_CENTRIFUGO_PUBLIC_URL="${INTERO_CENTRIFUGO_PUBLIC_URL:-${INTERO_PUBLIC_URL:-http://localhost:4311}}"
-  export INTERO_CENTRIFUGO_TOKEN_SECRET="${INTERO_CENTRIFUGO_TOKEN_SECRET:-intero-development-realtime-token-secret-v1}"
-  export INTERO_CENTRIFUGO_API_KEY="${INTERO_CENTRIFUGO_API_KEY:-intero-development-realtime-api-key-v1}"
-  docker compose up -d centrifugo
-  docker compose -f compose.proxy.yaml up -d
-fi
+docker compose up -d centrifugo
+docker compose -f compose.proxy.yaml up -d
 
 : "${DATABASE_URL:?Intero requires DATABASE_URL so migrations run before startup.}"
 : "${INTERO_DATABASE_URL:?Intero requires INTERO_DATABASE_URL for persistent MinIO metadata.}"

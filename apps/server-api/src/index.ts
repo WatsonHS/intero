@@ -1,15 +1,6 @@
 import { AttachmentService, MinioObjectStore } from "@intero/attachments";
 import { loadApiServiceConfig, PrivacySafeMetrics } from "@intero/config";
-import {
-  OrganizationId,
-  type Claim,
-  PrincipalId,
-  type ThreadId,
-  type ThreadMessage,
-  type Workstream,
-  type WorkstreamId,
-  uuidv7,
-} from "@intero/domain";
+import { OrganizationId, PrincipalId } from "@intero/domain";
 import { Pool } from "pg";
 
 import { PostgresActionInboxEventSource } from "./action-inbox-events.js";
@@ -34,7 +25,6 @@ import {
 } from "./spicedb-authorization.js";
 import { CentrifugoAccessRevoker } from "./realtime-routes.js";
 import { SpiceDbPilotAuthorization } from "./spicedb-pilot-authorization.js";
-import { demoSeedingEnabled } from "./store.js";
 
 const serviceConfig = loadApiServiceConfig();
 const config = serviceConfig.runtime;
@@ -94,15 +84,6 @@ let actionInboxEvents: PostgresActionInboxEventSource;
   if (providerEncryptionSecret) {
     await postgresStore.ensureWebPushKeys();
   }
-  if (
-    demoSeedingEnabled(process.env.INTERO_SEED_DEMO) &&
-    (await postgresStore.listProjections()).length === 0
-  ) {
-    await seedPostgresDemo(postgresStore);
-  }
-  if (demoSeedingEnabled(process.env.INTERO_SEED_DEMO)) {
-    await ensureDemoThreads(postgresStore);
-  }
   store = postgresStore;
   pilotStore =
     pilotAdapterConfig.persistence === "postgres"
@@ -127,7 +108,6 @@ let actionInboxEvents: PostgresActionInboxEventSource;
       quarantineRetentionDays: storage.quarantineRetentionDays,
       abortIncompleteMultipartDays: storage.abortIncompleteMultipartDays,
       encryption: storage.encryption,
-      ...(storage.kmsKeyId ? { kmsKeyId: storage.kmsKeyId } : {}),
       forcePathStyle: true,
     },
   );
@@ -228,7 +208,7 @@ const app = await buildApp({
       check: () => objectStore.checkReadiness(),
     },
   ],
-  metrics: serviceConfig.metricsEnabled ? new PrivacySafeMetrics() : false,
+  metrics: new PrivacySafeMetrics(),
   ...(auth ? { auth } : {}),
   ...(serviceConfig.auth
     ? {
@@ -317,121 +297,3 @@ await stopRequested;
 process.off("SIGINT", handleSigint);
 process.off("SIGTERM", handleSigterm);
 await app.close();
-
-async function seedPostgresDemo(store: PostgresPlatformStore): Promise<void> {
-  const workspaceId =
-    "019b5ac0-7600-7000-8000-000000000010" as Workstream["workspaceId"];
-  const fixtures: Array<{
-    id: WorkstreamId;
-    ownerId: PrincipalId;
-    title: string;
-    phase: Workstream["phase"];
-    predicate: Claim["predicate"];
-    value: string;
-    confidence: number;
-  }> = [
-    {
-      id: "019b5ac0-7600-7000-8000-000000000020" as WorkstreamId,
-      ownerId: "019b5ac0-7600-7000-8000-000000000021" as PrincipalId,
-      title: "Authorization tuple schema",
-      phase: "implementing",
-      predicate: "decision",
-      value: "Keep relationship checks behind the Authorization port.",
-      confidence: 0.88,
-    },
-    {
-      id: "019b5ac0-7600-7000-8000-000000000030" as WorkstreamId,
-      ownerId: "019b5ac0-7600-7000-8000-000000000031" as PrincipalId,
-      title: "Desktop coordination surface",
-      phase: "reviewing",
-      predicate: "dependency",
-      value: "Waiting on the Thread access-boundary copy review.",
-      confidence: 0.81,
-    },
-    {
-      id: "019b5ac0-7600-7000-8000-000000000040" as WorkstreamId,
-      ownerId: "019b5ac0-7600-7000-8000-000000000041" as PrincipalId,
-      title: "Cursor repair under reconnect",
-      phase: "blocked",
-      predicate: "blocker",
-      value: "Centrifugo replay fixture still drops one sequence.",
-      confidence: 0.94,
-    },
-  ];
-  for (const fixture of fixtures) {
-    await store.createWorkstream({
-      id: fixture.id,
-      workspaceId,
-      ownerId: fixture.ownerId,
-      title: fixture.title,
-      phase: fixture.phase,
-      scope: [],
-      blockers: [],
-      dependencies: [],
-      decisions: [],
-      artifactIds: [],
-      freshnessAt: new Date(Date.now() - 95_000).toISOString(),
-      confidence: fixture.confidence,
-    });
-    await store.addClaim({
-      id: uuidv7() as Claim["id"],
-      workstreamId: fixture.id,
-      predicate: fixture.predicate,
-      value: fixture.value,
-      sourceType:
-        fixture.predicate === "blocker"
-          ? "direct_observation"
-          : "coding_agent_report",
-      sourceRef: "demo:canonical-event",
-      observedAt: new Date(Date.now() - 65_000).toISOString(),
-      confidence: fixture.confidence,
-      privacy: "P3_PROJECT",
-      evidenceRefs: ["demo:evidence"],
-    });
-  }
-}
-
-async function ensureDemoThreads(store: PostgresPlatformStore): Promise<void> {
-  const humanId = "019b5ac0-7600-7000-8000-000000000021" as PrincipalId;
-  const standInId = "019b5ac0-7600-7000-8000-000000000003" as PrincipalId;
-  const threadId = "019b5ac0-7600-7000-8000-000000000060" as ThreadId;
-  if (!(await store.getThread(threadId))) {
-    await store.createThread({
-      id: threadId,
-      kind: "stand_in",
-      title: "Your Stand-in",
-      participantIds: [humanId, standInId],
-      standInIds: [standInId],
-      accessMode: "agent_readable",
-      priorHistoryGranted: false,
-      sequence: 0,
-      createdAt: new Date(Date.now() - 240_000).toISOString(),
-    });
-    await store.appendMessage(threadId, {
-      id: "019b5ac0-7600-7000-8000-000000000061" as ThreadMessage["id"],
-      senderId: standInId,
-      body: "Three current workstreams are synchronized. One needs attention: cursor recovery remains blocked on a missing sequence.",
-      createdAt: new Date(Date.now() - 210_000).toISOString(),
-    });
-  }
-  const roomId = "019b5ac0-7600-7000-8000-000000000070" as ThreadId;
-  if (!(await store.getThread(roomId))) {
-    await store.createThread({
-      id: roomId,
-      kind: "room",
-      title: "Intero MVP · Project Room",
-      participantIds: [humanId, standInId],
-      standInIds: [standInId],
-      accessMode: "agent_readable",
-      priorHistoryGranted: false,
-      sequence: 0,
-      createdAt: new Date(Date.now() - 180_000).toISOString(),
-    });
-    await store.appendMessage(roomId, {
-      id: "019b5ac0-7600-7000-8000-000000000071" as ThreadMessage["id"],
-      senderId: humanId,
-      body: "Use this Room for shared MVP decisions; private agent context stays local.",
-      createdAt: new Date(Date.now() - 150_000).toISOString(),
-    });
-  }
-}

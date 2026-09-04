@@ -104,28 +104,24 @@ Enable Better Auth and start the existing canonical browser renderer:
 
 ```sh
 export INTERO_AUTH_SECRET='replace-with-at-least-32-development-characters'
-export INTERO_RUNTIME_MODE='development'
 export INTERO_PUBLIC_URL='http://localhost:4311'
 
 pnpm dev:demo
 ```
 
-`dev:demo` refuses to start without `INTERO_AUTH_SECRET`, disables development
-identity simulation, and uses normal Better Auth sessions even though the
-local service profile permits HTTP loopback and the bundled insecure
-development dependencies. It starts the same-origin proxy as part of
+`dev:demo` refuses to start without `INTERO_AUTH_SECRET`; configuring auth
+disables development identity automatically. It uses normal Better Auth
+sessions while `NODE_ENV` selects the development service profile. It starts
+the same-origin proxy as part of
 `dev:pilot`; a separate `pnpm dev:proxy` is not required. Seeded demo records
 do not create a third or more permissive auth mode. The command also selects
 the seeded Demo Organization, Alex principal, and Stand-in IDs unless they are
-explicitly overridden. HTTPS environments may set `INTERO_RUNTIME_MODE=product`
-and provide production-safe TLS-backed dependencies before invoking the same
-command.
+explicitly overridden.
 
 Local aliases on ports `4310`, `4311`, and `5173` are trusted automatically.
 Use `localhost` consistently for the API public URL and Passkey relying-party
-ID when creating Passkeys. `INTERO_PASSKEY_RP_ID` defaults to the hostname from
-`INTERO_PUBLIC_URL`; set it explicitly only when the deployment requires a
-parent-domain RP ID. Browsers treat `localhost` and
+ID when creating Passkeys. The relying-party ID is derived from
+`INTERO_PUBLIC_URL`. Browsers treat `localhost` and
 `127.0.0.1` as different WebAuthn relying parties; mixing them can create an
 account without completing Passkey enrollment. Playwright e2e must use
 `http://localhost:5183` (not `127.0.0.1`) so Passkey virtual authenticators

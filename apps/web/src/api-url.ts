@@ -7,14 +7,11 @@ interface BrowserLocation {
 
 /**
  * Keeps direct Vite development working while making a reverse-proxied build
- * same-origin by default. An explicit VITE_INTERO_API_URL always wins.
+ * same-origin.
  */
 export function resolveInteroApiUrl(
-  configured: string | undefined,
   location: BrowserLocation | undefined,
 ): string {
-  const explicit = configured?.trim();
-  if (explicit) return explicit.replace(/\/+$/, "");
   if (!location || !["http:", "https:"].includes(location.protocol)) {
     return "http://localhost:4310";
   }
@@ -27,6 +24,5 @@ export function resolveInteroApiUrl(
 }
 
 export const INTERO_API_URL = resolveInteroApiUrl(
-  import.meta.env.VITE_INTERO_API_URL,
   typeof window === "undefined" ? undefined : window.location,
 );

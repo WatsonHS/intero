@@ -1,4 +1,4 @@
-{$INTERO_PUBLIC_URL:http://localhost:4311} {
+{$INTERO_GATEWAY_SITE:http://localhost:4311} {
 	encode zstd gzip
 
 	header {

@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildTestApp } from "./test-app.js";
 import { InMemoryPilotStore } from "./pilot-store.js";
-import { demoSeedingEnabled, InMemoryPlatformStore } from "./store.js";
+import { InMemoryPlatformStore } from "./store.js";
 
 const ALEX = "019b5ac0-7600-7000-8000-000000000002" as PrincipalId;
 const STAND_IN = personalStandInId(ALEX);
@@ -994,12 +994,6 @@ describe("Intero API vertical slice", () => {
       body: "@Alex Rivera please look",
       mentionedPrincipalIds: [ALEX],
     });
-  });
-
-  it("keeps demo fixtures opt-in", () => {
-    expect(demoSeedingEnabled(undefined)).toBe(false);
-    expect(demoSeedingEnabled("false")).toBe(false);
-    expect(demoSeedingEnabled("true")).toBe(true);
   });
 
   it("reports liveness and privacy-safe request metrics in isolated tests", async () => {

@@ -39,23 +39,17 @@ Required for the persistent API:
 - `INTERO_PUBLIC_URL`: an HTTPS origin. Product mode rejects plaintext HTTP.
 - `INTERO_DATABASE_URL`: RLS-constrained application connection.
 - `INTERO_PROVIDER_ENCRYPTION_KEY`: at least 16 characters, server only.
-- `INTERO_PILOT_PERSISTENCE=postgres`.
-- `INTERO_PILOT_STAND_IN_JOBS=transactional-outbox`.
-- `INTERO_SPICEDB_ENDPOINT` and `INTERO_SPICEDB_TOKEN` when the SpiceDB adapter
-  is selected.
+- `INTERO_SPICEDB_ENDPOINT` and `INTERO_SPICEDB_TOKEN` for authorization.
 
 Required for the worker:
 
 - the same persistent Pilot and provider settings;
-- `INTERO_WORKER_DATABASE_URL`;
-- optional `INTERO_WORKER_CONCURRENCY` (1-64);
-- optional metrics bind at `INTERO_WORKER_METRICS_HOST:INTERO_WORKER_METRICS_PORT`.
+- `INTERO_WORKER_DATABASE_URL`.
 
-`INTERO_SPICEDB_INSECURE=true` is local-development-only and is rejected in
-product mode. A private-CA deployment sets `INTERO_SPICEDB_CA_PATH` to the
-mounted CA certificate; the certificate SAN must cover the configured SpiceDB
-hostname. Authentication is enabled when `INTERO_AUTH_SECRET` is configured.
-GitHub OAuth likewise requires both client ID and client secret.
+A private-CA deployment sets `INTERO_SPICEDB_CA_PATH` to the mounted CA
+certificate; its presence enables TLS and the certificate SAN must cover the
+configured SpiceDB hostname. Development without a CA uses the local plaintext
+service. Authentication is enabled when `INTERO_AUTH_SECRET` is configured.
 
 The supported production Compose topology terminates public HTTPS at Caddy,
 uses TLS for the token-bearing API/worker/migrator connection to SpiceDB, and
@@ -64,12 +58,10 @@ single-host Compose network. Development CORS aliases, legacy canonical
 mutation routes, and the Prometheus endpoint are not exposed by the production
 gateway.
 
-Object storage requires `INTERO_OBJECT_STORAGE=minio`, endpoint, access key,
-server-only secret key, and bucket. Supported
-encryption modes are `AES256` and `aws:kms`; KMS mode also requires
-`INTERO_OBJECT_STORAGE_KMS_KEY_ID`. The local Compose stack uses a development
-static KMS key only. Production must use MinIO KMS/KES or an equivalent managed
-KMS and must not reuse Compose credentials.
+Object storage requires a MinIO endpoint, access key, server-only secret key,
+and bucket. Intero fixes encryption to `AES256`, the object limit to 25 MiB,
+pending expiry to one hour, quarantine retention to 30 days, and incomplete
+multipart cleanup to one day.
 
 ## Ordered startup
 
@@ -134,21 +126,10 @@ Metrics never include prompts, messages, file names/content, Claims, tenant IDs,
 Project IDs, principal IDs, API keys, tokens, or provider payloads. HTTP routes
 are normalized templates and status is reduced to a status class.
 
-### Realtime staged rollout and kill switch
+### Realtime recovery
 
-`INTERO_REALTIME_ROLLOUT_PERCENT` assigns each Organization to one stable,
-content-free hash bucket. `0` removes realtime discovery and token routes while
-durable HTTP/cursor repair stays authoritative; `100` enables every
-Organization. A percentage change never moves an Organization between buckets
-unless it crosses the new threshold.
-
-Advance through internal validation, `10`, `50`, and `100`. At each step require
-the browser route suite, outbox outage/fanout integration, shared rate-limit
-integration, no authorization anomaly, and healthy oldest-outbox/reconnect
-metrics for one observation window. Roll back to the previous percentage—or
-`0`—when remote visibility breaches its SLO, reconnect storms rise, or an
-authorization anomaly appears. Committed messages remain in PostgreSQL and
-clients visibly use bounded cursor repair during rollback.
+Realtime delivery is always enabled. PostgreSQL remains authoritative and
+clients use bounded cursor repair after missed delivery or reconnects.
 
 ## Object storage policy and lifecycle
 

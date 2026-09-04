@@ -1,32 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { pilotClientIsEnabled } from "./api.js";
+import { isPilotBrowser } from "./api.js";
 
-describe("pilotClientIsEnabled", () => {
-  it("keeps the cloud product enabled inside a packaged Desktop renderer", () => {
-    expect(
-      pilotClientIsEnabled({
-        hasDesktopBridge: true,
-        developmentBuild: false,
-        pilotFlag: false,
-      }),
-    ).toBe(true);
+describe("isPilotBrowser", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("keeps an ordinary production browser opt-in", () => {
-    expect(
-      pilotClientIsEnabled({
-        hasDesktopBridge: false,
-        developmentBuild: false,
-        pilotFlag: true,
-      }),
-    ).toBe(true);
-    expect(
-      pilotClientIsEnabled({
-        hasDesktopBridge: false,
-        developmentBuild: false,
-        pilotFlag: false,
-      }),
-    ).toBe(false);
+  it("enables the product in every browser runtime", () => {
+    vi.stubGlobal("window", {});
+    expect(isPilotBrowser()).toBe(true);
+  });
+
+  it("stays disabled during server rendering", () => {
+    vi.stubGlobal("window", undefined);
+    expect(isPilotBrowser()).toBe(false);
   });
 });
