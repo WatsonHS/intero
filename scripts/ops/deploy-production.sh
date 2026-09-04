@@ -11,6 +11,20 @@ if [[ ! -f "$env_file" ]]; then
   echo "Copy .env.production.example and fill every required value." >&2
   exit 1
 fi
+# Every non-comment key in .env.production.example must be present, so a new
+# required variable (for example the LiveKit key pair) fails here with a clear
+# list instead of inside `docker compose` interpolation.
+missing_keys=()
+while IFS= read -r key; do
+  if ! grep -Eq "^${key}=" "$env_file"; then
+    missing_keys+=("$key")
+  fi
+done < <(grep -E '^[A-Z_]+=' "$repo_root/.env.production.example" | cut -d= -f1)
+if (( ${#missing_keys[@]} > 0 )); then
+  echo "Missing keys in $env_file (see .env.production.example):" >&2
+  printf '  %s\n' "${missing_keys[@]}" >&2
+  exit 1
+fi
 public_url="$(
   awk -F= '$1 == "INTERO_PUBLIC_URL" { sub(/^[^=]*=/, ""); print; exit }' \
     "$env_file" |
