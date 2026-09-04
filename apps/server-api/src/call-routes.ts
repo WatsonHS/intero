@@ -106,19 +106,17 @@ export async function registerCallRoutes(
       occurredAt: new Date().toISOString(),
     };
     await options.eventPublisher.publish(threadChannel(threadId), event);
-    if (input.event.kind === "invite" || input.event.kind === "hangup") {
-      await Promise.all(
-        thread.thread.participantIds
-          .filter(
-            (participantId) =>
-              participantId !== principal!.id &&
-              !thread.thread.standInIds.includes(participantId),
-          )
-          .map((participantId) =>
-            options.eventPublisher!.publish(userChannel(participantId), event),
-          ),
-      );
-    }
+    await Promise.all(
+      thread.thread.participantIds
+        .filter(
+          (participantId) =>
+            participantId !== principal!.id &&
+            !thread.thread.standInIds.includes(participantId),
+        )
+        .map((participantId) =>
+          options.eventPublisher!.publish(userChannel(participantId), event),
+        ),
+    );
     return reply.status(202).send({ accepted: true });
   });
 }

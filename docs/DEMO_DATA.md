@@ -127,8 +127,9 @@ ID when creating Passkeys. `INTERO_PASSKEY_RP_ID` defaults to the hostname from
 `INTERO_PUBLIC_URL`; set it explicitly only when the deployment requires a
 parent-domain RP ID. Browsers treat `localhost` and
 `127.0.0.1` as different WebAuthn relying parties; mixing them can create an
-account without completing Passkey enrollment. Database URLs may continue to
-use `127.0.0.1`.
+account without completing Passkey enrollment. Playwright e2e must use
+`http://localhost:5183` (not `127.0.0.1`) so Passkey virtual authenticators
+can register. Database URLs may continue to use `127.0.0.1`.
 
 The browser identities are real Better Auth users with a shared disposable
 Demo password, linked to persisted Intero principals:

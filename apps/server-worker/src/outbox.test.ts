@@ -132,6 +132,54 @@ describe("Outbox dispatcher", () => {
     expect(publish.mock.calls[0]?.[1]).not.toHaveProperty("operationId");
   });
 
+  it("publishes compact message_appended pointers onto personal user channels", async () => {
+    const event = {
+      schemaVersion: 1,
+      eventId: "019b5ac0-7600-7000-8000-000000000301",
+      type: "conversation.changed",
+      threadId: "019b5ac0-7600-7000-8000-000000000302",
+      headSequence: 9,
+      accessVersion: 1,
+      reason: "message_appended",
+      messageId: "019b5ac0-7600-7000-8000-000000000303",
+      occurredAt: "2026-07-28T08:00:00.000Z",
+    };
+    const publish = vi.fn(
+      async (_channel: string, _event: Record<string, unknown>) => undefined,
+    );
+    const dispatcher = new OutboxDispatcher(
+      "organization-1",
+      new MemoryOutbox([
+        {
+          operationId: event.eventId,
+          channel: `intero:thread:${event.threadId}`,
+          topic: "conversation.changed",
+          payload: event,
+          attempts: 1,
+        },
+        {
+          operationId: event.eventId,
+          channel: "intero:user:principal-1",
+          topic: "conversation.changed",
+          payload: event,
+          attempts: 1,
+        },
+      ]),
+      { publish },
+    );
+
+    await expect(dispatcher.dispatch()).resolves.toBe(2);
+    expect(publish).toHaveBeenCalledWith(
+      `intero:thread:${event.threadId}`,
+      event,
+    );
+    expect(publish).toHaveBeenCalledWith("intero:user:principal-1", event);
+    expect(publish.mock.calls[1]?.[1]).not.toHaveProperty("body");
+    expect(publish.mock.calls[1]?.[1]).not.toHaveProperty(
+      "mentionedPrincipalIds",
+    );
+  });
+
   it("enqueues one conversation.changed callback per operation", async () => {
     const event = {
       schemaVersion: 1,

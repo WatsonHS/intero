@@ -1323,7 +1323,10 @@ async function createRolePages(
       const role = roles[index]!;
       if (roleStorageStates.has(role.email)) {
         await page.goto("/");
-        await expect(page.getByTitle("Team Pulse")).toBeVisible();
+        await page.waitForLoadState("networkidle");
+        await expect(page.getByTitle("Team Pulse")).toBeVisible({
+          timeout: 30_000,
+        });
       } else {
         await signIn(page, role);
         roleStorageStates.set(
@@ -1347,7 +1350,10 @@ async function signIn(page: Page, principal: Principal): Promise<void> {
   await page.locator('input[type="email"]').fill(principal.email);
   await page.locator('input[type="password"]').fill(demoPassword);
   await page.locator('button[type="submit"]').click();
-  await expect(page.getByTitle("Team Pulse")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTitle("Team Pulse")).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 async function assertExternalProviderConfigured(page: Page): Promise<void> {

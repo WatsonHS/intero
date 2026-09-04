@@ -152,6 +152,54 @@ describe("call routes", () => {
       event: { kind: "invite", mode: "video" },
     });
   });
+
+  it("publishes decline onto the caller's personal channel", async () => {
+    const published: Array<{
+      channel: string;
+      event: Record<string, unknown>;
+    }> = [];
+    const app = await buildTestApp({
+      store: new InMemoryPlatformStore(),
+      logger: false,
+      callTokenIssuer: {
+        async issue() {
+          throw new Error("not used");
+        },
+      },
+      callEventPublisher: {
+        async publish(channel, event) {
+          published.push({ channel, event });
+        },
+      },
+    });
+    apps.push(app);
+    const threadId = await createThread(app, [ALEX, PRIYA]);
+    const callId = uuidv7();
+    const eventId = uuidv7();
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/calls/events",
+      headers: auth(PRIYA),
+      payload: {
+        eventId,
+        threadId,
+        callId,
+        event: { kind: "decline" },
+      },
+    });
+
+    expect(accepted.statusCode).toBe(202);
+    expect(published.map(({ channel }) => channel)).toEqual([
+      `intero:thread:${threadId}`,
+      `intero:user:${ALEX}`,
+    ]);
+    expect(published[0]?.event).toMatchObject({
+      type: "conversation.call.event",
+      senderId: PRIYA,
+      event: { kind: "decline" },
+    });
+  });
 });
 
 describe("LiveKit call adapters", () => {

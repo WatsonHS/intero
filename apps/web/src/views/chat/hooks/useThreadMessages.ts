@@ -284,21 +284,42 @@ export function useThreadMessages({
     if (!current || !focusMessageId) return;
     setHighlightedMessageId(focusMessageId);
     if (current.messages.some((message) => message.id === focusMessageId)) {
-      requestAnimationFrame(() =>
-        document
-          .querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`)
-          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
-      );
-      return;
+      let cancelled = false;
+      let attempts = 0;
+      const tick = () => {
+        if (cancelled) return;
+        const node = document.querySelector<HTMLElement>(
+          `[data-message-id="${CSS.escape(focusMessageId)}"]`,
+        );
+        if (node) {
+          node.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        if (attempts++ < 60) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      return () => {
+        cancelled = true;
+      };
     }
     if (!focusSequence) return;
     const key = `${current.thread.id}:${focusMessageId}:${focusSequence}`;
     if (loadedFocusRef.current === key) return;
     loadedFocusRef.current = key;
-    loadAround.mutate({
-      threadId: current.thread.id,
-      aroundSequence: focusSequence,
-    });
+    loadAround.mutate(
+      {
+        threadId: current.thread.id,
+        aroundSequence: focusSequence,
+      },
+      {
+        onError: () => {
+          if (loadedFocusRef.current === key) {
+            loadedFocusRef.current = undefined;
+          }
+        },
+      },
+    );
+    return undefined;
   }, [
     current?.thread.id,
     current?.messages.length,

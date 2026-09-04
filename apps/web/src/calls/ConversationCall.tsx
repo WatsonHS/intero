@@ -233,7 +233,7 @@ export function ConversationCall({
   }, [stageContainerId]);
 
   useEffect(() => {
-    if (!enabled || realtime.status !== "live") return;
+    if (realtime.status !== "live") return;
     let disposed = false;
     let release: (() => void) | undefined;
     void realtime
@@ -251,14 +251,7 @@ export function ConversationCall({
       disposed = true;
       release?.();
     };
-  }, [
-    enabled,
-    handleEvent,
-    realtime.status,
-    realtime.watchCallEvents,
-    t,
-    threadId,
-  ]);
+  }, [handleEvent, realtime.status, realtime.watchCallEvents, t, threadId]);
 
   useEffect(
     () => () => {
@@ -394,49 +387,6 @@ export function ConversationCall({
       {stageContainer
         ? createPortal(
             <>
-              {status === "incoming" && activeCall ? (
-                <section
-                  role="dialog"
-                  aria-label={t("chat.call")}
-                  data-testid="conversation-call"
-                  className="w-full overflow-hidden rounded-[18px] bg-panel2 shadow-[0_12px_34px_rgba(25,20,14,0.14)]"
-                >
-                  <CallHeader
-                    mode={activeCall.mode}
-                    title={title}
-                    detail={t("chat.incomingCallFrom", {
-                      name:
-                        principalNames.get(activeCall.inviterId) ??
-                        t("chat.someone"),
-                    })}
-                  />
-                  <div className="flex items-center justify-center gap-3 px-5 py-7">
-                    <button
-                      type="button"
-                      data-testid="reject-call"
-                      onClick={() => void decline()}
-                      className="inline-flex h-10 items-center gap-2 rounded-pill border border-line2 bg-transparent px-5 text-[12px] text-ink-muted hover:border-danger hover:text-danger"
-                    >
-                      <PhoneDisconnectIcon size={16} />
-                      {t("chat.declineCall")}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="accept-call"
-                      onClick={() => void accept()}
-                      className="inline-flex h-10 items-center gap-2 rounded-pill border-0 bg-green px-5 text-[12px] font-[650] text-white"
-                    >
-                      {activeCall.mode === "video" ? (
-                        <VideoCameraIcon size={17} />
-                      ) : (
-                        <PhoneIcon size={16} />
-                      )}
-                      {t("chat.acceptCall")}
-                    </button>
-                  </div>
-                </section>
-              ) : null}
-
               {activeCall && credentials ? (
                 <section
                   role="dialog"
@@ -539,7 +489,7 @@ export function ConversationCall({
           )
         : null}
 
-      {status === "incoming" && activeCall && !stageContainer ? (
+      {status === "incoming" && activeCall ? (
         <section
           role="dialog"
           aria-label={t("chat.call")}
