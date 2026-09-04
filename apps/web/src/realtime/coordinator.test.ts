@@ -296,6 +296,73 @@ describe("ConversationRealtimeCoordinator", () => {
     coordinator.stop();
   });
 
+  it("delivers personal-channel message and call hints without a client subscription", async () => {
+    const onChange = vi.fn();
+    const onCallEvent = vi.fn();
+    const principalId = uuidv7();
+    const threadId = uuidv7();
+    const coordinator = new ConversationRealtimeCoordinator({
+      createSession: async () => ({
+        token: "connection-token",
+        expiresAt: new Date().toISOString(),
+        transports: [
+          {
+            transport: "websocket" as const,
+            endpoint: "wss://example.test/ws",
+          },
+        ],
+        emulationEndpoint: "https://example.test/emulation",
+        personalChannel: `intero:user:${principalId}`,
+        personalChannelToken: "personal-token",
+      }),
+      createSubscription: vi.fn(),
+      onStatus: vi.fn(),
+      onChange,
+      onCallEvent,
+      onRecoveryGap: vi.fn(),
+    });
+    coordinator.start();
+    await vi.waitFor(() =>
+      expect(fakeTransport.Centrifuge.instances).toHaveLength(1),
+    );
+    const client = fakeTransport.Centrifuge.instances[0]!;
+    expect(client.subscriptions).toHaveLength(0);
+
+    const change = {
+      schemaVersion: 1 as const,
+      eventId: uuidv7(),
+      type: "conversation.changed" as const,
+      threadId,
+      headSequence: 8,
+      accessVersion: 1,
+      reason: "message_appended" as const,
+      messageId: uuidv7(),
+      occurredAt: new Date().toISOString(),
+    };
+    const callEvent = {
+      schemaVersion: 1,
+      type: "conversation.call.event",
+      eventId: uuidv7(),
+      threadId,
+      callId: uuidv7(),
+      senderId: uuidv7(),
+      event: { kind: "invite" as const, mode: "audio" as const },
+      occurredAt: new Date().toISOString(),
+    };
+    client.emit("publication", {
+      channel: `intero:user:${principalId}`,
+      data: change,
+    });
+    client.emit("publication", {
+      channel: `intero:user:${principalId}`,
+      data: callEvent,
+    });
+
+    expect(onChange).toHaveBeenCalledWith(change);
+    expect(onCallEvent).toHaveBeenCalledWith(callEvent);
+    coordinator.stop();
+  });
+
   it("delivers typing hints from the personal channel", async () => {
     const typing: unknown[] = [];
     const threadId = uuidv7();

@@ -408,10 +408,8 @@ export function ConversationRealtimeProvider({
       let releaseThread: () => void = () => undefined;
       try {
         releaseThread = await watchThread(threadId);
-      } catch (error) {
-        listeners.delete(listener);
-        if (listeners.size === 0) callEventListeners.current.delete(threadId);
-        throw error;
+      } catch {
+        // Invites also arrive on the personal channel; keep the listener.
       }
       const pending = pendingCallInvites.current.get(threadId);
       if (pending && Date.now() - Date.parse(pending.occurredAt) <= 45_000) {

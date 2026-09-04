@@ -203,21 +203,9 @@ export class ConversationRealtimeCoordinator {
         emulationEndpoint: session.emulationEndpoint,
       });
       this.#client = client;
-      if (session.personalChannel && session.personalChannelToken) {
-        const personal = client.newSubscription(session.personalChannel, {
-          token: session.personalChannelToken,
-          getToken: async () => {
-            const next = await this.#dependencies.createSession();
-            return next.personalChannelToken ?? next.token;
-          },
-        });
-        personal.on("publication", (context) => this.#publication(context));
-        this.#subscriptions.set(session.personalChannel, {
-          subscription: personal,
-          consumers: 1,
-        });
-        personal.subscribe();
-      }
+      // Personal channel is server-subscribed via the connection JWT `subs`.
+      // Do not client-subscribe it: centrifuge-js compaction then drops those
+      // publications (mentions and call invites while not on that thread).
       client.on("connected", () => {
         if (client !== this.#client || this.#stopped) return;
         this.#clearConnectingTimer();

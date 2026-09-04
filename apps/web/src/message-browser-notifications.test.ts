@@ -60,6 +60,31 @@ describe("message browser notifications", () => {
     expect(selected[0]?.mentioned).toBe(true);
   });
 
+  it("selects a repaired personal-channel message_appended mention", () => {
+    const repaired = message({
+      mentionedPrincipalIds: [viewer],
+      body: "@Alex Rivera ping",
+      sequence: 12,
+    });
+    const selected = selectNewMessageNotifications({
+      messages: [repaired],
+      viewerId: viewer,
+      activeThreadId: "019f9a00-0000-7000-8000-000000000299",
+      windowFocused: true,
+      preferences: preferences("mentions"),
+      threadsById,
+      occurredAt: repaired.createdAt,
+      now: new Date(Date.parse(repaired.createdAt) + 400),
+    });
+    expect(selected).toEqual([
+      expect.objectContaining({
+        threadId,
+        mentioned: true,
+        message: repaired,
+      }),
+    ]);
+  });
+
   it("skips unmentioned messages when the preference is mentions", () => {
     expect(
       selectNewMessageNotifications({

@@ -1,12 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://127.0.0.1:4320";
-const rendererUrl =
-  process.env.INTERO_E2E_RENDERER_URL ?? "http://127.0.0.1:5183";
-// WebAuthn rejects IP rpIds ("This is an invalid domain"). CI hosts the
-// renderer on localhost and uses Passkey; 127.0.0.1 uses password activation.
-const passkeyUsable = new URL(rendererUrl).hostname === "localhost";
-const activationPassword = "Intero-demo-2026!";
+const apiUrl = process.env.INTERO_E2E_API_URL ?? "http://localhost:4320";
 
 test("two users activate, authenticate, receive targeted attention, and search safely", async ({
   browser,
@@ -53,20 +47,18 @@ test("two users activate, authenticate, receive targeted attention, and search s
   ).toBeVisible();
 
   const invitation = await resolveInvitation(admin);
-  if (passkeyUsable) {
-    const cdp = await recipientContext.newCDPSession(recipient);
-    await cdp.send("WebAuthn.enable");
-    await cdp.send("WebAuthn.addVirtualAuthenticator", {
-      options: {
-        protocol: "ctap2",
-        transport: "internal",
-        hasResidentKey: true,
-        hasUserVerification: true,
-        isUserVerified: true,
-        automaticPresenceSimulation: true,
-      },
-    });
-  }
+  const cdp = await recipientContext.newCDPSession(recipient);
+  await cdp.send("WebAuthn.enable");
+  await cdp.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
   await recipient.goto(
     `/accept-invitation?token=${encodeURIComponent(invitation.token)}`,
   );
@@ -74,12 +66,7 @@ test("two users activate, authenticate, receive targeted attention, and search s
     recipient.getByRole("heading", { name: "加入 产品体验" }),
   ).toBeVisible();
   await recipient.getByTestId("invitation-display-name").fill(invitation.name);
-  if (passkeyUsable) {
-    await recipient.getByRole("button", { name: "使用 Passkey 激活" }).click();
-  } else {
-    await recipient.getByTestId("activation-password").fill(activationPassword);
-    await recipient.getByTestId("activation-password-submit").click();
-  }
+  await recipient.getByRole("button", { name: "使用 Passkey 激活" }).click();
   const confirmMembership = recipient.getByRole("button", {
     name: "确认加入团队",
   });
@@ -107,13 +94,7 @@ test("two users activate, authenticate, receive targeted attention, and search s
   await expect(
     recipient.getByRole("heading", { name: "回到你的团队" }),
   ).toBeVisible();
-  if (passkeyUsable) {
-    await recipient.getByRole("button", { name: "使用 Passkey 登录" }).click();
-  } else {
-    await recipient.getByTestId("sign-in-email").fill(invitation.email);
-    await recipient.getByTestId("sign-in-password").fill(activationPassword);
-    await recipient.getByTestId("sign-in-password-submit").click();
-  }
+  await recipient.getByRole("button", { name: "使用 Passkey 登录" }).click();
   await expect(recipient.getByTitle("Team Pulse")).toBeVisible();
   await recipient.getByTitle("Team Pulse").click();
   await expect(recipient).toHaveURL(/\/pulse$/);

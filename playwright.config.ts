@@ -10,7 +10,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: process.env.INTERO_E2E_RENDERER_URL ?? "http://127.0.0.1:5183",
+    baseURL: process.env.INTERO_E2E_RENDERER_URL ?? "http://localhost:5183",
     screenshot: privacySafeG7 ? "off" : "only-on-failure",
     trace: privacySafeG7 ? "off" : "retain-on-failure",
     channel: "chrome",

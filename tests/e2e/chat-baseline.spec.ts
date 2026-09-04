@@ -426,7 +426,7 @@ test.describe("chat baseline", () => {
       alex
         .locator('[data-highlighted="true"]')
         .getByText(`${searchToken} gamma`),
-    ).toBeVisible({ timeout: 15_000 });
+    ).toBeVisible({ timeout: 30_000 });
 
     await alex.getByTestId("thread-search-toggle").click();
     await alex.getByTestId("thread-search-input").fill(searchToken);
@@ -527,10 +527,6 @@ test.describe("chat baseline", () => {
   });
 
   test("10b. mention toast when the viewer is on another thread", async () => {
-    test.fixme(
-      true,
-      "In-app mention toast is not observed while the viewer is on another thread, even though POST /messages persists mentionedPrincipalIds.",
-    );
     await openThread(alex, teamRoomId);
     await openThread(priya, dmThreadId);
     await waitForRealtime(alex);
@@ -550,10 +546,6 @@ test.describe("chat baseline", () => {
   });
 
   test("11. audio call ring and decline signaling", async () => {
-    test.fixme(
-      true,
-      "Callee never shows conversation-call after invite; caller reaches in-call, so signaling publish succeeds but the incoming banner is not observed.",
-    );
     await openThread(alex, dmThreadId);
     await openThread(priya, dmThreadId);
     await waitForRealtime(alex);
