@@ -153,6 +153,7 @@ const auth = serviceConfig.auth
       secret: serviceConfig.auth.secret,
       rpId: serviceConfig.auth.passkeyRpId,
       trustedOrigins: serviceConfig.auth.trustedOrigins,
+      rateLimitProfile: serviceConfig.runtimeMode,
       ...(authDatabase ? { database: authDatabase } : {}),
     })
   : undefined;

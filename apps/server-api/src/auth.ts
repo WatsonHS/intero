@@ -22,6 +22,44 @@ export interface AuthConfig {
   rpId: string;
   database?: Pool;
   trustedOrigins?: string[];
+  /**
+   * Which rate-limit profile to apply. Product keeps the strict per-IP
+   * budget; development relaxes it so local and CI browser suites, which all
+   * sign in from one loopback address, are not rejected with 429.
+   */
+  rateLimitProfile?: "product" | "development";
+}
+
+export type InteroAuthRateLimit = {
+  enabled: true;
+  window: number;
+  max: number;
+  customRules: Record<string, { window: number; max: number }>;
+};
+
+export function interoAuthRateLimit(
+  profile: "product" | "development" = "product",
+): InteroAuthRateLimit {
+  if (profile === "development") {
+    return {
+      enabled: true,
+      window: 60,
+      max: 600,
+      customRules: {
+        "/sign-in/email": { window: 60, max: 120 },
+        "/passkey/generate-authenticate-options": { window: 60, max: 120 },
+      },
+    };
+  }
+  return {
+    enabled: true,
+    window: 60,
+    max: 20,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 5 },
+      "/passkey/generate-authenticate-options": { window: 60, max: 10 },
+    },
+  };
 }
 
 export function createInteroAuth(config: AuthConfig) {
@@ -36,15 +74,7 @@ export function createInteroAuth(config: AuthConfig) {
       maxPasswordLength: 128,
       autoSignIn: true,
     },
-    rateLimit: {
-      enabled: true,
-      window: 60,
-      max: 20,
-      customRules: {
-        "/sign-in/email": { window: 60, max: 5 },
-        "/passkey/generate-authenticate-options": { window: 60, max: 10 },
-      },
-    },
+    rateLimit: interoAuthRateLimit(config.rateLimitProfile),
     advanced: {
       ipAddress: {
         // mountAuth replaces this header with Fastify's socket-derived address.
