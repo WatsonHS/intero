@@ -4136,6 +4136,9 @@ export function buildClaim(
     value: input.narrative.completedOutcome || input.narrative.currentFocus,
     narrative: input.narrative,
     evidenceRefs: input.evidenceRefs,
+    ...(input.deliveryEvidence
+      ? { deliveryEvidence: input.deliveryEvidence }
+      : {}),
     source: "direct_cloud_mcp",
     sourceBindingId: binding.id,
     sourceClient: binding.client,

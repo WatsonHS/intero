@@ -280,6 +280,10 @@ databaseSuite("Normalized PostgreSQL PilotStore", () => {
     expect(await store.listPrivateWorkState(projectId, adminId)).toHaveLength(
       1,
     );
+    const reloaded = await store.listPrivateWorkState(projectId, adminId);
+    expect(reloaded[0]?.claims[0]?.deliveryEvidence).toEqual(
+      checkpoint.deliveryEvidence,
+    );
 
     const eventCount = await admin.query<{ count: string }>(
       `SELECT count(*)
@@ -820,6 +824,20 @@ function checkpointInput(projectId: ProjectId): PilotCheckpointInput {
       },
     },
     evidenceRefs: [],
+    deliveryEvidence: {
+      repository: "example/billing",
+      commitSha: "a".repeat(40),
+      pullRequestUrl: "https://github.com/example/billing/pull/1",
+      checks: [
+        {
+          name: "CI",
+          status: "passed",
+          commitSha: "a".repeat(40),
+          url: "https://github.com/example/billing/actions/runs/1",
+          observedAt: "2026-07-26T01:20:00.000Z",
+        },
+      ],
+    },
   };
 }
 

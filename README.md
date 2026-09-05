@@ -360,6 +360,14 @@ just check          # generate, lint, test, and build
 Some integration tests require the Docker services started by `just dev-deps`.
 Environment-gated tests skip when their external dependency is unavailable.
 
+Routine CI runs contract consistency, TypeScript, tests without external services,
+and builds. Run the manual **Integration validation** workflow for database,
+authorization, realtime, and release changes; it adds real dependencies and the
+Golden Case, Agent connection, and chat browser suites.
+
+See [Agent startup context and delivery evidence](docs/AGENT_CONTEXT.md) for
+resuming work through MCP and linking checkpoints to commits, PRs, and CI reports.
+
 Demo fixtures are opt-in and must never be run against a production database.
 See [docs/DEMO_DATA.md](docs/DEMO_DATA.md) for the safety checks and commands.
 

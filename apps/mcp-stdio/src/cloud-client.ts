@@ -1,5 +1,6 @@
 import {
   PILOT_AGENT_CONFIGURATION_VERSION,
+  type DeliveryEvidence,
   type PilotAgentClient,
   type PilotCheckpointEventType,
   type PilotSharedBoundaryInput,
@@ -83,6 +84,7 @@ export interface CloudCheckpointInput {
   eventType: PilotCheckpointEventType;
   narrative: PilotWorkNarrative;
   evidenceRefs?: string[] | undefined;
+  deliveryEvidence?: DeliveryEvidence | undefined;
   clientEventId?: string | undefined;
   workstreamKey?: string | undefined;
   workstreamTitle?: string | undefined;
@@ -238,14 +240,19 @@ export class CloudPilotClient {
     return result;
   }
 
-  async currentContext(): Promise<unknown> {
+  async currentContext(
+    input: {
+      workstreamKey?: string | undefined;
+      boundaryKeys?: string[] | undefined;
+    } = {},
+  ): Promise<unknown> {
     const body = await this.mcpRequest({
       jsonrpc: "2.0",
       id: `current-context-${randomUUID()}`,
       method: "tools/call",
       params: {
         name: "stand_in.current_context",
-        arguments: {},
+        arguments: input,
       },
     });
     return parseMcpToolResult(body, "Current context");
@@ -377,6 +384,9 @@ export class CloudPilotClient {
       },
       narrative: input.narrative,
       evidenceRefs: input.evidenceRefs ?? [],
+      ...(input.deliveryEvidence
+        ? { deliveryEvidence: input.deliveryEvidence }
+        : {}),
       sharedBoundaries: input.sharedBoundaries ?? [],
     };
 

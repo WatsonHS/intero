@@ -13,7 +13,7 @@ export const AGENT_PLUGIN_SPEC_VERSION = "1.0.0";
 export const AGENT_PLUGIN_NAME = "intero";
 
 /** Version of the published artifact itself, independent of the spec version. */
-export const AGENT_PLUGIN_VERSION = "1.0.0";
+export const AGENT_PLUGIN_VERSION = "1.1.0";
 
 export const AGENT_PLUGIN_SCHEMA_URL = `https://agent-plugins.org/schemas/${AGENT_PLUGIN_SPEC_VERSION}/plugin.schema.json`;
 

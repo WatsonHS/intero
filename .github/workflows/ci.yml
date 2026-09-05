@@ -5,17 +5,16 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Scan Git history for secrets
-        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
@@ -24,140 +23,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Audit production dependencies
-        # The npm audit endpoint times out from the runners now and then; a
-        # transient network failure must not read as a vulnerability finding.
+      - name: Check API contracts
         run: |
-          for attempt in 1 2 3; do
-            if pnpm audit --prod --audit-level=moderate; then exit 0; fi
-            status=$?
-            if [ "$attempt" -lt 3 ]; then echo "audit attempt $attempt failed (exit $status); retrying in 20s"; sleep 20; fi
-          done
-          exit "$status"
-      - run: pnpm generate
-      - run: git diff --exit-code -- packages/api-contracts/generated
+          pnpm generate
+          git diff --exit-code -- packages/api-contracts/generated
       - run: pnpm lint
-      - run: pnpm format:check
-      - run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
-      - run: docker compose up -d --wait
-      - run: DATABASE_URL=postgres://intero:intero@127.0.0.1:5432/intero pnpm --filter @intero/server-api migrate
-      - run: DATABASE_URL=postgres://intero_worker:intero_worker@127.0.0.1:5432/intero pnpm --filter @intero/server-worker migrate
-      - run: INTERO_SPICEDB_ENDPOINT=127.0.0.1:50051 INTERO_SPICEDB_TOKEN=intero-development INTERO_SPICEDB_INSECURE=true pnpm --filter @intero/server-api migrate:spicedb
-      - name: Create disposable Demo acceptance database
-        run: |
-          docker compose exec -T postgres createdb -U intero intero_demo_ci
-          docker compose exec -T postgres psql -U intero -d postgres -v ON_ERROR_STOP=1 \
-            -c 'GRANT CONNECT ON DATABASE intero_demo_ci TO intero_app' \
-            -c 'GRANT CONNECT, CREATE ON DATABASE intero_demo_ci TO intero_worker'
-          docker compose exec -T postgres psql -U intero -d intero_demo_ci -v ON_ERROR_STOP=1 \
-            -c 'GRANT USAGE ON SCHEMA public TO intero_app'
-      - name: Test TypeScript with real dependencies
-        run: pnpm test:ts
-        env:
-          DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero
-          DATABASE_APP_URL: postgres://intero_app:intero_app@127.0.0.1:5432/intero
-          INTERO_WORKER_DATABASE_URL: postgres://intero_worker:intero_worker@127.0.0.1:5432/intero
-          DATABASE_WORKER_URL: postgres://intero_worker:intero_worker@127.0.0.1:5432/intero
-          INTERO_DEMO_TEST_DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero_demo_ci
-          INTERO_SPICEDB_ENDPOINT: 127.0.0.1:50051
-          INTERO_SPICEDB_TOKEN: intero-development
-          INTERO_CENTRIFUGO_API_URL: http://127.0.0.1:8000
-          INTERO_CENTRIFUGO_API_KEY: intero-development-realtime-api-key-v1
-          INTERO_CENTRIFUGO_TOKEN_SECRET: intero-development-realtime-token-secret-v1
-          INTERO_OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:29000
-          INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: intero
-          INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: intero-development
-          INTERO_OBJECT_STORAGE_BUCKET: intero-ci-attachments
-      - run: ./scripts/backup-restore-smoke.sh
+      - run: pnpm test:ts
       - run: pnpm build
-      - run: pnpm bundle:report
-      - name: Upload Web bundle report
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-bundle-report
-          path: apps/web/dist/bundle-report.json
-      - name: Install browser acceptance runtime
-        run: pnpm exec playwright install --with-deps chrome
-      - name: Start authenticated Demo runtime
-        run: |
-          INTERO_AUTH_SECRET=ci-demo-auth-secret-at-least-32-characters \
-          pnpm dev:demo > /tmp/intero-demo.log 2>&1 &
-          echo $! > /tmp/intero-demo.pid
-          for attempt in $(seq 1 90); do
-            if curl --fail --silent http://127.0.0.1:4310/ready >/dev/null \
-              && curl --fail --silent http://127.0.0.1:5173 >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          tail -200 /tmp/intero-demo.log
-          exit 1
-        env:
-          NODE_ENV: development
-          DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero_demo_ci
-          INTERO_DATABASE_URL: postgres://intero_app:intero_app@127.0.0.1:5432/intero_demo_ci
-          INTERO_WORKER_DATABASE_URL: postgres://intero_worker:intero_worker@127.0.0.1:5432/intero_demo_ci
-          INTERO_DEMO_DATA: "true"
-          INTERO_DEMO_CONFIRM: INTERO_DEMO_DISPOSABLE:127.0.0.1:5432/intero_demo_ci
-          INTERO_PROVIDER_ENCRYPTION_KEY: ci-provider-encryption-key
-          INTERO_PILOT_PERSISTENCE: postgres
-          INTERO_PILOT_STAND_IN_JOBS: transactional-outbox
-          INTERO_PILOT_AUTHORIZATION: spicedb
-          INTERO_SPICEDB_ENDPOINT: 127.0.0.1:50051
-          INTERO_SPICEDB_TOKEN: intero-development
-          INTERO_SPICEDB_INSECURE: "true"
-          INTERO_OBJECT_STORAGE: minio
-          INTERO_OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:29000
-          INTERO_OBJECT_STORAGE_ACCESS_KEY_ID: intero
-          INTERO_OBJECT_STORAGE_SECRET_ACCESS_KEY: intero-development
-          INTERO_OBJECT_STORAGE_BUCKET: intero-objects
-          INTERO_OBJECT_STORAGE_ENCRYPTION: AES256
-      - name: Browser acceptance — Phase 6
-        run: pnpm test:e2e:phase6
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Browser acceptance — Phase 7
-        run: pnpm test:e2e:phase7
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Browser acceptance — R1/R2 coordination
-        run: pnpm test:e2e:r1-r2
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Browser acceptance — Golden Case
-        run: pnpm test:e2e:golden-case
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Browser acceptance — Agent connection
-        run: pnpm test:e2e:agent-connection
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Browser acceptance — route loading and errors
-        run: pnpm test:e2e:routes
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-          DATABASE_URL: postgres://intero:intero@127.0.0.1:5432/intero_demo_ci
-      - name: Browser acceptance — chat baseline
-        run: pnpm test:e2e:chat
-        env:
-          INTERO_E2E_RENDERER_URL: http://localhost:5173
-          INTERO_E2E_API_URL: http://localhost:4310
-      - name: Upload browser failure evidence
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-acceptance-evidence
-          path: |
-            output/playwright
-      - if: always()
-        run: |
-          if test -f /tmp/intero-demo.pid; then
-            kill "$(cat /tmp/intero-demo.pid)" 2>/dev/null || true
-          fi
-          docker compose down

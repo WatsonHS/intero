@@ -232,6 +232,8 @@ just check          # 生成、Lint、测试并构建
 
 部分集成测试需要先通过 `just dev-deps` 启动 Docker 服务。如果外部依赖不可用，受环境控制的测试会跳过。
 
+日常 CI 只运行接口契约一致性、类型检查、不依赖外部服务的测试和构建。修改数据库、授权、实时链路或准备发布时，手动运行 **Integration validation** 工作流，验证真实依赖和 Golden Case、Agent 连接、聊天浏览器用例。
+
 Demo Fixture 必须显式启用，且绝不能对生产数据库运行。安全检查与命令请参阅 [docs/DEMO_DATA.md](docs/DEMO_DATA.md)。
 
 ## 安全与隐私
@@ -253,6 +255,7 @@ Intero 会处理私有工程上下文，应当被视为安全敏感服务。
 
 ## 文档
 
+- [Agent 开工简报与交付证据](docs/AGENT_CONTEXT.md)：按工作区接续工作，并关联提交、PR 和 CI 报告。
 - [产品路线图](docs/PRODUCT_ROADMAP.zh-CN.md)
 - [Golden Case：从 Team 群聊到跨项目协调](docs/GOLDEN_CASE.zh-CN.md)
 - [技术架构](docs/ARCHITECTURE.md)
