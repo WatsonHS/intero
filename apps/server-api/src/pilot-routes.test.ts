@@ -204,68 +204,74 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "codex" },
     });
     expect(chineseTicket.statusCode).toBe(201);
-    const chineseConnectPrompt = chineseTicket.json().connectPrompt as string;
-    expect(chineseConnectPrompt).not.toContain("required = false");
-    expect(chineseConnectPrompt).toContain("zh-CN");
-    expect(chineseConnectPrompt).toContain(".codex/config.toml");
-    expect(chineseConnectPrompt).toContain(".codex/hooks.json");
-    expect(chineseConnectPrompt).toContain("AGENTS.md");
-    expect(chineseConnectPrompt).toContain("/v1/pilot/mcp");
-    expect(chineseConnectPrompt).toContain('"reuseProbeUrl"');
-    expect(chineseConnectPrompt).toContain(
-      '"retryableUntil":"connected_or_expired"',
+    const codexReadme = await readSetupDocument(
+      app,
+      chineseTicket.json().connectPrompt,
     );
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).not.toContain("required = false");
+    expect(chineseTicket.json().connectPrompt).toContain(
+      '"preferredLanguage":"zh-CN"',
+    );
+    expect(codexReadme).toContain(
+      '"preferredLanguage":"{{preferredLanguage}}"',
+    );
+    expect(codexReadme).toContain(".codex/config.toml");
+    expect(codexReadme).toContain(".codex/hooks.json");
+    expect(codexReadme).toContain("AGENTS.md");
+    expect(codexReadme).toContain("/v1/pilot/mcp");
+    expect(codexReadme).toContain('"reuseProbeUrl"');
+    expect(codexReadme).toContain('"retryableUntil":"connected_or_expired"');
+    expect(codexReadme).toContain(
       '"exchangeRequest":{"method":"POST","headers":{"content-type":"application/json"},"body":',
     );
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).toContain(
       '"client":"codex","name":"Codex · <repository-name>","workspaceId":"<stable-workspace-uuid>"',
     );
-    expect(chineseConnectPrompt).toContain(
-      "JSON body 精确使用 ticket、client、name、workspaceId 四个键",
+    expect(codexReadme).toContain(
+      "exactly four JSON keys: ticket, client, name, workspaceId",
     );
-    expect(chineseConnectPrompt).toContain("connected 或 expiresAt 前");
-    expect(chineseConnectPrompt).toContain("intero.connection_status");
-    expect(chineseConnectPrompt).toContain("intero.validate_connection");
-    expect(chineseConnectPrompt).toContain("stand_in.report_checkpoint");
-    expect(chineseConnectPrompt).toContain("stand_in.checkpoint_status");
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).toContain("until connected or expiresAt");
+    expect(codexReadme).toContain("intero.connection_status");
+    expect(codexReadme).toContain("intero.validate_connection");
+    expect(codexReadme).toContain("stand_in.report_checkpoint");
+    expect(codexReadme).toContain("stand_in.checkpoint_status");
+    expect(codexReadme).toContain(
       '"checkpointTerminalStatuses":["published","private","failed"]',
     );
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).toContain(
       '"initialIntent":{"trigger":"first_user_request_understood","timing":"before_substantive_work","eventType":"work_started","fields":["workstreamKey","workstreamTitle","narrative.currentFocus"]}',
     );
-    expect(chineseConnectPrompt).toContain(
-      "每个新对话理解首条用户请求后、开始实质工作前",
+    expect(codexReadme).toContain(
+      "after understanding the first user request in every new conversation and before substantive work",
     );
-    expect(chineseConnectPrompt).toContain(
-      "SessionStart Hook 发送 hooks.allowedPayload",
+    expect(codexReadme).toContain(
+      "SessionStart hook sends hooks.allowedPayload",
     );
-    expect(chineseConnectPrompt).toContain(
-      "本配置任务报告 pending_gui_validation",
+    expect(codexReadme).toContain(
+      "This setup task reports pending_gui_validation",
     );
-    expect(chineseConnectPrompt).toContain(
-      "直接使用 Codex 内置的新任务/对话能力，在当前仓库发起独立验证对话",
+    expect(codexReadme).toContain(
+      "use Codex's built-in new-task/conversation capability to start an independent validation conversation in this repository",
     );
-    expect(chineseConnectPrompt).toContain(
-      "新对话报告 MCP、配置版本与 Hook 验证结果",
+    expect(codexReadme).toContain(
+      "the new conversation reports MCP, configuration-version, and Hook verification",
     );
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).toContain(
       `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
     );
-    expect(chineseConnectPrompt).toContain(".worktreeinclude");
-    expect(chineseConnectPrompt).toContain(
+    expect(codexReadme).toContain(".worktreeinclude");
+    expect(codexReadme).toContain(
       'node \\"$(git rev-parse --show-toplevel)/.intero/hook.mjs\\"',
     );
-    expect(chineseConnectPrompt).toContain(
-      "ready=true、configurationCurrent=true 且 lifecycleReady=true",
+    expect(codexReadme).toContain(
+      "ready=true, configurationCurrent=true, and lifecycleReady=true",
     );
-    expect(chineseConnectPrompt).not.toContain("codex://threads/new");
-    expect(chineseConnectPrompt).toContain("移除本地 verification 字段");
-    expect(chineseConnectPrompt).not.toContain("以下 JSON 是声明式期望状态");
-    expect(chineseConnectPrompt).not.toContain("intero-mcp");
-    expect(chineseConnectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
-    expect(chineseConnectPrompt.length).toBeLessThan(6_000);
+    expect(codexReadme).not.toContain("codex://threads/new");
+    expect(codexReadme).toContain("removes the local verification field");
+    expect(codexReadme).not.toContain("以下 JSON 是声明式期望状态");
+    expect(codexReadme).not.toContain("intero-mcp");
+    expect(codexReadme).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
+    expect(chineseTicket.json().connectPrompt.length).toBeLessThan(1_200);
     const chineseRawTicket = (
       chineseTicket.json().connectPrompt as string
     ).match(/"ticket":\s*"(ticket_[A-Za-z0-9_-]+)"/)?.[1];
@@ -323,28 +329,28 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "claude-code" },
     });
     expect(englishTicket.statusCode).toBe(201);
-    expect(englishTicket.json().connectPrompt).toContain(
-      "fresh Claude Code GUI validation session",
+    const englishReadme = await readSetupDocument(
+      app,
+      englishTicket.json().connectPrompt,
     );
+    expect(englishReadme).toContain("fresh Claude Code GUI validation session");
+    expect(englishReadme).toContain("pending_gui_validation");
     expect(englishTicket.json().connectPrompt).toContain(
-      "pending_gui_validation",
+      '"preferredLanguage":"en-US"',
     );
-    expect(englishTicket.json().connectPrompt).toContain("en-US");
-    expect(englishTicket.json().connectPrompt).toContain(".mcp.json");
-    expect(englishTicket.json().connectPrompt).toContain(
-      ".claude/settings.json",
-    );
-    expect(englishTicket.json().connectPrompt).toContain("CLAUDE.md");
-    expect(englishTicket.json().connectPrompt).toContain(
+    expect(englishReadme).toContain(".mcp.json");
+    expect(englishReadme).toContain(".claude/settings.json");
+    expect(englishReadme).toContain("CLAUDE.md");
+    expect(englishReadme).toContain(
       "The same ticket is retryable only with the same client, repository label, and workspaceId",
     );
-    expect(englishTicket.json().connectPrompt).toContain(
+    expect(englishReadme).toContain(
       "exactly four JSON keys: ticket, client, name, workspaceId",
     );
     expect((englishTicket.json().connectPrompt as string).length).toBeLessThan(
-      4_800,
+      1_200,
     );
-    expect(englishTicket.json().connectPrompt).not.toContain("intero-mcp");
+    expect(englishReadme).not.toContain("intero-mcp");
 
     const openCodeTicket = await app.inject({
       method: "POST",
@@ -353,12 +359,14 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "opencode" },
     });
     expect(openCodeTicket.statusCode).toBe(201);
-    expect(openCodeTicket.json().connectPrompt).toContain("opencode.json");
-    expect(openCodeTicket.json().connectPrompt).toContain(
-      ".opencode/plugins/intero.ts",
+    const openCodeReadme = await readSetupDocument(
+      app,
+      openCodeTicket.json().connectPrompt,
     );
-    expect(openCodeTicket.json().connectPrompt).toContain("AGENTS.md");
-    expect(openCodeTicket.json().connectPrompt).not.toContain("intero-mcp");
+    expect(openCodeReadme).toContain("opencode.json");
+    expect(openCodeReadme).toContain(".opencode/plugins/intero.ts");
+    expect(openCodeReadme).toContain("AGENTS.md");
+    expect(openCodeReadme).not.toContain("intero-mcp");
 
     const grokTicket = await app.inject({
       method: "POST",
@@ -367,7 +375,10 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "grok-build" },
     });
     expect(grokTicket.statusCode).toBe(201);
-    const grokPrompt = grokTicket.json().connectPrompt as string;
+    const grokPrompt = await readSetupDocument(
+      app,
+      grokTicket.json().connectPrompt,
+    );
     expect(grokPrompt).toContain("Grok Build");
     expect(grokPrompt).toContain("$GROK_HOME/config.toml");
     expect(grokPrompt).toContain("grok mcp doctor intero --json");
@@ -385,7 +396,10 @@ describe("pilot cloud-first vertical slice", () => {
       payload: { client: "cursor" },
     });
     expect(cursorTicket.statusCode).toBe(201);
-    const cursorPrompt = cursorTicket.json().connectPrompt as string;
+    const cursorPrompt = await readSetupDocument(
+      app,
+      cursorTicket.json().connectPrompt,
+    );
     expect(cursorPrompt).toContain("Cursor");
     expect(cursorPrompt).toContain("~/.cursor/mcp.json");
     expect(cursorPrompt).toContain(".cursor/mcp.json");
@@ -407,7 +421,10 @@ describe("pilot cloud-first vertical slice", () => {
       },
     });
     expect(desktopCursor.statusCode).toBe(201);
-    const desktopPrompt = desktopCursor.json().connectPrompt as string;
+    const desktopPrompt = await readSetupDocument(
+      app,
+      desktopCursor.json().connectPrompt,
+    );
     expect(desktopPrompt).toContain('"deliveryMode":"desktop_bridge"');
     expect(desktopPrompt).toContain(
       '"connectArguments":["cloud","connect","--client","cursor"',
@@ -435,7 +452,7 @@ describe("pilot cloud-first vertical slice", () => {
         },
       });
       expect(response.statusCode).toBe(201);
-      return response.json().connectPrompt as string;
+      return readSetupDocument(app, response.json().connectPrompt);
     };
 
     const codexPrompt = await pluginRequest("codex");
@@ -576,7 +593,7 @@ describe("pilot cloud-first vertical slice", () => {
 
     expect(ticketResponse.statusCode).toBe(201);
     expect(ticketResponse.json().connectPrompt).toContain(
-      `"--workspace-id","${approvedWorkspaceId}"`,
+      `"expectedWorkspaceId":"${approvedWorkspaceId}"`,
     );
     const ticket = (ticketResponse.json().connectPrompt as string).match(
       /"ticket":"(ticket_[A-Za-z0-9_-]+)"/,
@@ -633,29 +650,24 @@ describe("pilot cloud-first vertical slice", () => {
     });
     expect(response.json().ticket).not.toHaveProperty("ticketHash");
     expect(response.json().mcpUrl).toBe("http://127.0.0.1:4310/v1/pilot/mcp");
-    expect(response.json().connectPrompt).toContain(
+    const prompt = response.json().connectPrompt as string;
+    expect(prompt.length).toBeLessThan(1_200);
+    expect(prompt).not.toContain("pending_gui_validation");
+    expect(prompt).not.toContain("configuration");
+    const document = await readSetupDocument(app, prompt);
+    expect(document).toContain(
       '"authorization":"Bearer credential returned by setup exchange"',
     );
-    expect(response.json().connectPrompt).toContain(
-      '"retryableUntil":"connected_or_expired"',
-    );
-    expect(response.json().connectPrompt).toContain(
-      '"body":{"ticket":"ticket_',
-    );
-    expect(response.json().connectPrompt).toContain(
+    expect(document).toContain('"retryableUntil":"connected_or_expired"');
+    expect(document).toContain('"body":{"ticket":"{{ticket}}"');
+    expect(document).toContain(
       `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
     );
-    expect(response.json().connectPrompt).toContain(
-      "ready=true、configurationCurrent=true 且 lifecycleReady=true",
+    expect(document).toContain(
+      "ready=true, configurationCurrent=true, and lifecycleReady=true",
     );
-    expect(response.json().connectPrompt).not.toContain('"clientId"');
-    expect(response.json().connectPrompt).not.toContain('"repositoryName"');
-    expect(response.json().connectPrompt).toContain("pending_gui_validation");
-    expect(response.json().connectPrompt).not.toContain("required = false");
-    expect(response.json().connectPrompt).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
-    expect(response.json().connectPrompt).not.toMatch(
-      /不要|不得|禁止|never|do not/i,
-    );
+    expect(document).toContain("pending_gui_validation");
+    expect(document).not.toContain(response.json().ticket.id);
   });
 
   it("keeps Attach and Repair operations idempotent and constrains ticket exchanges", async () => {
@@ -2513,7 +2525,7 @@ describe("pilot cloud-first vertical slice", () => {
     expect(repair.json().connectPrompt).toContain(
       `"expectedBindingId":"${legacy.binding.id}"`,
     );
-    expect(repair.json().connectPrompt).toContain(
+    expect(await readSetupDocument(app, repair.json().connectPrompt)).toContain(
       `"configuration":{"version":${PILOT_AGENT_CONFIGURATION_VERSION}`,
     );
 
@@ -3872,4 +3884,19 @@ async function overview(
   });
   expect(response.statusCode).toBe(200);
   return response.json();
+}
+
+async function readSetupDocument(
+  app: FastifyInstance,
+  prompt: string,
+): Promise<string> {
+  const link = prompt.match(/^https?:\/\/\S+\/README\.md$/m)?.[0];
+  expect(link).toBeDefined();
+  const url = new URL(link!);
+  expect(url.search).toBe("");
+  expect(url.pathname).not.toContain("ticket_");
+  const response = await app.inject({ method: "GET", url: url.pathname });
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"]).toContain("text/markdown");
+  return response.body;
 }

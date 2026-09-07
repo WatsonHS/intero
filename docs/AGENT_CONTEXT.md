@@ -78,6 +78,29 @@ its observation time so an older result can be inspected at its source.
 
 ## Distribution and validation
 
+Connection tasks now contain a short English prompt with a setup README link and JSON
+connection parameters. The current deployment serves public Markdown at
+`/v1/pilot/agent/setup/v1-<configurationVersion>/<client>/<deliveryMode>/README.md`.
+The URL contains only the document/configuration version, client, and delivery mode.
+The README is English only. The owner's `preferredLanguage` remains a connection
+parameter for subsequent Agent interaction; it does not select a document variant.
+Tickets, expiry times, Project identity, and optional binding or
+workspace constraints stay in the copied prompt; they are never sent to the
+README endpoint. Reading the document needs neither a login nor a configured
+organization, and does not redeem the ticket.
+
+The README supplies the client-specific installation and validation steps with
+placeholders for the copied parameters. It preserves native, Desktop bridge,
+and standard plugin installation paths. Unsupported plugin clients receive the
+native path. Missing optional constraints are omitted, including the bridge's
+`--workspace-id` argument when no workspace is supplied. A stale document
+version returns 404; the Agent stops setup if the document is unavailable and
+the user can generate a fresh prompt. Bump the document revision in
+`apps/server-api/src/agent-setup.ts` when changing the setup contract.
+
+Installation steps remain in the README. The managed repository instructions
+continue to carry the everyday coordination rules below.
+
 The stdio bridge forwards the same briefing filters and delivery schema as
 remote MCP. Managed instructions and generated Agent Plugins use one shared
 instruction body. Refresh an existing managed integration or reinstall the

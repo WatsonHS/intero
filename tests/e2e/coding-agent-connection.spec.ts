@@ -34,13 +34,17 @@ test("Web reflects authenticated MCP initialization and functional validation", 
   const prompt = page.getByTestId("agent-connect-prompt");
   await expect(prompt).toBeVisible();
   const promptText = (await prompt.textContent()) ?? "";
-  expect(promptText).toMatch(/"transport":\s*"streamable-http"/);
-  expect(promptText).toContain(".codex/config.toml");
-  expect(promptText).toContain("AGENTS.md");
-  expect(promptText).toMatch(
-    /"authorization":\s*"Bearer credential returned by setup exchange"/,
-  );
-  expect(promptText).toContain("pending_gui_validation");
+  expect(promptText.length).toBeLessThan(1_200);
+  const readmeUrl = setupDocumentUrl(promptText);
+  expect(readmeUrl.search).toBe("");
+  const readmeResponse = await page.request.get(readmeUrl.href);
+  expect(readmeResponse.ok()).toBe(true);
+  expect(readmeResponse.headers()["content-type"]).toContain("text/markdown");
+  const readme = await readmeResponse.text();
+  expect(readme).toContain(".codex/config.toml");
+  expect(readme).toContain("AGENTS.md");
+  expect(readme).toContain("Bearer credential returned by setup exchange");
+  expect(readme).toContain("pending_gui_validation");
   expect(promptText).not.toContain("required = false");
   expect(promptText).not.toMatch(/\b(?:SDK|CLI|stdio)\b/i);
   expect(promptText).not.toMatch(/不要|不得|禁止|never|do not/i);
@@ -210,10 +214,9 @@ async function exchangeConnection(
   const ticket = prompt.match(
     /"ticket":\s*"((?:ott|ticket)_[A-Za-z0-9_-]+)"/,
   )?.[1];
-  const exchangeUrl = prompt.match(/"exchangeUrl":\s*"([^"]+)"/)?.[1];
-  const mcpUrl = prompt.match(
-    /"url":\s*"(https?:\/\/[^"]+\/v1\/pilot\/mcp)"/,
-  )?.[1];
+  const baseUrl = setupDocumentUrl(prompt).origin;
+  const exchangeUrl = `${baseUrl}/v1/pilot/agent/connect`;
+  const mcpUrl = `${baseUrl}/v1/pilot/mcp`;
   expect(ticket).toBeTruthy();
   expect(exchangeUrl).toBeTruthy();
   expect(mcpUrl).toBeTruthy();
@@ -298,4 +301,10 @@ function initializePayload(id: string) {
       clientInfo: { name: "codex", version: "e2e" },
     },
   };
+}
+
+function setupDocumentUrl(prompt: string): URL {
+  const link = prompt.match(/^https?:\/\/\S+\/README\.md$/m)?.[0];
+  expect(link).toBeTruthy();
+  return new URL(link!);
 }
