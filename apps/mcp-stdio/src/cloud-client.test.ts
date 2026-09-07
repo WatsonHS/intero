@@ -312,7 +312,11 @@ describe("cloud MCP client", () => {
 
       await client.validateConnection();
       await client.reportConnectionCheck();
-      const currentContext = await client.currentContext();
+      const contextFilters = {
+        workstreamKey: "delivery",
+        boundaryKeys: ["api/accounts.v1"],
+      };
+      const currentContext = await client.currentContext(contextFilters);
 
       expect(client.context().preferredLanguage).toBe("zh-CN");
       expect(validations).toEqual([
@@ -352,7 +356,7 @@ describe("cloud MCP client", () => {
             method: "tools/call",
             params: {
               name: "stand_in.current_context",
-              arguments: {},
+              arguments: contextFilters,
             },
           }),
         },
@@ -387,6 +391,33 @@ describe("cloud MCP client", () => {
           },
         },
       });
+      const deliveryEvidence = {
+        repository: "example/service",
+        commitSha: "a".repeat(40),
+        pullRequestUrl: "https://github.com/example/service/pull/1",
+        checks: [
+          {
+            name: "CI",
+            status: "passed" as const,
+            commitSha: "a".repeat(40),
+            url: "https://github.com/example/service/actions/runs/1",
+            observedAt: new Date().toISOString(),
+          },
+        ],
+      };
+      await client.reportCheckpoint({
+        eventType: "artifact_produced",
+        deliveryEvidence,
+        narrative: {
+          currentFocus: "Delivery",
+          completedOutcome: "PR ready",
+          evidence: [],
+          nextStep: "Review",
+          collaboration: { needed: false, request: "", requestedFrom: "" },
+        },
+      });
+      expect(checkpoints).toHaveLength(2);
+      expect(checkpoints[1]).toMatchObject({ deliveryEvidence });
     } finally {
       server.close();
       await once(server, "close");

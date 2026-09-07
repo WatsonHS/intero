@@ -1,5 +1,6 @@
 import {
   containsForbiddenEventField,
+  DeliveryEvidence,
   PILOT_AGENT_CONFIGURATION_VERSION,
   PilotCheckpointEventType,
   PilotSharedBoundaryInput,
@@ -21,6 +22,7 @@ import { z } from "zod";
 import type { PilotCheckpointService } from "./pilot-service.js";
 import type { PilotStore } from "./pilot-store.js";
 import { PilotStoreError } from "./pilot-store.js";
+import { buildAgentBriefing } from "./agent-briefing.js";
 
 export interface PilotMcpRoutesOptions {
   store: PilotStore;
@@ -271,13 +273,23 @@ function createPilotMcpServer(
     "stand_in.current_context",
     {
       description:
-        "Show the authenticated, Project-scoped Intero connection without exposing credentials.",
-      inputSchema: {},
+        "Read the authenticated Project-scoped connection and startup briefing: recent workspace work, blockers, next steps, relevant shared boundaries, and confirmed decisions. Records carry sources and freshness; delivery evidence is reported, not independently verified.",
+      inputSchema: {
+        workstreamKey: z.string().min(1).max(160).optional(),
+        boundaryKeys: z.array(z.string().min(3).max(160)).max(12).optional(),
+      },
     },
-    async () => {
-      const binding =
-        (await options.store.findAgentBindingById(initialBinding.id)) ??
-        initialBinding;
+    async (input) => {
+      const binding = await options.store.findAgentBindingById(
+        initialBinding.id,
+      );
+      if (!binding) {
+        throw new PilotStoreError(
+          "AGENT_CONNECTION_INACTIVE",
+          401,
+          "Agent connection is no longer active.",
+        );
+      }
       const state = agentConnectionState(binding);
       const confirmedCoordination = (
         await options.store.listCoordination(binding.projectId, binding.ownerId)
@@ -312,6 +324,16 @@ function createPilotMcpServer(
         activityUpdatedAt: binding.activityUpdatedAt,
         lastSeenAt: binding.lastSeenAt,
         confirmedCoordination,
+        ...(binding.validatedAt
+          ? {
+              briefing: await buildAgentBriefing(
+                options.store,
+                binding,
+                input,
+                new Date().toISOString(),
+              ),
+            }
+          : {}),
       });
     },
   );
@@ -327,6 +349,9 @@ function createPilotMcpServer(
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
         evidenceRefs: z.array(z.string().max(200)).max(10).optional(),
+        deliveryEvidence: DeliveryEvidence.optional().describe(
+          "Commit, PR, and CI references reported by this Agent; never independent verification. Do not send logs or credentials.",
+        ),
         clientEventId: z.string().min(8).max(200).optional(),
         workstreamKey: z.string().min(1).max(160).optional(),
         workstreamTitle: z.string().min(1).max(160).optional(),
@@ -375,6 +400,9 @@ function createPilotMcpServer(
         },
         narrative: input.narrative,
         evidenceRefs: input.evidenceRefs ?? [],
+        ...(input.deliveryEvidence
+          ? { deliveryEvidence: input.deliveryEvidence }
+          : {}),
         sharedBoundaries: input.sharedBoundaries ?? [],
       };
       const result = await options.checkpointService.submit(

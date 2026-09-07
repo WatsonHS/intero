@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   PilotAgentClient,
+  DeliveryEvidence,
   PilotCheckpointEventType,
   PilotSharedBoundaryInput,
   PilotWorkNarrative,
@@ -80,10 +81,13 @@ async function runCloudMcpServer(
     "stand_in.current_context",
     {
       description:
-        "Show the authenticated Project-scoped connection and human-confirmed coordination available to this Coding Agent.",
-      inputSchema: {},
+        "Read the Project-scoped startup briefing: your workspace's recent work, blockers, next steps, relevant shared boundaries, and human-confirmed decisions. Evidence is attributed and freshness is explicit. Read once before starting substantive work.",
+      inputSchema: {
+        workstreamKey: z.string().min(1).max(160).optional(),
+        boundaryKeys: z.array(z.string().min(3).max(160)).max(12).optional(),
+      },
     },
-    async () => result(await client.currentContext()),
+    async (input) => result(await client.currentContext(input)),
   );
   registerTool(
     "stand_in.report_checkpoint",
@@ -96,6 +100,9 @@ async function runCloudMcpServer(
         eventType: PilotCheckpointEventType,
         narrative: PilotWorkNarrative,
         evidenceRefs: z.array(z.string().max(200)).max(10).optional(),
+        deliveryEvidence: DeliveryEvidence.optional().describe(
+          "Commit, PR, and CI references reported by this Agent; never independent verification. Do not send logs or credentials.",
+        ),
         clientEventId: z.string().min(8).max(200).optional(),
         workstreamKey: z.string().min(1).max(160).optional(),
         workstreamTitle: z.string().min(1).max(160).optional(),

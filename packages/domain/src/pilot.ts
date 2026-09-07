@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DeliveryEvidence } from "./delivery-evidence.js";
 
 import {
   MessageId,
@@ -562,6 +563,7 @@ export const PilotCheckpointInput = z
       .strict(),
     narrative: PilotWorkNarrative,
     evidenceRefs: z.array(z.string().max(200)).max(10).default([]),
+    deliveryEvidence: DeliveryEvidence.optional(),
     sharedBoundaries: z
       .array(PilotSharedBoundaryInput)
       .max(12)
@@ -654,6 +656,7 @@ export const PilotPrivateClaim = z
     value: z.string().min(1).max(600),
     narrative: PilotWorkNarrative,
     evidenceRefs: z.array(z.string().max(200)).max(10),
+    deliveryEvidence: DeliveryEvidence.optional(),
     source: z.literal("direct_cloud_mcp"),
     sourceBindingId: z.uuid(),
     sourceClient: PilotAgentClient,

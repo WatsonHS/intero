@@ -1,6 +1,7 @@
 export * from "./attachments.js";
 export * from "./conversations.js";
 export * from "./coordination.js";
+export * from "./delivery-evidence.js";
 export * from "./events.js";
 export * from "./ids.js";
 export * from "./notifications.js";

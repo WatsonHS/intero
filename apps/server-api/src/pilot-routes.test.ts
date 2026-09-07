@@ -1818,6 +1818,168 @@ describe("pilot cloud-first vertical slice", () => {
     expect(accept.json().code).toBe("INVITATION_EXPIRED");
   });
 
+  it("returns a workspace briefing with private progress, shared boundaries, and attributed delivery evidence", async () => {
+    const fixture = await readyProject(app);
+    const workspaceId = uuidv7();
+    const alex = await connectAgent(app, fixture.project.id, A, "codex", {
+      workspaceId,
+    });
+    const nextAgent = await connectAgent(app, fixture.project.id, A, "cursor", {
+      workspaceId,
+    });
+    const otherWorkspace = await connectAgent(
+      app,
+      fixture.project.id,
+      A,
+      "grok-build",
+    );
+    const morgan = await connectAgent(app, fixture.project.id, B);
+    const own = checkpoint(fixture.project.id, {
+      clientEventId: "brief-own-0001",
+    });
+    const deliveryEvidence = {
+      repository: "example/repo",
+      commitSha: "a".repeat(40),
+      pullRequestUrl: "https://github.com/example/repo/pull/1",
+      checks: [
+        {
+          name: "CI",
+          status: "passed",
+          commitSha: "a".repeat(40),
+          url: "https://github.com/example/repo/actions/runs/1",
+          observedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    const sharedBoundaries = [
+      {
+        key: "api/briefing.v1",
+        kind: "api",
+        relation: "changing",
+        assumption: "Existing response fields remain available.",
+        change: "compatible",
+        preserves: ["Existing response fields remain available."],
+      },
+    ];
+    const report = {
+      eventType: own.eventType,
+      narrative: own.narrative,
+      clientEventId: own.clientEventId,
+      workstreamKey: own.workstream.key,
+      workstreamTitle: own.workstream.title,
+      deliveryEvidence,
+      sharedBoundaries,
+    };
+    await expect(
+      callMcpTool(app, alex.credential, "stand_in.report_checkpoint", report),
+    ).resolves.toMatchObject({ accepted: true, duplicate: false });
+    await expect(
+      callMcpTool(app, alex.credential, "stand_in.report_checkpoint", report),
+    ).resolves.toMatchObject({ duplicate: true });
+    await callMcpTool(
+      app,
+      otherWorkspace.credential,
+      "stand_in.report_checkpoint",
+      {
+        ...report,
+        clientEventId: "brief-other-workspace",
+        workstreamTitle: "Other repository private work",
+      },
+    );
+    await callMcpTool(app, morgan.credential, "stand_in.report_checkpoint", {
+      ...report,
+      clientEventId: "brief-other-member",
+      workstreamTitle: "Morgan private work",
+      narrative: { ...own.narrative, currentFocus: "Morgan private focus" },
+    });
+    const context = await callMcpTool(
+      app,
+      nextAgent.credential,
+      "stand_in.current_context",
+      {
+        workstreamKey: own.workstream.key,
+      },
+    );
+    expect(context.briefing.ownWork).toHaveLength(1);
+    expect(context.briefing.ownWork[0]).toMatchObject({
+      currentFocus: own.narrative.currentFocus,
+      nextStep: own.narrative.nextStep,
+      freshness: "fresh",
+      latestCheckpointId: own.clientEventId,
+      recentDeliveries: [
+        {
+          checkpointId: own.clientEventId,
+          ...deliveryEvidence,
+          source: "coding_agent_report",
+          status: "reported_passed",
+          independentlyVerified: false,
+        },
+      ],
+    });
+    expect(context.briefing.relatedWork).toEqual([
+      expect.objectContaining({
+        ownerId: B,
+        boundaryKey: "api/briefing.v1",
+        source: "explicit_shared_boundary",
+      }),
+    ]);
+    expect(JSON.stringify(context.briefing)).not.toContain("Morgan private");
+    expect(JSON.stringify(context.briefing)).not.toContain(
+      "Other repository private",
+    );
+    expect(JSON.stringify(context.briefing)).not.toContain(alex.credential);
+    const filtered = await callMcpTool(
+      app,
+      nextAgent.credential,
+      "stand_in.current_context",
+      {
+        workstreamKey: "different-work",
+        boundaryKeys: ["api/unrelated.v1"],
+      },
+    );
+    expect(filtered.briefing.ownWork).toEqual([]);
+    expect(filtered.briefing.relatedWork).toEqual([]);
+
+    // Old records are visible as stale; they are never presented as current work.
+    const old = checkpoint(fixture.project.id, {
+      clientEventId: "brief-stale-0001",
+    });
+    old.occurredAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    expect((await sendCheckpoint(app, alex.credential, old)).statusCode).toBe(
+      202,
+    );
+    const stale = await callMcpTool(
+      app,
+      nextAgent.credential,
+      "stand_in.current_context",
+      {},
+    );
+    expect(stale.briefing.ownWork[0].freshness).toBe("stale");
+    expect(stale.briefing.ownWork[0].recentDeliveries[0].checkpointId).toBe(
+      own.clientEventId,
+    );
+    const privateStates = await pilotStore.listPrivateWorkState(
+      fixture.project.id,
+      A,
+    );
+    const read = vi
+      .spyOn(pilotStore, "listPrivateWorkState")
+      .mockResolvedValueOnce(
+        privateStates.map((state) => ({ ...state, expiresAt: old.occurredAt })),
+      );
+    try {
+      const expired = await callMcpTool(
+        app,
+        nextAgent.credential,
+        "stand_in.current_context",
+        {},
+      );
+      expect(expired.briefing.ownWork).toEqual([]);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("shows awaiting validation until a real remote MCP handshake succeeds", async () => {
     const fixture = await readyProject(app);
     const ticketResponse = await app.inject({
@@ -1913,6 +2075,9 @@ describe("pilot cloud-first vertical slice", () => {
     expect(
       initializedText ? JSON.parse(initializedText).status : undefined,
     ).toBe("mcp_initialized");
+    expect(
+      initializedText ? JSON.parse(initializedText).briefing : undefined,
+    ).toBeUndefined();
     const tools = await mcpClient.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
@@ -3691,7 +3856,7 @@ async function callMcpTool(
   });
   expect(response.statusCode).toBe(200);
   const result = response.json().result;
-  expect(result?.isError).not.toBe(true);
+  expect(result?.isError, JSON.stringify(result?.content)).not.toBe(true);
   return JSON.parse(result.content[0].text);
 }
 
