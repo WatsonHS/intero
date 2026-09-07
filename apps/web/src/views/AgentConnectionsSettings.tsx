@@ -30,7 +30,10 @@ import {
   PilotApiError,
 } from "../pilot/api.js";
 import { usePilot } from "../pilot/context.js";
-import { codexConnectionDeepLink } from "./agent/deep-link.js";
+import {
+  codexConnectionDeepLink,
+  openCodexConnection,
+} from "./agent/deep-link.js";
 import {
   agentBindingIsConnected,
   agentRequiresLifecycleHook,
@@ -85,6 +88,7 @@ type IssuedConnection = {
   prompt: string;
   mcpUrl: string;
   expiresAt: string;
+  repositoryPath?: string;
 };
 
 type AttachmentPhase =
@@ -104,6 +108,8 @@ type ConnectionMutationResult =
   | {
       cancelled: false;
       client: PilotAgentClient;
+      projectId: string;
+      repositoryPath?: string;
       result: Awaited<ReturnType<typeof createPilotAgentConnection>>;
     };
 
@@ -154,6 +160,13 @@ export function AgentConnectionsSettings({
   >({});
   const [now, setNow] = useState(() => Date.now());
   const pendingMutationIds = useRef(new Map<string, string>());
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const desktop =
     typeof window === "undefined" ? undefined : window.interoDesktop;
   const localIntegrations = useQuery({
@@ -228,15 +241,19 @@ export function AgentConnectionsSettings({
       client: PilotAgentClient;
       bindingId?: string;
       clientMutationId: string;
+      projectId: string;
     }
   >({
     mutationFn: async ({
       client,
       bindingId,
       clientMutationId,
+      projectId,
     }): Promise<ConnectionMutationResult> => {
       setAttachmentClient(client);
       setRevokedConnection(undefined);
+      setIssued(undefined);
+      setLaunchError(undefined);
       let expectedWorkspaceId: string | undefined;
       if (desktop) {
         if (!repository || Date.parse(repository.expiresAt) <= Date.now()) {
@@ -297,6 +314,10 @@ export function AgentConnectionsSettings({
       return {
         cancelled: false,
         client,
+        projectId,
+        ...(desktop && repository
+          ? { repositoryPath: repository.repositoryPath }
+          : {}),
         result: await createPilotAgentConnection(
           pilot.identityId!,
           projectId,
@@ -310,7 +331,7 @@ export function AgentConnectionsSettings({
     },
     onSuccess: async (outcome, variables) => {
       const contextKey = attachmentAttemptContextKey(
-        projectId,
+        variables.projectId,
         variables.client,
         variables.bindingId,
       );
@@ -327,6 +348,7 @@ export function AgentConnectionsSettings({
         contextKey,
         "completed",
       );
+      if (!mounted.current || outcome.projectId !== projectId) return;
       const { client, result } = outcome;
       setIssued({
         bindingId: result.bindingId,
@@ -334,8 +356,17 @@ export function AgentConnectionsSettings({
         prompt: result.connectPrompt,
         mcpUrl: result.mcpUrl,
         expiresAt: result.ticket.expiresAt,
+        ...(outcome.repositoryPath
+          ? { repositoryPath: outcome.repositoryPath }
+          : {}),
       });
       setCopyStatus("idle");
+      if (
+        client === "codex" &&
+        Date.parse(result.ticket.expiresAt) > Date.now()
+      ) {
+        launchCodex(result.connectPrompt, outcome.repositoryPath);
+      }
       pilot.setSelectedProjectId(projectId);
       await queryClient.invalidateQueries({
         queryKey: ["pilot", "overview", pilot.identityId, projectId],
@@ -343,7 +374,7 @@ export function AgentConnectionsSettings({
     },
     onError: (error, variables) => {
       const contextKey = attachmentAttemptContextKey(
-        projectId,
+        variables.projectId,
         variables.client,
         variables.bindingId,
       );
@@ -497,6 +528,7 @@ export function AgentConnectionsSettings({
     pendingMutationIds.current.set(contextKey, clientMutationId);
     return {
       client,
+      projectId,
       ...(bindingId ? { bindingId } : {}),
       clientMutationId,
     };
@@ -520,20 +552,12 @@ export function AgentConnectionsSettings({
     }
   }
 
-  async function launchCodex(prompt: string) {
+  function launchCodex(prompt: string, repositoryPath?: string) {
     setLaunchError(undefined);
-    if (!desktop || !repository) return;
-    setLaunchPending(true);
     try {
-      window.open(
-        codexConnectionDeepLink(prompt, repository.repositoryPath),
-        "_blank",
-        "noopener,noreferrer",
-      );
+      openCodexConnection(prompt, repositoryPath);
     } catch {
-      setLaunchError("无法打开所选仓库，请复制连接任务后在 Codex 中继续。");
-    } finally {
-      setLaunchPending(false);
+      setLaunchError("无法打开 Codex，请重试或复制连接任务后在 Codex 中继续。");
     }
   }
 
@@ -615,6 +639,7 @@ export function AgentConnectionsSettings({
           <select
             value={projectId}
             data-testid="agent-connection-project"
+            disabled={startConnection.isPending}
             onChange={(event) => {
               const nextProjectId = event.target.value;
               setProjectId(nextProjectId);
@@ -1148,8 +1173,15 @@ export function AgentConnectionsSettings({
             </span>
             <span>
               <strong className="text-[13px] font-[630]">
-                在 {CLIENT_LABELS[issued.client]} 中完成原生验证
+                {issued.client === "codex"
+                  ? "等待 Codex 完成连接"
+                  : `在 ${CLIENT_LABELS[issued.client]} 中完成原生验证`}
               </strong>
+              {issued.client === "codex" && !issuedExpired ? (
+                <p className="mt-1.5 text-[11px] leading-[1.65] text-ink-muted">
+                  已请求打开 Codex。若未打开，可重新打开或复制连接任务。
+                </p>
+              ) : null}
               <p className="mt-1.5 text-[11px] leading-[1.65] text-ink-muted">
                 {repository
                   ? `Desktop 已将本地控制操作绑定到 ${repository.snapshot.repository} 与 ${project?.name}。`
@@ -1228,25 +1260,30 @@ export function AgentConnectionsSettings({
                 重新生成连接任务
               </button>
             ) : null}
-            {issued.client === "codex" ? (
+            {issued.client === "codex" && !issuedExpired ? (
               typeof window !== "undefined" && window.interoDesktop ? (
                 <button
                   type="button"
                   disabled={launchPending}
-                  onClick={() => void launchCodex(issued.prompt)}
+                  onClick={() =>
+                    launchCodex(issued.prompt, issued.repositoryPath)
+                  }
                   className="inline-flex h-9 items-center gap-2 rounded-btn border-0 bg-accent-strong px-4 text-[11.5px] font-[620] text-on-accent disabled:opacity-50"
                 >
                   <ArrowSquareOutIcon size={14} />
-                  {launchPending ? "正在打开 Codex…" : "在 Codex App 中继续"}
+                  重新打开 Codex
                 </button>
               ) : (
                 <a
-                  href={codexConnectionDeepLink(issued.prompt)}
-                  target="_blank"
+                  href={codexConnectionDeepLink(
+                    issued.prompt,
+                    issued.repositoryPath,
+                  )}
                   rel="noreferrer"
                   className="inline-flex h-9 items-center gap-2 rounded-btn bg-accent-strong px-4 text-[11.5px] font-[620] text-on-accent no-underline"
                 >
-                  <ArrowSquareOutIcon size={14} />在 Codex App 中继续
+                  <ArrowSquareOutIcon size={14} />
+                  重新打开 Codex
                 </a>
               )
             ) : null}
